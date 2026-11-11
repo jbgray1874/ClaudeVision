@@ -34,8 +34,19 @@ os.environ.setdefault("SDI_OFFLINE", "1")
 import concept_scan                                                    # noqa: E402
 from source_precedence import SOURCE_RANK, rank, source_of             # noqa: E402
 
-FIXTURE = json.loads(
-    (ROOT / "tests" / "fixtures" / "concept" / "plan_a_bin.json").read_text(encoding="utf-8"))
+# NEVER COMMITTED (SCRUM-137). This fixture was excluded by the blanket `*.json` rule in
+# .gitignore when the test went in, so on any other checkout the module failed to import and
+# stopped the whole suite at collection. Until the read is restored as a reviewed fixture it is
+# private evidence: found under SDI_PRIVATE_CORPUS or in the repo path, otherwise skipped by name.
+from private_evidence import corpus_file, missing_reason                # noqa: E402
+
+_FIXTURE_PATH = ROOT / "tests" / "fixtures" / "concept" / "plan_a_bin.json"
+if not os.path.isfile(_FIXTURE_PATH):
+    _FIXTURE_PATH = corpus_file("plan_a_bin.json")
+if _FIXTURE_PATH is None:
+    pytest.skip(missing_reason("tests/fixtures/concept/plan_a_bin.json, never committed"),
+                allow_module_level=True)
+FIXTURE = json.loads(Path(_FIXTURE_PATH).read_text(encoding="utf-8"))
 
 
 # ── the image at the front door ─────────────────────────────────────────────────────
@@ -882,7 +893,8 @@ def test_a_cached_answer_never_asks_the_model_again(tmp_path, monkeypatch):
 
     import _bom_vision_reader as pathB
     png = pathB.render_page_to_png(str(pdf), 0)
-    key = concept_scan._cache_key([png], os.environ.get("XAI_VISION_MODEL", "grok-4.3"))
+    import xai_models
+    key = concept_scan._cache_key([png], xai_models.vision_model())
     (tmp_path / "cache").mkdir()
     (tmp_path / "cache" / (key + ".json")).write_text(
         json.dumps({"raw_response": json.dumps(FIXTURE)}), encoding="utf-8")

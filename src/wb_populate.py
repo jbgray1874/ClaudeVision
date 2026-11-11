@@ -90,6 +90,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 # which used to answer it privately and disagreed with the rest of the engine.
 import bought_in_policy as _bought_in_policy
 import costed_facts as _costed_facts
+import material_preservation as _material_preservation
 
 # What goes next to a price nobody can reproduce. Short enough for a spreadsheet cell and
 # blunt enough that it cannot be read as a supplier quote.
@@ -691,6 +692,13 @@ def _bom_line_price_traced(_pe: Dict[str, Any]) -> Tuple[Optional[float], List[s
     if _pe.get("_price_explicitly_withheld"):
         _t.append("_price_explicitly_withheld -> withheld, no price")
         return None, _t
+    # THE SAME ARTICLE IS COSTED ON ONE LINE (D-748). The merge below set unit_cost_gbp to 0 on
+    # the other line, but a fabricated leaf is priced from its material estimate, so 0358141's
+    # upright and end caps read "SAME ARTICLE AS UPC0358141 M2: costed there, not here" and
+    # carried GBP 13.66 each all the same. A line that says its money is elsewhere has none.
+    if _pe.get("_duplicate_of"):
+        _t.append(f"_duplicate_of={_pe.get('_duplicate_of')!r} -> 0.00, costed on that line")
+        return 0.0, _t
     _me = _pe.get("material_estimate") or {}
     # WHAT THE PART IS DECIDES WHICH FIELDS CAN PRICE IT.
     #
@@ -1745,6 +1753,82 @@ def _largest_fabricated_part_area(parts):
     return best_area, best_pn
 
 
+def band_area_for_row(row_part_numbers, all_parts, children_by_pn=None):
+    """(area_m2, part_number, where from) a department row is size-banded on (D-658, D-659).
+
+    EACH ROW ON ITS OWN PARTS (JG, 3 Nov 2026). The band was the JOB's largest part for every
+    row, so correcting 12684-02-M04 to its drawn 504 x 313 moved the 33 hooks' P.Coat row from
+    638/hr to 319/hr: a hook took the baseplate's band. A row is banded on the largest
+    fabricated part it carries, or that sits inside an assembly it carries (the final pack row
+    packs the frame, and the baseplate is in that box). A part from another branch of the tree
+    never sets it. Where nothing in the row's own subtree has a measured area the answer is
+    (0.0, None, why): the row gets the department's un-banded allowance, said and asked, never
+    another part's size."""
+    wanted = {str(x).strip().upper() for x in (row_part_numbers or []) if str(x).strip()}
+    seen = set(wanted)
+    stack = list(wanted)
+    kids = children_by_pn or {}
+    while stack:
+        for child in kids.get(stack.pop(), ()) or ():
+            c = str(child).strip().upper()
+            if c and c not in seen:
+                seen.add(c)
+                stack.append(c)
+    own = [p for p in (all_parts or []) if isinstance(p, dict)
+           and str(p.get("part_number") or "").strip().upper() in seen]
+    area, pn = _largest_fabricated_part_area(own) if own else (0.0, None)
+    if area > 0:
+        where = ("this row's own parts" if str(pn or "").strip().upper() in wanted
+                 else "a part inside an assembly this row carries")
+        return area, pn, where
+    return 0.0, None, ("no part on this row, or inside an assembly it carries, has a measured "
+                       "area")
+
+
+def unmeasured_row_parts(row_part_numbers, all_parts) -> List[str]:
+    """The fabricated parts named on a row that carry no measured area (D-660). A band set by
+    the measured ones is then set by PART of what the row coats or packs: 12684-02's hook row
+    is banded on the bracket while the arm's own drawing is unresolved, so its 638/hr is
+    provisional and is said to be. A bought-in line is not counted; it sets no band anyway."""
+    try:
+        import bought_in_policy as _bip
+    except Exception:                                    # noqa: BLE001
+        _bip = None
+    wanted = {str(x).strip().upper() for x in (row_part_numbers or []) if str(x).strip()}
+    out: List[str] = []
+    for p in (all_parts or []):
+        if not isinstance(p, dict):
+            continue
+        pn = str(p.get("part_number") or "").strip()
+        if pn.upper() not in wanted:
+            continue
+        if _bip is not None and _bip.is_bought_in(p):
+            continue
+        if p.get("is_assembly_parent") or p.get("is_sub_assembly"):
+            continue
+        if _largest_fabricated_part_area([p])[0] <= 0:
+            out.append(pn)
+    return sorted(set(out))
+
+
+def canonical_children_by_pn(summary) -> Dict[str, List[str]]:
+    """Each canonical node's children, keyed by part number (upper case) (D-659)."""
+    out: Dict[str, List[str]] = {}
+    try:
+        payload = canonical_route_payload(summary) or {}
+    except Exception:                                                # noqa: BLE001
+        payload = {}
+    for node in (payload.get("nodes") or []):
+        if not isinstance(node, dict):
+            continue
+        pn = str(node.get("part_number") or "").strip().upper()
+        kids = [str(e.get("part_number") or "").strip().upper()
+                for e in (node.get("children") or []) if isinstance(e, dict)]
+        if pn and kids:
+            out[pn] = [k for k in kids if k]
+    return out
+
+
 def _is_powder_consumable(part) -> bool:
     """A BOM line that IS the powder itself (the coating consumable), by name or description.
 
@@ -1773,6 +1857,66 @@ def _powder_consumable_rate(part, engine_rate):
         if rate:
             return rate
     return None
+
+
+_SHEET_RANGE_REF = re.compile(r"(?<![!A-Z$])\$?([A-Z]{1,3})\$?(\d+)\s*:\s*\$?([A-Z]{1,3})\$?(\d+)")
+
+
+def template_wire_gauges(ws, w: Dict[str, Any]) -> Tuple[List[float], str]:
+    """(the gauges the Wire block's lookup table holds, where they were read) (D-692).
+
+    The Wire block prices a row by looking its gauge up in a table lower on the sheet (gauge,
+    metres per tonne), the lookup taking the largest table gauge NOT ABOVE the row's. A gauge
+    the table does not hold is therefore priced, silently, as a thinner wire (or not at all,
+    below the smallest). The table is read where the template's own formula on the block's
+    first row names it — the template is the source of truth for its own layout — else from
+    the engine's copy of it, config.WIRE_GAUGE_TABLE (template rows 151-159)."""
+    try:
+        from openpyxl.utils import column_index_from_string
+        row = int(w["first_row"])
+        for col in range(int(w["col_length"]) + 1, int(w["col_length"]) + 12):
+            f = ws.cell(row, col).value
+            if not (isinstance(f, str) and "LOOKUP" in f.upper()):
+                continue
+            m = _SHEET_RANGE_REF.search(f.upper())
+            if not m:
+                continue
+            c = column_index_from_string(m.group(1))
+            r0, r1 = sorted((int(m.group(2)), int(m.group(4))))
+            gauges = sorted({float(v) for v in (ws.cell(r, c).value for r in range(r0, r1 + 1))
+                             if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0})
+            if gauges:
+                return gauges, f"the template's gauge table ({m.group(1)}{r0}:{m.group(1)}{r1})"
+    except Exception:                                                # noqa: BLE001
+        pass
+    table = getattr(config, "WIRE_GAUGE_TABLE", {}) if config is not None else {}
+    return (sorted(float(g) for g in (table or {})),
+            "the template's gauge table as the engine holds it (config.WIRE_GAUGE_TABLE)")
+
+
+# THE WIRE ROW SAYS ITS RATE IS AN ALLOWANCE (D-692). The Wire block prices every row from the
+# template's Wire Cost Per Tonne, an undated allowance with no purchasing source or date; a row
+# showing a gauge, a length and a total reads as a stock price unless the row itself says not.
+_WIRE_RATE_TAG = "[PROVISIONAL RATE - CONFIRM WITH PURCHASING]"
+
+
+def template_wire_rate(ws) -> Optional[float]:
+    """The £/t in the template's own Wire Cost Per Tonne cell (the figure beside its label), or
+    None when the sheet has no such label or no figure beside it."""
+    hit = _find_label_cell(ws, "wire cost per tonne")
+    if not hit:
+        return None
+    r, c = hit
+    for col in range(c + 1, c + 5):
+        v = ws.cell(r, col).value
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+            return float(v)
+    return None
+
+
+def _wire_words(material: Any) -> str:
+    words = " ".join(str(material or "mild steel").replace("_", " ").lower().split())
+    return words if "wire" in words else f"{words} wire"
 
 
 def _is_sheet_metal(mat: str) -> bool:
@@ -1888,6 +2032,25 @@ _HOLE_CUTTING_OPS = frozenset(set(getattr(config, "READ_PROFILE_CUTS", ()) or ()
                               | {"hole_machining", "drilling", "punch"})
 
 
+def measured_internal_cutouts(pe: Mapping[str, Any]) -> Optional[int]:
+    """Internal cut-outs the DXF contour walk measured: every closed profile but the outline.
+
+    Only a complete walk answers. A walk that could not close its loops is a floor, and a
+    raw-parser figure can count one profile twice (see drawing_job_merge._arbitrate_pierces),
+    so neither is put on the sheet as a measurement. None when there is no measured count."""
+    g = pe.get("dxf_raw_geometry") if isinstance(pe, Mapping) else None
+    if not isinstance(g, Mapping):
+        return None
+    if g.get("estimated_pierce_count_source") != "dxf_contour_walk" \
+            or g.get("pierce_count_incomplete") or g.get("estimated_pierce_count_uncertain"):
+        return None
+    try:
+        n = int(g.get("estimated_pierce_count") or 0)
+    except (TypeError, ValueError):
+        return None
+    return n - 1 if n > 1 else None
+
+
 def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
     """A geometry datum off a COSTED part record, from whichever of its two geometry
     records has one — normalized_geometry first, geometry_rollup second.
@@ -1983,6 +2146,21 @@ def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
 # one file and not board in another.
 
 
+def _buying_unit_conflict(sheet_price: Any, cpp: Any, pps: Any) -> bool:
+    """A claimed stock-sheet price the row's own nest disproves (SCRUM-182).
+
+    True when dividing the claimed sheet price by the nest returns less than a third of
+    the engine's own per-part money: a figure that cheap per sheet is a piece wearing
+    the sheet column. A SUSPICION DETECTOR, never proof of either basis — the caller
+    leaves the row unpriced with the conflict named, and never invents a synthetic
+    sheet rate to make the two numbers agree."""
+    try:
+        sp, c, n = float(sheet_price), float(cpp), float(pps)
+    except (TypeError, ValueError):
+        return False
+    return bool(sp > 0 and c > 0 and n > 1 and sp / n < c / 3.0)
+
+
 def _board_sheet_price_from_kg_rate(material, thickness_mm, sheet_l_mm, sheet_w_mm):
     """A board's cost per SHEET from its £/kg rate x sheet volume x density.
 
@@ -2004,7 +2182,15 @@ def _board_sheet_price_from_kg_rate(material, thickness_mm, sheet_l_mm, sheet_w_
     rates = getattr(config, "MATERIAL_PRICE_GBP_PER_KG", {}) or {}
     dens = getattr(config, "MATERIAL_DENSITY_KG_PER_M3", {}) or {}
     rate = density = None
-    for k in (name, name.replace(" ", "_"), name.replace("_", " ")):
+    try:
+        # And under the key the price resolves to (D-602): "Aluminium, 3mm" is ALUMINIUM.
+        _resolved = str(config.resolve_material_rate_key(material) or "").upper()
+    except Exception:                                        # noqa: BLE001
+        _resolved = ""
+    for k in (name, name.replace(" ", "_"), name.replace("_", " "),
+              _resolved, _resolved.replace(" ", "_"), _resolved.replace("_", " ")):
+        if not k:
+            continue
         rate = rate if rate is not None else rates.get(k)
         density = density if density is not None else dens.get(k)
     try:
@@ -2037,6 +2223,17 @@ def _own_sheet_rate(mat: str) -> Optional[float]:
     rate = None
     for k in (name, name.replace(" ", "_"), name.replace("_", " ")):
         rate = rate if rate is not None else rates.get(k)
+    if not rate:
+        # UNDER THE KEY THE PRICE RESOLVES TO (D-602). "Aluminium, 3mm" is priced as
+        # ALUMINIUM by the estimator; missed here, it fell to the Sheet Steel block and was
+        # charged at the mild-steel £/tonne.
+        try:
+            _key = config.resolve_material_rate_key(mat)
+        except Exception:                                    # noqa: BLE001
+            _key = None
+        if _key:
+            _k = str(_key).upper()
+            rate = rates.get(_k) or rates.get(_k.replace(" ", "_")) or rates.get(_k.replace("_", " "))
     if not rate:
         return None
     try:
@@ -3145,6 +3342,83 @@ def _canonical_finish_signature(
                      "+".join(sorted(colours)) or "COLOUR-UNREAD"))
 
 
+_PER_PIECE_COST_METHODS = {"last_resort_market_indication"}
+
+
+def per_piece_price_basis(me: Any) -> bool:
+    """Is this material record's money a price for ONE PIECE, not for a stock sheet (D-665)? The
+    last-resort market rescue writes a per-piece allowance; a sheet price cannot be inferred
+    from it, because nothing says the piece was bought as a share of that sheet."""
+    if not isinstance(me, dict):
+        return False
+    return bool(me.get("material_allowance_only")
+                or str(me.get("cost_method") or "") in _PER_PIECE_COST_METHODS)
+
+
+def sheet_price_rebuilt_from_part_cost(me: Any) -> Optional[float]:
+    """The pre-scrap sheet price a nest-costed part implies (cost per part x parts per sheet /
+    (1 + scrap)), or None. Never rebuilt from a per-piece allowance (D-665): 12203-66-GA's
+    front panel took a ~£0.32 market allowance for one piece, and this multiplied it by the
+    sheet's 261 pieces into an "£80.98 sheet price" no supplier quoted, on one of three panels
+    cut from the same board."""
+    if not isinstance(me, dict) or per_piece_price_basis(me):
+        return None
+    _cpp = _safe(me.get("cost_per_part_gbp") or me.get("unit_material_cost_gbp"))
+    _pps = _safe(me.get("parts_per_sheet"))
+    _scrap_frac = _safe(me.get("scrap_pct")) or 0.04
+    if _cpp and _pps:
+        return round(float(_cpp) * float(_pps) / (1.0 + float(_scrap_frac)), 2)
+    return None
+
+
+_FACED_FAMILIES = {"MFMDF", "MFC"}
+
+
+def _record_is_faced_board(p: Any) -> bool:
+    """Does this record say its board is bought faced: the laminate in the sheet price?"""
+    if not isinstance(p, dict):
+        return False
+    me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
+    return bool(p.get("_laminate_in_board")
+                or str(p.get("_stated_faced_family") or "").upper() in _FACED_FAMILIES
+                or str(me.get("costing_material_family") or "").upper() in _FACED_FAMILIES
+                or str(p.get("normalized_material") or "").upper() in _FACED_FAMILIES)
+
+
+def is_faced_board_job(summary: Dict[str, Any], parts: Any) -> bool:
+    """Is any of these lines a faced board, read from its costed record OR its own part record
+    (D-664)? The labour rows name the board from either (canonical_labour_groups); the scope of
+    the joinery shop's stated rates must read the same two places.
+
+    12203-66-GA, 3 Nov 2026 19:48: three 13.8 mm laminated MDF panels, every CNC row labelled
+    "13.8mm MFMDF", and Bench Work ran at 10/hr and Packing at 75/hr against the joinery
+    shop's stated 2/hr and 20/hr for faced board. The market rescue had replaced the panels'
+    costed material record without the faced family; the part records still carried it."""
+    lines = [p for p in (parts or []) if isinstance(p, dict)]
+    if any(_record_is_faced_board(p) for p in lines):
+        return True
+    try:
+        _est, raw = _canonical_record_index(summary or {}, lines)
+    except Exception:                                                # noqa: BLE001
+        return False
+    for p in lines:
+        pn = str(p.get("part_number") or "").strip().upper()
+        if pn and _record_is_faced_board(raw.get(pn)):
+            return True
+    return False
+
+
+def faced_board_line(summary: Dict[str, Any], pe: Any) -> bool:
+    """Is this board line faced board, by its costed record, its unpriced faced result, or its
+    own part record (D-664/D-666)?"""
+    if not isinstance(pe, dict):
+        return False
+    me = pe.get("material_estimate") if isinstance(pe.get("material_estimate"), dict) else {}
+    if _record_is_faced_board(pe) or str(me.get("cost_method") or "") == "faced_board_unpriced":
+        return True
+    return is_faced_board_job(summary, [pe])
+
+
 def _canonical_record_index(
     summary: Dict[str, Any],
     part_estimates: List[Dict[str, Any]],
@@ -3168,6 +3442,112 @@ def _canonical_record_index(
             if part_number:
                 raw.setdefault(part_number, item)
     return estimates, raw
+
+
+def _nest_word(nest_id: Any) -> str:
+    """"laser nest" for a laser's, "CNC Joinery nest" for the joinery CNC's."""
+    dept = str(nest_id or "").split("|")[0]
+    return "laser nest" if dept.startswith("Laser") else f"{dept} nest"
+
+
+def charge_bevel_pass(ws, groups: Dict[Any, Dict[str, Any]], lb: Mapping[str, Any],
+                      flags: List[str]) -> List[int]:
+    """Put a bevelled panel's bevel pass into its cutting row's charged cells (D-681).
+
+    The CNC Joinery row is charged at the department's STATED rate (Tony Ford's 12/hr), which
+    rightly overrides the engine's derived routing time, and so the bevel pass the engine
+    timed (estimator, bevel_machining) never reached the sheet: 12203-65's 12:19 book charged
+    the five mitred panels exactly as square-edged ones. The bevel is work beyond the routing
+    that rate was measured on, so it is added to it, not instead of it:
+
+        rate = qty / (qty / stated rate + bevel minutes a unit / 60)
+
+    and the bevel tool's set-up joins the row's own set-up lookup as "=(lookup)+minutes",
+    before the nest pass divides a proven nest's one set-up (so a shared program shares one
+    bevel set-up; an unproven one keeps its own). Both are house allowances, said on the row.
+    Returns the rows changed."""
+    changed: List[int] = []
+    for g in groups.values():
+        passes = g.get("bevel_pass_min_by_part") or {}
+        r = g.get("workbook_row")
+        if not passes or not r:
+            continue
+        r = int(r)
+        tp_cell = ws.cell(row=r, column=lb["col_throughput"])
+        tp = _safe(tp_cell.value)
+        if not tp or tp <= 0:
+            _flag(f"bevel pass NOT added to row {r}: its rate is not a number "
+                  f"({tp_cell.value!r}), so the bevel on {', '.join(passes)} is described, "
+                  f"not charged.", flags)
+            continue
+        qty = _safe(g.get("qty"), 1) or 1.0
+        per_piece = qty / max(1, len(passes))
+        extra_h = sum(float(v) for v in passes.values()) * per_piece / 60.0
+        new_tp = float(qty) / (float(qty) / float(tp) + extra_h)
+        tp_cell.value = round(new_tp, 4)
+        bs = _safe(g.get("bevel_setup_min")) or 0.0
+        s_cell = ws.cell(row=r, column=lb["col_setup"])
+        setup_added = 0.0
+        if bs > 0:
+            if isinstance(s_cell.value, str) and s_cell.value.startswith("="):
+                s_cell.value = "=(%s)+%g" % (s_cell.value[1:], bs)
+                setup_added = bs
+            elif _safe(s_cell.value) is not None:
+                s_cell.value = float(_safe(s_cell.value)) + bs
+                setup_added = bs
+        g["bevel_pass_charged"] = {
+            "rate_before_per_hour": round(float(tp), 4), "rate_after_per_hour": round(new_tp, 4),
+            "pass_min_by_part": dict(passes), "setup_min_added": setup_added,
+            "basis": "house allowance: LABOUR_RULES cnc_routing bevel_sec_per_mm, "
+                     "bevel_setup_min"}
+        _flag(f"BEVEL PASS CHARGED on row {r} ({', '.join(passes)}): the department's "
+              f"{float(tp):g}/hr for the routing plus "
+              f"{sum(float(v) for v in passes.values()):.2f} min of bevel pass a piece = "
+              f"{new_tp:.2f}/hr"
+              + (f", and {setup_added:g} min of bevel-tool set-up on the row's own set-up"
+                 if setup_added else ", no set-up cell to add the bevel tool to")
+              + ". House allowances: confirm against the CAM cycle time.", flags)
+        changed.append(r)
+    return changed
+
+
+def _common_stock_sheet(members: Sequence[Dict[str, Any]], estimates: Mapping[str, Any],
+                        order_qty: Any) -> Optional[Tuple[Any, float]]:
+    """(sheet, fraction of it the whole order takes) for the stock sheet, among the ones the
+    members already use, on which EVERY member nests by the template's own rule and the order
+    takes the least; else None. Members without a blank or a material are not guessed."""
+    try:
+        import costed_facts as _cf
+    except Exception:                                                # noqa: BLE001
+        return None
+    pieces = []
+    for g in members:
+        pn = str((g.get("parts") or [""])[0]).strip().upper()
+        pe = estimates.get(pn) or {}
+        se = ((pe.get("material_estimate") or {}).get("stock_estimate") or {})
+        sheet = se.get("candidate_sheet_size_mm")
+        bd = _cf.blank_dimensions(pe) if pe else {}
+        length, width = _safe(bd.get("length_mm")), _safe(bd.get("width_mm"))
+        mat = pe.get("normalized_material") or (pe.get("material_estimate") or {}).get("material")
+        if not (sheet and length and width and mat):
+            return None
+        pieces.append((g, tuple(sheet), float(length), float(width), mat))
+    best: Optional[Tuple[Any, float]] = None
+    for cand in sorted({pc[1] for pc in pieces}):
+        frac = 0.0
+        for g, _own, length, width, mat in pieces:
+            try:
+                nest = _cf.nest_on_sheet(mat, length, width, cand[0], cand[1])
+            except Exception:                                        # noqa: BLE001
+                nest = None
+            pps = _safe((nest or {}).get("parts_per_sheet"))
+            if not pps or pps <= 0:
+                frac = -1.0
+                break
+            frac += ((_safe(g.get("qty"), 1) or 1) * float(order_qty or 1)) / float(pps)
+        if frac > 0 and (best is None or frac < best[1]):
+            best = (cand, frac)
+    return best
 
 
 def allocate_laser_nest_setup(ws, groups: Dict[Any, Dict[str, Any]],
@@ -3210,7 +3590,7 @@ def allocate_laser_nest_setup(ws, groups: Dict[Any, Dict[str, Any]],
         if not all(_m.get("laser_nest_proven") for _m in _members):
             _why_np = next((str(_m.get("laser_nest_evidence") or "") for _m in _members
                             if _m.get("laser_nest_evidence")), "no nesting proof")
-            _flag(f"laser nest {_nid}: rows split per component but the ONE-set-up "
+            _flag(f"{_nest_word(_nid)} {_nid}: rows split per component but the ONE-set-up "
                   f"allocation was NOT applied — the nest is not proven to fit one "
                   f"sheet ({_why_np}). Each of the {_n} rows carries a full department "
                   f"set-up; if these genuinely share a sheet program, reduce it on the "
@@ -3236,14 +3616,14 @@ def allocate_laser_nest_setup(ws, groups: Dict[Any, Dict[str, Any]],
                 _l_cell.value = "=(%s)/%d" % (str(_l_cell.value)[1:], _n)
                 _m["setup_share"] = ("1/%d of the department set-up "
                                      "(template's own lookup, divided)" % _n)
-            _flag(f"laser nest {_nid}: {_n} component rows "
+            _flag(f"{_nest_word(_nid)} {_nid}: {_n} component rows "
                   f"(sheet rows {_rows_ok}) share ONE department set-up — each row carries "
                   f"the template's own set-up lookup divided by {_n}, so the nest's total "
                   f"is exactly one allowance and moves if the estimators change their "
                   f"table. Components of one material and gauge nest on one sheet "
                   f"(Howard Thurley, 7332-01).", flags)
         else:
-            _flag(f"laser nest {_nid}: the rows split per component but the set-up could "
+            _flag(f"{_nest_word(_nid)} {_nid}: the rows split per component but the set-up could "
                   f"NOT be allocated — the template's hours/set-up cells on row(s) "
                   f"{_rows_bad} are not the shape this build knows (J reading L). EVERY "
                   f"row is carrying a FULL department set-up: {_n} set-ups charged where "
@@ -3275,6 +3655,33 @@ def section_words_on_line(desc: Any, material_estimate: Any) -> str:
     if "OVAL" in words.upper() and "OVAL" not in text.upper():
         return f"{text}  {words}".strip()
     return text
+
+
+# SHEET CUTTERS: a row per component, one set-up only across a PROVEN nest (D-671). The joinery
+# CNC joined the lasers here after D-670 had merged its panels on material and thickness alone:
+# that shows the panels could share stock, not that they share a program, tooling, workholding
+# or machining face.
+_SHEET_NEST_CUTTERS = frozenset({"Laser (Metal)", "Laser (Acrylic)", "CNC Joinery"})
+# Where one program may run several sheets of one stock: loading a further sheet is not a full
+# new set-up there. The lasers keep the one-sheet condition Howard set (7332-01).
+_MULTI_SHEET_PROGRAM_CUTTERS = frozenset({"CNC Joinery"})
+_OWN_SETUP = "own set-up"
+
+
+def machining_setup_signature(record: Mapping[str, Any]) -> str:
+    """What a panel's cutting program has to do beyond its outline, as far as the record says
+    (D-671): "outline", "bevel 45" (the angles its bevelled edges take), or "own set-up" where
+    an inner feature is still a question nobody has answered. Panels share a set-up only with
+    the same signature; flips, fixtures and tool changes are not read, and the evidence says
+    so."""
+    if not isinstance(record, Mapping):
+        return "outline"
+    if any(isinstance(q, Mapping) and q.get("subject") == "nested_outline_frame_or_step"
+           for q in (record.get("manufacturing_questions") or [])):
+        return _OWN_SETUP
+    be = record.get("bevelled_edges") if isinstance(record.get("bevelled_edges"), Mapping) else {}
+    ang = _safe(be.get("angle_deg"))
+    return f"bevel {ang:g}" if ang else "outline"
 
 
 def canonical_labour_groups(
@@ -3319,6 +3726,7 @@ def canonical_labour_groups(
         _out_of_scope = set()
     tube_pns = tube_part_numbers(summary)
     groups: Dict[Any, Dict[str, Any]] = {}
+    _first_visit: Dict[Tuple[str, str], Any] = {}
 
     def _prove_laser_nests(groups_in: Dict[Any, Dict[str, Any]]) -> None:
         """ONE SHEET, PROVEN — NOT PRESUMED FROM MATERIAL AND GAUGE.
@@ -3342,7 +3750,14 @@ def canonical_labour_groups(
             if len(_members) < 2:
                 for _g in _members:
                     _g["laser_nest_proven"] = True
-                    _g["laser_nest_evidence"] = "single row — nothing shared, nothing to prove"
+                    _sg = str(_g.get("setup_signature") or "")
+                    _g["laser_nest_evidence"] = (
+                        f"its own set-up: a further visit to this panel ({_sg.split(', ', 1)[1]})"
+                        if _sg.startswith(_OWN_SETUP + ", ") else
+                        "its own set-up: an inner feature on this panel is still a question, "
+                        "so its machining is not shown to match any other panel's"
+                        if _sg == _OWN_SETUP else
+                        "single row — nothing shared, nothing to prove")
                 continue
             _fraction, _sheets, _bad = 0.0, set(), []
             for _g in _members:
@@ -3361,12 +3776,42 @@ def canonical_labour_groups(
                 _proven, _why = False, (f"no nest result for {', '.join(_bad)} — nothing "
                                         f"proves these share a sheet")
             elif len(_sheets) > 1:
-                _proven, _why = False, (f"members nest on DIFFERENT stock sheets "
-                                        f"({sorted(_sheets)}) — not one program")
+                # ONE STOCK SHEET THEY CAN ALL BE CUT FROM IS ONE PROGRAM (D-695). Each part
+                # picks the stock size that suits it best, so two 12 mm strips of one board,
+                # 12693-01-04J's 1145 x 210 and 725 x 210, landed on a 2440 x 1220 and a
+                # 3050 x 1525 and were refused a shared set-up. Re-nest the members together
+                # on each sheet one of them already uses; where all fit, that is the nest.
+                _common = _common_stock_sheet(_members, estimates, order_qty)
+                if _common:
+                    _sheet_c, _fraction = _common
+                    _one_sheet = _fraction <= 1.0
+                    if _one_sheet or str(_nid).split("|")[0] in _MULTI_SHEET_PROGRAM_CUTTERS:
+                        _n_sh = int(_fraction) + (1 if _fraction % 1 else 0)
+                        _proven, _why = True, (
+                            f"re-nested together on one {_sheet_c} sheet "
+                            + (f"the whole order takes {_fraction:.2f} of it" if _one_sheet
+                               else f"one program run on {_n_sh} of them ({_fraction:.2f})")
+                            + f", by the template's own nesting; each member's material is "
+                              f"still priced on the stock size it was costed on (members "
+                              f"chose {sorted(_sheets)})")
+                    else:
+                        _proven, _why = False, (f"re-nested on {_sheet_c} the order needs "
+                                                f"{_fraction:.2f} sheets — past one sheet")
+                else:
+                    _proven, _why = False, (f"members nest on DIFFERENT stock sheets "
+                                            f"({sorted(_sheets)}) and do not all fit any one "
+                                            f"of them — not one program")
             elif _fraction <= 1.0:
                 _proven, _why = True, (f"the whole order takes {_fraction:.2f} of one "
                                        f"{next(iter(_sheets))} sheet, by the template's "
                                        f"own nesting")
+            elif str(_nid).split("|")[0] in _MULTI_SHEET_PROGRAM_CUTTERS:
+                # ONE PROGRAM, SEVERAL SHEETS (D-671): loading a further sheet of the same
+                # stock and the same program is not a full new set-up.
+                _proven, _why = True, (f"one program run on {int(_fraction) + (1 if _fraction % 1 else 0)} "
+                                       f"{next(iter(_sheets))} sheets ({_fraction:.2f} by the "
+                                       f"template's own nesting); loading each further sheet "
+                                       f"is not charged as a set-up — confirm")
             else:
                 _proven, _why = False, (f"the order needs {_fraction:.2f} sheets — past "
                                         f"one sheet, Howard's one-set-up condition is not "
@@ -3394,10 +3839,28 @@ def canonical_labour_groups(
                     f"estimator-confirmed nesting group: {_confirmed}. Not derived — a "
                     f"person who knows the job stated these components share one program, "
                     f"which is the condition Howard set for one set-up")
+            _sig = _members[0].get("setup_signature")
+            if _sig and _proven:
+                _why += (f"; the same machining on every panel ({_sig}); flips, fixtures and "
+                         f"tool changes are not read — confirm one program covers them")
             for _g in _members:
                 _g["laser_nest_proven"] = _proven
                 _g["laser_nest_evidence"] = _why
 
+    # PACKING IS THE SHIPPED UNIT'S (D-674). On the joinery card "assembly" maps to Packing
+    # Joinery. 12203-65-GA's 4 Nov 09:55 book charged two packing rows, one on the box 01J (the
+    # read's "fitting the bumpers to the box") and one on the GA (the top assembly, packed
+    # whatever joined it). A box inside the product is not packed on its own. Where bench work
+    # already covers that part, its fitting decision joins the bench row with no time of its
+    # own; where nothing does, it is charged as before.
+    _ships = {str(t).strip().upper() for t in
+              (list(payload.get("top_assemblies") or []) + [payload.get("top_assembly")])
+              if str(t or "").strip()}
+    _bench_targets = {str(d.get("target_id") or "").strip().upper()
+                      for d in (payload.get("decisions") or [])
+                      if isinstance(d, dict) and d.get("status") == "required"
+                      and str(d.get("operation") or "").strip().lower() == "bench_work"}
+    _fitting_on_the_bench: List[Tuple[str, str, str]] = []
     for decision in payload.get("decisions") or []:
         if not isinstance(decision, dict) or decision.get("status") != "required":
             continue
@@ -3527,6 +3990,10 @@ def canonical_labour_groups(
         wb_op = _map_operation(operation, is_acrylic, stock_form, material)
         if wb_op is None:
             wb_op = operation
+        if (wb_op == "Packing Joinery" and _ships and target_id
+                and target_id not in _ships and target_id in _bench_targets):
+            _fitting_on_the_bench.append((decision_id, operation, target_id))
+            continue
         if (
             wb_op == "Weld (CO2)"
             and stock_form in {"wire", "bar"}
@@ -3583,7 +4050,7 @@ def canonical_labour_groups(
             key = ("canonical-event", decision_id)
         elif wb_op == "Robomac":
             key = ("canonical-event", decision_id)
-        elif wb_op in ("Laser (Metal)", "Laser (Acrylic)"):
+        elif wb_op in _SHEET_NEST_CUTTERS:
             # ── ONE LABOUR ROW PER COMPONENT ON THE LASER ────────────────────────────
             #
             # "Labour rates should be separate line each component as reflect the
@@ -3603,6 +4070,13 @@ def canonical_labour_groups(
             # worse than the blended row it replaces.
             key = ("canonical-part-setup", wb_op, material.upper(),
                    "%g" % thickness, target_id or decision_id)
+            # A SECOND VISIT TO THE SAME PANEL IS A SECOND SET-UP (D-671): a later cut of a
+            # panel this department already cuts, at another route position, is further
+            # machining with its own row and its own set-up, never a share of the nest's.
+            if wb_op in _MULTI_SHEET_PROGRAM_CUTTERS and sequence is not None:
+                _first = _first_visit.setdefault((wb_op, target_id or decision_id), sequence)
+                if sequence != _first:
+                    key = key + ("visit %g" % sequence,)
         else:
             # Compatible leaf events share one tooling setup. Decision identities remain
             # attached individually, so no event disappears in the grouping.
@@ -3649,6 +4123,25 @@ def canonical_labour_groups(
             # The nest this row shares its set-up with: same laser, same material, same
             # gauge — the tuple that decides whether parts can share a sheet program.
             group["laser_nest_id"] = "%s|%s|%g" % (wb_op, material.upper(), thickness)
+            if wb_op in _MULTI_SHEET_PROGRAM_CUTTERS:
+                # SAME STOCK IS NOT THE SAME SET-UP (D-671): the panel's machining joins the
+                # key, and a panel whose inner feature is unanswered keeps a set-up of its own.
+                _sig = machining_setup_signature(raw.get(target_id) or estimates.get(target_id)
+                                                 or {})
+                if len(key) > 5:
+                    _sig = f"{_OWN_SETUP}, {key[5]}"
+                group["setup_signature"] = _sig
+                # THE BEVEL PASS THIS ROW'S TIME INCLUDES, BY PANEL (D-677): the record times
+                # it on the CNC row (estimator, bevel_machining), so the row says it carries it.
+                _bm = (raw.get(target_id) or estimates.get(target_id) or {}).get(
+                    "bevel_machining")
+                if isinstance(_bm, Mapping) and _safe(_bm.get("run_min")):
+                    group.setdefault("bevel_pass_min_by_part", {})[str(target_id)] = round(
+                        float(_bm["run_min"]), 2)
+                    group["bevel_setup_min"] = max(_safe(group.get("bevel_setup_min")) or 0.0,
+                                                   _safe(_bm.get("setup_min")) or 0.0)
+                group["laser_nest_id"] += "|" + (f"{_sig}:{target_id or decision_id}"
+                                                 if _sig.startswith(_OWN_SETUP) else _sig)
         if decision_id not in group["decision_ids"]:
             group["decision_ids"].append(decision_id)
         if operation not in group["engine_ops"]:
@@ -3821,6 +4314,18 @@ def canonical_labour_groups(
                     .get("hole_count"), 0) or 0) * int(qty)
 
     _merge_unread_colour_into_the_known_one(groups)
+    for _did, _op, _tgt in _fitting_on_the_bench:
+        _bench = next((g for g in groups.values() if g.get("wb_op") == "Bench Work Joinery"
+                       and _tgt in (list(g.get("targets") or []) + list(g.get("parts") or []))),
+                      None)
+        if _bench is None:
+            continue
+        _bench["decision_ids"].append(_did)
+        if _op not in _bench["engine_ops"]:
+            _bench["engine_ops"].append(_op)
+        _bench.setdefault("fitting_covered", []).append(
+            f"{_tgt}: its fitting is bench work on this row, not a packing of its own — "
+            f"only {', '.join(sorted(_ships))} is packed")
     _prove_laser_nests(groups)
 
     for group in groups.values():
@@ -5226,6 +5731,10 @@ def build_workbook_labour(
                 "holes_cut": g.get("holes_cut"),
                 "holes_cut_by_part": dict(g.get("holes_cut_by_part") or {}),
                 "holes_cut_basis": g.get("holes_cut_basis"),
+                # THE BEVEL PASS EACH PANEL'S CUT INCLUDES (D-677), minutes a part.
+                "bevel_pass_min_by_part": dict(g.get("bevel_pass_min_by_part") or {}),
+                # AND WHAT THE ROW'S CELLS NOW CHARGE FOR IT (D-681): absent, it is described.
+                "bevel_pass_charged": g.get("bevel_pass_charged"),
                 # HOW THE RATE WAS ARRIVED AT — template_calculated / size_banded /
                 # historical / historical_unbanded / engine_derived / unmeasured_default.
                 # Without this the audit tabs present an unmeasured constant and the
@@ -5292,6 +5801,25 @@ _STATED_SHOP_TIME_MARKERS = (
     ("unit_fitting_applied", ("handling", "assembly"),
      "the per-part handling allowance for each piece the unit fits (LABOUR_RULES handling)"),
 )
+
+
+# THE TWO CLAIMS THAT ARE ALLOWANCES, NOT MEASUREMENTS (D-667). The bench-fitting rule falls
+# back to a house allowance per part fitted outside the joinery pilot's scope, and the unit
+# fitting is a per-piece handling allowance. Both are honest stand-ins where nothing measured
+# the work; neither is evidence about this job that a department's measured rate for the same
+# department, inside that rate's own scope, should give way to.
+_ALLOWANCE_TIME_MARKERS = frozenset({"bench_work_applied", "unit_fitting_applied"})
+
+
+def allowance_only_claim(group: Any, stated_time_by_pn: Dict[str, str],
+                         measured_claim_pns: Any) -> bool:
+    """Does this row's stated time come ONLY from allowance claims (D-667)? True when at least
+    one member carries a stated claim and none of them carries a measured one (a department's
+    stated time, a weld or pack model, a count taken off the part's own record)."""
+    claimed = [str(p).strip().upper() for p in ((group or {}).get("parts") or [])
+               if str(p).strip().upper() in (stated_time_by_pn or {})]
+    strong = {str(p).strip().upper() for p in (measured_claim_pns or ())}
+    return bool(claimed) and not any(p in strong for p in claimed)
 
 
 def _claim_covers(stated_ops: Any, operation: Any) -> bool:
@@ -5578,6 +6106,29 @@ def point_bom_lines_at_nest_rows(ws, bom: Mapping[str, Any],
     return moved
 
 
+def scale_estimate_columns(ws, setting: Any) -> List[str]:
+    """Multiply each column's own template width from the first to the last letter by the
+    factor (config.ESTIMATE_COLUMN_WIDTH_SCALE). A column the template gives no width keeps
+    the sheet default; a width the template sets for a range reaching outside these columns
+    is left alone rather than changed for columns nobody asked about. Returns the letters set."""
+    from openpyxl.utils import column_index_from_string, get_column_letter
+    if not setting:
+        return []
+    first, last, factor = setting
+    lo, hi = column_index_from_string(str(first)), column_index_from_string(str(last))
+    done: List[str] = []
+    for _key, dim in list(ws.column_dimensions.items()):
+        # A width loaded from the template carries its column range; one set in code has only
+        # its letter until the book is saved.
+        own = column_index_from_string(str(getattr(dim, "index", "") or _key))
+        a, b = int(dim.min or 0) or own, int(dim.max or 0) or own
+        if not (a and b and lo <= a and b <= hi) or not dim.width:
+            continue
+        dim.width = round(float(dim.width) * float(factor), 2)    # a set width is custom
+        done += [get_column_letter(c) for c in range(a, b + 1)]
+    return sorted(done, key=column_index_from_string)
+
+
 def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional[str]:
     """Open the template, populate inputs from `summary`, save-as to output dir.
     `job_folder_name` is the drawing-folder basename, used for the output filename.
@@ -5832,6 +6383,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"own cost per sheet (D-559).", flags)
             else:
                 steel_parts.append(pe)
+        # 3a. NOT STEEL THE SHEET STEEL BLOCK CAN PRICE (D-602). That block prices every row at
+        #     one mild-steel £/tonne, so brass, copper, glass or a material nobody holds a rate
+        #     for was charged as mild steel there, silently. It goes to the BOM as a per-each
+        #     line at its own price or none, with the question asked.
+        elif (stock_form in STEEL_STOCK_FORMS and not _is_board(mat)
+              and not _material_preservation.sheet_steel_can_price(mat)):
+            bom_parts.append(pe)
+            _q3a = _material_preservation.sheet_steel_question(pe)
+            if _q3a:
+                _flag(_q3a, flags)
+                if _q3a not in (pe.get("review_flags") or []):
+                    pe.setdefault("review_flags", []).append(_q3a)
         # 3. steel (sheet or stated-weight, with real geometry) — but NOT a board/timber part.
         #    A timber panel costed by stated weight has stock_form 'stated_weight' (in
         #    STEEL_STOCK_FORMS); without the board guard it would be dumped in Sheet Steel and
@@ -5897,6 +6460,26 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                   f"blankL={blank_l}) — written to the BOM as a per-each line so it "
                   f"cannot silently read as free. Add its material/geometry to cost it "
                   f"as sheet or board.", flags)
+
+    # ── THE MATERIAL IS PRESERVED WHERE THE MONEY IS PLACED (D-602) ─────────────────
+    # The last word, whichever rule above placed the part. A Sheet Steel row must be steel
+    # that block can price; anything else leaves it for the BOM with the question asked.
+    # And every charged line must be the material it was stated as, unless a recorded
+    # decision changed it: an unrecorded change is asked, never fixed silently here.
+    for _pe_ss in list(steel_parts):
+        _q_ss = _material_preservation.sheet_steel_question(_pe_ss)
+        if _q_ss:
+            steel_parts.remove(_pe_ss)
+            bom_parts.append(_pe_ss)
+            _flag(_q_ss, flags)
+            if _q_ss not in (_pe_ss.get("review_flags") or []):
+                _pe_ss.setdefault("review_flags", []).append(_q_ss)
+    for _pe_mp in bom_parts + steel_parts + board_parts + wire_parts:
+        _q_mp = _material_preservation.material_question(_pe_mp)
+        if _q_mp:
+            _flag(_q_mp, flags)
+            if _q_mp not in (_pe_mp.get("review_flags") or []):
+                _pe_mp.setdefault("review_flags", []).append(_q_mp)
 
     # ── BOM block: desc, code, PRICE (engine), qty, scrap ──────────────────
     # Holds true bought-ins (fixings, vinyl, electricals) AND tube sections
@@ -6034,6 +6617,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # part it came from so the flag can name it. Only a part we make votes, through a stock
     # form we recognise; see _largest_fabricated_part_area for why "" and bought-in do not.
     _max_part_area_m2, _max_part_area_pn = _largest_fabricated_part_area(_all_pes_pw)
+    # The tree each department row's band is read through (D-659): a row's own parts and the
+    # parts inside the assemblies it carries, never another branch's.
+    _band_children = canonical_children_by_pn(summary)
     _powder_basis = ("MINIMUM PER PIECE" if _powder_by_floor_kg >= _powder_by_area_kg
                      else "COATED AREA")
     _wire_powder_kg = _powder_kg_total          # the BOM branch below reads this name
@@ -6519,7 +7105,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _at_breaks = _cl_rec.get("order_gbp_at_breaks") or (
             {"order": _cl_rec["order_gbp"]} if _safe(_cl_rec.get("order_gbp")) else None)
         _mpb_cfg = dict(getattr(config, "MATERIAL_PRICE_BREAK", {}) or {})
-        if _at_breaks and _mpb_cfg.get("enabled"):
+        # AND A UNIT RATE WITH AN ORDER MINIMUM (D-689): the plating card's minimum moves
+        # with the quantity like any order figure, so its cell reads the break row too.
+        _with_minimum = isinstance(pe.get("unit_with_order_minimum"), dict) \
+            and price is not None
+        if (_at_breaks or _with_minimum) and _mpb_cfg.get("enabled"):
             _t = row + int(_mpb_cfg.get("row_offset", -6))
             _sheet_name = str(_mpb_cfg.get("sheet") or "Material Price Break")
             # WITH THE RUN'S OWN FIGURE AS THE FALLBACK. A run that never fills the break
@@ -6685,6 +7275,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     if wire_parts:
         w = cm["tube"]
         row = w["first_row"]
+        # A GAUGE THE TABLE DOES NOT HOLD IS SAID, AND NO ROW IS INVENTED FOR IT (D-692). The
+        # row's lookup would price it as the next thinner gauge, with nothing on the sheet to
+        # say so; adding a row would put a metres-per-tonne nobody stated into the template.
+        _wire_gauges, _wire_table_where = template_wire_gauges(ws, w)
+        _wire_to_confirm: Dict[str, Set[float]] = {}
         for pe in wire_parts:
             if row > w["last_row"]:
                 _flag(f"Wire overflow: {len(wire_parts)} wire/bar parts but only "
@@ -6695,14 +7290,44 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             length = _safe(me.get("wire_length_mm") or pe.get("wire_length_mm"))
             qty = int(_safe(pe.get("quantity"), 1))
             desc = f"{pe.get('part_number') or ''}  {pe.get('description') or ''}".strip()
+            desc = f"{desc[:120 - len(_WIRE_RATE_TAG) - 1]} {_WIRE_RATE_TAG}"
+            if gauge is not None:
+                _wire_to_confirm.setdefault(
+                    _wire_words(pe.get("normalized_material") or me.get("material")),
+                    set()).add(gauge)
             if gauge is None or length is None:
                 _flag(f"wire part {pe.get('part_number')} missing gauge/length "
                       f"(gauge={gauge}, length={length}) — line will be £0.", flags)
+            elif _wire_gauges and not any(abs(gauge - g) < 1e-6 for g in _wire_gauges):
+                _below = [g for g in _wire_gauges if g < gauge]
+                _gq = (f"{pe.get('part_number')}: Ø{gauge:g} is not a gauge in "
+                       f"{_wire_table_where}, which holds "
+                       f"{', '.join(f'{g:g}' for g in _wire_gauges)} mm — the Wire row's "
+                       f"lookup prices it as "
+                       + (f"Ø{max(_below):g} wire" if _below else
+                          "nothing (it is below the smallest gauge)")
+                       + ". No gauge row has been added to the template; confirm the stock, "
+                         "or add the gauge and its metres per tonne to the table.")
+                _flag(_gq, flags)
+                if _gq not in (pe.get("review_flags") or []):
+                    pe.setdefault("review_flags", []).append(_gq)
             ws.cell(row=row, column=w["col_desc"],   value=str(desc)[:120])
             ws.cell(row=row, column=w["col_qty"],    value=qty)
             ws.cell(row=row, column=w["col_gauge"],  value=gauge)
             ws.cell(row=row, column=w["col_length"], value=length)
             row += 1
+        # Said once for the block, with the sheet's own figure where its cell holds one.
+        if _wire_to_confirm:
+            _wr = template_wire_rate(ws)
+            _flag(f"{block_title('tube')} block: every row is priced from the template's Wire "
+                  f"Cost Per Tonne"
+                  + (f" (£{_wr:,.0f}/t = £{_wr / 1000.0:.2f}/kg)" if _wr else "")
+                  + " — an undated template allowance with no purchasing source and no price "
+                    "date. PROVISIONAL, not a verified stock price: confirm "
+                  + "; ".join(f"the {_words} price for "
+                              + ", ".join(f"Ø{g:g}" for g in sorted(_gs))
+                              for _words, _gs in sorted(_wire_to_confirm.items()))
+                  + " with purchasing.", flags)
 
     # part_number -> the Sheet Steel row it was written to. Used below so the Laser
     # labour row can reference the template's OWN rate calculator instead of our model.
@@ -6823,6 +7448,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # blank (not 0) when not read, so a genuine no-hole part is not a false claim.
         # Both geometry records, asked in order — see costed_geometry_value.
         _holes = costed_geometry_value(pe, "hole_count", "estimated_hole_count")
+        _cutouts = measured_internal_cutouts(pe)
+        if _cutouts and _cutouts > int(_holes or 0):
+            # A SLOT IS PIERCED LIKE A HOLE (D-684). S counts every internal start the laser
+            # makes; the hole count knows only circles.
+            _flag(f"steel {pe.get('part_number')}: S = {_cutouts} internal cut-outs the DXF "
+                  f"contour walk measured ({int(_holes or 0)} of them round holes)", flags)
+            _holes = _cutouts
         if isinstance(_holes, (int, float)) and int(_holes) > 0:
             ws.cell(row=row, column=s["col_holes"], value=int(_holes))
         _cutlen = _safe(costed_geometry_value(
@@ -6859,7 +7491,29 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         length = _safe(_bd["length_mm"])
         width  = _safe(_bd["width_mm"])
         thick  = _safe(pe.get("normalized_thickness_mm") or me.get("thickness_mm"))
-        ws.cell(row=row, column=o["col_desc"],   value=f"{pe.get('part_number','')}  {pe.get('description','')}")
+        # A GAUGE THE COSTING REFUSED NEVER REACHES THE SHEET (SCRUM-180). 12678-01-GA's
+        # boards nested at Ga 2.5 beside the question that had refused 2.5 below the board
+        # floor: the estimate's own gauge was unset, and this cell refilled itself from a
+        # stale copy on the material result. With a refusal recorded and no resolved
+        # gauge, the Ga cell stays empty and the £/kg gap-filler below gets nothing, so
+        # the row shows an honest 0 beside its question instead of pricing the refusal.
+        _rej_t = _safe(pe.get("thickness_rejected_mm"))
+        _gauge_held = bool(_rej_t and not _safe(pe.get("normalized_thickness_mm")))
+        if _gauge_held:
+            thick = None
+            _flag(f"other-sheet {pe.get('part_number')} gauge unset — {float(_rej_t):g} mm "
+                  f"was refused below the board floor; no gauge and no sheet price until "
+                  f"the gauge is confirmed.", flags)
+        _o_desc = f"{pe.get('part_number','')}  {pe.get('description','')}"
+        # THE SPECIFIED BOARD STAYS ON ITS ROW (D-693). Where the sheet price is SDI Live's
+        # rate for another board (plain MDF for 12693-01-04J's MRMDF in EGGER: U999 ST2), the
+        # row says which board was specified and what of it the figure does not include, as an
+        # unresolved reading does on a BOM line (D-432). The figure stands; it is provisional.
+        _spec_note = str(me.get("specification_line_note") or "").strip()
+        if _spec_note:
+            _o_desc = f"{_o_desc}  —  {_spec_note}"
+            _flag(f"other-sheet {pe.get('part_number')}: {_spec_note}.", flags)
+        ws.cell(row=row, column=o["col_desc"],   value=_o_desc)
         ws.cell(row=row, column=o["col_qty"],    value=int(_safe(pe.get("quantity"), 1)))
         ws.cell(row=row, column=o["col_length"], value=length)
         ws.cell(row=row, column=o["col_width"],  value=width)
@@ -6894,12 +7548,22 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # neither are left blank + flagged (honest £0, not a silent guess).
         _sheet_price = _safe(me.get("sheet_price_gbp"))
         if not _sheet_price:
-            _cpp = _safe(me.get("cost_per_part_gbp") or me.get("unit_material_cost_gbp"))
-            _pps = _safe(me.get("parts_per_sheet"))
-            _scrap_frac = _safe(me.get("scrap_pct")) or 0.04
-            if _cpp and _pps:
-                _sheet_price = round(float(_cpp) * float(_pps) / (1.0 + float(_scrap_frac)), 2)
-        if not _sheet_price:
+            _sheet_price = sheet_price_rebuilt_from_part_cost(me)
+            if _sheet_price is None and per_piece_price_basis(me):
+                _flag(f"Other-sheet {pe.get('part_number')}: its £"
+                      f"{float(_safe(me.get('cost_per_part_gbp')) or 0):.2f} is a per-piece "
+                      f"market allowance, not a sheet price, so it is not multiplied up "
+                      f"into one (D-665).", flags)
+        if not _sheet_price and faced_board_line(summary, pe):
+            # A FACED BOARD IS NOT ITS CORE BY WEIGHT (D-666). 12203-66-GA's 19:48 and 20:10
+            # books charged the 13.8 mm laminated front panel £80.98 a sheet: 2800 x 2070 x
+            # 13.8 mm of MDF at 750 kg/m3 and the plain-MDF £1.35/kg, the raw-core money the
+            # estimator's faced-board rule refuses. The faced sheet's price is the gap.
+            _flag(f"Other-sheet {pe.get('part_number')} is faced board: its sheet is NOT "
+                  f"priced from the {str(pe.get('normalized_material') or 'core').upper()} "
+                  f"core's £/kg rate, which would charge raw-core money for a laminated "
+                  f"panel; unpriced until the faced sheet price is given (D-666).", flags)
+        elif not _sheet_price:
             # LAST, AND ONLY A GAP-FILLER: derive the £/sheet from the material's own £/kg rate the
             # same way steel is costed, so a board with a rate in config is never £0. MDF (1.35
             # £/kg, 750 kg/m3) 1235x365x12 stops shipping free.
@@ -6911,6 +7575,50 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"{str(pe.get('normalized_material') or '').upper()} £/kg rate x sheet volume "
                       f"x density (£{_sheet_price:.2f}/sheet) — an SDI material rate, not a supplier "
                       f"quote; confirm the board grade.", flags)
+        # THE CHARGED CELL IS CROSS-CHECKED, AND A CONFLICT PRICES NOTHING (SCRUM-182).
+        # The template's own formula divides this cell by the row's nest, so a stored
+        # "sheet price" must hand back the engine's per-part money. 12678-01-GA wrote a
+        # per-piece £7.50 here and the nest divided it into £0.31 shelves. The detector
+        # below is a SUSPICION, never proof of either basis — so nothing is rebuilt and
+        # no synthetic sheet rate is invented: a verified sheet price nests as before, a
+        # verified per-part allowance travels with its own nest-of-one, and a figure the
+        # two readings of which disagree is left OFF the sheet, with the conflict and
+        # the question on the row, until a person says what the price bought.
+        # AND THE GAUGE HOLD COVERS EVERY SOURCE OF A SHEET PRICE (SCRUM-180, second
+        # 12678 review). The first guard emptied the gauge cell and starved the £/kg
+        # gap-filler — and the 19:09 run still charged £6.50 a sheet on a gauge-less
+        # shelf, because a stored sheet price from the costing walked straight past it.
+        # With the gauge unset the board is not identified, so NO price can claim to
+        # buy it, wherever the figure came from: the cell stays empty and the row sits
+        # unpriced beside its own gauge question.
+        if _gauge_held and _sheet_price:
+            _flag(f"other-sheet {pe.get('part_number')} sheet price "
+                  f"£{float(_sheet_price):.2f} WITHHELD — the gauge is unset "
+                  f"({float(_rej_t):g} mm refused), so the board is not identified and "
+                  f"no price can claim to buy it; unpriced until the gauge is confirmed "
+                  f"(SCRUM-180).", flags)
+            pe.setdefault("review_flags", []).append(
+                f"{pe.get('part_number')}: sheet price £{float(_sheet_price):.2f} "
+                f"withheld — the gauge is unset, so the board it would buy is not "
+                f"identified; confirm the gauge and the row prices")
+            _sheet_price = None
+        _cpp_chk = _safe(me.get("cost_per_part_gbp") or me.get("unit_material_cost_gbp"))
+        _pps_chk = _safe(se.get("parts_per_sheet") or me.get("parts_per_sheet"))
+        if _buying_unit_conflict(_sheet_price, _cpp_chk, _pps_chk):
+            _flag(f"Other-sheet {pe.get('part_number')} CONFLICTING BUYING BASES: "
+                  f"£{float(_sheet_price):.2f} claims to be the stock sheet, but divided "
+                  f"by the nest of {float(_pps_chk):g} it returns "
+                  f"£{float(_sheet_price) / float(_pps_chk):.2f} against the engine's "
+                  f"£{float(_cpp_chk):.2f} a part. Neither basis is verified, so no sheet "
+                  f"price is written and the row is unpriced until a person says what the "
+                  f"price buys (SCRUM-182).", flags)
+            pe.setdefault("review_flags", []).append(
+                f"{pe.get('part_number')}: CONFLICTING BUYING BASES — a claimed sheet "
+                f"price of £{float(_sheet_price):.2f} against the engine's "
+                f"£{float(_cpp_chk):.2f} a part under a nest of {float(_pps_chk):g}; the "
+                f"row is left unpriced — confirm whether the figure bought a stock sheet "
+                f"or a cut piece")
+            _sheet_price = None
         if _sheet_price:
             ws.cell(row=row, column=o["col_cost_per_sheet"], value=_sheet_price)
         else:
@@ -7106,13 +7814,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # See the derived-throughput gate below: a stated rate is not a default to be improved
     # on, it is the answer.
     _STATED_THROUGHPUT_ROWS: set = set()
-    _faced_board_job = any(
-        isinstance(_p, dict) and (
-            _p.get("_laminate_in_board")
-            or str((_p.get("material_estimate") or {}).get("costing_material_family")
-                   or "").upper() in {"MFMDF", "MFC"}
-            or str(_p.get("normalized_material") or "").upper() in {"MFMDF", "MFC"})
-        for _p in (list(bom_parts or []) + list(board_parts or [])))
+    _faced_board_job = is_faced_board_job(summary, list(bom_parts or []) + list(board_parts or []))
     if _faced_board_job:
         for _row, _key in (("CNC Joinery",        "joinery_cnc_parts_per_hour"),
                            ("Edge Banding",       "joinery_edge_banding_parts_per_hour"),
@@ -7142,6 +7844,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _stated_time_by_pn: Dict[str, str] = {}
     _stated_hours_by_pn: Dict[str, Dict[str, float]] = {}
     _stated_ops_by_pn: Dict[str, set] = {}
+    _measured_claim_pns: set = set()        # D-667: claims that are not allowances
     _stamped_records = list(bom_parts or [])
     for _srcname in ("parts",):
         _stamped_records += [r for r in (summary.get(_srcname) or []) if isinstance(r, dict)]
@@ -7164,6 +7867,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             if _sp.get(_marker):
                 _stated_time_by_pn.setdefault(_spn, _why)
                 _stated_ops_by_pn.setdefault(_spn, set()).update(_ops)
+                if _marker not in _ALLOWANCE_TIME_MARKERS:
+                    _measured_claim_pns.add(_spn)
                 # AND THE HOURS THEMSELVES, not only the fact that some exist.
                 #
                 # Five separate branches in the emit loop below can each discard a computed
@@ -7205,6 +7910,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             for _cop, _cwhy in _cot.items():
                 _stated_time_by_pn.setdefault(_spn, str(_cwhy))
                 _stated_ops_by_pn.setdefault(_spn, set()).add(str(_cop).strip().lower())
+                _measured_claim_pns.add(_spn)
         _le = _sp.get("labour_estimate")
         if isinstance(_le, dict):
             _rh = _le.get("run_hours_per_unit")
@@ -8107,6 +8813,26 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         #
         # Everything else is untouched: a group with no stated time walks the chain exactly
         # as before, and the medians keep doing the job they are good at.
+        # A DEPARTMENT'S MEASURED RATE, IN ITS OWN SCOPE, OUTRANKS AN ALLOWANCE (D-667).
+        # 12203-66-GA, 3 Nov 2026 19:48 and 20:10: a faced-board tray. Bench Work Joinery was
+        # stated at 6 minutes (the house allowance, 2 min x 3 parts, because the tray's own
+        # record read plain MDF) and Packing Joinery at the per-piece handling allowance, and
+        # both took this branch ahead of the joinery shop's measured 2/hr and 20/hr for faced
+        # board. A measured time still wins here; an allowance gives way to the measurement.
+        _measured_tp = (_THROUGHPUT_DEFAULTS.get(wb_op or "")
+                        if wb_op in _STATED_THROUGHPUT_ROWS else None)
+        if _measured_tp and allowance_only_claim(g, _stated_time_by_pn, _measured_claim_pns):
+            ws.cell(row=row, column=lb["col_throughput"], value=float(_measured_tp))
+            g["rate_basis"] = "department_stated_rate"
+            g["workbook_row"] = row
+            _flag(f"throughput for '{wb_op}' is {float(_measured_tp):g}/hr — the joinery "
+                  f"department's measured rate for faced board, which outranks the house "
+                  f"allowance the costing stated for this row on "
+                  f"{', '.join(str(p) for p in (g.get('parts') or []))}: an allowance is a "
+                  f"stand-in where nothing measured the work, and here something did (D-667).",
+                  flags)
+            row += 1
+            continue
         _stated_hours, _stated_members = stated_row_hours(
             g, _stated_time_by_pn, _stated_hours_by_pn, _stated_ops_by_pn)
         _stated_from = ", ".join(_stated_members)
@@ -8164,28 +8890,49 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
         # ── SIZE-BANDED DEFAULT, keyed on the job's largest part AREA ────────────────
         # For Assemble/pack and P.Coat one number cannot be right - a small part is packed
-        # and coated far faster than a big one. Pick the band from _max_part_area_m2, which
+        # and coated far faster than a big one. Pick the band from the row's own parts (D-659), which
         # is known here (unlike unit cost, a workbook formula). Fold/Laser are not in the
         # band table (derived); Robomac/Weld are not (not size-driven) - all fall through.
         _bands = _THROUGHPUT_SIZE_BANDS.get(wb_op or "")
-        if _bands and _max_part_area_m2 > 0:
+        # EACH ROW ON ITS OWN PARTS (D-658, JG 3 Nov 2026). The band was keyed on the JOB's
+        # largest part and applied to every row of the department, so correcting 12684-02-M04
+        # to its drawn 504 x 313 moved the 33 hooks' P.Coat row from 638/hr to 319/hr: a hook
+        # took the baseplate's band. A row is banded on the largest fabricated part it carries;
+        # only a row whose parts carry no area of their own (an assembly row) takes the job's.
+        _band_area, _band_pn, _band_from = band_area_for_row(
+            g.get("parts") or [], _all_pes_pw, _band_children)
+        if _bands and _band_area > 0:
             _e1, _e2, _e3 = _THROUGHPUT_AREA_EDGES
-            _a = _max_part_area_m2
+            _a = _band_area
             _band = "A" if _a < _e1 else "B" if _a < _e2 else "C" if _a < _e3 else "D"
             _banded = _bands.get(_band)
             if _banded:
-                _flag(f"throughput for '{wb_op}' size-banded on part area: largest part "
-                      f"{_max_part_area_pn or '?'} {_max_part_area_m2:.4f} m2 -> band {_band} "
+                _unmeasured = unmeasured_row_parts(g.get("parts") or [], _all_pes_pw)
+                g["band_set_by"] = {"part": _band_pn, "area_m2": round(_band_area, 4),
+                                    "band": _band, "from": _band_from,
+                                    "provisional": bool(_unmeasured),
+                                    "unmeasured_parts": _unmeasured}
+                _flag(f"throughput for '{wb_op}' size-banded on part area, from {_band_from}: "
+                      f"largest part {_band_pn or '?'} {_band_area:.4f} m2 -> band {_band} "
                       f"-> {_banded}/hr "
-                      f"(was default {default_tp}/hr). MEASURED from your own history by product "
-                      f"size - a small part runs faster than a big one, and one median cannot "
-                      f"say that. Retune in config.THROUGHPUT_SIZE_BANDS.", flags)
+                      + (f"PROVISIONAL: {', '.join(_unmeasured)} on this row carr"
+                         f"{'ies' if len(_unmeasured) == 1 else 'y'} no measured area, so the "
+                         f"band may be set by part of what is coated or packed; confirm the "
+                         f"row's throughput. " if _unmeasured else "")
+                      + f"(was default {default_tp}/hr). MEASURED from your own history by "
+                        f"product size - a small part runs faster than a big one, and one median "
+                        f"cannot say that. Retune in config.THROUGHPUT_SIZE_BANDS.", flags)
                 default_tp = _banded
                 _rate_basis = "size_banded"
-        elif _bands and _max_part_area_m2 <= 0:
-            _flag(f"throughput for '{wb_op}': wanted to size-band it but no fabricated part "
-                  f"area was computed - using the un-banded default {default_tp}/hr. Not "
-                  f"guessing a band.", flags)
+        elif _bands and _band_area <= 0:
+            # A ROW-SPECIFIC ALLOWANCE, SAID AND ASKED (D-659): never another part's band.
+            g["band_set_by"] = {"part": None, "band": None, "from": _band_from,
+                                "allowance": f"un-banded department figure {default_tp}/hr"}
+            _flag(f"throughput for '{wb_op}' on the row for "
+                  f"{', '.join(str(x) for x in (g.get('parts') or [])[:4]) or '?'}: "
+                  f"{_band_from}, so it is not size-banded - the un-banded department figure "
+                  f"{default_tp}/hr stands as an ALLOWANCE for this row. Not another part's "
+                  f"band. Confirm this row's throughput.", flags)
             # A historical median applied WITHOUT the band it was measured in. Weaker than
             # a banded rate and stronger than a constant nobody measured — a distinction
             # the sheet made in a console line and nowhere an estimator reads.
@@ -8523,6 +9270,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         g["workbook_row"] = row
         row += 1
 
+    charge_bevel_pass(ws, _groups, lb, flags)
     allocate_laser_nest_setup(ws, _groups, lb, flags)
 
     # The canonical route record — built here, after the write loop, so every row carries
@@ -8577,11 +9325,23 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # the quantity the spec will be priced over, by length, like the tape. One ask for
     # the job, with the measurement in it, instead of a silently absent line.
     try:
-        _lam_parts = [p for p in (bom_parts or [])
-                      if isinstance(p, dict)
-                      and (p.get("_laminate_in_board")
-                           or (p.get("material_estimate") or {}).get(
-                               "costing_material_family"))]
+        # BOTH LISTS, the same mistake the joinery rates fixed before this (see
+        # _faced_board_job): a laminated PANEL with a blank sits in board_parts, so an
+        # ask scoped to bom_parts never fired on the very parts that get banded
+        # (SCRUM-179 — 12678-01-GA's EDGE row at zero on a laminated podium).
+        _lam_lines = [p for p in (list(bom_parts or []) + list(board_parts or []))
+                      if isinstance(p, dict)]
+        try:
+            _lam_raw = _canonical_record_index(summary, _lam_lines)[1]
+        except Exception:                                            # noqa: BLE001
+            _lam_raw = {}
+        # AND THE PART'S OWN RECORD (D-664), where a rescue replaced the costed one.
+        _lam_parts = [p for p in _lam_lines
+                      if (p.get("_laminate_in_board")
+                          or (p.get("material_estimate") or {}).get(
+                              "costing_material_family")
+                          or _record_is_faced_board(_lam_raw.get(
+                              str(p.get("part_number") or "").strip().upper())))]
         _bom_says_edging = any("EDG" in str(r.get("description") or "").upper()
                                for r in (summary.get("bom_rows")
                                          or (summary.get("document_analysis") or {}).get(
@@ -8605,6 +9365,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 from edge_banding import banded_length_mm as _banded_of
             except Exception:                                    # noqa: BLE001
                 _banded_of = None
+            # THE DRAWING'S OWN EDGING WORDS (D-733): "300 EDGED" sat in the drawing read's
+            # edging route, so this said "no edging layer, note or callout" of a part whose
+            # view prints one.
+            try:
+                from edge_banding import stamp_edging_route_words as _stamp_words
+                _stamp_words(_lam_parts, summary)
+            except Exception:                                    # noqa: BLE001
+                pass
             for _p in _lam_parts:
                 _q = float(_safe(_p.get("quantity")) or 1)
                 _v = _banded_of(_p) if _banded_of else {}
@@ -8856,6 +9624,19 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         open_on_sheet(wb, cm["estimate_sheet"])
     except Exception as _oe:                                          # noqa: BLE001
         _flag(f"could not set the book to open on the Estimate sheet ({_oe}).", flags)
+
+    # ── The Estimate sheet's columns G to M at half the template's width ──────
+    # James Gray, 4 Nov 2026. Each column keeps its own proportion; see config.
+    try:
+        _scaled = scale_estimate_columns(wb[cm["estimate_sheet"]],
+                                         getattr(config, "ESTIMATE_COLUMN_WIDTH_SCALE", None))
+        if _scaled:
+            print(f"   [wb_populate] Estimate columns {', '.join(_scaled)} set to "
+                  f"{config.ESTIMATE_COLUMN_WIDTH_SCALE[2]:g} of the template's width",
+                  flush=True)
+    except Exception as _cw:                                          # noqa: BLE001
+        _flag(f"the Estimate sheet's column widths were left as the template has them "
+              f"({type(_cw).__name__}: {_cw}).", flags)
 
     # ── Save-As to output dir with folder-name + timestamp ─────────────────
     os.makedirs(cm["output_dir"], exist_ok=True)
@@ -9287,23 +10068,8 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
                 "sheet row", "shares that row with", "why the counts differ"]
             _out_rows = []
             for _r in _routes:
-                _wr = _row_for.get(str(_r.get("decision_id") or ""))
-                _shares, _note = "", ""
-                if _wr:
-                    _others = [p for p in (_wr.get("part_numbers") or [])
-                               if str(p).upper() != str(_r.get("part_or_assembly") or "").upper()]
-                    _shares = ", ".join(str(p) for p in _others)
-                    if _others:
-                        _note = ("one sheet row, several parts — a row is a tooling SETUP, so "
-                                 "this decision and the ones for the parts beside it are "
-                                 "charged once between them")
-                elif str(_r.get(_yes_no)) == "yes":
-                    _note = ("charged, but no sheet row carries this decision id — the join "
-                             "from the route to the sheet is missing for this line")
-                else:
-                    _note = "not charged, so no sheet row is expected"
                 _out_rows.append([_r.get(k) for k in _keys]
-                                 + [(_wr or {}).get("workbook_row"), _shares, _note])
+                                 + list(route_line_on_the_sheet(_r, _row_for, _yes_no)))
             _blocks.append({
                 "title": "2 · Routes — every decision, and which sheet row charged it",
                 "intro": [
@@ -9342,6 +10108,48 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
         print(f"   [wb_populate] BOMs/Routes tabs not added "
               f"({type(_bre_exc).__name__}: {_bre_exc})", flush=True)
     return
+
+
+def route_line_on_the_sheet(route_row: Mapping[str, Any],
+                            row_for: Mapping[str, Mapping[str, Any]],
+                            yes_no: str = "charged") -> Tuple[Any, str, str]:
+    """The Routes tab's last three cells for one route line: the sheet row(s) that charged it,
+    the parts sharing those rows, and why the counts differ.
+
+    EVERY DECISION ID ON THE LINE, NOT THE LINE'S IDS AS ONE STRING (D-685). bom_and_route_extract
+    prints one line per (part, operation) and joins the ids of every decision behind it
+    ("decision:a, decision:b"). The tab looked that whole string up, which no row carries, so
+    12693-01-101's assembly, decided twice and charged on two rows, read "charged, but no sheet
+    row carries this decision id": the one line on the tab that most needed its rows named.
+    Each id is joined on its own, and a line charged on more than one row says so."""
+    _ids = [i.strip() for i in str(route_row.get("decision_id") or "").split(",") if i.strip()]
+    _rows: List[Mapping[str, Any]] = []
+    for _i in _ids:
+        _hit = row_for.get(_i)
+        if _hit is not None and all(_hit is not _w for _w in _rows):
+            _rows.append(_hit)
+    _self = str(route_row.get("part_or_assembly") or "").upper()
+    if _rows:
+        _others = list(dict.fromkeys(
+            str(p) for _w in _rows for p in (_w.get("part_numbers") or [])
+            if str(p).upper() != _self))
+        if len(_rows) > 1:
+            _note = (f"one route line charged on {len(_rows)} sheet rows — each decision behind "
+                     f"it made a row of its own; if they are the same work, it is charged "
+                     f"{len(_rows)} times")
+        elif _others:
+            _note = ("one sheet row, several parts — a row is a tooling SETUP, so this decision "
+                     "and the ones for the parts beside it are charged once between them")
+        else:
+            _note = ""
+        _cell = (", ".join(str(_w.get("workbook_row")) for _w in _rows
+                           if _w.get("workbook_row") is not None)
+                 if len(_rows) > 1 else _rows[0].get("workbook_row"))
+        return _cell, ", ".join(_others), _note
+    if str(route_row.get(yes_no)) == "yes":
+        return None, "", ("charged, but no sheet row carries this decision id — the join from "
+                          "the route to the sheet is missing for this line")
+    return None, "", "not charged, so no sheet row is expected"
 
 
 CANONICAL_BOM_HEADERS = ["Part", "Description", "Kind", "Qty/unit", "Parent(s)", "Children",

@@ -578,6 +578,13 @@ class _Book:
                    for v in values if isinstance(v, str))
 
 
+# The rows that put a stated surface on (a brushed grain, an anodised surface), where no
+# READ_OPERATION_CHARGED_BY family names them.
+_FINISH_ROWS: Dict[str, Tuple[str, ...]] = {
+    "brushed": ("brush_before_plate", "linisher", "polishing", "diamond_polish", "deburring"),
+    "anodise": ("anodising",)}
+
+
 def _families(op: str) -> Tuple[str, ...]:
     fam = dict(_cfg("READ_OPERATION_CHARGED_BY", {}) or {})
     return tuple(fam[op]) if op in fam else (op,)
@@ -625,10 +632,15 @@ def _source_of(rec: Mapping[str, Any], field: str) -> str:
 
 # ── the audit: after Excel ───────────────────────────────────────────────────────────
 
-def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = None,
+          ledger: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """Every read item's final state, the engine's allowances apart, and the findings that hold
     the release. Mutates nothing; never returns a verdict kept from an earlier workbook."""
-    ledger = summary.get("read_ledger") if isinstance(summary.get("read_ledger"), Mapping) else {}
+    # THE LEDGER UNDER AUDIT: the LLM read's by default, or the one given (the drawing ledger,
+    # SCRUM-194 requirement 2), which names the sources that are its own reading.
+    if not isinstance(ledger, Mapping):
+        ledger = summary.get("read_ledger") if isinstance(summary.get("read_ledger"), Mapping) else {}
+    _read_src = set(ledger.get("read_sources") or _READ_SOURCES)
     result: Dict[str, Any] = {"schema": SCHEMA,
                               "applicable": bool(ledger.get("items") or ledger.get("error")),
                               "issues": [], "items": [], "allowances": [], "engine_lines": []}
@@ -664,6 +676,9 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                  "cells": [c for c in cells if c], **extra}
         if item.get("link"):
             entry["link"] = item["link"]
+        for _k in ("page", "words"):                 # where the drawing said it (SCRUM-194)
+            if item.get(_k) not in (None, ""):
+                entry[_k] = item[_k]
         if item.get("renamed_to"):
             # A NAME THE ENGINE CHANGED IS SHOWN BESIDE THE READ'S (D-596d).
             entry["renamed_to"] = item["renamed_to"]
@@ -887,7 +902,7 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                                                             " (its line is not charged)"))
                 return
             by = _source_of(rec, "quantity")
-            if by in _READ_SOURCES:
+            if by in _read_src:
                 done(item, UNRESOLVED, f"changed from {read_q:g} to {rec_q:g} and no source "
                                        f"names the change")
             else:
@@ -912,6 +927,32 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                                        f"carries that code — the item priced is not shown to be "
                                        f"{ref}; the supplier match is unproven")
             return
+        if item["kind"] == "section":
+            # A SECTION THE DRAWING STATES, HELD TO THE COSTED RECORD (SCRUM-194 requirement 2):
+            # its profile and its length or pieces, as read, against what was priced.
+            read = item.get("as_read") if isinstance(item.get("as_read"), Mapping) else {}
+            held_ss = (cost.get("section_stock") if isinstance(cost.get("section_stock"), Mapping)
+                       else rec.get("section_stock") if isinstance(rec.get("section_stock"), Mapping) else {})
+            if not held_ss or not held_ss.get("a"):
+                done(item, UNRESOLVED, "the costed record holds no section — the stated section was "
+                                       "lost before costing")
+                return
+            changes = []
+            for key in ("a", "b", "t", "length_mm"):
+                a, b = fcc.number(read.get(key)), fcc.number(held_ss.get(key))
+                if a and b is not None and not math.isclose(a, b, rel_tol=0, abs_tol=0.5):
+                    changes.append({"field": key, "from": a, "to": b,
+                                    "by": _source_of(rec, "section_stock." + key) or "unnamed"})
+            if any(c["by"] in _read_src or c["by"] == "unnamed" for c in changes):
+                done(item, UNRESOLVED, "; ".join(f"{c['field']} {c['from']:g} read, {c['to']:g} held"
+                                                 for c in changes) + " — no source names the change",
+                     corrected=changes)
+            elif changes:
+                done(item, CORRECTED, "; ".join(f"{c['field']} {c['from']:g} read, {c['to']:g} held — by {c['by']}"
+                                                for c in changes), corrected=changes)
+            else:
+                done(item, CARRIED, "as read")
+            return
         if item["kind"] == "material":
             held = rec.get("normalized_material") or cost.get("normalized_material")
             if not held:
@@ -923,7 +964,7 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                 by = _source_of(rec, "normalized_material")
                 done(item, CORRECTED, f"{item.get('as_read')} as read, {held} held — by "
                                       f"{by or 'the engine'}'s material vocabulary"
-                     if by in _READ_SOURCES else f"{item.get('as_read')} as read, {held} held — by {by}",
+                     if by in _read_src else f"{item.get('as_read')} as read, {held} held — by {by}",
                      corrected={"from": item.get("as_read"), "to": held,
                                 "by": by or "material vocabulary at the read's rank"})
             return
@@ -936,7 +977,7 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                     continue
                 by = _source_of(rec, field)
                 changes.append({"field": key, "from": a, "to": b, "by": by or "unnamed"})
-                if by in _READ_SOURCES:
+                if by in _read_src:
                     unnamed.append(key)
             if unnamed:
                 done(item, UNRESOLVED, f"{', '.join(unnamed)} changed and no source names the "
@@ -956,7 +997,11 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
             return
         if ruled(item):
             return
-        if what == "folds":
+        if what.startswith("thread"):
+            work_state(item, "tapping", pn)
+        elif what == "countersink":
+            work_state(item, "countersinking", pn)
+        elif what == "folds":
             work_state(item, "folding", pn)
         elif what == "banded edges":
             work_state(item, "edge_banding", pn)
@@ -988,7 +1033,10 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                  int(fcc.number(c.get("count")) or 0))
                 for c in (rec.get("concept_cutout_dims") or []) if isinstance(c, Mapping)
                 and str(c.get("what") or "").lower().startswith("hole")]
-        held += [(fcc.number(d) or 0, 0) for d in (rec.get("hole_sizes_mm") or [])]
+        held += [(fcc.number(f.get("diameter_mm")) or 0, int(fcc.number(f.get("count")) or 0))
+                 for f in (rec.get("stated_features") or []) if isinstance(f, Mapping) and f.get("kind") == "hole"]
+        if not any(n for _d, n in held):
+            held += [(fcc.number(d) or 0, 0) for d in (rec.get("hole_sizes_mm") or [])]
         size = f"Ø{dia:g}" if dia else "the"
         match = [h for h in held if not dia or abs(h[0] - dia) <= 0.25]
         if not match:
@@ -1156,6 +1204,13 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                      + (f"a {'/'.join(named)} rate" if named else "a rate that names no process")
                      + f", not a {proc} rate; give the {proc} rate or the minutes at it, or rule "
                        f"how it is covered", rows)
+        elif what in _FINISH_ROWS:
+            # A GRAIN OR AN ANODISED SURFACE STATED ON THE SHEET IS WORK (SCRUM-194): the rows
+            # that put it on charge it, or it is unresolved with the finish named.
+            rows = book.any_rows(_FINISH_ROWS[what])
+            done(item, CHARGED if rows else UNRESOLVED,
+                 f"{what} finish charged by {', '.join(sorted({l['title'] for l in rows}))}" if rows
+                 else f"{item.get('text') or what} stated, and no row charges that finish", rows)
         else:
             done(item, UNRESOLVED, "a stated requirement no rule here can account for")
 
@@ -1268,7 +1323,7 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
         kind = item.get("kind")
         if kind == "part":
             continue
-        if kind in ("quantity", "material", "size", "stated_reference"):
+        if kind in ("quantity", "material", "size", "section", "stated_reference"):
             fact(item)
         elif kind in ("operation", "unit_operation"):
             work_state(item, op_name(item.get("item")), _pn(item.get("record")))
@@ -1302,13 +1357,29 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
         if e["state"] == UNRESOLVED:
             issues.append({"code": "read_item_unresolved", "item": e["id"], "part": e["record"],
                            "label": e.get("label"), "why": e["how"]})
+    # AN ENGINE ALLOWANCE IS A PRICED INFERENCE WITH ITS REASON, NOT A HOLD, on the drawing
+    # ledger. The read contract holds an allowance no read item explains, because the model
+    # was asked to list the work. The drawing was not: an operation the engine reasonably
+    # inferred beside what the sheet states (JG, 5 Nov 2026: price it, name the assumption,
+    # ask beside the charge) is listed with its basis under allowances_noted, and only an
+    # UNRESOLVED stated fact holds the release.
+    drawing_ledger = str(ledger.get("schema") or "").startswith("drawing_ledger")
     for a in result["allowances"]:
+        if a.get("holds") and drawing_ledger:
+            a["holds"] = False
+            result.setdefault("allowances_noted", []).append(
+                {"item": f"allowance:{a['operation']}", "part": a.get("part") or "", "class": a["class"],
+                 "basis": a.get("basis"), "row": a.get("row"), "cell": a.get("cell"),
+                 "row_value_gbp": a.get("row_value_gbp")})
+            continue
         if a.get("holds"):
             issues.append({"code": "engine_allowance_unconfirmed", "item": f"allowance:{a['operation']}",
                            "part": a.get("part") or "", "class": a["class"],
                            "minutes_per_product": a.get("minutes_per_product"),
                            "gbp_per_unit": a.get("gbp_per_unit"),
-                           "hours_at": a.get("hours_at"), "basis": a.get("basis")})
+                           "hours_at": a.get("hours_at"), "basis": a.get("basis"),
+                           "row": a.get("row"), "cell": a.get("cell"),
+                           "row_value_gbp": a.get("row_value_gbp")})
     for line in result["engine_lines"]:
         if line.get("holds"):
             issues.append({"code": "engine_line_unconfirmed", "item": f"line:{line['record']}",
@@ -1398,16 +1469,21 @@ def _allowances(summary: Mapping[str, Any], book: _Book, ledger: Mapping[str, An
                                  if minutes is not None else {}),
                     "rate_gbp_per_hour": rate, "gbp_per_unit": gbp,
                     "gbp_per_unit_on_sheet": l["value"] if dedicated else None,
+                    # THE ROW'S OWN CHARGE, whoever shares it (D-603): where the part records no
+                    # run minutes the finding names the row and its money, never "0 min".
+                    "row_value_gbp": l["value"],
                     "confirmed": (f"confirmed for this job by {book.decided_by}: "
                                   f"{ruling.get('reason')}" if confirmed else ""),
                     "holds": cls in holding and not confirmed})
     origins = {_pn(e.get("record")): e for e in (ledger.get("engine_lines") or [])
                if isinstance(e, Mapping)}
+    drawing_ledger = str(ledger.get("schema") or "").startswith("drawing_ledger")
     for pn, rows in sorted(book.material.items()):
         if pn in traced_material or pn in read_parts:
             continue
         cost = book.costs.get(pn) or book.records.get(pn) or {}
         origin = str((origins.get(pn) or {}).get("origin") or "")
+        hold: Optional[bool] = None
         try:
             from commercial_lines import is_commercial_line          # noqa: WPS433
             commercial = bool(is_commercial_line(cost)) or pn in ("PACKAGING", "DELIVERY")
@@ -1436,16 +1512,48 @@ def _allowances(summary: Mapping[str, Any], book: _Book, ledger: Mapping[str, An
                 "a record more than one read line could be, linked to none — rule which line "
                 "it is" if origin == "read:link_ambiguous" else
                 "a record made from a read line this read does not contain")
+        elif drawing_ledger:
+            cls, note, hold = _drawing_line_class(pn, cost, book.records.get(pn) or {})
         else:
             cls, note = "unclassified", "an engine line with no stated basis"
         ruling = book.rulings.get(f"line:{pn}".lower())
         confirmed = bool(ruling and ruling.get("ruling") == "confirmed")
-        result["engine_lines"].append({
-            "record": pn, "class": cls, "basis": note,
-            "gbp_on_sheet": sum(fcc.cached_number(r.get("total_value_gbp")) or 0 for r in rows),
-            "cells": [r.get("charged_cell") for r in rows],
-            "holds": cls in holding and not confirmed})
+        holds_line = (hold if drawing_ledger and hold is not None else cls in holding) and not confirmed
+        line = {"record": pn, "class": cls, "basis": note,
+                "gbp_on_sheet": sum(fcc.cached_number(r.get("total_value_gbp")) or 0 for r in rows),
+                "cells": [r.get("charged_cell") for r in rows], "holds": holds_line}
+        result["engine_lines"].append(line)
+        if drawing_ledger and not holds_line:
+            result.setdefault("lines_noted", []).append(dict(line))
     _held_cost(summary, result, quantities)
+
+
+def _drawing_line_class(pn: str, cost: Mapping[str, Any], rec: Mapping[str, Any]
+                        ) -> Tuple[str, str, bool]:
+    """A costed line the drawing ledger never held, on the drawing ledger (SCRUM-194
+    requirement 2). The ledger holds made parts' sheets: a purchase of the parts list, a
+    consumable the finish needs and a line with no sheet are the engine's, listed with their
+    basis and never a hold. A MADE PART WITH A SHEET OF ITS OWN THAT THE READ GAVE NO FACT is
+    costed on the engine's reading alone, and that holds: it is the gap the ledger exists to
+    show (0358141's 09:32 record: M2 and M3 priced with nothing of their own read)."""
+    try:
+        from bought_in_policy import bought_in_reason                # noqa: WPS433
+        reason = bought_in_reason(dict(cost)) or bought_in_reason(dict(rec))
+    except Exception:                                                # noqa: BLE001
+        reason = ""
+    if reason:
+        return ("listed_purchase", f"a purchased line of the parts list, not a made part ({reason}); "
+                                   "the drawing ledger holds made parts only", False)
+    if cost.get("_consumable_qty_unknown") or cost.get("_price_explicitly_withheld") \
+            or rec.get("_consumable_qty_unknown"):
+        return ("consumable", "a consumable priced from the parts' finish and area; no sheet "
+                              "states it as a part", False)
+    own_pages = [p for p in (rec.get("pages") or []) if p != rec.get("bound_to_parts_list_page")]
+    roles = set(rec.get("page_roles") or cost.get("page_roles") or [])
+    if own_pages or "detail" in roles:
+        return ("unread_made_part", "a made part with a sheet of its own that the deterministic "
+                                    "read gave no fact: costed on the engine's reading alone", True)
+    return ("engine_line", "a line no sheet of the drawing states; the engine's own, listed", False)
 
 
 def _held_cost(summary: Mapping[str, Any], result: Dict[str, Any], quantities: List[int]) -> None:
@@ -1490,6 +1598,37 @@ def _held_cost(summary: Mapping[str, Any], result: Dict[str, Any], quantities: L
                             if e.get("state") == UNRESOLVED],
         "note": ("run minutes at the row's department rate; each row's set-up is spread by "
                  "Excel and is not separated here")}
+
+
+def record_drawing(summary: Dict[str, Any], workbook_path: Any = None) -> Dict[str, Any]:
+    """The drawing ledger's audit, written on the record as drawing_charge_result (SCRUM-194
+    requirement 2). The same contract as record(), over what the drawing's own text stated."""
+    ledger = summary.get("drawing_ledger") if isinstance(summary.get("drawing_ledger"), Mapping) else {}
+    try:
+        if not ledger.get("items"):
+            result = {"schema": SCHEMA, "applicable": False, "passed": None, "verified": False,
+                      "items": [], "allowances": [], "engine_lines": [], "issues": [],
+                      "scope": "no drawing ledger on this job — the deterministic read stated no "
+                               "fact a made part could be held to. That is coverage, not acceptance."}
+        else:
+            snapshot = fcc.snapshot_xlsx(workbook_path) if workbook_path else None
+            result = audit(summary, snapshot, ledger=ledger)
+            if result.get("applicable") and not workbook_path:
+                result["issues"].append({"code": "final_workbook_not_verified", "item": "", "part": ""})
+                result["passed"] = False
+    except Exception as exc:                                         # noqa: BLE001
+        result = {"schema": SCHEMA, "applicable": True, "passed": False, "items": [],
+                  "allowances": [], "engine_lines": [],
+                  "issues": [{"code": "read_charge_audit_failed", "item": "", "part": "",
+                              "text": f"{type(exc).__name__}: {exc}"}]}
+    result["ledger"] = "drawing_ledger"
+    summary["drawing_charge_result"] = result
+    if result.get("applicable"):
+        c = result.get("counts") or {}
+        print(f"   [drawing-ledger] {c.get(CHARGED, 0)} charged, {c.get(COVERED, 0)} covered, "
+              f"{c.get(EXCLUDED, 0)} excluded, {c.get(UNRESOLVED, 0)} unresolved; facts "
+              f"{c.get(CARRIED, 0)} carried, {c.get(CORRECTED, 0)} corrected", flush=True)
+    return result
 
 
 def record(summary: Dict[str, Any], workbook_path: Any = None) -> Dict[str, Any]:

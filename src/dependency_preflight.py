@@ -58,6 +58,7 @@ IMPORT_NAME: Dict[str, str] = {
     "python-dotenv": "dotenv",
     "requests": "requests",
     "Pillow": "PIL",
+    "anthropic": "anthropic",
     "openai": "openai",
     "pywin32": "win32com",
 }
@@ -84,6 +85,8 @@ CONSEQUENCE: Dict[str, str] = {
               "defaults without saying so",
     "requests": "no web or LLM price lookups",
     "PIL": "no image handling — logos and page rasters fail",
+    "anthropic": "Claude cannot stand in when xAI is busy or has no key: a busy xAI leaves the "
+                 "LLM read not done, as before (src/claude_fallback.py)",
     "openai": "the VISION BOM reader cannot run, so every BOM is read by one reader instead "
               "of two and the drawing's own parts list may go unread",
     "xlrd": "legacy .xls manual estimate sheets cannot be read for comparison",

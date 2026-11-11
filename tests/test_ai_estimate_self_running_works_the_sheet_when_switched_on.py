@@ -75,14 +75,17 @@ def switch_mod(tmp_path, monkeypatch):
 def test_off_until_someone_presses_it(switch_mod):
     v = switch_mod.view()
     assert v["enabled"] is False and v["watcher"]["connected"] is False
-    assert switch_mod.heartbeat({"phase": "idle"}) == {"enabled": False, "run_now": False}
+    _hb = switch_mod.heartbeat({"phase": "idle"})
+    assert (_hb["enabled"], _hb["run_now"], _hb["toggled_epoch"]) == (False, False, 0.0)
 
 
 def test_a_press_is_on_and_asks_for_one_immediate_read(switch_mod):
     v = switch_mod.switch(True, by="James Gray")
     assert v["enabled"] and v["run_now_pending"] and v["switched_by"] == "James Gray"
-    assert switch_mod.heartbeat({"phase": "idle"}) == {"enabled": True, "run_now": True}
-    assert switch_mod.heartbeat({"phase": "idle"}) == {"enabled": True, "run_now": False}
+    _hb = switch_mod.heartbeat({"phase": "idle"})
+    assert _hb["enabled"] is True and _hb["run_now"] is True and _hb["toggled_epoch"] > 0
+    _again = switch_mod.heartbeat({"phase": "idle"})
+    assert (_again["enabled"], _again["run_now"]) == (True, False), "one press, one read"
 
 
 def test_stop_is_off(switch_mod):
@@ -105,6 +108,45 @@ def test_the_last_cycles_tally_survives_a_short_beat(switch_mod):
     w = switch_mod.view()["watcher"]
     assert w["counts"] == {"ready": 2} and w["recent"] == [{"drawing": "A"}]
     assert w["phase"] == "idle"
+
+
+# ── the card's run window (D-626) ────────────────────────────────────────────────────
+#
+# JG, 2 Nov 2026: the price of each quantity ran (D-610's quantity_prices, carried through
+# here untouched), "only show the number ran for the past week and a max of 100, or we'll
+# run out of space".
+
+def _ledger_of(attempts):
+    return {"jobs": {str(i): {"customer": "TTI", "drawing": f"J{i}", "attempts": [a]}
+                     for i, a in enumerate(attempts)}}
+
+
+def test_the_card_lists_the_past_week_only_and_at_most_100():
+    from datetime import datetime
+    now = datetime(2026, 11, 2, 12, 0, 0)
+    attempts = [{"status": "done", "queued_at": "2026-11-01T10:00:00",
+                 "finished_at": "2026-11-01T10:40:00",
+                 "quantity_prices": [{"quantity": 1, "unit_gbp": 421.37},
+                                     {"quantity": 10, "unit_gbp": 300.0}]},
+                {"status": "done", "queued_at": "2026-10-25T10:00:00",
+                 "finished_at": "2026-10-25T10:40:00"},          # 8 days old — off the card
+                {"status": "error", "queued_at": "2026-10-20T10:00:00",
+                 "finished_at": "2026-10-20T10:10:00"}]
+    rows = sr.recent_runs(_ledger_of(attempts), now=now)
+    assert [r["drawing"] for r in rows] == ["J0"]
+    assert rows[0]["quantity_prices"][1] == {"quantity": 10, "unit_gbp": 300.0}
+    many = [{"status": "done", "queued_at": f"2026-11-01T10:00:{s % 60:02d}",
+             "finished_at": "2026-11-01T11:00:00"} for s in range(130)]
+    assert len(sr.recent_runs(_ledger_of(many), now=now)) == 100
+
+
+def test_a_run_still_going_stays_on_the_card_whatever_its_age():
+    from datetime import datetime
+    rows = sr.recent_runs(_ledger_of([
+        {"status": "running", "queued_at": "2026-10-01T10:00:00"},
+        {"status": "queued", "queued_at": "2026-09-01T10:00:00"}]),
+        now=datetime(2026, 11, 2, 12, 0, 0))
+    assert {r["status"] for r in rows} == {"running", "queued"}
 
 
 # ── the watcher obeys the switch ─────────────────────────────────────────────────────
@@ -198,6 +240,8 @@ def test_a_dry_run_copies_nothing_and_records_nothing(share):
 
 
 def test_one_cycle_collects_then_runs_every_ready_job_in_turn(share, monkeypatch):
+    # Collecting from Production is switched on for this test; it is off by default (D-608).
+    monkeypatch.setattr(sr.config, "LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION", True)
     rows = [_row(5, "0351292"), _row(6, "0360001")]
     monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": rows)
     portal = FakePortal()
@@ -207,6 +251,21 @@ def test_one_cycle_collects_then_runs_every_ready_job_in_turn(share, monkeypatch
     assert out["counts"].get("done") == 2
     ledger = ler.load_ledger(share["ledger"])
     assert [v["status"] for v in ledger["collected"].values()] == ["copied"]
+
+
+def test_by_default_a_cycle_takes_packs_from_the_live_enquiry_folder_only(share, monkeypatch):
+    """JG, 31 Oct 2026 (D-608): until the extraction endpoint is ready the drawings are looked
+    for under the Live Enquiry root, and nothing is copied in from Production."""
+    monkeypatch.setattr(sr.config, "LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION", False)
+    rows = [_row(5, "0351292"), _row(6, "0360001")]
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": rows)
+    portal = FakePortal()
+    out = sr.cycle(_settings(share), portal, FakeSwitch([]), say=lambda s: None,
+                   wait={"poll_seconds": 0, "sleep": lambda s: None})
+    assert portal.started == ["0360001"], "only the pack already in the Live Enquiry folder"
+    assert out["collected"] == []
+    assert not (share["root"] / "M&S" / "0351292").exists(), "nothing copied from Production"
+    assert out["counts"].get("waiting") == 1
 
 
 def test_switched_off_between_jobs_queues_nothing_more(share, monkeypatch):
@@ -301,9 +360,315 @@ def test_the_routes_switch_it_and_hear_the_watcher(client):
     assert on["enabled"] is True and "no self-running watcher is connected" in on["note"]
     beat = client.post("/api/estimate/self-running/heartbeat",
                        json={"phase": "running", "current": {"drawing": "0351292"}}).json()
-    assert beat == {"enabled": True, "run_now": True}
+    assert beat["enabled"] is True and beat["run_now"] is True
+    assert beat["toggled_epoch"] > 0, "the beat says when the switch was last pressed (D-644)"
     seen = client.get("/api/estimate/self-running").json()
     assert seen["watcher"]["connected"] and seen["watcher"]["current"]["drawing"] == "0351292"
     off = client.post("/api/estimate/self-running/stop", json={}).json()
     assert off["enabled"] is False
     assert client.post("/api/estimate/self-running/heartbeat", json={}).json()["enabled"] is False
+
+
+class _HomeAnswer:
+    def __init__(self, body):
+        self.body = body
+
+    def read(self):
+        import json as _json
+        return _json.dumps(self.body).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _home(monkeypatch, answer=None, down=False):
+    import urllib.error
+    import urllib.request
+    calls = []
+
+    def urlopen(req, timeout=None):
+        calls.append(req)
+        if down:
+            raise urllib.error.URLError("timed out")
+        return _HomeAnswer(answer or {"enabled": True, "watcher": {"connected": True}})
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setenv("SDI_SELF_RUNNING_HOME", "http://10.0.0.5:8071/")
+    return calls
+
+
+def test_with_a_home_every_self_running_request_is_answered_by_that_one_switch(client,
+                                                                             monkeypatch):
+    """D-651: the phone (SDI-App01) and the laptop's page each showed their own switch. A
+    service told SDI_SELF_RUNNING_HOME keeps none: reads, presses and the watcher's beats all
+    go to the home, so both screens show the same switch."""
+    calls = _home(monkeypatch, {"enabled": True, "switched_by": "the phone",
+                                "watcher": {"connected": True}})
+    seen = client.get("/api/estimate/self-running").json()
+    assert seen["enabled"] is True and seen["switched_by"] == "the phone"
+    assert seen["home"] == "http://10.0.0.5:8071"
+    client.post("/api/estimate/self-running/start", json={"by": "JG"})
+    client.post("/api/estimate/self-running/stop", json={})
+    client.post("/api/estimate/self-running/heartbeat", json={"phase": "idle"})
+    sent = [(r.get_method(), r.full_url) for r in calls]
+    assert sent == [("GET", "http://10.0.0.5:8071/api/estimate/self-running"),
+                    ("POST", "http://10.0.0.5:8071/api/estimate/self-running/start"),
+                    ("POST", "http://10.0.0.5:8071/api/estimate/self-running/stop"),
+                    ("POST", "http://10.0.0.5:8071/api/estimate/self-running/heartbeat")]
+    assert all(r.get_header("X-sdi-self-running-forwarded") == "1" for r in calls)
+    import json as _json
+    assert _json.loads(calls[1].data)["by"] == "JG"
+    assert _json.loads(calls[3].data) == {"phase": "idle"}
+    monkeypatch.delenv("SDI_SELF_RUNNING_HOME")
+    assert client.get("/api/estimate/self-running").json()["enabled"] is False, \
+        "nothing was switched on this service: it keeps no switch of its own"
+
+
+def test_a_request_already_passed_on_is_served_where_it_lands(client, monkeypatch):
+    """So SDI_SELF_RUNNING_HOME set by mistake on SDI-App01 itself cannot loop."""
+    calls = _home(monkeypatch)
+    on = client.post("/api/estimate/self-running/start", json={},
+                     headers={"X-SDI-Self-Running-Forwarded": "1"}).json()
+    assert on["enabled"] is True and "home" not in on
+    assert calls == []
+
+
+def test_a_home_that_cannot_be_reached_is_said_never_answered_from_a_copy(client, monkeypatch):
+    """A local answer would be a second switch, which is what this removes."""
+    _home(monkeypatch, down=True)
+    r = client.post("/api/estimate/self-running/start", json={})
+    assert r.status_code == 503
+    detail = r.json()["detail"]
+    assert "http://10.0.0.5:8071" in detail and "cannot reach it" in detail
+    assert client.get("/api/estimate/self-running").status_code == 503
+    monkeypatch.delenv("SDI_SELF_RUNNING_HOME")
+    assert client.get("/api/estimate/self-running").json()["enabled"] is False
+
+
+def test_a_row_made_ready_during_a_job_runs_in_the_same_cycle(share, monkeypatch):
+    """D-639: the sheet is read again after each finished job. A row added while the first
+    job ran is next, not left for the next cycle 15 minutes after this one ends."""
+    reads = {"n": 0}
+
+    def _read(path, sheet=""):
+        reads["n"] += 1
+        rows = [_row(6, "0360001")]
+        if reads["n"] > 1:                      # the line was added while 0360001 ran
+            ga = share["root"] / "M&S" / "0360002" / "0360002-GA.pdf"
+            if not ga.exists():                 # dropped once: a rewrite on every read can
+                ga.parent.mkdir(parents=True, exist_ok=True)   # cross a second and read as
+                ga.write_bytes(b"%PDF-1.4")                     # a new revision of the pack
+            rows.append(_row(7, "0360002"))
+        return rows
+    monkeypatch.setattr(ler, "read_sheet", _read)
+    portal = FakePortal()
+    out = sr.cycle(_settings(share), portal, FakeSwitch([]), say=lambda s: None,
+                   wait={"poll_seconds": 0, "sleep": lambda s: None})
+    assert portal.started == ["0360001", "0360002"]
+    assert out["counts"].get("done") == 2
+
+
+def test_a_failed_row_is_tried_once_a_cycle_not_looped(share, monkeypatch):
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": [_row(6, "0360001")])
+
+    class _Failing(FakePortal):
+        def status(self, run_id):
+            return {"status": "error", "error": "boom"}
+    portal = _Failing()
+    sr.cycle(_settings(share), portal, FakeSwitch([]), say=lambda s: None,
+             wait={"poll_seconds": 0, "sleep": lambda s: None})
+    assert portal.started == ["0360001"]
+
+
+def test_a_stop_sent_from_the_card_stays_said_until_the_watcher_reports():
+    """D-643: the 20-second refresh overwrote "Stop requested", and the card drew "running"
+    from the watcher's last report, so a stop that had landed read as one that did nothing.
+    The page remembers the run it stopped, says so on every refresh, and treats a 409 (the
+    service already holds it stopped) as landed."""
+    page = PAGE.read_text(encoding="utf-8")
+    assert "const selfStopped = {};" in page
+    assert "STOP SENT at" in page
+    assert "if(r.ok || r.status === 409){" in page
+    assert "selfJobBtn.disabled = !!stoppedAt;" in page
+
+
+def test_a_stopped_job_is_let_go_of_before_the_sheet_is_read_again(share, monkeypatch):
+    """D-649: the card drew "running" (and its Stop button "Stopping") from the watcher's last
+    report, which said running until the sheet and the Live Enquiry folders had been read
+    again for the next job. The watcher reports the moment a job ends, with no job current."""
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": [_row(6, "0360001")])
+
+    class _Stopped(FakePortal):
+        def status(self, run_id):
+            return {"status": "error", "error": "Released by hand from the page."}
+    switch = FakeSwitch([])
+    sr.cycle(_settings(share), _Stopped(), switch, say=lambda s: None,
+             wait={"poll_seconds": 0, "sleep": lambda s: None})
+    phases = [b.get("phase") for b in switch.beats]
+    assert "running" in phases and "between jobs" in phases
+    ended = switch.beats[phases.index("between jobs")]
+    assert phases.index("running") < phases.index("between jobs")
+    assert not ended.get("current"), "the ended job is no longer reported as current"
+    assert "0360001" in ended["message"] and "ended without an estimate" in ended["message"]
+
+
+def test_a_running_job_is_checked_every_ten_seconds(share, monkeypatch):
+    """D-649: the watcher asked after a job every 30s, so a stop pressed on the page waited up
+    to half a minute before the watcher even noticed."""
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": [_row(6, "0360001")])
+    slept = []
+    monkeypatch.setattr(sr.time, "sleep", slept.append)
+    sr.cycle(_settings(share), FakePortal(), FakeSwitch([]), say=lambda s: None)
+    assert sr.JOB_POLL_SECONDS == 10
+    assert slept and set(slept) == {10}
+
+
+def test_the_card_asks_every_five_seconds_while_a_stop_is_pending():
+    """D-649: after Stop, the card is refreshed every 5s (for a minute at most) until the
+    watcher reports the job ended, not at the page's usual 20s."""
+    page = PAGE.read_text(encoding="utf-8")
+    handler = page[page.index("selfJobBtn.onclick = async"):]
+    handler = handler[:handler.index("refreshSelf();\nsetInterval(refreshSelf, 20000);")]
+    assert "quickSelf();" in handler
+    assert "}, 5000);" in page[page.index("function quickSelf()"):]
+    assert "if(!stoppedAt && selfQuick){ clearInterval(selfQuick); selfQuick = null; }" in page
+
+
+
+class _SwitchPortal:
+    def __init__(self, server, answer=None, down=False):
+        self.server, self.answer, self.down, self.reports = server, answer or {}, down, []
+
+    def self_running(self, rep):
+        if self.down:
+            raise ler.PortalError(0, "no answer")
+        self.reports.append(rep)
+        return dict(self.answer)
+
+
+def test_the_watcher_reports_to_every_service_and_obeys_the_latest_press():
+    """D-644: the phone's switch was on a service the watcher never reported to, and said
+    "not connected". The beat now goes to every service on the list; the switch pressed most
+    recently on any of them is obeyed, so Off pressed anywhere still stops it."""
+    laptop = _SwitchPortal("http://localhost:8072", {"enabled": False, "toggled_epoch": 100.0})
+    phone = _SwitchPortal("http://localhost:8071",
+                          {"enabled": True, "run_now": True, "toggled_epoch": 200.0})
+    sw = sr.Switch([laptop, phone], say=lambda s: None)
+    assert sw.beat({"phase": "idle"}) is True and sw.last["run_now"] is True
+    assert laptop.reports and phone.reports, "both services hear the watcher"
+    laptop.answer = {"enabled": False, "toggled_epoch": 300.0}       # Off pressed later
+    assert sw.beat({"phase": "idle"}) is False
+    assert sw.last["run_now"] is False
+
+
+def test_a_service_that_cannot_be_reached_is_left_out_and_none_is_off():
+    said = []
+    up = _SwitchPortal("a", {"enabled": True, "toggled_epoch": 5.0})
+    down = _SwitchPortal("b", down=True)
+    sw = sr.Switch([down, up], say=said.append)
+    assert sw.beat({}) is True
+    sw.beat({})
+    assert len(said) == 1, "an unreachable service is said once, not every beat"
+    assert sr.Switch([_SwitchPortal("c", down=True)], say=lambda s: None).beat({}) is False
+
+
+def test_a_service_takes_a_newer_press_the_watcher_passes_on(switch_mod):
+    """D-650: each screen showed its own switch. The laptop page read "Switched off" while
+    the watcher ran jobs on an On pressed later on the phone. A press passed on by the
+    watcher is taken when it is newer, without asking for another immediate read."""
+    switch_mod.switch(False)
+    mine = switch_mod.heartbeat({"phase": "idle"})["toggled_epoch"]
+    later = {"enabled": True, "toggled_epoch": mine + 60, "switched_by": "the phone",
+             "switched_on_at": "2026-11-03T15:00:00+00:00"}
+    hb = switch_mod.heartbeat({"phase": "running", "obeyed": later})
+    assert hb["enabled"] is True and hb["run_now"] is False
+    assert hb["toggled_epoch"] == mine + 60
+    v = switch_mod.view()
+    assert v["enabled"] is True and v["switched_by"] == "the phone"
+    assert v["switched_on_at"] == "2026-11-03T15:00:00+00:00"
+    assert "obeyed" not in v["watcher"], "the relay is not part of what the watcher said"
+
+
+def test_an_older_press_passed_on_changes_nothing(switch_mod):
+    switch_mod.switch(True)
+    mine = switch_mod.heartbeat({"phase": "idle"})["toggled_epoch"]
+    hb = switch_mod.heartbeat({"phase": "idle",
+                               "obeyed": {"enabled": False, "toggled_epoch": mine - 60}})
+    assert hb["enabled"] is True and hb["toggled_epoch"] == mine
+
+
+def test_a_press_here_is_newer_than_one_taken_from_a_machine_whose_clock_is_ahead(switch_mod):
+    """Off pressed on the laptop must not read as older than an On taken from SDI-App01 a
+    few seconds fast, or the watcher would obey the On and pass it straight back."""
+    import time as _t
+    ahead = _t.time() + 300
+    switch_mod.heartbeat({"obeyed": {"enabled": True, "toggled_epoch": ahead}})
+    switch_mod.switch(False)
+    hb = switch_mod.heartbeat({"phase": "idle"})
+    assert hb["enabled"] is False and hb["toggled_epoch"] > ahead
+
+
+def test_the_watcher_passes_the_press_in_force_to_a_service_that_is_behind():
+    laptop = _SwitchPortal("http://localhost:8072", {"enabled": False, "toggled_epoch": 100.0})
+    phone = _SwitchPortal("http://10.0.0.5:8071",
+                          {"enabled": True, "toggled_epoch": 200.0, "switched_by": "the phone"})
+    sw = sr.Switch([laptop, phone], say=lambda s: None)
+    assert sw.beat({"phase": "idle"}) is True
+    told = [r for r in laptop.reports if "obeyed" in r]
+    assert len(told) == 1 and told[0]["obeyed"]["enabled"] is True
+    assert told[0]["obeyed"]["toggled_epoch"] == 200.0
+    assert told[0]["obeyed"]["switched_by"] == "the phone"
+    assert not [r for r in phone.reports if "obeyed" in r], "the service it came from is not told"
+
+
+def test_an_older_service_without_a_press_time_is_not_asked_every_beat():
+    old = _SwitchPortal("old", {"enabled": False})
+    new = _SwitchPortal("new", {"enabled": True, "toggled_epoch": 50.0})
+    sw = sr.Switch([old, new], say=lambda s: None)
+    sw.beat({})
+    sw.beat({})
+    assert len(old.reports) == 2 and not [r for r in old.reports if "obeyed" in r]
+
+
+def test_every_screen_shows_the_switch_in_force_after_one_beat(switch_mod):
+    """End to end on the service's own code: the laptop switched off, the phone's On later."""
+    import time as _t
+    switch_mod.switch(False)
+
+    class _Laptop:
+        server = "http://localhost:8072"
+
+        def self_running(self, rep):
+            return switch_mod.heartbeat(rep)
+    phone = _SwitchPortal("http://10.0.0.5:8071",
+                          {"enabled": True, "toggled_epoch": _t.time() + 1,
+                           "switched_by": "the phone"})
+    assert sr.Switch([_Laptop(), phone], say=lambda s: None).beat({"phase": "idle"}) is True
+    v = switch_mod.view()
+    assert v["enabled"] is True and v["switched_by"] == "the phone"
+
+
+def test_reinstalling_the_watcher_restarts_it_with_its_new_settings():
+    """D-648: re-running install-self-running-task.ps1 with SDI-App01 added changed the task
+    and left the old watcher running (MultipleInstances IgnoreNew), still reporting to the
+    laptop only. The install now stops the running watcher before registering, clears a lock
+    whose process is gone, and prints what the new watcher reports to."""
+    ps = (ROOT / "tools" / "start" / "install-self-running-task.ps1").read_text(encoding="utf-8")
+    stop = ps.index("Stop-ScheduledTask -TaskName $TaskName")
+    assert stop < ps.index("Register-ScheduledTask -TaskName $TaskName")
+    assert '$_.CommandLine -like "*self_running.py*"' in ps
+    assert '"live_enquiry.lock"' in ps and "Get-Process -Id ([int]$holder)" in ps
+    assert "reporting to|did not answer" in ps
+    assert all(ord(c) < 128 for c in ps)
+
+
+def test_the_installers_queue_on_8071_first_so_the_jobs_show_on_the_wall_people_watch():
+    """Jobs are queued on the first service listed; the wall people watch is 8071's (JG, 10 Nov 2026)."""
+    here = Path(__file__).resolve().parents[1] / "tools" / "start"
+    for name in ("install-self-running-task.ps1", "install-design-sweep-task.ps1"):
+        ps1 = (here / name).read_text(encoding="utf-8")
+        assert '"http://localhost:8071,http://localhost:8072"' in ps1, name
+        assert "localhost:8072,http://localhost:8071" not in ps1, name
+        assert all(ord(c) < 128 for c in ps1), name

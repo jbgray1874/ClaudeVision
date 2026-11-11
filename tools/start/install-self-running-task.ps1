@@ -6,9 +6,10 @@
         .\tools\start\install-self-running-task.ps1 -Remove
 
     WHAT IT RUNS. src\self_running.py: ask the portal every minute whether self-running is
-    switched on; while it is, read the Live Enquiry workbook, collect each waiting row's
-    drawings from Production into the Live Enquiry folder, and run every ready job through
-    the portal one after another. Switched off, it runs nothing. Its output goes to
+    switched on; while it is, read the AI Live Enquiry workbook from the top, take each row
+    with AI CHECK = YES, a QTY and AICompleted NO, N or Re-Run, find its drawings under the
+    Live Enquiry folder (customer, then the folder carrying the drawing number), and run every
+    ready job through the portal one after another (D-608). Switched off, it runs nothing. Its output goes to
     output\live_enquiry\self_running.log; every read rewrites
     output\live_enquiry\live_enquiry_status.csv.
 
@@ -29,7 +30,11 @@
 [CmdletBinding()]
 param(
     [string] $Root = "",
-    [string] $Server   = $(if ($env:SDI_SERVER) { $env:SDI_SERVER } else { "http://localhost:8072" }),
+    # BOTH SERVICES ON THIS MACHINE, LIKE THE RUNNER (D-644): the watcher reports to every
+    # one on the list, so the switch works from whichever the page or the phone reached.
+    # 8071 FIRST: jobs are queued on the first service on the list, and the wall people watch
+    # is 8071's, so a Self-Running job shows there. Add another with -Server "a,b,...".
+    [string] $Server   = $(if ($env:SDI_SERVER) { $env:SDI_SERVER } else { "http://localhost:8071,http://localhost:8072" }),
     [string] $TaskName = "SDI AI Estimate Self-Running",
     [string] $OldTask  = "SDI Live Enquiry Runner",
     [switch] $Remove
@@ -62,13 +67,25 @@ if (-not (Test-Path $python)) { $python = Join-Path $Root ".venv\Scripts\python.
 if (-not (Test-Path $python)) { throw "No engine virtualenv under $Root\.venv" }
 $log = Join-Path $Root "output\live_enquiry\self_running.log"
 
-# THE WORKBOOK MUST BE IN .env, NOT ONLY IN THIS WINDOW. A task reads C:\ClaudeVision\.env.
+# WHICH WORKBOOK THE TASK WILL READ (D-608b). A task reads C:\ClaudeVision\.env, never this
+# window. SDI_LIVE_ENQUIRY_WORKBOOK there wins; without it, AI-Live-Enquiry.xlsx in the Live
+# Enquiry folder is read, by its UNC path: a task has no K: drive.
 $envFile = Join-Path $Root ".env"
-$hasBook = (Test-Path $envFile) -and (Select-String -Path $envFile -Pattern '^\s*SDI_LIVE_ENQUIRY_WORKBOOK\s*=' -Quiet)
-if (-not $hasBook) {
-    Write-Host "SDI_LIVE_ENQUIRY_WORKBOOK is not in $envFile." -ForegroundColor Red
-    Write-Host "Add it (no quotes round a UNC path) and run this again:" -ForegroundColor Red
-    Write-Host '  SDI_LIVE_ENQUIRY_WORKBOOK=\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Live Enquiries\Live Enquiry (no password).xlsx'
+$book = "\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\Live Enquiry\AI-Live-Enquiry.xlsx"
+$fromEnv = $null
+if (Test-Path $envFile) {
+    $fromEnv = Select-String -Path $envFile -Pattern '^\s*SDI_LIVE_ENQUIRY_WORKBOOK\s*=\s*(.+?)\s*$' |
+        Select-Object -First 1
+}
+if ($fromEnv) {
+    $book = $fromEnv.Matches[0].Groups[1].Value.Trim('"')
+    Write-Host "  workbook $book  (SDI_LIVE_ENQUIRY_WORKBOOK in .env)"
+} else {
+    Write-Host "  workbook $book  (the default; nothing set in .env)"
+}
+if (-not (Test-Path $book)) {
+    Write-Host "That workbook is not there: $book" -ForegroundColor Red
+    Write-Host "Put the AI Live Enquiry sheet there, or set SDI_LIVE_ENQUIRY_WORKBOOK in $envFile, and run this again." -ForegroundColor Red
     exit 2
 }
 
@@ -78,6 +95,36 @@ if ($old) {
     Stop-ScheduledTask -TaskName $OldTask -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $OldTask -Confirm:$false
     Write-Host "Removed '$OldTask': self-running replaces it (one sheet, one lock). A job it had queued carries on in the portal." -ForegroundColor Yellow
+}
+
+# A WATCHER ALREADY RUNNING KEEPS ITS OLD SETTINGS (D-648). Registering with -Force changes
+# the task's definition, not the process it started; and with MultipleInstances IgnoreNew the
+# Start below does nothing while that process lives. On 3 Nov 2026 the watcher went on
+# reporting to the laptop's services only, after this was re-run with SDI-App01 added, and the
+# phone said "no self-running watcher is connected". So the running watcher is stopped first,
+# and the lock it can no longer release is cleared if its process is gone.
+$current = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($current) { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue }
+$watchers = @(Get-CimInstance Win32_Process -Filter "Name like 'python%'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like "*self_running.py*" })
+foreach ($w in $watchers) { Stop-Process -Id $w.ProcessId -Force -ErrorAction SilentlyContinue }
+if ($watchers.Count) {
+    Write-Host "  stopped the running watcher (pid $(($watchers | ForEach-Object { $_.ProcessId }) -join ', ')) so the new settings take effect" -ForegroundColor Yellow
+    Start-Sleep -Seconds 2
+}
+$ledger = Join-Path $Root "output\live_enquiry\ledger.json"
+if (Test-Path $envFile) {
+    $ledgerEnv = Select-String -Path $envFile -Pattern '^\s*SDI_LIVE_ENQUIRY_LEDGER\s*=\s*(.+?)\s*$' |
+        Select-Object -First 1
+    if ($ledgerEnv) { $ledger = $ledgerEnv.Matches[0].Groups[1].Value.Trim('"') }
+}
+$lock = Join-Path (Split-Path -Parent $ledger) "live_enquiry.lock"
+if (Test-Path $lock) {
+    $holder = ((Get-Content -LiteralPath $lock -ErrorAction SilentlyContinue) -split "\s+")[0]
+    if (-not ($holder -as [int]) -or -not (Get-Process -Id ([int]$holder) -ErrorAction SilentlyContinue)) {
+        Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+        Write-Host "  cleared the lock left by a watcher that is no longer running" -ForegroundColor Yellow
+    }
 }
 
 $action = New-ScheduledTaskAction -Execute $python `
@@ -118,7 +165,13 @@ Write-Host "  status   $(Join-Path $Root 'output\live_enquiry\live_enquiry_statu
 Write-Host "  starts   at logon for $env:USERNAME; restarts if it exits; checked every 5 minutes"
 
 Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 3
+Start-Sleep -Seconds 12
 Write-Host ""
 Write-Host "  task state: $((Get-ScheduledTask -TaskName $TaskName).State)" -ForegroundColor Green
+# WHAT THE NEW WATCHER SAYS (D-648): the services it reports to, and any it cannot reach.
+if (Test-Path $log) {
+    Get-Content -LiteralPath $log -Tail 40 |
+        Where-Object { $_ -match "reporting to|did not answer|holds .*lock|Another Live Enquiry" } |
+        Select-Object -Last 4 | ForEach-Object { Write-Host "  $_" -ForegroundColor Cyan }
+}
 Write-Host "  watch it:   Get-Content '$log' -Wait -Tail 30"

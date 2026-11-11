@@ -14,6 +14,7 @@ pandas          # tabular data handling
 python-dotenv   # load configuration from .env (imported as `dotenv`)
 requests        # web / LLM price-lookup calls
 Pillow          # image handling (imported as `PIL`)
+anthropic       # Claude, the reader when xAI is busy or has no key (src/claude_fallback.py)
 openai          # xAI is OpenAI-compatible; the client the VISION BOM reader calls Grok
                 # through (_bom_vision_reader.call_vision_llm). Undeclared until now, so
                 # a machine without it read every BOM with one reader instead of two and
@@ -25,9 +26,15 @@ openai          # xAI is OpenAI-compatible; the client the VISION BOM reader cal
 # (CI / Linux), where the rest of the pipeline still runs on PDF + DXF.
 # Requires a licensed SolidWorks seat on the machine — no key is held in this repo.
 pywin32; sys_platform == "win32"
+# The SOLIDWORKS Document Manager backup reader (D-711): its class factory has no IDispatch,
+# so pywin32 cannot reach it; comtypes binds to its interfaces from the type library.
+comtypes; sys_platform == "win32"
 
 # ── Optional / feature-specific ──────────────────────────────────────────
 # Uncomment as needed; these are heavier and not on the core estimate path.
+# psutil                   # the runner's compute reading for the wall (D-743): each job's
+#                          # own CPU and memory, SolidWorks' and Excel's. Not the engine's:
+#                          # without it the runner reads the machine's totals only.
 # numpy                    # numerics (usually pulled in transitively)
 # opencv-python            # vision helpers (imported as `cv2`)
 # pytesseract              # OCR fallback (requires system Tesseract)

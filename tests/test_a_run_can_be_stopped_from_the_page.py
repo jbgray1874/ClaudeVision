@@ -135,7 +135,15 @@ def test_the_busy_runner_line_names_the_run_it_is_on(routes):
 
 
 def test_the_page_offers_stop_beside_the_busy_runner_for_a_run_it_did_not_start():
-    assert "sb.dataset.stopRun = busyRun" in PAGE and "busyRun !== runId" in PAGE
+    """Since D-732 each running estimate has its own pane with its own Stop, inside the runner
+    box, so the one click handler covers every pane."""
+    panes = PAGE[PAGE.index("async function renderRunPanes("):]
+    panes = panes[:panes.index("async function checkRunners(")]
+    assert "const mine = r.run_id === runId;" in panes
+    assert 'data-stop-run="${paneEsc(r.run_id)}"' in panes
+    assert '<div class="runpanes" id="runPanes" hidden></div>' in PAGE
+    box = PAGE[PAGE.index('id="runnerBox"'):]
+    assert box.index('id="runPanes"') < box.index("</div>\n        <p class=\"note\">Estimates")
     handler = PAGE[PAGE.index('runnerBox.addEventListener("click"'):]
     handler = handler[:handler.index("checkRunners();")]
     assert '"/abandon"' in handler

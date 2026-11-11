@@ -3184,6 +3184,18 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     _classified_ids = {id(r) for r in _indicative}
     _unpriced = [r for r in _unpriced if id(r) not in _classified_ids]
     needs_a_person = _unpriced + _indicative
+    # THE RECORD'S MISSING PRICES, NOT THE BILL'S ALONE (D-733). The bill block is all this
+    # read, so a sheet row with no price was never counted: 12677-01-GA, 6 Nov 11:33, said "1
+    # line carries no price" with GEL TAPE named, while the 9 mm locator panel on the Other
+    # Sheet Material block was £0 too and the report beside it said two. The record's
+    # missing-price decisions are the tally the report and the Explanation tab already print;
+    # each one the bill block did not hold is listed here as well.
+    _bill_codes = {str(r.get("code") or "").strip().upper() for r in _unpriced}
+    _sheet_missing = [
+        d for d in ((record or {}).get("decisions_required") or [])
+        if isinstance(d, dict) and d.get("kind") == "missing_price"
+        and str(d.get("part") or "").strip()
+        and str(d.get("part") or "").strip().upper() not in _bill_codes]
     labour = _setup_and_run(labour_rows, order_qty)
     untraced = _tracing_failures(scan, pack, steel_calc, material, page_index)
 
@@ -3214,7 +3226,10 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                        f"(no BOM, material, labour or unit cost). Usual cause: the "
                        f"triggering email had no attachments. Re-send the job with the "
                        f"drawing pack attached.")
-        return {"subject": _empty_subject, "html": _empty_html, "text": _empty_text}
+        return {"subject": _empty_subject, "html": _empty_html, "text": _empty_text,
+                "spoken": (f"SDI Intelligence walkthrough for {job}. No estimate was produced: "
+                           f"the run received no drawings to work from, so nothing here is a "
+                           f"price. Re-send the job with its drawing pack.")}
 
     # A RULING IS A DECISION THAT NEEDS YOU TOO (D-598t). 9439-07-04's 09:10 note listed the
     # manufacturing decisions only, so the TIG rate, the glue stages, the bar's purchase basis
@@ -3249,8 +3264,8 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     # was missing was the line that makes it a note rather than an artefact.
     add(f"<p>Here is the estimate for <b>{_e(job)}</b>"
         f"{' (' + _e(client) + ')' if client else ''}, costed at {order_qty} off. "
-        f"The figures come from the workbook's own calculated cells — please read the "
-        f"outstanding items below before anything goes to the customer.</p>")
+        f"The figures come from the workbook's own calculated cells, and the quote is "
+        f"attached.</p>")
     add(f"<p><b>{_e(job)}</b>{' &middot; ' + _e(client) if client else ''} &middot; "
         f"{order_qty} of &middot; {_e(_state.strip().rstrip('.') or 'FOR REVIEW')}</p>")
     # ── THE HEADLINE TOTAL, AND THE CELL IT CAME FROM ───────────────────────────
@@ -3292,6 +3307,35 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         add(" No customer quotation is attached or issued — it is held until the "
             "outstanding lines below are settled.</p>"
             if provisional else "</p>")
+
+    # THE PRICE AT EVERY QUANTITY, WHERE THE EYE LANDS (D-613). JG, 1 Nov 2026: the e-mail
+    # should carry "a detailed but readable summary of the estimate across the units priced".
+    # The quantity table sat in §1, under the panel and a paragraph of working, with material
+    # and labour columns and no order value; on a phone nobody reached it. Here it is first:
+    # the quantity, the sheet's own unit cost at it, and what the order comes to. §1 keeps the
+    # full table and its caveats.
+    _summary = [r for r in ((quantity_sweep or {}).get("rows") or [])
+                if isinstance(r, dict) and _money(r.get("unit")) is not None
+                and _money(r.get("quantity"))]
+    if len(_summary) > 1:
+        _as_run = (quantity_sweep or {}).get("baseline_quantity") or order_qty
+        add('<p style="margin:16px 0 4px"><b>Price at each quantity</b></p>')
+        add(_table(["Quantity", "Unit cost, ex VAT", "Order value, ex VAT"],
+                   [[f"{_fmt(r.get('quantity'))} off"
+                     + (" (as run)" if int(_money(r.get("quantity")) or 0) == int(_as_run)
+                        else ""),
+                     _gbp(r.get("unit")),
+                     _gbp(round(_money(r["unit"]) * _money(r["quantity"]), 2))]
+                    for r in _summary], numeric={1, 2}))
+        add('<p style="color:#5b6b7d;font-size:12px;margin:4px 0 12px">Each unit cost is '
+            "the workbook's own total at that quantity. The order value is that unit cost "
+            "times the quantity. §1 has material and labour at each quantity, and what does "
+            "not step down.</p>")
+    elif _money(totals.get("unit")) is not None and _money(order_qty):
+        add(f'<p style="margin:8px 0">Order value at {_fmt(order_qty)} off: '
+            f"<b>{_e(_gbp(round(_money(totals['unit']) * _money(order_qty), 2)))}</b>"
+            f' <span style="color:#5b6b7d;font-size:12px">the unit cost times the '
+            f"quantity, ex VAT</span></p>")
 
     # WHERE THE PANEL GOES. Built at the very end, from the same values the sections are
     # built from, and put HERE — above everything. See the block by that name below.
@@ -3571,10 +3615,13 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                         for r in _counted], numeric={2, 4, 5, 6, 7}))
         _skipped = _basis.get("parts_without_a_blank")
         _phantom = _basis.get("parts_with_an_impossible_blank")
-        _size = _basis.get("largest_part_mm") or []
+        try:
+            from commercial_lines import packed_size_phrase as _packed_size
+            _size_words = _packed_size(_basis)
+        except Exception:                                            # noqa: BLE001
+            _size_words = ""
         add(f"<p>That is <b>{_fmt(_basis.get('order_weight_kg'))} kg</b> for the whole order"
-            + (f", largest panel {_fmt(_size[0])} × {_fmt(_size[1])} mm" if len(_size) == 2
-               else "")
+            + (f", {_size_words}" if _size_words else "")
             + f", from {_plural(_basis.get('parts_measured') or 0, 'part')} the engine could "
               f"measure"
             + (f"; {_plural(_skipped, 'part')} had no blank to weigh" if _skipped else "")
@@ -3584,6 +3631,18 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             + ". Weight uses each recorded stock basis: section kg/m × cut length for sections, "
               "or blank area × gauge × density for sheet, times how many are "
               "made. It decides the next line.</p>")
+        # THE PACK'S OWN FIGURE, WHERE IT TOOK CHARGE (SCRUM-178). Without this sentence a
+        # reader sees 33.07 kg above and 1.84 kg of counted parts and has to guess which
+        # one the courier was asked about.
+        if _basis.get("weight_basis"):
+            _wb = str(_basis.get("weight_basis"))
+            add(f"<p><b>The weight the lookups were asked.</b> "
+                f"{_wb[0].upper() + _wb[1:]}.</p>")
+        # A STATED WEIGHT THAT COULD NOT BE OWNED stays an open question, in print.
+        if _basis.get("stated_weight_unverified"):
+            _wu = str(_basis.get("stated_weight_unverified"))
+            add(f"<p><b>A stated weight was not used.</b> "
+                f"{_wu[0].upper() + _wu[1:]}.</p>")
         # WHAT WAS LEFT OUT, BY NAME. A unit weight that comes up short against the title
         # block is a part that was not weighed, and a tally of "2 parts had no blank" cannot
         # tell anybody which. Named, it is one line for design to answer.
@@ -3674,8 +3733,9 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                 f"as most of the detail behind it.</p>")
 
     # 5 ─ what needs a person
-    if needs_a_person:
-        add(f"<h3>5. {_plural(len(needs_a_person), 'line')} that need you</h3>")
+    if needs_a_person or _sheet_missing:
+        add(f"<h3>5. {_plural(len(needs_a_person) + len(_sheet_missing), 'line')} "
+            f"that need you</h3>")
         _nrows = []
         for row in sorted(needs_a_person,
                           key=lambda r: -((_money(r.get("price")) or 0)
@@ -3695,6 +3755,13 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                  "The line is costing nothing — nothing we can query holds a rate for this."),
                 _where(scan.get(str(row.get("code") or "").upper()) or {}, pack, page_index),
             ])
+        for _d in _sheet_missing:
+            _pn = str(_d.get("part") or "").strip()
+            _nrows.append([
+                _pn, str(_d.get("issue") or ""), "£0.00",
+                str(_d.get("action") or "supply a rate or a supplier quote"),
+                _where(scan.get(_pn.upper()) or {}, pack, page_index),
+            ])
         add(_table(["Line", "What it is", "On the sheet now", "What's needed",
                     "Which drawing files and pages"], _nrows, numeric={2}))
         if _market:
@@ -3713,7 +3780,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         # THE DECISIONS, NOT JUST THE PRICES. The report leads with these and the quote
         # counts them in its draft strip; a note that listed only the unpriced lines told
         # Tim there was nothing else to decide. From the record, in the report's words.
-        if not needs_a_person:
+        if not (needs_a_person or _sheet_missing):
             add(f"<h3>5. {_plural(len(_mfg), 'decision')} that need you</h3>")
         else:
             add(f"<h4>And {_plural(len(_mfg), 'decision')} still open</h4>")
@@ -3959,7 +4026,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     except Exception:                                                # noqa: BLE001
         pass
 
-    _unpriced_n = len(_unpriced)
+    _unpriced_n = len(_unpriced) + len(_sheet_missing)
     if _unpriced_n:
         _focus.append((10_000_000.0, (                       # no price is the top of any list
             f"<b>{_plural(_unpriced_n, 'line')} "
@@ -4035,7 +4102,113 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
 
     add("</div>")
     html = "\n".join(h)
-    return {"subject": subject, "html": html, "text": _as_text(html)}
+    # THE SAME NOTE, SPOKEN (D-609): written from the figures above, never re-derived, so the
+    # walkthrough cannot say a number the note does not.
+    spoken = spoken_walkthrough(
+        job=job, client=client, order_qty=order_qty, total=_job_total, totals=totals,
+        other=_other, by_block=_by_block, block_words=_BLOCK_WORDS, labour_rows=labour_rows,
+        quantity_rows=_qs_rows, need=_need, focus=[t for _, t in _focus],
+        provisional=provisional)
+    return {"subject": subject, "html": html, "text": _as_text(html), "spoken": spoken}
+
+
+# ── THE WALKTHROUGH, SPOKEN (D-609) ──────────────────────────────────────────────────
+# JG, 31 Oct 2026: after each self-running run, the estimate is e-mailed "with the files
+# associated with the run and a voice walk through also". The words are written here, from
+# the covering note's own figures; walkthrough_audio.py turns them into sound.
+
+def say_gbp(value: Any) -> str:
+    """Money as a voice reads it well: "538 pounds and 6 pence", "1,234 pounds"."""
+    m = _money(value)
+    if m is None:
+        return "an amount not yet known"
+    pence_total = int(round(abs(m) * 100))
+    pounds, pence = divmod(pence_total, 100)
+    words = f"{pounds:,} pound{'' if pounds == 1 else 's'}"
+    if pence:
+        words += f" and {pence} pence"
+    return ("minus " if m < 0 else "") + words
+
+
+def _speakable(text: str, keep_brackets: bool = True) -> str:
+    """Words a voice can read: tags, section marks and brackets gone, "£1,664.83" said as
+    money, "+" as a comma. Without `keep_brackets` what was in brackets goes too."""
+    text = re.sub(r"<[^>]+>", " ", str(text or ""))
+    if not keep_brackets:
+        text = re.sub(r"\([^)]*\)", " ", re.sub(r"\[[^\]]*\]", " ", text))
+    text = re.sub(r"£\s*([0-9][0-9,]*(?:\.[0-9]+)?)",
+                  lambda m: say_gbp(float(m.group(1).replace(",", ""))), text)
+    text = re.sub(r"§\s*\d+", "", text)
+    text = re.sub(r"\[[^\]]*\]", "", text)
+    text = text.replace("(", ", ").replace(")", ", ")
+    text = re.sub(r"\s*\+\s*", ", ", text)
+    text = re.sub(r"\s+([,.;:])", r"\1", re.sub(r"\s+", " ", text))
+    return re.sub(r",(?:\s*,)+", ",", text).strip(" ,.;:")       # never a number's own comma
+
+
+def _spoken_line(html_text: str) -> str:
+    """A focus item as one short sentence: its bold headline, its first sentence, at most
+    thirty words."""
+    m = re.search(r"<b>(.*?)</b>", str(html_text or ""), re.S)
+    text = _speakable(m.group(1) if m else str(html_text or ""), keep_brackets=False)
+    text = re.split(r"(?<=[.;!?])\s", text, maxsplit=1)[0].strip(" .;:")
+    words = text.split()
+    return " ".join(words[:30])
+
+
+def spoken_walkthrough(*, job: str, client: str, order_qty: Any, total: Dict[str, Any],
+                       totals: Dict[str, Any], other: Any, by_block: Dict[str, Any],
+                       block_words: Dict[str, str], labour_rows: List[Dict[str, Any]],
+                       quantity_rows: List[Dict[str, Any]], need: str, focus: List[str],
+                       provisional: bool) -> str:
+    """A short spoken walkthrough of one estimate: what it is, the unit cost and where it
+    comes from, the other quantities, and what needs a person. About a minute and a half."""
+    out: List[str] = [f"SDI Intelligence walkthrough for {job}"
+                      + (f", for {client}" if client else "") + "."]
+    if total.get("amount") is not None:
+        out.append(f"It is costed at {order_qty} off, at {say_gbp(total['amount'])} a unit, "
+                   f"excluding VAT, read from the workbook's own total.")
+    else:
+        out.append(f"It is costed at {order_qty} off, but the unit cost is pending: "
+                   f"{total.get('why') or 'the total could not be traced to a cell'}.")
+    if _money(totals.get("material")) is not None and _money(totals.get("labour")) is not None:
+        split = (f"Material comes to {say_gbp(totals.get('material'))} and labour to "
+                 f"{say_gbp(totals.get('labour'))}")
+        if _money(other):
+            split += f", with {say_gbp(other)} added by the unit price's own uplift"
+        out.append(split + ".")
+    else:
+        out.append("The sheet's material and labour totals could not be read.")
+    blocks = sorted(((k, v) for k, v in (by_block or {}).items()
+                     if _money(v) and k in block_words),
+                    key=lambda kv: -(_money(kv[1]) or 0))[:2]
+    if blocks:
+        out.append("Most of the material is " + " and ".join(
+            f"{block_words.get(k, k)} at {say_gbp(v)}" for k, v in blocks) + ".")
+    lab = sorted((r for r in labour_rows or [] if _money(r.get("total_value_gbp"))),
+                 key=lambda r: -(_money(r.get("total_value_gbp")) or 0))[:3]
+    if lab:
+        names = [f"{str(r.get('operation') or r.get('description') or 'a labour line').lower()}"
+                 f" at {say_gbp(r.get('total_value_gbp'))}" for r in lab]
+        out.append("The largest labour lines are "
+                   + (", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1
+                      else names[0]) + ".")
+    others = [r for r in quantity_rows or []
+              if _money(r.get("unit")) and str(r.get("quantity")) != str(order_qty)]
+    if others:
+        out.append("At the other quantities: " + "; ".join(
+            f"{r.get('quantity')} off, {say_gbp(r.get('unit'))} a unit" for r in others) + ".")
+    if need:
+        out.append(_speakable(need.replace("To confirm:", "Still to confirm:")) + ".")
+    lines = [s for s in (_spoken_line(f) for f in focus[:3]) if s]
+    if lines:
+        order = ("First", "Second", "Third")
+        out.append("What needs your eye. " + " ".join(
+            f"{order[i]}: {s}." for i, s in enumerate(lines)))
+    # NO DISCLAIMERS (D-646). JG, 3 Nov 2026: the quote is generated and attached every time,
+    # "without any disclaimers"; estimating controls what goes to a customer.
+    out.append("The workbook, the report, the explanation and the quote are attached.")
+    return " ".join(out)
 
 
 def release_section_html(record: Any, summary: Any) -> str:

@@ -40,6 +40,75 @@ The consequence worth keeping is unchanged and still bites: **what is deployed o
 `C:\ClaudeVision` is whatever was last pulled, not what is on the branch.** Verify against run
 output before reasoning about behaviour.
 
+**TWO GITHUB REPOSITORIES, KEPT IN SYNC — ALWAYS (JG, standing rule).** The same code lives in two
+places, and both must carry every change before anyone is told to pull or run:
+
+  * `jbgray1874/ClaudeVision` — where cloud sessions commit and push (`main-2026`).
+  * `jbgraysdi2026/ClaudeVision` — what the laptop pulls: `C:\ClaudeVision` runs the portal branch
+    `claude/app-portal-main-2026`, which takes the engine by merging `main-2026`.
+
+A cloud session attached to `jbgray1874` cannot push to `jbgraysdi2026`: it holds no login for that
+account, and two repositories with the same name cannot be attached to one session. So a session
+that has pushed engine work says so plainly, and the sync is done from the laptop, in this order:
+
+    cd C:\ClaudeVision
+    git fetch https://github.com/jbgray1874/ClaudeVision.git main-2026
+    git merge --no-edit FETCH_HEAD
+    git merge-base --is-ancestor <commit> HEAD; if ($?) { "fixes in" } else { "NOT in" }
+
+Stop there unless it prints "fixes in"; if the merge reports a conflict, stop and send its output,
+and never force-push or discard anything.
+
+When the session has ALSO pushed portal work to `jbgray1874`'s `claude/app-portal-main-2026` (only
+with JG's permission, as D-613's guard change was on 1 Nov 2026), that branch is merged the same way,
+after checking the laptop already holds the portal commit it was built on, so nothing older rides in:
+
+    git fetch https://github.com/jbgray1874/ClaudeVision.git claude/app-portal-main-2026
+    git merge-base --is-ancestor <portal base> HEAD; if ($?) { git merge --no-edit FETCH_HEAD } else { "STOP: send  git log --oneline -5 FETCH_HEAD" }
+    git merge-base --is-ancestor <portal commit> HEAD; if ($?) { "fixes in" } else { "NOT in" }
+
+Then publish and restart, as ONE statement (3 Nov 2026 review: a printed "STOP" does not stop
+the next pasted line; PowerShell runs each line of a paste on its own. A block in braces is read
+whole before any of it runs, so a failed check really does stop the push and the restarts):
+
+    git merge-base --is-ancestor <commit> HEAD
+    if (-not $?) { "NOT in: stop here and send the output above" } else {
+      git push origin HEAD
+      git fetch origin main-2026
+      git merge-base --is-ancestor FETCH_HEAD HEAD
+      if (-not $?) { "STOP: send  git log --oneline HEAD..FETCH_HEAD" } else {
+        git push origin HEAD:main-2026
+        .\tools\start\restart-service.ps1
+        .\tools\start\restart-service.ps1 -Port 8071 -TaskName "SDI Intelligence Service 8071"
+        .\tools\start\restart-runner.ps1
+        .\tools\start\check-services.ps1 -Ports 8071,8072
+      }
+    }
+
+Do not start a job unless check-services.ps1 shows EVERY service that answers on HEAD
+(8071 included), and the job's report reads that commit on its "Engine build" line before a single
+number is read. 6 Nov 2026 lost a morning to this: the block restarted 8072 and the runner but not
+the laptop's 8071 task, which restart-service.ps1 does not touch without its own -Port and
+-TaskName, and the 09:38 11908-22-GA run reported "Engine build 194d2c0", the night before's code.
+
+The first block merges `jbgray1874`'s `main-2026` straight into the portal branch, with the commit
+the session named as the proof. `git push origin HEAD` publishes the portal branch to
+`jbgraysdi2026`. The next two lines keep `jbgraysdi2026`'s `main-2026` carrying every engine change:
+it has held the portal branch's merges and three AM CRM connector commits since before 31 Oct, so
+its history differs from `jbgray1874`'s `main-2026`. Both histories are preserved through merges,
+never by force: it is moved forward to the portal tip, and only when that is a fast-forward. The two
+`main-2026` branches point at one commit only if one is merged into the other, which would put the
+portal history on the engine branch; that is a decision for JG, not a step of this sync.
+`check-services.ps1` then reads every service on the machine, and nothing runs until each one that
+answers is on HEAD.
+
+30 Oct 2026 lost two hours to this: `git pull origin main-2026` said "Already up to date" because the
+laptop's `origin` is `jbgraysdi2026`, which had none of the day's six commits, and the rerun replayed
+the old read. 31 Oct 2026 hit it again the other way: the old first block pushed `jbgray1874`'s
+`main-2026` over `jbgraysdi2026`'s, which was rejected because the two histories differ, and the
+pull that followed brought back the old code. A session never tells JG to rerun until the check
+prints "fixes in".
+
 **§2 is still right that the venv is the only interpreter** — and this is now enforced rather than
 remembered. `src/dependency_preflight.py` parses the "Core pipeline (required)" block of
 `requirements.txt`, imports each module, and refuses to start the scan when a fatal package is
@@ -276,6 +345,10 @@ as xAI/LLM estimates so estimators know to verify (see Pending #3 below).
   items on 1282 (junction box, mains cable, earth strap, LED link light, GU10 downlight, loom).
   Current xAI flagship is grok-4.3 (verified via web search; older slugs redirect to it, but
   grok-2 is too old even for redirect).
+- **Superseded 1 Nov 2026 by D-612.** The models are named once at the top of `src/config.py`
+  (XAI_MODEL grok-4.7, XAI_VISION_MODEL, XAI_IMAGE_MODEL grok-imagine-image-2.0); `.env` overrides
+  them with SDI_XAI_MODEL, SDI_XAI_VISION_MODEL and SDI_XAI_IMAGE_MODEL. No module names a model
+  itself. `python src\xai_models.py` lists the account's models and checks the three settings.
 
 ### estimator.py (the big one — many changes; verified present via grep at end of session)
 - **`_lookup_catalogue_tube_price`** (line ~540): matches a detected tube profile+length against
@@ -448,6 +521,18 @@ as xAI/LLM estimates so estimators know to verify (see Pending #3 below).
 - **Distinguish IDENTIFICATION from PRICING** — finding an item and pricing it are different jobs.
 - **Bottom layer always "honest flag, don't guess"** — this is what makes the finite-combination
   approach robust against unseen combinations.
+- **WHAT THE ENGINE INFERRED STAYS IN (JG, 5 Nov 2026).** The engine drives the estimate; it is
+  not a tool that questions everything. A weld it inferred stays charged, and a row it inferred
+  stays a line, even with no recorded source. Do not turn inferred work into a question or drop
+  it from the price. "Honest flag" is for where there is nothing to infer from. (D-715 and D-716
+  did the opposite on 12676-01-GA2 and were reverted in ad86873f.)
+- **JIRA STAYS CURRENT (JG, 7 Nov 2026): "this needs to be constantly updated. we need to update
+  the start and end dates also as we go".** After each pushed change, comment on the SCRUM issue it
+  serves: what changed, the commit, the status. Set Start date (`customfield_10015`) when work on an
+  issue begins, from its first commit, and Due date when its development finishes. Status: To Do,
+  then In Progress while being built, In Review when built, tested and live on the laptop, and Done
+  only when JG accepts. Work done or under way that Jira does not have gets its own issue. No
+  customer names in Jira.
 - **Confirm ALL related files deploy**, not just the obvious one (the section-detection pair gap).
 - **Solutions must EXTEND across all drawings**, not special-case 1282 (general recognisers, not
   enumerated lists).

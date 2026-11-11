@@ -1956,7 +1956,9 @@ def _files_read_section(summary: Dict[str, Any]) -> str:
     else:
         # An older JSON, or a run where the stamp did not land. Derive it from the flag: the
         # answer is coarser but it is never wrong about the three readers --llm-only disables.
-        _readers = readers_that_ran(llm_only=run_was_llm_only(summary))
+        from run_readers import run_was_deterministic_only as _det_only_rep
+        _readers = readers_that_ran(llm_only=run_was_llm_only(summary),
+                                    deterministic_only=_det_only_rep(summary))
     _ran = {r.get("key"): bool(r.get("ran")) for r in _readers if isinstance(r, dict)}
     _sw_ran = _ran.get("solidworks", True)
 
@@ -2942,10 +2944,18 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
         # So the engine seeds the classification with None for the figure, and the costed
         # record overwrites it below with the sheet's own charge where there is one.
         _me = _pe.get("material_estimate") or {}
+        # A MADE PART'S LABOUR IS NOT ITS MATERIAL EITHER (D-662). 12684-02-M07, eleven cross
+        # bars with no material price, was listed as "costed elsewhere ... on a sheet-steel
+        # row" at 18:53 because its saw, weld and dressing made the total non-zero; it sat on
+        # no material block at all. The total counts only for what is left after labour.
         try:
-            _v = float(_me.get("extended_material_cost_gbp") or 0) or float(
-                _pe.get("extended_total_cost_gbp") or 0)
+            _lab_m = float(((_pe.get("labour_estimate") or {}).get(
+                "extended_labour_cost_gbp")) or 0)
+            _v = float(_me.get("extended_material_cost_gbp") or 0) or max(
+                0.0, float(_pe.get("extended_total_cost_gbp") or 0) - _lab_m)
         except (TypeError, ValueError):
+            _v = 0.0
+        if _v <= 0.005:
             _v = 0.0
         if _v:
             _costed_elsewhere[_pn] = None
@@ -3373,6 +3383,7 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
     ])
     body = "\n".join([
         _render_header(h, has_parity, summary),
+        _render_run_panel(summary, record),
         _render_run_stop(summary),
         _render_concept_takeoff(summary),
         _render_product_scope(summary),
@@ -3668,6 +3679,25 @@ def _clip_names(reason: Any, n: int = 6) -> str:
     return f"{head}: {', '.join(items[:n])} and {len(items) - n} more"
 
 
+def _render_run_panel(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
+    """WHICH RUN THIS IS, before any number (D-601).
+
+    Run ID, runner machine, engine build, mode, reference documents, reads and the final
+    review status. Each of the four Altavio HPP books of 30 Oct needed the run log to answer
+    one of these. The build is the stamp AI Provenance prints, recorded at run time; the
+    status is the Summary's own release line, so the panel and the Summary say one thing.
+    Internal: the customer quotation carries none of it."""
+    try:
+        from run_provenance import facts
+        rows = facts(summary, review_status=_release_words(record, summary)[1])
+    except Exception:                                            # noqa: BLE001
+        return ""
+    body = "".join(f"<tr><td><b>{_esc(k)}</b></td><td>{_esc(v)}</td></tr>" for k, v in rows)
+    return (f'<div class="card run-provenance"><div class="mini"><b>Run provenance</b> '
+            f'&mdash; internal; not on the customer quotation</div>'
+            f'<table><tbody>{body}</tbody></table></div>')
+
+
 def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
                     h: Dict[str, Any], hl: Dict[str, Any]) -> str:
     """Quantity, material, labour, unit cost and release status. Then the five facts an
@@ -3718,7 +3748,10 @@ def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
     if plating.get("charged"):
         _mem = ", ".join(plating.get("members") or []) or "no member"
         _exc = plating.get("excluded") or []
+        _unm = plating.get("unmassed") or []
         facts.append(f"Plating {_money(plating.get('ext_gbp'))} is priced on <b>{_esc(_mem)}</b>"
+                     + (f"; plated with the weldment but no mass resolved, so not in the "
+                        f"priced weight: {_esc(', '.join(_unm))}" if _unm else "")
                      + (f"; excluded because their own detail states another finish: "
                         f"{_esc(', '.join(_exc))}" if _exc else "") + ".")
     basis = ("not a price — this run costed nothing, so no figure on the sheet is one"

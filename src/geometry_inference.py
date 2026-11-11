@@ -249,12 +249,14 @@ def infer_missing_geometry(summary: Dict[str, Any], db=None) -> Dict[str, Any]:
     try:
         parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
     except Exception:
-        return {"inferred": [], "still_missing": [], "refused_bought_in": []}
+        return {"inferred": [], "still_missing": [], "refused_bought_in": [],
+                "refused_no_blank": []}
 
     geometried = [p for p in parts if _has_geometry(p)]
     inferred_log: List[Dict[str, Any]] = []
     still_missing: List[str] = []
     refused_bought_in: List[Dict[str, Any]] = []
+    refused_no_blank: List[Dict[str, Any]] = []
 
     for part in parts:
         if _has_geometry(part):
@@ -301,6 +303,24 @@ def infer_missing_geometry(summary: Dict[str, Any], db=None) -> Dict[str, Any]:
         if not _is_no_geometry_bom_part(part):
             continue
 
+        # A PART THAT USES NO BLANK OF ITS OWN IS LENT NONE (D-661). 12684-02-GA, 3 Nov 2026
+        # 18:11: the outer frame (1/2" square tube), the cross bar (10 mm square bar) and the
+        # frame assembly 102SA each took the hook bracket's 39.7 x 30 flat on the "same
+        # material" tier. The tube and the bar then went to the Sheet Steel block on it, and
+        # the assembly's borrowed outline was held over its baseplate as a size check. A
+        # section is cut to length and an assembly is sized through its members: one rule
+        # (detail_page_geometry.not_cut_from_a_blank) says which parts those are, and it is
+        # asked here before any blank is lent.
+        try:
+            from detail_page_geometry import not_cut_from_a_blank as _uses_no_blank
+            _no_blank = bool(_uses_no_blank(part))
+        except Exception:                                            # noqa: BLE001
+            _no_blank = False
+        if _no_blank:
+            refused_no_blank.append({"part": part.get("part_number"),
+                                     "description": part.get("description")})
+            continue
+
         pn = part.get("part_number")
 
         # 1. Historical SDILive match
@@ -340,4 +360,4 @@ def infer_missing_geometry(summary: Dict[str, Any], db=None) -> Dict[str, Any]:
         still_missing.append(str(pn))
 
     return {"inferred": inferred_log, "still_missing": still_missing,
-            "refused_bought_in": refused_bought_in}
+            "refused_bought_in": refused_bought_in, "refused_no_blank": refused_no_blank}

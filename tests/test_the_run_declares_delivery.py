@@ -50,6 +50,22 @@ def test_declared_not_required_is_a_deliberate_zero_that_says_so():
         "the declaration is delivery's alone — packaging is untouched"
 
 
+def test_the_sheet_does_not_ask_for_a_rate_on_a_declared_zero():
+    """12684-02-GA, 3 Nov 2026 18:11 (D-661): the declared line was cut off mid-sentence and
+    "MATERIAL UNPRICED: enter a unit rate" written after it, first on the input list. The
+    workbook's line classifier now excuses the declaration as the provenance classifier did."""
+    from estimator_inputs import (NOT_APPLICABLE, UNPRICED, canonical_pricing_status,
+                                  unpriced_reason_for_row)
+    parts = _shippable_parts()
+    E.estimate_document(parts, summary=_summary(parts, {"requested": False, "postcode": ""}))
+    d = _line_of(parts, "DELIVERY")
+    assert canonical_pricing_status(d, 0.0) == NOT_APPLICABLE
+    assert unpriced_reason_for_row(d)["category"] == "not_applicable"
+    p = _line_of(parts, "PACKAGING")
+    assert canonical_pricing_status(dict(p, unit_cost_gbp=0.0), 0.0) == UNPRICED, \
+        "an undeclared zero is still an input somebody fills"
+
+
 def test_declared_with_a_postcode_rides_the_line_for_the_calculator():
     parts = _shippable_parts()
     E.estimate_document(parts, summary=_summary(

@@ -966,6 +966,54 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
                 f"The SolidWorks analyser reported a problem: {sw.get('analyser_error')}. An "
                 f"existing extract was used if one was present.",
                 analyser_error=sw.get("analyser_error")))
+    if sw.get("extract_reader") == "solidworks_docmgr" and sw.get("found"):
+        # THE MODELS WERE READ, BUT NOT BY SOLIDWORKS (SCRUM-184). The Document Manager backup
+        # reader reads what each file SAVED and measures nothing, so this job's model evidence
+        # is thinner than a worker's read in ways the sheet does not otherwise show: no
+        # bounding box, volume or surface area anywhere, and a mass or flat pattern only where
+        # a file saved one. A WARNING by itself — the values it did read are real and ranked
+        # below every measurement. BLOCKING when a formed part saved no flat pattern and has
+        # no DXF: that part's blank is not measured by anything, and the price must not rest
+        # on a guess at it.
+        _need = list(((sw.get("applied") or {}) if isinstance(sw.get("applied"), dict)
+                      else {}).get("needs_solidworks_worker_parts") or [])
+        out.append(_violation(
+            "native_extract_from_docmgr", BLOCKING if _need else WARNING,
+            f"The SolidWorks models were read by the Document Manager BACKUP reader, not by "
+            f"SolidWorks ({sw.get('docmgr_backup_reason') or 'reason not recorded'}). It reads "
+            f"the values each file saved and measures nothing — "
+            f"{', '.join(sw.get('docmgr_not_saved') or ['bounding box', 'volume', 'surface area'])}"
+            f" were not supplied, and nothing was guessed in their place. Its values rank below "
+            f"a DXF and below the SolidWorks worker."
+            + (f" {len(_need)} formed part(s) saved no flat pattern and have no DXF, so their "
+               f"blanks are not measured by anything: {', '.join(str(p) for p in _need[:10])}. "
+               f"Run the SolidWorks worker or supply their DXFs before quoting."
+               if _need else ""),
+            backup_reason=sw.get("docmgr_backup_reason"),
+            needs_solidworks_worker=_need[:20]))
+    elif sw.get("docmgr_topped_up") and sw.get("found"):
+        # SOLIDWORKS READ MOST OF THE MODELS AND THE BACKUP READ THE REST (D-706). The files
+        # the worker reached keep its measurements; the ones it opened and could not read were
+        # read by the Document Manager in the same run, from what each saved. Same rule as the
+        # whole-job case for those files: a WARNING, BLOCKING when one of them is a formed part
+        # with no saved flat and no DXF.
+        _need = list(((sw.get("applied") or {}) if isinstance(sw.get("applied"), dict)
+                      else {}).get("needs_solidworks_worker_parts") or [])
+        _top = [str(p) for p in (sw.get("docmgr_topped_up") or [])]
+        _names = [re.split(r"[\\/]", p)[-1] for p in _top]
+        out.append(_violation(
+            "native_extract_from_docmgr", BLOCKING if _need else WARNING,
+            f"SolidWorks could not read {len(_top)} model file(s) in this run, and the Document "
+            f"Manager BACKUP reader read them from what each file saved: "
+            f"{', '.join(_names[:10])}{' and more' if len(_names) > 10 else ''}. Every other "
+            f"file keeps the SolidWorks worker's values. For these, nothing was measured and "
+            f"their values rank below a DXF and below the worker."
+            + (f" {len(_need)} formed part(s) saved no flat pattern and have no DXF, so their "
+               f"blanks are not measured by anything: {', '.join(str(p) for p in _need[:10])}. "
+               f"Run the SolidWorks worker or supply their DXFs before quoting."
+               if _need else ""),
+            backup_reason=sw.get("docmgr_backup_reason"), topped_up=_top[:20],
+            needs_solidworks_worker=_need[:20]))
     return out
 
 
@@ -1162,18 +1210,52 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
     # NAME THE CODES, NOT THE ARRAY INDICES. "part_estimates[11]" cannot be added to a
     # catalogue; the whole instruction this violation ends with depends on the reader knowing
     # which items to go and price.
-    _names = sorted({str(g["part"]) for g in guessed if g.get("part")}) \
-        or sorted({str(g["where"]) for g in guessed})
+    # ONE ITEM, HOWEVER IT IS SPELT (D-696). 12693-01-GA's ticket holder is one line on the
+    # sheet, but its records carry the code with and without its spaces, and the check said
+    # "2 item(s)" naming both. Spellings that differ only in spaces and punctuation are one
+    # item, shown in the fuller spelling.
+    _by_key: Dict[str, str] = {}
+    for g in guessed:
+        _p = str(g.get("part") or "").strip()
+        if not _p:
+            continue
+        _k = re.sub(r"[^A-Z0-9]", "", _p.upper()) or _p.upper()
+        if len(_p) > len(_by_key.get(_k, "")):
+            _by_key[_k] = _p
+    _names = sorted(_by_key.values()) or sorted({str(g["where"]) for g in guessed})
+    # ONE LINE PER ITEM, saying how many price records it has (D-700): the report prints a
+    # check's lines one by one, and six records of one ticket holder read as six items.
+    def _item_key(g: Dict[str, Any]) -> str:
+        _p = str(g.get("part") or "").strip()
+        return (re.sub(r"[^A-Z0-9]", "", _p.upper()) or _p.upper()) if _p else str(g["where"])
+    _item_lines: List[Dict[str, Any]] = []
+    for g in guessed:
+        _k = _item_key(g)
+        if any(_item_key(x) == _k for x in guessed[:guessed.index(g)]):
+            continue
+        _n = sum(1 for x in guessed if _item_key(x) == _k)
+        _item_lines.append(dict(g, part=_by_key.get(_k, g.get("part")),
+                                reason=f"{_n} price record{'s' if _n != 1 else ''}"))
+    # THIS JOB'S FACTS ONLY (D-603a). The sentence carried another job's history, "one cable
+    # line moving from GBP 4.54 to GBP 8.54", into every book that tripped it, so the HPP
+    # covering email described a cable this job does not have. And it counted price records,
+    # not items: "8 priced line(s)" beside two names. The count is the items named; the
+    # records stay in the detail.
     return [_violation(
         "price_not_reproducible", BLOCKING,
-        f"{len(guessed)} priced line(s) that reached the total were costed by an AI market "
-        f"estimate rather than a catalogue: {', '.join(_names[:8])}"
-        f"{f' (+{len(_names) - 8} more)' if len(_names) > 8 else ''}. Those figures change "
-        f"every run — the same job has priced at three different totals on identical inputs, "
-        f"one cable line moving from GBP 4.54 to GBP 8.54 on its own — so the estimate cannot "
-        f"be reproduced or defended. Add these codes to the price catalogue, or price the "
-        f"lines by hand.",
-        parts=_names, lines=guessed[:10], count=len(guessed))]
+        f"{len(_names)} item(s) priced into the total by an AI market estimate rather than a "
+        f"catalogue: {', '.join(_names[:8])}"
+        f"{f' (+{len(_names) - 8} more)' if len(_names) > 8 else ''}. A market estimate is "
+        f"not a price anyone quoted, and a fresh read can return a different figure, so the "
+        f"estimate cannot be reproduced or defended on it. Add these codes to the price "
+        f"catalogue, or price the lines by hand.",
+        # THE COUNT IS THE ITEMS, AS THE HEADLINE SAYS (D-700). 12693-01's 10:44 report
+        # printed "1 item(s)" above a detail line listing the ticket holder six times in two
+        # spellings and "count=6": the price records, rendered as if they were items. The
+        # records are kept for tracing, under a name the report does not print item by item,
+        # and their number is said as what it is.
+        parts=_names, lines=_item_lines[:10], records=guessed[:10], count=len(_names),
+        price_records=len(guessed))]
 
 
 def check_an_unresolved_reading_blocks_the_quote(summary: Any) -> List[Dict[str, Any]]:
@@ -2439,6 +2521,31 @@ def check_a_charged_identity_is_whole_and_charged_once(summary: Any) -> List[Dic
         lines=out, count=len(out))]
 
 
+def check_what_the_drawing_stated_is_accounted_for(summary: Any) -> List[Dict[str, Any]]:
+    """Every fact the drawing's own text stated for a made part is charged, covered, excluded or
+    unresolved, and unresolved holds the release (SCRUM-194 requirement 2). The same check as
+    the read ledger's, over the drawing ledger and its result; the codes carry a prefix so a
+    release row says which ledger holds it."""
+    if not isinstance(summary, dict):
+        return []
+    ledger = summary.get("drawing_ledger")
+    if not isinstance(ledger, dict) or not (ledger.get("items") or ledger.get("error")):
+        return []
+    view = dict(summary)
+    view["read_ledger"] = ledger
+    if isinstance(summary.get("drawing_charge_result"), dict):
+        view["read_charge_result"] = summary["drawing_charge_result"]
+    else:
+        view.pop("read_charge_result", None)
+    out = []
+    for v in check_what_the_read_returned_is_accounted_for(view):
+        v = dict(v)
+        v["code"] = "drawing_" + str(v.get("code") or "")
+        v["message"] = "DRAWING LEDGER: " + str(v.get("message") or "")
+        out.append(v)
+    return out
+
+
 def check_what_the_read_returned_is_accounted_for(summary: Any) -> List[Dict[str, Any]]:
     """Every item an LLM read returned is charged, covered by a named charge, excluded by a
     person with a reason, or unresolved — and unresolved holds the release (D-596). Every
@@ -2486,7 +2593,17 @@ def check_what_the_read_returned_is_accounted_for(summary: Any) -> List[Dict[str
             by_op.setdefault(str(i.get("item")), []).append(i)
     for item, group in by_op.items():
         op = item.split(":", 1)[-1]
-        minutes = round(sum(float(g.get("minutes_per_product") or 0) for g in group), 2)
+        # AN UNKNOWN IS NOT ZERO (D-603). The minutes come from the part's own run times; where
+        # none is recorded this said "roll, 0 min a unit" beside a Roll row charging £23.74.
+        # Then the finding names the sheet's row and its charge instead.
+        _known = [g for g in group if g.get("minutes_per_product") is not None]
+        minutes = round(sum(float(g.get("minutes_per_product") or 0) for g in _known), 2)
+        _rows = {(str(g.get("row") or ""), str(g.get("cell") or "")): g.get("row_value_gbp")
+                 for g in group if g.get("row")}
+        _on_sheet = "; ".join(
+            f"the sheet's {r} row" + (f" ({c})" if c else "")
+            + (f" charges £{float(v):.2f}" if isinstance(v, (int, float)) else "")
+            for (r, c), v in sorted(_rows.items()))
         hours: Dict[str, float] = {}
         for g in group:
             for q, h in (g.get("hours_at") or {}).items():
@@ -2497,9 +2614,11 @@ def check_what_the_read_returned_is_accounted_for(summary: Any) -> List[Dict[str
         gbp = round(sum(float(g.get("gbp_per_unit") or 0) for g in group), 2)
         out.append(_violation(
             "engine_allowance_unconfirmed", BLOCKING,
-            f"Engine allowance not confirmed for this job: {op.replace('_', ' ')}, {minutes:g} "
-            f"min a unit on {', '.join(parts) or 'the job'}"
+            f"Engine allowance not confirmed for this job: {op.replace('_', ' ')}, "
+            + (f"{minutes:g} min a unit" if _known else "run minutes not recorded on the part")
+            + f" on {', '.join(parts) or 'the job'}"
             + (f", £{gbp:.2f} a unit" if gbp else "") + (f" ({at})" if at else "")
+            + (f"; {_on_sheet}" if _on_sheet else "")
             + f". Basis: {group[0].get('basis')}. Confirm it for this job with the reason "
               f"(read_rulings 'allowance:{op}'), or take it off (operations_off).",
             target_id=(parts[0] if len(parts) == 1 else ""), identities=parts, operation=op,
@@ -2535,6 +2654,40 @@ def check_what_the_read_returned_is_accounted_for(summary: Any) -> List[Dict[str
             + ". Until it is, nothing the read returned is shown to reach a charged cell.",
             count=len(other)))
     return out
+
+
+def check_what_the_read_said_reaches_a_priced_part(summary: Any) -> List[Dict[str, Any]]:
+    """Every part the whole-pack read described with a priced fact reaches a priced part, or
+    the loss is named (D-749).
+
+    0358141, 7 Nov 2026: the read had the upright as 30 x 30 x 2 at 1,383 mm, the end caps as
+    3 mm plate and the rub strips as 3 mm brushed stainless, under the spellings their own
+    sheets print. The parts list spelt them with a space, the join compared text, and every
+    fact sat on a read part no priced part matched. The sheet priced 1,400 mm of 30 x 15 tube
+    and a plastic strip, and nothing said a word. A read fact that changes the stock, the size
+    or the material and reaches nothing holds the release until a person rules on it."""
+    if not isinstance(summary, dict):
+        return []
+    ext = summary.get("llm_full_extract") if isinstance(summary.get("llm_full_extract"), dict) else {}
+    lost = [u for u in ((ext.get("counts") or {}).get("unmatched") or []) if isinstance(u, dict)]
+    if not lost:
+        return []
+    _shape = ("tube_section", "cut_length_mm", "cut_lengths_mm", "thickness_mm",
+              "overall_size_mm", "material")
+
+    def _said(u: Mapping[str, Any]) -> str:
+        facts = u.get("facts") or {}
+        return (f"{u.get('part_number')} ({u.get('description') or 'no description'}: "
+                + ", ".join(f"{k} {v}" for k, v in list(facts.items())[:4]) + ")")
+    hard = [u for u in lost if any(k in (u.get("facts") or {}) for k in _shape)]
+    sev = BLOCKING if hard else WARNING
+    return [_violation(
+        "read_facts_reached_no_priced_part", sev,
+        f"{len(lost)} part(s) the read described reached no priced part, so what it read is not "
+        f"in the price: " + "; ".join(_said(u) for u in lost[:6])
+        + ". Each is a part the sheet should carry under another number, or one the read added: "
+          "join it to its part, or rule it out of scope.",
+        lines=lost[:20], count=len(lost), needs_ruling=True)]
 
 
 def check_every_page_reached_a_read(summary: Any) -> List[Dict[str, Any]]:
@@ -5366,6 +5519,8 @@ CHECKS = (
     check_a_charged_identity_is_whole_and_charged_once,
     check_a_sheet_blank_and_a_bought_item_reach_the_charged_cells,
     check_what_the_read_returned_is_accounted_for,
+    check_what_the_drawing_stated_is_accounted_for,
+    check_what_the_read_said_reaches_a_priced_part,
     check_every_page_reached_a_read,
     check_a_blank_and_its_cut_path_can_both_be_true,
     check_prices_are_firm,

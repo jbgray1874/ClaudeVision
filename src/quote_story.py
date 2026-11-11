@@ -396,11 +396,21 @@ def _is_assembly(p: Dict[str, Any]) -> bool:
     """An assembly by the canonical graph's word, or by its sheet's role where the graph
     said nothing. A BOUGHT ARTICLE LISTED ON AN ASSEMBLY SHEET IS A BOUGHT LINE (D-587):
     0351292's five fasteners are bound to the GA, so its role read "assembly", and the
-    quote told the customer "11 parts SDI makes, 0 bought in" beside five bought lines."""
-    if str(p.get("_canonical_kind") or "").lower() == "assembly":
+    quote told the customer "11 parts SDI makes, 0 bought in" beside five bought lines.
+
+    WHERE THE GRAPH SPOKE, ITS WORD STANDS (D-668). 12203-66's three panels are drawn on
+    pages of the GA's own PDF, so each page read "assembly". The graph called each a leaf and
+    the sheet costed all three, yet the quote told the customer "0 parts SDI makes" and "No
+    made parts — every line is bought in". The page's role decides only when the graph said
+    nothing; a blank on the costed record is a made part's, as one on the part itself is."""
+    kind = str(p.get("_canonical_kind") or "").strip().lower()
+    if kind == "assembly":
         return True
+    if kind in ("leaf", "bought_in"):
+        return False
+    me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
     if "assembly" not in {str(r).lower() for r in (p.get("page_roles") or [])} \
-            or _num(p.get("blank_length_mm")):
+            or _num(p.get("blank_length_mm")) or _num(me.get("blank_length_mm")):
         return False
     return not _is_bought(p)
 
@@ -409,9 +419,28 @@ def _qty(p: Dict[str, Any]) -> float:
     return _num(p.get("quantity")) or 1.0
 
 
+_BOARD_ACRONYMS = frozenset({"MDF", "MFC", "MFMDF", "HPL", "ABS", "PVC", "ACM", "PETG",
+                             "HDPE", "GRP", "OSB"})
+
+
+def _keeps_its_capitals(word: str) -> bool:
+    """A board's or plastic's initials stay capitals: "MDF", not "Mdf" (D-668). A short word
+    with no vowel is initials too; a word like STEEL or OAK is not."""
+    w = word.strip(".,;:()").upper()
+    return w in _BOARD_ACRONYMS or (1 < len(w) <= 5 and w.isalpha()
+                                    and not set(w) & set("AEIOUY"))
+
+
+def _name_case(text: str, lower: bool = False) -> str:
+    """Title case (or lower case) for a material's name, its initials left as capitals."""
+    return " ".join(w.upper() if _keeps_its_capitals(w) else (w.lower() if lower else
+                                                              w.capitalize())
+                    for w in str(text or "").split())
+
+
 def _material_name(p: Dict[str, Any]) -> str:
     m = str(p.get("normalized_material") or "").replace("_", " ").strip()
-    return m.title() if m else ""
+    return _name_case(m) if m else ""
 
 
 def _code_in(text: Any) -> str:
@@ -536,7 +565,17 @@ def job_facts(summary: Dict[str, Any], parts: List[Dict[str, Any]],
             if lab[0] < len(_ROUTE_ORDER):
                 by_dept.setdefault(lab[1], set()).update(
                     str(x) for x in (d.get("participants") or [d.get("target_id")]) if x)
+    # LINES THE PACK DRAWS THAT THE BILL DOES NOT CARRY (D-675). 12203-65-GA's 4 Nov 09:55 quote
+    # said "0 parts SDI makes" and "No made parts — every line is bought in" while the box's
+    # five panels sat in the pack, recognised, and set aside as not linked to the product. A
+    # count of the bill is not a fact about the product when the bill is short: such lines are
+    # named, and no sentence below presents the costed count as the whole.
+    not_costed = sorted({str(e.get("part_number") or "") for e in
+                         (summary.get("set_aside_outside_product") or [])
+                         if isinstance(e, dict) and e.get("part_number")
+                         and e.get("reason") == "not_linked_to_the_product"})
     return {
+        "not_costed": not_costed,
         "parts_by_dept": by_dept,
         "pages": pages, "sources": srcs, "page_count": len(pages) or int(
             summary.get("page_count") or 0),
@@ -643,9 +682,11 @@ def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[
          or _parts_list_quote(facts["pages"], used, codes)
          or _quote_for("parts", facts["pages"], used))
     top = sorted(made, key=lambda p: -(_num(p.get("unit_total_cost_gbp")) or 0))[:3]
+    short = _not_costed_words(facts)
     out.append({
         "topic": "parts", "title": _TOPICS["parts"]["title"], "saw": q,
-        "concluded": (f"{len(made)} part{'s' if len(made) != 1 else ''} SDI makes "
+        "concluded": (f"{short} Costed so far: " if short else "") + (
+                      f"{len(made)} part{'s' if len(made) != 1 else ''} SDI makes "
                       f"({_g(facts['made_pieces'])} pieces a unit) and {len(bought)} bought "
                       f"in" + (f" — led by the " + ", the ".join(
                           _lower_words(_nice(p.get('description') or p.get('part_number')))
@@ -682,9 +723,9 @@ def evidence_items(summary: Dict[str, Any], facts: Dict[str, Any]) -> List[Dict[
     out.append({
         "topic": "material", "title": _TOPICS["material"]["title"], "saw": q,
         "concluded": ("Made from " + "; ".join(
-            _material_phrase(m.lower() if i else m, gs)
+            _material_phrase(_name_case(m, lower=True) if i else m, gs)
             for i, (m, gs) in enumerate(_by_material(facts["made"])[:3])) + "."
-            if groups else "No made parts — every line is bought in."),
+            if groups else (_not_costed_words(facts) or "No made parts — every line is bought in.")),
         "bill": (_money(facts, sheet_val, "Sheet and section material {} a unit, nested on "
                         "SDI's stock", "Sheet and section material, nested on SDI's stock")
                  if sheet_val else "Material on the bill of materials"),
@@ -1119,6 +1160,17 @@ def _traced_words(facts: Dict[str, Any]) -> str:
             f"{_g(n)} item{'s' if n != 1 else ''} {'are' if n != 1 else 'is'} still being confirmed.")
 
 
+def _not_costed_words(facts: Dict[str, Any]) -> str:
+    """The sentence that says the costed bill is not yet the whole pack, or "" (D-675)."""
+    nc = list(facts.get("not_costed") or [])
+    if not nc:
+        return ""
+    shown = ", ".join(nc[:6]) + (f" and {len(nc) - 6} more" if len(nc) > 6 else "")
+    return (f"Not complete: {len(nc)} line{'s' if len(nc) != 1 else ''} drawn in your pack "
+            f"{'are' if len(nc) != 1 else 'is'} not on the costed bill yet ({shown}), so what "
+            f"follows covers only what has been costed.")
+
+
 def _route_claim(facts: Dict[str, Any]) -> str:
     """"All 9 made parts given a blank, a gauge and a path…" — COUNTED, never asserted (D-589).
     The sentence was fixed text: 0351292's page said every made part had a blank while the
@@ -1183,7 +1235,9 @@ def reading_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: st
         ("02 · CONCLUDED", "Decided how it is built",
          built,
          f"Materials, gauges and joints — {len(facts['made'])} parts SDI makes, "
-         f"{len(facts['bought'])} bought in."),
+         f"{len(facts['bought'])} bought in"
+         + (f" so far; {len(facts['not_costed'])} more drawn in your pack are still being "
+            f"added to the estimate." if facts.get("not_costed") else ".")),
         ("03 · CONNECTED", "Turned the design into a route", chain_route,
          _route_claim(facts)),
         ("04 · COSTED", "Priced it in SDI's workbook", costed, _sourced_words(facts)),
@@ -1311,10 +1365,23 @@ def costing_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: st
         lo, hi = model[0], model[-1]
         why = ""
         if len(model) >= 2 and lo["setup"] > 0:
+            # THE SENTENCE SAYS WHAT THE TABLE BELOW IT PRINTS (D-700). 12693-01's quote read
+            # "running work holds at £173.25" over a table showing £173.22 at 1 off and
+            # £173.25 at 50 off. "Holds" only where both columns print the same figure; a
+            # small move is named as one, and a large one is not called unchanged at all.
+            _run_lo, _run_hi = _gbp(lo["running"]), _gbp(hi["running"])
+            if _run_lo == _run_hi:
+                _running = (f"running work holds at {_run_hi} because the work in each unit "
+                            f"does not change")
+            elif abs(float(hi["running"]) - float(lo["running"])) <= \
+                    0.02 * max(abs(float(lo["running"])), abs(float(hi["running"])), 0.01):
+                _running = (f"running work barely moves, from {_run_lo} to {_run_hi}, because "
+                            f"the work in each unit does not change")
+            else:
+                _running = f"running work goes from {_run_lo} to {_run_hi}"
             why = (f"At {_g(lo['quantity'])} off, {_gbp(lo['setup'])} of machine and line "
                    f"set-up rests on each unit; at {_g(hi['quantity'])} off it is "
-                   f"{_gbp(hi['setup'])}, while running work holds at {_gbp(hi['running'])} "
-                   f"because the work in each unit does not change.")
+                   f"{_gbp(hi['setup'])}, while {_running}.")
             if lo.get("order_charges") and hi.get("order_charges") is not None \
                     and lo["order_charges"] > hi["order_charges"]:
                 why += (f" Packaging and delivery, priced for the whole order, fall from "
@@ -1373,7 +1440,10 @@ def costing_page(summary: Dict[str, Any], facts: Dict[str, Any], *, customer: st
                   f'in SDI\'s own costing workbook from {_g(facts["page_count"])} pages of your '
                   f'{"brief" if facts["concept"] else "drawings"}; {len(made)} made part'
                   f'{"s" if len(made) != 1 else ""} sized from '
-                  f'{"your visuals and stated dimensions" if facts["concept"] else "your drawings"}.</p>')
+                  f'{"your visuals and stated dimensions" if facts["concept"] else "your drawings"}'
+                  + (f'; {len(facts["not_costed"])} more drawn line'
+                     f'{"s" if len(facts["not_costed"]) != 1 else ""} not yet costed'
+                     if facts.get("not_costed") else "") + '.</p>')
     return f"""
   <div class="sheet qs">
     {_head(sdi_logo, cust_header, f"SDI to {customer} · {job_number}")}

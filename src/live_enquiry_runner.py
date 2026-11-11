@@ -25,10 +25,12 @@ person queues it from the page — same staging, same runner, same deliverables,
 same place — and the next row is queued only when that one has finished. Nothing here prices
 anything; if this file has an opinion about costing, that is a bug.
 
-THE WORKBOOK IS READ, NEVER WRITTEN. It is the estimators' working file and is often open.
-What ran, when, on which pack and at what figure is kept in this runner's own ledger, and every
-scan writes a status table beside it (live_enquiry_status.csv) saying, for every row, what it
-did and why.
+THE WORKBOOK IS READ, AND WRITTEN IN ONE PLACE ONLY. It is the estimators' working file and is
+often open. What ran, when, on which pack and at what figure is kept in this runner's own
+ledger, and every scan writes a status table beside it (live_enquiry_status.csv) saying, for
+every row, what it did and why. The one write (D-608a): AI Estimate Self-Running sets the AI
+Live Enquiry sheet's AICompleted to YES on a row whose run finished, and only while the
+workbook is not open in Excel (mark_completed).
 
 A ROW THAT CANNOT RUN SAYS WHY, AND WHO MOVES IT:
     not asked   AI CHECK is not YES
@@ -40,11 +42,13 @@ A ROW THAT CANNOT RUN SAYS WHY, AND WHO MOVES IT:
                 folder, or new quantities, makes it ready again
     failed      the last run failed; `retry` lets it go again
 
-WHERE THE DRAWINGS COME FROM is a list of sources, tried in order. Today it is the Live Enquiry
-share. The design area, through the endpoint James will provide (SDI_DESIGN_AREA_ENDPOINT),
-becomes the second: a row whose folder is missing asks it for the pack. Until that endpoint
-exists the source says so and finds nothing. (src/live_enquiry_collector.py is the earlier,
-provisional search of W:\\Production; it copies drawings and runs nothing.)
+WHERE THE DRAWINGS COME FROM is a list of sources, tried in order. FIRST THE DESIGN SHARE
+(SCRUM-203): the row's drawing number resolved by the shared pack resolver from the design
+area's index, and the pack kept in the Live Enquiry share, re-used if unchanged, a new folder if
+changed. Then the Live Enquiry share itself, for a pack dropped there by hand. The design area's
+endpoint (SDI_DESIGN_AREA_ENDPOINT) stays a placeholder. The production share is never a source:
+it is a hand-made copy of design. (src/live_enquiry_collector.py, the earlier search of it,
+copies drawings and runs nothing.)
 
 Settings: src/config.py, LIVE_ENQUIRY_* — the workbook path (SDI_LIVE_ENQUIRY_WORKBOOK), the
 root, the vocabularies. The portal is SDI_SERVER and SDI_API_KEY, the runner's own names.
@@ -91,6 +95,12 @@ class EnquiryRow:
     account_manager: str = ""
     quantities: str = ""
     notes: str = ""
+    # THE AI LIVE ENQUIRY SHEET (D-608): its AICompleted answer, and whether the sheet has that
+    # column at all. A sheet with it runs by its own rule; one without keeps D-420's.
+    ai_completed: str = ""
+    completed_column: bool = False
+    # The estimator's address, where the sheet has a column for it (D-614).
+    estimator_email: str = ""
 
 
 def _text(value: Any) -> str:
@@ -156,17 +166,21 @@ def _columns(header: Sequence[Any]) -> Dict[str, int]:
     return found
 
 
-def rows_from_table(table: Sequence[Sequence[Any]]) -> List[EnquiryRow]:
-    """Enquiry rows from a sheet's cells. The header is the first row naming both a Customer
-    and a Drawing column; a cell under no header is a note on its row."""
-    header_at, cols = None, {}
+def _header(table: Sequence[Sequence[Any]]) -> Tuple[int, Dict[str, int]]:
+    """(index of the header row, column of each field): the first row naming both a Customer
+    and a Drawing column. One function, so reading the sheet and writing AICompleted back
+    find the same columns."""
     for i, line in enumerate(table[:15]):
         cols = _columns(line)
         if "customer" in cols and "drawing" in cols:
-            header_at = i
-            break
-    if header_at is None:
-        raise ValueError("No header row naming both a Customer and a Drawing No. column.")
+            return i, cols
+    raise ValueError("No header row naming both a Customer and a Drawing No. column.")
+
+
+def rows_from_table(table: Sequence[Sequence[Any]]) -> List[EnquiryRow]:
+    """Enquiry rows from a sheet's cells. The header is the first row naming both a Customer
+    and a Drawing column; a cell under no header is a note on its row."""
+    header_at, cols = _header(table)
     header = table[header_at]
     headed = {i for i, cell in enumerate(header) if _text(cell)}
     out: List[EnquiryRow] = []
@@ -184,19 +198,117 @@ def rows_from_table(table: Sequence[Sequence[Any]]) -> List[EnquiryRow]:
             description=_text(cell("description")), received=_as_date(cell("received")),
             due=_as_date(cell("due")), ai_check=_text(cell("ai_check")),
             estimator=_text(cell("estimator")), account_manager=_text(cell("account_manager")),
-            quantities=_text(cell("quantities")), notes=notes))
+            quantities=_text(cell("quantities")), notes=notes,
+            ai_completed=_text(cell("ai_completed")), completed_column="ai_completed" in cols,
+            estimator_email=_text(cell("estimator_email"))))
     return out
+
+
+def completed_word(text: str) -> str:
+    """An AICompleted answer as one word: "Re-Run", "re run" and "RERUN" are all RERUN."""
+    return re.sub(r"[\s\-_]+", "", str(text or "").upper())
+
+
+def pick_sheet(names: Sequence[str], wanted: str = "") -> str:
+    """The sheet to read (D-608a): the one asked for, else the first of
+    config.LIVE_ENQUIRY_SHEET_NAMES the workbook has, else its only sheet. Never its first tab
+    by default: the AI Live Enquiry workbook's first tab is "Archived"."""
+    by_fold = {str(n).casefold(): str(n) for n in names}
+    wanted = (wanted or config.LIVE_ENQUIRY_SHEET or "").strip()
+    if wanted:
+        if wanted.casefold() in by_fold:
+            return by_fold[wanted.casefold()]
+        raise ValueError(f"The workbook has no sheet '{wanted}'; its sheets are "
+                         f"{', '.join(names)}. Set SDI_LIVE_ENQUIRY_SHEET to one of them.")
+    for name in config.LIVE_ENQUIRY_SHEET_NAMES:
+        if name.casefold() in by_fold:
+            return by_fold[name.casefold()]
+    if len(names) == 1:
+        return str(names[0])
+    raise ValueError(f"The workbook has sheets {', '.join(names)} and none is called "
+                     f"{' or '.join(config.LIVE_ENQUIRY_SHEET_NAMES)}. Set SDI_LIVE_ENQUIRY_SHEET "
+                     f"to the sheet the jobs are on.")
 
 
 def read_sheet(path: Path, sheet: str = "") -> List[EnquiryRow]:
     import openpyxl
     wb = openpyxl.load_workbook(_open_workbook_bytes(path), read_only=True, data_only=True)
     try:
-        name = sheet or config.LIVE_ENQUIRY_SHEET
-        ws = wb[name] if name in wb.sheetnames else wb.worksheets[0]
+        ws = wb[pick_sheet(wb.sheetnames, sheet)]
         return rows_from_table([list(r) for r in ws.iter_rows(values_only=True)])
     finally:
         wb.close()
+
+
+def mark_completed(path: Path, row: "EnquiryRow", sheet: str = "") -> Tuple[bool, str]:
+    """Write config.LIVE_ENQUIRY_COMPLETED_MARK into the row's AICompleted cell (D-608a): JG,
+    31 Oct 2026, "when we complete the run for that row, we populate the AICompleted column J
+    with YES, so it is not re-ran unless re-set". (True, what was written) or (False, why not).
+
+    THE ONE WRITE TO THE WORKBOOK, and it is careful about whose file it is:
+      * not while the workbook is open in Excel (its ~$ lock file is beside it): Excel would
+        save over the YES, or the person would be editing a file changed under them. The
+        caller tries again on a later read;
+      * only on the row that still holds this customer and drawing. A row moved by a sort or
+        an insert is found again by its customer and drawing; two rows holding the job, or
+        none, are left alone and said;
+      * formulas, formats and every other cell are kept (openpyxl loads the formulas, not
+        their values), and the file is replaced in one step, never half-written.
+    A password-protected workbook cannot be written back, and says so."""
+    import openpyxl
+    path = Path(path)
+    lock = path.with_name("~$" + path.name)
+    if lock.exists():
+        return False, (f"the workbook is open in Excel ({lock.name} beside it); AICompleted is "
+                       f"written on a later read, once it is closed")
+    try:
+        if path.read_bytes()[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
+            return False, "the workbook is password-protected, so AICompleted cannot be written"
+        wb = openpyxl.load_workbook(path)
+    except OSError as exc:
+        return False, f"the workbook could not be opened to write AICompleted ({exc})"
+    try:
+        ws = wb[pick_sheet(wb.sheetnames, sheet)]
+        table = [list(r) for r in ws.iter_rows(values_only=True)]
+        header_at, cols = _header(table)
+        if "ai_completed" not in cols:
+            return False, "the sheet has no AICompleted column"
+        want = (customer_key(row.customer), drawing_key(row.drawing))
+
+        def holds(n: int) -> bool:
+            line = table[n - 1] if 0 < n <= len(table) else []
+            def cell(name: str) -> Any:
+                i = cols.get(name)
+                return line[i] if i is not None and i < len(line) else None
+            return (customer_key(_text(cell("customer"))),
+                    drawing_key(_text(cell("drawing")))) == want
+
+        target = row.row if holds(row.row) else None
+        if target is None:
+            found = [n for n in range(header_at + 2, len(table) + 1) if holds(n)]
+            if len(found) != 1:
+                return False, (f"row {row.row} no longer holds {row.drawing} for {row.customer}, "
+                               f"and {len(found) or 'no'} other row(s) do; AICompleted not "
+                               f"written")
+            target = found[0]
+        ws.cell(row=target, column=cols["ai_completed"] + 1,
+                value=config.LIVE_ENQUIRY_COMPLETED_MARK)
+        tmp = path.with_name(path.stem + ".sdi-writing" + path.suffix)
+        wb.save(tmp)
+    except (OSError, ValueError) as exc:
+        return False, f"AICompleted could not be written ({exc})"
+    finally:
+        wb.close()
+    try:
+        os.replace(tmp, path)
+    except OSError as exc:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return False, (f"the workbook could not be replaced ({exc}); AICompleted is written on "
+                       f"a later read")
+    return True, (f"AICompleted on row {target} set to {config.LIVE_ENQUIRY_COMPLETED_MARK}")
 
 
 # ── NAMES ON THE SHARE ───────────────────────────────────────────────────────────────
@@ -231,6 +343,25 @@ def names_the_drawing(folder_name: str, key: str) -> bool:
         return False
     rest = flat[len(key):]
     return rest == "" or bool(re.match(r"^-(?:(?:GA|SA)\d*)?(?:-?[A-Z(]|$)", rest))
+
+
+def names_the_drawing_inside(folder_name: str, key: str) -> bool:
+    """The drawing number anywhere in the folder's name, as a whole number (D-608): JG's
+    "pattern match for the Drawing No. in the name of the folder", for a folder named
+    "0359974 Editions Footwear Podium 12678-01-GA". Not inside a longer number: the character
+    before it is not a letter or digit, and what follows obeys names_the_drawing's rule, so
+    "12678-01-02-GA" still does not name 12678-01."""
+    if not key:
+        return False
+    text = re.sub(r"\s+", " ", str(folder_name or "").upper().replace("_", "-"))
+    for m in re.finditer(re.escape(key), text):
+        if m.start() and text[m.start() - 1].isalnum():
+            continue
+        rest = text[m.end():]
+        if (rest == "" or rest[0] in " (" or
+                re.match(r"^-(?:(?:GA|SA)\d*)?(?:-?[A-Z( ]|$)", rest)):
+            return True
+    return False
 
 
 def _customer_words(name: str) -> List[str]:
@@ -335,6 +466,11 @@ class LiveEnquiryShare:
         client_dir = client[0] if client else None
         hits = ([d for d in _subfolders(client_dir) if names_the_drawing(d.name, key)]
                 if client_dir else [])
+        if not hits and client_dir is not None:
+            # A FOLDER THAT CARRIES THE NUMBER INSIDE ITS NAME (D-608), looked for only under
+            # the customer's folder and only when no folder is named by the number: the
+            # stricter match wins wherever it finds one.
+            hits = [d for d in _subfolders(client_dir) if names_the_drawing_inside(d.name, key)]
         at_root = False
         if not hits:
             # THE OLDER LAYOUT: a pack at the root named by its drawing number,
@@ -366,6 +502,67 @@ class LiveEnquiryShare:
         return Located("found", f"{len(drawings)} drawing(s) in {folder.name}{old_layout}",
                        folder=folder, client_folder_name=client_name, files=files,
                        source=self.name)
+
+
+class DesignShare:
+    """THE DESIGN SHARE, THROUGH THE SHARED PACK RESOLVER (SCRUM-199/203, JG 9 Nov 2026).
+
+    Packs come from the design area (\\\\sdi-dc01\\CAD\\Design\\Customers April 08 Onwards, then
+    Prototype), never the production share, which is a hand-made copy holding PDFs and sometimes
+    DXFs. The row's drawing number is resolved exactly as the estimating page and the tracker
+    pricer resolve it (src/pack_resolver.py), and the pack is kept in the Live Enquiry share's
+    <customer>\\<drawing> (src/pack_store.py): an unchanged pack is used as it is, a changed one
+    gets a new folder beside the old, so the ledger sees new drawings and the row is ready again.
+    An ambiguous pack holds the row with the question to answer. With nothing to search, or no
+    file named for the drawing, it has no say, and the Live Enquiry share's own reason stands."""
+    name = "design share"
+
+    def __init__(self, root: Path, folders: Optional[Callable[[], Any]] = None):
+        self.root = Path(root)
+        self._folders = folders
+
+    def find(self, row: EnquiryRow) -> Optional[Located]:
+        import pack_resolver as pr
+        import pack_store as ps
+        if not str(row.drawing or "").strip():
+            return None
+        # A PACK A PERSON PUT IN THE LIVE ENQUIRY FOLDER WINS (JG, 10 Nov 2026). 12674-01-GA had
+        # its full pack, PDF included, in Live Enquiry\M&S\12674-01-GA; this source resolved a
+        # DXF-only pack from the design area, saw it differ, filed it beside as "12674-01-GA v2"
+        # and the run priced that, and was refused. A folder for the drawing that this source did
+        # not make (no pack manifest in it) is the estimator's: the share takes it as it is.
+        share = LiveEnquiryShare(self.root).find(row) if self.root.is_dir() else None
+        if share is not None and share.folder is not None and share.status == "found" \
+                and not (Path(share.folder) / ps.MANIFEST).exists():
+            return None
+        if share is not None and share.status == "held" and " fit " in str(share.reason):
+            return None             # two folders for the drawing: the share's question stands
+        if self._folders is not None:
+            folders, lookup = self._folders(), None
+        else:
+            folders, _source, lookup = pr.folders_for(row.drawing)
+        if not folders:
+            return None             # nothing to search: the share's own reason is the useful one
+        m = pr.resolve(row.drawing, folders, client=row.customer, lookup=lookup)
+        if m["status"] == "not found":
+            return None             # not on design: the share is asked, and its reason stands
+        if not m["price_ok"]:
+            return Located("held", f"design share: {m['question']}", source=self.name)
+        # NEVER A PACK WITH NO DRAWING. The engine prices from the drawings; a DXF-only pack is
+        # refused by it ("NOTHING WILL BE ESTIMATED"), so it is not filed or queued.
+        _kinds = {Path(str(f.get("path") or "")).suffix.lower() for f in ps._files_of(m)}
+        if not (_kinds & DRAWING_SUFFIXES):
+            return Located("held", f"design share: the pack found for {row.drawing} has no PDF "
+                                   f"drawing, only {', '.join(sorted(k for k in _kinds if k)) or 'no files'}"
+                                   f" — put the GA PDF in the Live Enquiry folder "
+                                   f"{row.customer}\\{row.drawing}", source=self.name)
+        named = customer_folders(_subfolders(self.root), row.customer) if self.root.is_dir() else []
+        client = named[0].name if len(named) == 1 else row.customer
+        kept = ps.store(m, client, root=self.root)
+        folder = Path(kept["folder"])
+        return Located("found", f"{m['status']} pack from the design share: {len(m['members'])} drawing(s), "
+                                f"revision {m.get('revision') or 'not read'}; {kept['state']} in {folder.name}",
+                       folder=folder, client_folder_name=client, files=pack_files(folder), source=self.name)
 
 
 class DesignArea:
@@ -419,6 +616,11 @@ def quantities_for(row: EnquiryRow, located: Located,
                    console: Dict[str, List[int]]) -> Tuple[List[int], str]:
     """The quantities and where they were stated. Nothing stated is nothing: setup is spread
     over the run quantity, so a guessed one moves every labour line, and the row is held."""
+    if row.completed_column:
+        # THE AI LIVE ENQUIRY SHEET'S QUANTITY IS ITS QTY COLUMN (D-608), and nothing else: not
+        # the console, not a file in the folder, not the description.
+        q = parse_quantities(row.quantities)
+        return (q, "the sheet's QTY column") if q else ([], "")
     given = console.get(drawing_key(row.drawing))
     if given:
         return list(given), "given at the console (qty)"
@@ -482,6 +684,7 @@ class Decision:
     quantity_source: str = ""
     fingerprint: str = ""
     last: Dict[str, Any] = field(default_factory=dict)
+    rerun: bool = False               # AICompleted says Re-Run (D-608)
 
 
 def _hold_note(notes: str) -> str:
@@ -501,10 +704,81 @@ def _not_one_drawing(drawing: str) -> str:
     return ""
 
 
+# A RUN LOST TO A RESTART IS RUN AGAIN (JG, 10 Nov 2026: "the process needs to circle back and
+# check the live enquiry s/sheet and if it's not set to AICompleted yes, they should run"). These
+# endings say nothing about the job: the machine or a service was restarted under it, or its
+# report was lost. Such a run does not count as a try; the row is queued again on the next read.
+INTERRUPTED = ("was restarted while this job was running", "no longer knows this run",
+               "no service on the list knows this run", "stopped responding",
+               "is working on another service's job", "Its Grid Runner")
+
+# WHAT THE ENGINE PRICES FROM: a drawing (PDF) or a render of one. A pack holding only DXFs or
+# models was queued on 10 Nov (12674-01-GA, 12674-02-GA, 12424-02-GA: a lone DXF) and refused by
+# the engine with "NOTHING WILL BE ESTIMATED"; it is held here instead, saying what is missing.
+DRAWING_SUFFIXES = {".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+
+
+def interrupted(attempt: Dict[str, Any]) -> bool:
+    err = str(attempt.get("error") or "")
+    return attempt.get("status") == "error" and any(w in err for w in INTERRUPTED)
+
+
+_BUILD_CACHE: Dict[str, Any] = {}
+
+
+def checkout_build(root: Optional[Path] = None) -> str:
+    """The commit this checkout is on, read from .git (no git needed); "" when unknown.
+    A run the engine refused is tried again once a sync brings a different build."""
+    root = Path(root) if root else Path(__file__).resolve().parents[1]
+    now = time.time()
+    hit = _BUILD_CACHE.get(str(root))
+    if hit and now - hit[0] < 60:
+        return hit[1]
+    sha = ""
+    try:
+        git = root / ".git"
+        if git.is_file():                         # a worktree: "gitdir: <path>"
+            git = Path(git.read_text(encoding="utf-8").split(":", 1)[1].strip())
+        head = (git / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref:"):
+            ref = head.split(":", 1)[1].strip()
+            common = git
+            if (git / "commondir").is_file():
+                common = (git / (git / "commondir").read_text(encoding="utf-8").strip()).resolve()
+            for base in (git, common):
+                f = base / ref
+                if f.is_file():
+                    sha = f.read_text(encoding="utf-8").strip()
+                    break
+            if not sha and (common / "packed-refs").is_file():
+                for line in (common / "packed-refs").read_text(encoding="utf-8").splitlines():
+                    if line.endswith(" " + ref):
+                        sha = line.split(" ", 1)[0]
+                        break
+        else:
+            sha = head
+    except (OSError, IndexError):
+        sha = ""
+    _BUILD_CACHE[str(root)] = (now, sha[:12])
+    return sha[:12]
+
+
 def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
            seen: Optional[Dict[str, int]] = None) -> Decision:
     if row.ai_check.strip().upper() not in {w.upper() for w in config.LIVE_ENQUIRY_ASKED}:
         return Decision(row, "not_asked", f"AI CHECK is '{row.ai_check or 'blank'}'")
+    # THE AI LIVE ENQUIRY SHEET'S RULE (D-608): YES, a QTY, and AICompleted NO, N or Re-Run.
+    rerun = False
+    if row.completed_column:
+        said = completed_word(row.ai_completed)
+        if said not in config.LIVE_ENQUIRY_RUN_WHEN_COMPLETED:
+            return Decision(row, "not_asked",
+                            f"AICompleted is '{row.ai_completed or 'blank'}' — NO, N or Re-Run "
+                            f"runs it")
+        if not parse_quantities(row.quantities):
+            return Decision(row, "held", "no QTY on the sheet — put the quantities in the QTY "
+                                         "column")
+        rerun = said in config.LIVE_ENQUIRY_RERUN
     note = _hold_note(row.notes)
     if note:
         return Decision(row, "held", f"the row's note says '{note}'")
@@ -521,12 +795,25 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
     located = locate(row, sources)
     job = ledger["jobs"].get(key) or {}
     attempts = job.get("attempts") or []
-    if not attempts and job.get("baseline") == "*":
+    # RE-RUN BEATS A BASELINE (D-642). A job marked as estimated by hand before the runner
+    # existed read "done" before Re-Run was ever looked at, so typing Re-Run on its row did
+    # nothing. A person asking for it on the sheet is the stronger instruction; it runs once
+    # per marking, as Re-Run does everywhere else.
+    _rerun_baseline = rerun and not job.get("rerun_taken")
+    if not attempts and job.get("baseline") == "*" and not _rerun_baseline:
         return Decision(row, "done", f"run by hand before the runner (baselined "
                                      f"{job.get('baselined_at')})", located=located)
     if located.status != "found":
         return Decision(row, located.status, located.reason, located=located)
-    if not attempts and job.get("baseline") == fingerprint(located.files):
+    if located.files and not any(Path(f).suffix.lower() in DRAWING_SUFFIXES
+                                 for f in located.files):
+        kinds = ", ".join(sorted({Path(f).suffix.lower() or Path(f).name
+                                  for f in located.files}))
+        return Decision(row, "held", f"the pack in {located.folder} has no PDF drawing, only "
+                                     f"{kinds} — the engine prices from the drawings: put the "
+                                     f"GA PDF there", located=located)
+    if (not attempts and job.get("baseline") == fingerprint(located.files)
+            and not _rerun_baseline):
         return Decision(row, "done", f"run by hand before the runner (baselined "
                                      f"{job.get('baselined_at')})", located=located)
     qty, qsource = quantities_for(row, located, ledger.get("quantities", {}))
@@ -538,26 +825,62 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
     fp = fingerprint(located.files)
     last = attempts[-1] if attempts else {}
     d = Decision(row, "ready", "first run", located=located, quantities=qty,
-                 quantity_source=qsource, fingerprint=fp, last=last)
+                 quantity_source=qsource, fingerprint=fp, last=last, rerun=rerun)
+    # RE-RUN RUNS ONCE PER MARKING (D-608). Until AICompleted is written back the cell still
+    # says Re-Run after the run; the ledger remembers it was taken, and forgets when the cell
+    # is seen saying anything else (plan()), so marking it Re-Run again runs it again.
+    rerun_due = rerun and not job.get("rerun_taken")
     if not last:
         if job.get("baseline"):
-            d.reason = "the pack has changed since it was baselined"
+            d.reason = ("Re-Run asked for on the sheet (it was baselined as estimated by hand)"
+                        if rerun_due else "the pack has changed since it was baselined")
         return d
     same = last.get("fingerprint") == fp and list(last.get("quantities") or []) == qty
     if last.get("status") in {"queued", "running"}:
         d.status, d.reason = "running", f"queued as run {last.get('run_id')} at " \
                                         f"{last.get('queued_at')}"
         return d
+    if rerun_due and last.get("status") in {"done", "error"}:
+        d.reason = "Re-Run asked for on the sheet"
+        return d
+    # A STOP MEANS STOP (JG, 10 Nov 2026). A person who stops a job, from the estimating page
+    # or Grid Control, has decided; queueing it again as "attempt 2" a minute later undid
+    # that. Held until the sheet says Re-Run or somebody types `retry`.
+    if last.get("status") == "error" and stopped_by_hand(last) and not job.get("retry"):
+        d.status, d.reason = "held", (f"stopped by hand at {last.get('finished_at') or '?'} — "
+                                      f"mark it Re-Run on the sheet, or `retry {row.drawing}`, "
+                                      f"to run it again")
+        return d
     if same and last.get("status") == "done":
+        if row.completed_column and last.get("sheet_marked"):
+            # RESET BY A PERSON (D-608a): this run's YES reached the sheet, and the cell now
+            # asks for a run again, so somebody cleared or changed it on purpose.
+            d.reason = (f"AICompleted reset since this run was marked "
+                        f"{config.LIVE_ENQUIRY_COMPLETED_MARK} at {last.get('sheet_marked')}")
+            return d
         d.status, d.reason = "done", f"estimated {last.get('finished_at')} — " \
                                      f"{last.get('output_path') or 'no output path'}"
+        if row.completed_column:
+            d.reason += (f" (AICompleted not yet written: "
+                         f"{last.get('sheet_mark_note') or 'waiting for the next read'})")
         return d
     if not same:
         d.reason = ("the pack has changed since the last run"
                     if last.get("fingerprint") != fp else "the quantities have changed")
         return d
+    if interrupted(last):
+        d.reason = (f"its last run was cut off, not refused ({(last.get('error') or '')[:90]}); "
+                    f"running it again")
+        return d
+    _now_build = checkout_build()
+    if (last.get("status") == "error" and last.get("build") and _now_build
+            and last["build"] != _now_build):
+        d.reason = (f"the engine has been updated since its last run was refused "
+                    f"({last['build'][:7]} → {_now_build[:7]}); running it again")
+        return d
     tries = sum(1 for a in attempts if a.get("fingerprint") == fp
-                and list(a.get("quantities") or []) == qty and a.get("status") != "done")
+                and list(a.get("quantities") or []) == qty and a.get("status") != "done"
+                and not interrupted(a))
     if job.get("retry") or tries < config.LIVE_ENQUIRY_MAX_ATTEMPTS:
         d.reason = "retry asked for" if job.get("retry") else f"attempt {tries + 1}"
         return d
@@ -601,9 +924,18 @@ def baseline(rows: Sequence[EnquiryRow], sources: Sequence[Any], ledger: Dict[st
 
 def plan(rows: Sequence[EnquiryRow], sources: Sequence[Any],
          ledger: Dict[str, Any]) -> List[Decision]:
-    """Every row's decision, ready rows first by the date the estimate is wanted."""
+    """Every row's decision, ready rows first by the date the estimate is wanted, or, on the
+    AI Live Enquiry sheet, in the sheet's own order from the top."""
     seen: Dict[str, int] = {}
+    # A RE-RUN TAKEN IS FORGOTTEN once the cell says something else (D-608), so the next
+    # Re-Run on the same row is a new request.
+    for r in rows:
+        if r.completed_column and completed_word(r.ai_completed) not in config.LIVE_ENQUIRY_RERUN:
+            (ledger.get("jobs", {}).get(job_key(r)) or {}).pop("rerun_taken", None)
     decisions = [decide(r, sources, ledger, seen) for r in rows]
+    if any(r.completed_column for r in rows):
+        # THE AI LIVE ENQUIRY SHEET RUNS FROM THE TOP (D-608): ready rows in the sheet's order.
+        return sorted(decisions, key=lambda d: (d.status != "ready", d.row.row))
     far = date.max
     return sorted(decisions, key=lambda d: (d.status != "ready", d.row.due or far, d.row.row))
 
@@ -651,15 +983,66 @@ class Portal:
     def status(self, run_id: str) -> Dict[str, Any]:
         return self._call("GET", f"/api/estimate/{run_id}")
 
+    def abandon(self, run_id: str) -> Dict[str, Any]:
+        return self._call("POST", f"/api/estimate/{run_id}/abandon", {})
+
+    def recipients(self) -> List[str]:
+        """The page's saved "Email the finished estimate to" list (D-609): the addresses its
+        box is pre-filled with, saved by its "Save as the default list" button."""
+        got = self._call("GET", "/api/estimate/recipients") or {}
+        return [str(a) for a in (got.get("recipients") or []) if str(a).strip()]
+
+    def dm_extract(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Ask the portal's Document Manager route for a drawing pack (D-702): the same
+        POST /api/estimate/dm/extract the page's Extract button makes. Returns its job id."""
+        return self._call("POST", "/api/estimate/dm/extract", body)
+
+    def dm_extract_status(self, job_id: str) -> Dict[str, Any]:
+        """Where that extract has got to, and whether its pack is readable from the portal."""
+        return self._call("GET", f"/api/estimate/dm/extract/{job_id}")
+
     def self_running(self, report: Dict[str, Any]) -> Dict[str, Any]:
         """Report to the portal's AI Estimate Self-Running switch and hear whether it is on
         (D-588). The answer is the only thing that lets the self-running watcher queue a job."""
         return self._call("POST", "/api/estimate/self-running/heartbeat", report)
 
 
-def request_body(d: Decision) -> Dict[str, Any]:
+_ADDRESS = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def estimator_addresses(row: EnquiryRow) -> Tuple[List[str], List[str]]:
+    """(used, refused): the e-mail addresses the row names for its estimator (D-614), from the
+    Estimator Email column or written in the Estimator column. Used only at the domains in
+    LIVE_ENQUIRY_EMAIL_DOMAINS; any other is refused and said, never sent to."""
+    used: List[str] = []
+    refused: List[str] = []
+    for found in _ADDRESS.findall(f"{row.estimator_email} {row.estimator}"):
+        address = found.strip(".").lower()
+        domain = address.rsplit("@", 1)[-1]
+        target = used if domain in config.LIVE_ENQUIRY_EMAIL_DOMAINS else refused
+        if address not in target:
+            target.append(address)
+    return used, refused
+
+
+def recipients_for(d: Decision, email_to: Optional[Sequence[str]] = None) -> List[str]:
+    """Who this row's finished estimate goes to: the saved list (or LIVE_ENQUIRY_EMAIL_TO), and,
+    when LIVE_ENQUIRY_EMAIL_ESTIMATOR is on, the estimator the row names (D-614)."""
+    base = list(email_to or []) or [a.strip() for a in
+                                     re.split(r"[,;\s]+", config.LIVE_ENQUIRY_EMAIL_TO or "")
+                                     if a.strip()]
+    out: List[str] = []
+    for address in base + (estimator_addresses(d.row)[0]
+                           if config.LIVE_ENQUIRY_EMAIL_ESTIMATOR else []):
+        if address.lower() not in {a.lower() for a in out}:
+            out.append(address)
+    return out
+
+
+def request_body(d: Decision, email_to: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """What the page sends for a pack estimate. The client is the share's folder name — the
-    spelling the output tree is filed under — and the drawing number is the row's."""
+    spelling the output tree is filed under — and the drawing number is the row's. `email_to`
+    names who the finished estimate goes to (D-609); without it, LIVE_ENQUIRY_EMAIL_TO."""
     return {
         "client": d.located.client_folder_name or d.row.customer,
         "drawing_number": d.row.drawing,
@@ -669,17 +1052,29 @@ def request_body(d: Decision) -> Dict[str, Any]:
         "files": [],
         "deliverables": True,
         "method": "both",
-        "email_to": config.LIVE_ENQUIRY_EMAIL_TO or None,
+        "email_to": ", ".join(recipients_for(d, email_to)) or None,
         "email_quote": False,
     }
 
 
+def stopped_by_hand(attempt: Dict[str, Any]) -> bool:
+    """True for a run a person stopped. A service older than the flag still says so in the
+    error it writes on a stop, so that is read as well."""
+    return bool(attempt.get("stopped_by_hand")) or str(attempt.get("error") or "").startswith(
+        ("Released by hand", "Released with the rest of this enquiry"))
+
+
 def _attempt_from(snapshot: Dict[str, Any], attempt: Dict[str, Any]) -> Dict[str, Any]:
+    if snapshot.get("stopped_by_hand"):
+        attempt["stopped_by_hand"] = True
     attempt.update({
         "status": snapshot.get("status") or attempt.get("status"),
         "error": snapshot.get("error") or "",
         "output_path": snapshot.get("output_path") or attempt.get("output_path"),
         "engine_price_gbp": snapshot.get("engine_price_gbp"),
+        # THE PRICE AT EVERY QUANTITY, AND THE WALKTHROUGH PAGE (D-610), for the page's card.
+        "quantity_prices": snapshot.get("quantity_prices") or attempt.get("quantity_prices") or [],
+        "walkthrough_url": snapshot.get("walkthrough_url") or attempt.get("walkthrough_url") or "",
         "seconds": snapshot.get("seconds"),
         "deliverables": [x.get("name") for x in (snapshot.get("deliverables") or [])
                          if isinstance(x, dict)],
@@ -689,59 +1084,55 @@ def _attempt_from(snapshot: Dict[str, Any], attempt: Dict[str, Any]) -> Dict[str
     return attempt
 
 
-def refresh_open_runs(ledger: Dict[str, Any], portal: Portal) -> None:
+def _asked_in_turn(attempt: Dict[str, Any], portal: Portal,
+                   others: Sequence[Portal] = ()) -> List[Portal]:
+    """The services to ask about a run: the one it was queued on first, then the rest."""
+    every = [portal] + [p for p in others if p is not portal]
+    home = str(attempt.get("server") or "").rstrip("/")
+    first = [p for p in every if getattr(p, "server", "") == home]
+    return first + [p for p in every if p not in first]
+
+
+def refresh_open_runs(ledger: Dict[str, Any], portal: Portal,
+                      others: Sequence[Portal] = ()) -> None:
     """A run left queued or running by an earlier cycle (or an earlier process) is asked about
-    before anything new is decided, so the ledger never acts on a stale 'running'."""
+    before anything new is decided, so the ledger never acts on a stale 'running'.
+
+    ASKED WHERE IT WAS QUEUED (JG, 10 Nov 2026). 11896-02-01-GA was queued on 8072; the watcher
+    was reinstalled with 8071 first, asked 8071, was told "no such run", and wrote the job off
+    as "the portal no longer knows this run" while 8072 still had it. The service a run was
+    queued on is recorded with it and asked first; it is lost only when no service knows it."""
     for job in ledger["jobs"].values():
         for attempt in job.get("attempts") or []:
             if attempt.get("status") not in {"queued", "running"}:
                 continue
-            try:
-                _attempt_from(portal.status(attempt["run_id"]), attempt)
-            except PortalError as exc:
-                if exc.status == 404:
-                    attempt.update(status="error", finished_at=_now(),
-                                   error="the portal no longer knows this run (restarted?)")
+            lost = True
+            for p in _asked_in_turn(attempt, portal, others):
+                try:
+                    _attempt_from(p.status(attempt["run_id"]), attempt)
+                    attempt.setdefault("server", getattr(p, "server", ""))
+                    lost = False
+                    break
+                except PortalError as exc:
+                    if exc.status != 404:
+                        lost = False          # did not answer: not evidence it is gone
+            if lost:
+                attempt.update(status="error", finished_at=_now(),
+                               error="no service on the list knows this run (restarted?)")
 
 
 def run_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Path,
             say: Callable[[str], None] = print, poll_seconds: float = 30.0,
             sleep: Callable[[float], None] = time.sleep,
-            clock: Callable[[], float] = time.time) -> Dict[str, Any]:
+            clock: Callable[[], float] = time.time,
+            email_to: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """Queue one row and wait for it to finish. The attempt is in the ledger from the moment it
     is queued, so a runner stopped mid-wait finds it again on the next start."""
-    attempt: Dict[str, Any] = {
-        "queued_at": _now(), "status": "queued", "row": d.row.row,
-        "folder": str(d.located.folder), "fingerprint": d.fingerprint,
-        "quantities": list(d.quantities), "quantity_source": d.quantity_source,
-    }
-    started = portal.start(request_body(d))           # refused: nothing is recorded here
-    job = ledger["jobs"].setdefault(job_key(d.row), {
-        "customer": d.row.customer, "drawing": d.row.drawing, "attempts": []})
-    attempt["run_id"] = started.get("run_id")
-    attempt["output_path"] = started.get("output_path")
-    job["attempts"].append(attempt)
-    job.pop("retry", None)
-    save_ledger(ledger_path, ledger)
-    say(f"   queued {d.row.drawing} ({d.row.customer}) at {'/'.join(map(str, d.quantities))} "
-        f"— run {attempt['run_id']}")
+    attempt = queue_one(d, portal, ledger, ledger_path, say=say, email_to=email_to)
     deadline = clock() + config.LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES * 60
     while True:
         sleep(poll_seconds)
-        try:
-            snap = portal.status(attempt["run_id"])
-        except PortalError as exc:
-            if exc.status == 404:
-                attempt.update(status="error", finished_at=_now(),
-                               error="the portal no longer knows this run (restarted?)")
-                save_ledger(ledger_path, ledger)
-                return attempt
-            say(f"   (portal did not answer: {exc.message}; still waiting)")
-            snap = {}
-        if snap:
-            _attempt_from(snap, attempt)
-            save_ledger(ledger_path, ledger)
-        if attempt["status"] in {"done", "error"}:
+        if poll_once(attempt, portal, ledger, ledger_path, say=say):
             return attempt
         _touch_lock(ledger_path)
         if clock() > deadline:
@@ -750,16 +1141,79 @@ def run_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Pa
             return attempt
 
 
+def poll_once(attempt: Dict[str, Any], portal: Portal, ledger: Dict[str, Any],
+              ledger_path: Path, say: Callable[[str], None] = print) -> bool:
+    """Ask the service once how a queued run is going; True once it has ended."""
+    try:
+        snap = portal.status(attempt["run_id"])
+    except PortalError as exc:
+        if exc.status == 404:
+            attempt.update(status="error", finished_at=_now(),
+                           error="the portal no longer knows this run (restarted?)")
+            save_ledger(ledger_path, ledger)
+            return True
+        say(f"   (portal did not answer: {exc.message}; still waiting)")
+        snap = {}
+    if snap:
+        _attempt_from(snap, attempt)
+        save_ledger(ledger_path, ledger)
+    return attempt["status"] in {"done", "error"}
+
+
+def queue_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Path,
+              say: Callable[[str], None] = print,
+              email_to: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+    """Queue one row and record it in the ledger; does not wait. Refused: nothing recorded."""
+    attempt: Dict[str, Any] = {
+        "queued_at": _now(), "status": "queued", "row": d.row.row,
+        "folder": str(d.located.folder), "fingerprint": d.fingerprint,
+        "quantities": list(d.quantities), "quantity_source": d.quantity_source,
+        # A ROW ON THE AI LIVE ENQUIRY SHEET HAS AICompleted WRITTEN BACK when it finishes
+        # (D-608a); kept on the attempt so a run that finishes while nobody waits on it is
+        # still written on a later read.
+        "marks_sheet": bool(d.row.completed_column),
+    }
+    started = portal.start(request_body(d, email_to))  # refused: nothing is recorded here
+    job = ledger["jobs"].setdefault(job_key(d.row), {
+        "customer": d.row.customer, "drawing": d.row.drawing, "attempts": []})
+    attempt["run_id"] = started.get("run_id")
+    attempt["server"] = getattr(portal, "server", "")
+    attempt["build"] = checkout_build()
+    attempt["output_path"] = started.get("output_path")
+    job["attempts"].append(attempt)
+    job.pop("retry", None)
+    if d.rerun:
+        job["rerun_taken"] = True                 # this Re-Run has been answered (D-608)
+    save_ledger(ledger_path, ledger)
+    say(f"   queued {d.row.drawing} ({d.row.customer}) at {'/'.join(map(str, d.quantities))} "
+        f"— run {attempt['run_id']}")
+    _to = recipients_for(d, email_to)
+    attempt["email_to"] = _to
+    say(f"   e-mailed when finished to {', '.join(_to)}" if _to else
+        "   e-mailed to nobody when finished: no saved list and no estimator address")
+    if config.LIVE_ENQUIRY_EMAIL_ESTIMATOR:
+        _used, _refused = estimator_addresses(d.row)
+        if _refused:
+            say(f"   NOT e-mailed to {', '.join(_refused)}: not an address at "
+                f"{', '.join(config.LIVE_ENQUIRY_EMAIL_DOMAINS)}. The estimate is internal.")
+        elif not _used:
+            say(f"   row {d.row.row} names no estimator e-mail address, so only the saved list "
+                f"hears about it")
+    return attempt
+
+
 def run_ready(decisions: Sequence[Decision], portal: Portal, ledger: Dict[str, Any],
               ledger_path: Path, limit: Optional[int] = None,
               say: Callable[[str], None] = print,
               before_each: Optional[Callable[[Decision], bool]] = None,
+              after_each: Optional[Callable[[Decision, Dict[str, Any]], None]] = None,
               **wait: Any) -> List[Dict[str, Any]]:
     """Every ready row, one after another. Stops when no runner is connected or a run is
     still going at its time limit — a queue built behind work that is not moving helps no
     one. `before_each` is asked before each row is queued (D-588): the self-running watcher
     reports the row it is about to run and answers False once the portal's switch is off, so
-    the run in progress finishes and nothing more is queued."""
+    the run in progress finishes and nothing more is queued. `after_each` is told each
+    attempt as it ends (D-608a): the watcher writes AICompleted back for a finished one."""
     done: List[Dict[str, Any]] = []
     for d in decisions:
         if d.status != "ready":
@@ -794,6 +1248,8 @@ def run_ready(decisions: Sequence[Decision], portal: Portal, ledger: Dict[str, A
         say(f"   {d.row.drawing}: {attempt['status']}"
             + (f" — £{price:,.2f} a unit at {d.quantities[0]} off" if price else "")
             + (f" — {attempt.get('error')}" if attempt.get("error") else ""))
+        if after_each is not None:
+            after_each(d, attempt)
         if attempt["status"] not in {"done", "error"}:
             break
     return done
@@ -898,7 +1354,12 @@ def _settings(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def _sources(root: Path) -> List[Any]:
-    return [LiveEnquiryShare(root), DesignArea(config.DESIGN_AREA_ENDPOINT)]
+    # THE DESIGN SHARE FIRST (SCRUM-203): it keeps the Live Enquiry folder current with the
+    # design area. The share second, for a pack an estimator dropped by hand that design does not
+    # hold. SDI_DESIGN_SHARE_SOURCE=0 turns the design share off and leaves the share alone.
+    first = [] if str(os.getenv("SDI_DESIGN_SHARE_SOURCE", "1")).strip().lower() in {"0", "off", "false", "no"} \
+        else [DesignShare(root)]
+    return first + [LiveEnquiryShare(root), DesignArea(config.DESIGN_AREA_ENDPOINT)]
 
 
 def scan(s: Dict[str, Any], ledger: Dict[str, Any]) -> List[Decision]:

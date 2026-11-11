@@ -520,6 +520,88 @@ def test_the_silence_is_measured_from_the_last_line_not_the_start_of_the_run(eng
         f"it is timing from the start of the run, not from the last line")
 
 
+# ── a stop is heard and acted on within seconds (D-649) ─────────────────────
+class _WorksUntilStopped:
+    """An engine in a long silent phase that only ends when it is terminated."""
+
+    def __init__(self):
+        self._alive = True
+        self.returncode = None
+        self.terminated_at = None
+
+    @property
+    def stdout(self):
+        def _lines():
+            yield "   [bom] 28 line(s)\n"
+            while self._alive:
+                time.sleep(0.01)
+        return _lines()
+
+    def poll(self):
+        return None if self._alive else self.returncode
+
+    def terminate(self):
+        self.terminated_at = time.time()
+        self._alive, self.returncode = False, 1
+
+    def kill(self):
+        self.terminate()
+
+    def wait(self, timeout=None):
+        while self._alive:
+            time.sleep(0.01)
+        return self.returncode
+
+
+class _AbandonedRequests:
+    """The service after Stop was pressed: every progress post is refused with a 409."""
+
+    def __init__(self):
+        self.progress, self.completed = [], []
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        (self.completed if url.endswith("/complete") else self.progress).append(json)
+
+        class _R:
+            status_code, ok, text = 409, False, "That run is already error."
+
+            @staticmethod
+            def json():
+                return {}
+
+            @staticmethod
+            def raise_for_status():
+                return None
+        return _R()
+
+
+def test_a_stop_ends_a_silent_engine_within_seconds_not_at_the_next_beat(engine, monkeypatch):
+    """3 Nov 2026: "why does stop this job take so long to shut down". A silent engine's only
+    post was the 30s beat, and a stop it heard was acted on at the beat after that. With the
+    console poster held off, only the runner's own listening can hear this stop, and the
+    engine must be ended long before one 30s beat has passed."""
+    runner, root = engine
+    monkeypatch.setattr(runner, "_BEAT_SECONDS", 30)
+    monkeypatch.setattr(runner, "_POST_EVERY_SECONDS", 60)
+    monkeypatch.setattr(runner, "_LISTEN_SECONDS", 0.05)
+    tpl = root / "Blank Estimate Sheet  WB 2026.xlsx"
+    tpl.write_bytes(b"present is all this check asks")
+    monkeypatch.setenv("SDI_WB_TEMPLATE", str(tpl))
+    proc = _WorksUntilStopped()
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda *a, **k: proc)
+    req = _AbandonedRequests()
+    job = {"run_id": "r1", "client": "Boots", "units": 45, "drawing_number": "11650-00",
+           "job_folder": str(root), "output_path": str(root / "share" / "Boots")}
+    started = time.time()
+    runner._execute(req, "http://x/api/estimate", {}, job, root, Path("python"), "rnr-1")
+    assert proc.terminated_at is not None, "the engine was never ended"
+    assert proc.terminated_at - started < 5, (
+        f"the engine was ended {proc.terminated_at - started:.1f}s after the stop could be "
+        f"heard; the beat is 30s")
+    said = [line for post in req.progress for line in (post.get("lines") or [])]
+    assert any("STOPPING" in line for line in said)
+
+
 # ── a death that leaves evidence ────────────────────────────────────────────
 def test_everything_the_runner_says_goes_to_a_file_as_well(engine, capsys):
     """"IT JUST SEEMS TO RANDOMLY DIE" IS WHAT NO LOG LOOKS LIKE.
@@ -761,3 +843,48 @@ def test_a_restart_does_not_drop_a_marker_into_the_middle_of_the_log(engine):
     runner._Tee(None, log).write("first run\n")
     runner._Tee(None, log).write("second run\n")
     assert log.read_bytes().count(b"\xef\xbb\xbf") == 1
+
+
+class _Chatty:
+    """Prints a burst of lines at once, the way the part-details block does."""
+
+    def __init__(self, n):
+        self._n = n
+        self._alive = True
+
+    @property
+    def stdout(self):
+        def _lines():
+            for i in range(self._n):
+                yield f"  line {i}\n"
+            self._alive = False
+        return _lines()
+
+    def poll(self):
+        return None if self._alive else 0
+
+    def wait(self):
+        self._alive = False
+        return 0
+
+
+def test_a_burst_of_console_is_a_few_posts_not_one_per_line(engine, monkeypatch):
+    """D-598w. flush() said "batched" and posted every line, from the loop that reads the
+    engine's pipe, so each post stalled the engine: 146 s of a 9439-07-04 run went on printing
+    eight parts. A burst now goes in a handful of posts, every line in order, none lost."""
+    runner_mod = __import__("sdi_estimate_runner")
+    _tpl = engine[1] / "Blank Estimate Sheet  WB 2026.xlsx"
+    _tpl.write_bytes(b"present is all this check asks")
+    monkeypatch.setenv("SDI_WB_TEMPLATE", str(_tpl))
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", lambda *a, **k: _Chatty(300))
+    req = _FakeRequests()
+    root = engine[1]
+    job = {"run_id": "r1", "client": "Boots", "units": 1, "drawing_number": "9439-07-04",
+           "job_folder": str(root), "output_path": str(root / "share" / "Boots")}
+    runner_mod._execute(req, "http://x/api/estimate", {}, job, root, Path("python"), "rnr-1")
+    said = [ln for post in req.progress for ln in (post.get("lines") or [])
+            if ln.startswith("  line ")]
+    assert said == [f"  line {i}" for i in range(300)], "every line, once, in order"
+    carrying = [p for p in req.progress if any(str(ln).startswith("  line ")
+                                               for ln in (p.get("lines") or []))]
+    assert len(carrying) <= 3, f"{len(carrying)} posts for one burst: still one per line"

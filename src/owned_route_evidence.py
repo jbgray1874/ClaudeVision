@@ -137,8 +137,49 @@ def _graph(summary):
             if isinstance(n, dict) and n.get('part_number')}
 
 
+# A BONDING TAPE OR PAD ON AN ASSEMBLY'S OWN BILL STATES HOW IT IS JOINED (D-733).
+_BOND_MEMBER = re.compile(
+    r'\bVHB\b|\bGEL\s*TAPE\b|\bDOUBLE[\s-]*SIDED\b.*\bTAPE\b|'
+    r'\b(?:FOAM|ADHESIVE|MOUNTING|BONDING|ACRYLIC\s+FOAM)\s+TAPE\b|'
+    r'\bADHESIVE\s+(?:PADS?|DOTS?)\b', re.I)
+
+
+def bonding_member(summary, assembly):
+    """The bonding tape on this assembly's own bill, as 'CODE (description)', or '' (D-733).
+
+    12677-01-GA, 6 Nov 2026: 12677-01-101SA's bill carries GEL TAPE (VHB GEL TAPE, 4 off)
+    between its two panels, and the estimate asked how the assembly is joined, saying no
+    drawing states the joint. The drawing states it: on the bill, as the part that does it."""
+    asm = key(assembly)
+    if not asm or not isinstance(summary, dict):
+        return ''
+    recs = {}
+    kids = set()
+    for p in (list((summary.get('manufacturing_writeup') or {}).get('parts') or [])
+              + list(summary.get('parts') or [])
+              + list((summary.get('estimate_summary') or {}).get('part_estimates') or [])):
+        if not isinstance(p, dict) or not p.get('part_number'):
+            continue
+        pn = key(p.get('part_number'))
+        recs.setdefault(pn, p)
+        if pn == asm:
+            kids.update(key(c) for c in p.get('assembly_children') or [])
+        if asm in {key(a) for a in p.get('parent_assemblies') or []}:
+            kids.add(pn)
+    for c in ((_graph(summary).get(asm) or {}).get('children') or []):
+        kids.add(key(c.get('part_number') if isinstance(c, dict) else c))
+    for pn in sorted(k for k in kids if k):
+        r = recs.get(pn) or {}
+        words = f"{pn} {r.get('description') or ''}"
+        if _BOND_MEMBER.search(words):
+            desc = ' '.join(str(r.get('description') or '').split())
+            return f'{pn} ({desc})' if desc and desc.upper() != pn else pn
+    return ''
+
+
 def stated_bond(summary, part_number):
     """The hot-melt note on this part's own sheet or an assembly above it, or '' (D-598t).
+    Or a bonding tape on the bill of this assembly or one above it (D-733).
 
     The bond a GA prints joins the parts beneath it, so a glue route on a member or a
     sub-assembly is stated work, not an inference, wherever that note is printed above it.
@@ -153,6 +194,9 @@ def stated_bond(summary, part_number):
         if not pn or pn in seen:
             continue
         seen.add(pn)
+        _tape = bonding_member(summary, pn)
+        if _tape:
+            return f'{pn}: its bill carries {_tape}, which is the joint'
         for pg in own_pages(records.get(pn) or {'part_number': pn}, pages):
             lines = page_text(pg).splitlines()
             for i, line in enumerate(lines):

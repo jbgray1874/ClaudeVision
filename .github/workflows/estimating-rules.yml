@@ -117,10 +117,24 @@ jobs:
       # them SKIP cleanly rather than fail. fastapi is here because the run-stop tests import
       # the estimate_routes app directly and error without it (they do not skip); everything
       # else the suite touches is a reader it can import offline.
+      #
+      # THE LIST WAS WRONG, AND THE JOB NEVER REACHED A TEST (SCRUM-137, 25 Oct 2026). Every push
+      # to main-2026 stopped at collection: four portal test files need python-multipart (any
+      # FastAPI route taking a form), the TestClient tests need httpx, and some fifty tests
+      # import PyMuPDF unguarded. msal and itsdangerous are what the portal app imports to sign
+      # people in; without them the whole-app page tests caught the ImportError as a skip and
+      # never ran. Reproduced in a clean virtualenv with exactly this list before it was changed;
+      # a dependency is added here only when a test genuinely needs it.
       - name: Install the dependencies the suite exercises
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest openpyxl xlrd ezdxf shapely pdfplumber python-dotenv requests Pillow fastapi
+          python -m pip install pytest openpyxl xlrd ezdxf shapely pdfplumber python-dotenv requests Pillow fastapi python-multipart httpx pymupdf msal itsdangerous
 
+      # PRIVATE EVIDENCE SKIPS, BY NAME, AND IS COUNTED. A frozen replay record and a customer
+      # drawing are job data and are never committed, so CI cannot hold them: those tests skip
+      # here with the reason printed (-rs), and the laptop's acceptance run, which has them,
+      # runs them without the opt-out. A skip is reported as a skip, never as a pass.
       - name: Full test suite
-        run: python -m pytest tests/ -q
+        env:
+          SDI_REPLAY_ALLOW_MISSING: "1"
+        run: python -m pytest tests/ -q -rs

@@ -133,6 +133,80 @@ def stated_mass_yardstick_kg(summary: Any) -> Optional[float]:
     return best
 
 
+def stated_product_weight_kg(summary: Any) -> Optional[Dict[str, Any]]:
+    """The unit weight the pack itself states, {"kg", "where"}, or None (SCRUM-178).
+
+    The heaviest WEIGHT figure on any sheet once the qualified ones are dropped — the
+    assembled product's, usually, which is the figure packaging and delivery should be
+    asked for when the blanks could not all be weighed. A weight the sheet qualifies as
+    something else's (MAX, LOADING, CAPACITY, GROSS, SHIPPING, a bag's, the goods') is a
+    rating or a consignment total, not the unit on the bench, and the same vocabulary the
+    title-block reader uses drops it here (extractor_patterns.strip_weights_not_the_parts),
+    so "MAX LOADING: 50KG" never becomes the product and "WEIGHT: 33.07kg" on the next
+    line still does.
+
+    AND THE WEIGHT BELONGS TO THE SELECTED PRODUCT, where the job declares one: the
+    heaviest figure anywhere in a pack can be another variant's or a reference sheet's,
+    so pages that name the declared product are read first, and only when none of them
+    states a weight does the rest of the pack answer — with the where saying the figure
+    was not matched to the product, so the covering note's reader can judge it."""
+    try:
+        from extractor_patterns import strip_weights_not_the_parts as _strip
+    except Exception:                                                # noqa: BLE001
+        def _strip(t: str) -> str:
+            return t
+
+    def _heaviest(pgs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        best: Optional[float] = None
+        where = ""
+        for pg in pgs:
+            text = _strip(" ".join(str(pg.get(k) or "")
+                                   for k in ("pypdf_text", "pdfplumber_text",
+                                             "normalized_text")))
+            for m in _WEIGHT.finditer(text):
+                v = _num(m.group(1))
+                if v is None:
+                    continue
+                kg = v / 1000.0 if m.group(2).upper() == "G" else v
+                if best is None or kg > best:
+                    best = kg
+                    n = pg.get("job_page_number") or pg.get("page_number")
+                    where = f"page {n}" if n else "its own sheet"
+        return {"kg": best, "where": where} if best else None
+
+    pages = [pg for pg in (((summary or {}).get("pages") or [])
+                           if isinstance(summary, dict) else []) if isinstance(pg, dict)]
+    # ONE DRAWING NUMBER HOWEVER IT IS SPACED OR JOINED (D-721): 11908-22's sheet prints
+    # "11908-22 GA" and the job declares "11908-22-GA", and the GA's 1.419 kg was refused as
+    # "not matched to the declared product". Spaces, hyphens, underscores, dots and slashes
+    # are dropped on both sides before they are compared.
+    declared = re.sub(r"[\s\-_./]+", "", str((summary or {}).get("declared_product") or ""
+                                            if isinstance(summary, dict) else "")).upper()
+    if declared:
+        own = [pg for pg in pages
+               if declared in re.sub(r"[\s\-_./]+", "", " ".join(
+                   str(pg.get(k) or "") for k in
+                   ("pypdf_text", "pdfplumber_text", "normalized_text"))).upper()]
+        got = _heaviest(own)
+        if got:
+            got["verified"] = True
+            return got
+        got = _heaviest([pg for pg in pages if pg not in own])
+        if got:
+            # UNVERIFIED, AND SAID SO: a figure from a sheet that does not name the
+            # declared product stays a provisional observation — the consumer must not
+            # let it drive anything on the strength of a warning string alone.
+            got["verified"] = False
+            got["where"] += (f" — not matched to the declared product "
+                             f"{str((summary or {}).get('declared_product') or declared).strip()}; "
+                             f"confirm it is the product's own figure")
+        return got
+    got = _heaviest(pages)
+    if got:
+        got["verified"] = True        # one product, nothing to mismatch against
+    return got
+
+
 def job_yardstick_mm(summary: Any, parts: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     """{mm, basis, kg, kg_basis} — the stated envelope first, else the largest measured
     member; the heaviest stated weight. None where the job states and measures nothing."""

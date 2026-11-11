@@ -179,3 +179,26 @@ def test_a_row_keyed_by_part_code_is_still_classified_correctly():
         "a bought-in bolt is being told its gauge or blank size is missing")
     made = rows[rows.index("10575-01-013"):]
     assert "SDI makes it" in made
+
+
+def test_a_made_parts_labour_does_not_make_its_material_costed_elsewhere():
+    """12684-02-GA, 3 Nov 2026 18:53 (D-662): eleven cross bars with no material price were
+    named "show zero here and ARE costed ... on a sheet-steel row" because their saw, weld and
+    dressing made the part's total non-zero. They sat on no material block. A made part's total
+    counts only for what is left after its labour, as a bought-in's already did."""
+    job = _summary(
+        rows=[{"part_number": "12684-02-M07", "price_gbp": 0, "unpriced_reason": _reason()},
+              {"part_number": "10575-01-001", "price_gbp": 0, "unpriced_reason": _reason()}],
+        estimates=[
+            {"part_number": "12684-02-M07",
+             "material_estimate": {"extended_material_cost_gbp": 0.0},
+             "labour_estimate": {"extended_labour_cost_gbp": 58.63},
+             "extended_total_cost_gbp": 58.63},
+            {"part_number": "10575-01-001",
+             "material_estimate": {"extended_material_cost_gbp": 0.0},
+             "labour_estimate": {"extended_labour_cost_gbp": 10.0},
+             "extended_total_cost_gbp": 50.62}])
+    html = jrh._unpriced_section(job)
+    rows = html[html.index("<tbody>"):]
+    assert "12684-02-M07" in rows, "a part whose only money is labour is still an open price"
+    assert "10575-01-001" not in rows, "money left after labour is material, costed elsewhere"

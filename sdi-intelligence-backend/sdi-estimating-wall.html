@@ -1,0 +1,2135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grid Control</title>
+<!--
+  THE ESTIMATING WALL (D-737). JG, 7 Nov 2026: "build the full-screen page for the wall monitor
+  ... something SUPER impressive and techie ... runtime stats, KPIs around run times, monitoring
+  on activity, red amber green on running."
+
+  Everything on it comes from GET /api/estimate/wall, worked out by estimate_wall.py on the
+  service (tested there); this page only draws it and ticks the clocks between reads. No data
+  of its own, no external files: a wall PC on the LAN needs nothing but the service.
+
+  THE PAGE SCROLLS (D-741). JG, 7 Nov 2026: "there is no scroll and the last runs ... is cut off".
+  The operations view fills the screen when the screen is big enough and keeps its own minimum
+  height when it is not, so a short screen scrolls rather than squeezing the charts; Recent
+  scrolls inside its own panel; the alerts ticker stays at the foot of the screen. Below it sits
+  the parity view: "we should see the parity runs and all kpis/ vizualizations built into this".
+  It comes from the same read, as `parity`, which the service refreshes from the parity share
+  in the background every five minutes (src/parity_job.py wall_summary, tested there).
+
+  Every colour carries a word and an icon beside it, never colour alone:
+    ✓ green   on pace / ready        ▲ amber   slow, waiting for SolidWorks, Document Manager
+    ✕ red     late, silent, erring, offline       ○ grey   a planned machine not yet connected
+-->
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#0a0a09; --surface:#10100e; --panel:rgba(20,20,17,.88); --panel-2:#161613;
+    --line:#26261f; --line-hi:#4a4421;
+    --ink:#f2f2ea; --ink-2:#b6b6a7; --ink-3:#8a8a7f;
+    --accent:#F6D946; --accent-dim:rgba(246,217,70,.14);
+    --good:#0ca30c; --warn:#f0a030; --bad:#d03b3b; --grey:#5b6b78;
+    --s-done:#3987e5; --s-failed:#d03b3b; --s-extract:#9085e9;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,"SFMono-Regular",Menlo,monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  /* NOTHING SCROLLS UNLESS ASKED (D-744): no smooth scrolling for the browser to start on its
+     own, and the panes that are redrawn every few seconds are never the browser's anchor. */
+  .lanes,.kpis,.fleet,.feed,.ptasks,.side,.bottom,#pKpis,#pMain{overflow-anchor:none}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);overflow-x:hidden;
+       overflow-y:auto;font-variant-numeric:tabular-nums;min-height:100vh}
+  /* THE ROOM: a faint engineering grid, a vignette and one slow scan line. */
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:
+      radial-gradient(ellipse at 50% 0%, rgba(246,217,70,.07), transparent 60%),
+      linear-gradient(rgba(246,217,70,.035) 1px, transparent 1px) 0 0/40px 40px,
+      linear-gradient(90deg, rgba(246,217,70,.035) 1px, transparent 1px) 0 0/40px 40px;}
+  body::after{content:"";position:fixed;left:0;right:0;height:140px;top:-140px;z-index:0;
+    pointer-events:none;background:linear-gradient(transparent, rgba(246,217,70,.05), transparent);
+    animation:scan 9s linear infinite}
+  @keyframes scan{to{transform:translateY(calc(100vh + 140px))}}
+  @media (prefers-reduced-motion: reduce){body::after{display:none}.pulse,.live-dot{animation:none!important}}
+
+  .wall{position:relative;z-index:1;display:flex;flex-direction:column;gap:12px;padding:14px 18px 10px}
+  /* The operations view: the screen's height, less the header and the ticker, but never less
+     than the height its panels need. Shorter than that, the page scrolls. */
+  .ops{display:grid;gap:12px;height:max(calc(100vh - 106px), 940px);
+       grid-template-rows:auto minmax(0,1.9fr) minmax(0,1fr);scroll-margin-top:12px}
+
+  /* ── HEADER ─────────────────────────────────────────────── */
+  header{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:16px}
+  .brand{display:flex;align-items:center;gap:12px;min-width:0}
+  .mark{width:38px;height:38px;flex:none}
+  .brand h1{margin:0;font-family:var(--mono);font-size:17px;letter-spacing:.18em;font-weight:600;
+            white-space:nowrap}
+  .brand h1 b{color:var(--accent);font-weight:600}
+  .brand .sub{font-family:var(--mono);font-size:11px;color:var(--ink-3);letter-spacing:.14em;
+              margin-top:3px;white-space:nowrap}
+  .banner{display:flex;align-items:center;gap:10px;padding:9px 18px;border-radius:999px;
+          border:1px solid var(--line-hi);background:var(--panel);font-family:var(--mono);
+          font-size:13px;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap;
+          justify-self:center;max-width:100%;min-width:0;overflow:hidden}
+  .banner #bannerText{overflow:hidden;text-overflow:ellipsis}
+  .banner .ico{font-size:15px}
+  .banner.green{border-color:rgba(12,163,12,.55);box-shadow:0 0 22px rgba(12,163,12,.18)}
+  .banner.amber{border-color:rgba(250,178,25,.6);box-shadow:0 0 22px rgba(250,178,25,.2)}
+  .banner.red{border-color:rgba(208,59,59,.7);box-shadow:0 0 26px rgba(208,59,59,.3);
+              animation:alarm 1.6s ease-in-out infinite}
+  @keyframes alarm{50%{box-shadow:0 0 6px rgba(208,59,59,.15)}}
+  .clockbox{justify-self:end;text-align:right;display:flex;gap:18px;align-items:center}
+  .clock{font-family:var(--mono);font-size:34px;font-weight:600;letter-spacing:.04em;line-height:1}
+  .date{font-family:var(--mono);font-size:11px;color:var(--ink-3);letter-spacing:.12em;margin-top:4px}
+  .link{font-family:var(--mono);font-size:11px;color:var(--ink-2);display:flex;align-items:center;
+        gap:7px;letter-spacing:.06em;white-space:nowrap}
+  .live-dot{width:9px;height:9px;border-radius:50%;background:var(--good);
+            box-shadow:0 0 10px var(--good);animation:blink 2s ease-in-out infinite}
+  .live-dot.lost{background:var(--bad);box-shadow:0 0 10px var(--bad)}
+  @keyframes blink{50%{opacity:.35}}
+  .fsbtn{font-family:var(--mono);font-size:11px;color:var(--ink-2);background:transparent;
+         border:1px solid var(--line-hi);border-radius:6px;padding:6px 9px;cursor:pointer;
+         letter-spacing:.06em;white-space:nowrap}
+  .fsbtn:hover{color:var(--ink);border-color:var(--accent)}
+  /* A narrower screen keeps the header on one line: the link says itself by its dot alone,
+     and full screen by its symbol. */
+  @media (max-width:1600px){ #linkText,.fsbtn .wide{display:none} .clockbox{gap:12px} }
+
+  /* ── PANELS ─────────────────────────────────────────────── */
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;min-height:0;
+         position:relative;overflow:hidden;backdrop-filter:blur(2px)}
+  .panel::before{content:"";position:absolute;left:0;top:0;width:28px;height:2px;background:var(--accent)}
+  .ptitle{display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+          font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--ink-3);
+          text-transform:uppercase;padding:10px 14px 0}
+  .ptitle b{color:var(--ink-2);font-weight:600}
+  .ptitle .r{letter-spacing:.08em;text-transform:none}
+
+  /* ── KPI STRIP ──────────────────────────────────────────── */
+  .kpis{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:12px}
+  .kpi{padding:12px 14px 12px}
+  .kpi .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;color:var(--ink-3);
+          text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .kpi .v{font-family:var(--mono);font-size:34px;font-weight:600;line-height:1.05;margin-top:6px;
+          white-space:nowrap;letter-spacing:-.01em}
+  .kpi .v small{font-size:17px;color:var(--ink-2);font-weight:500;margin-left:3px}
+  .kpi .s{font-size:12px;color:var(--ink-2);margin-top:5px;white-space:nowrap;overflow:hidden;
+          text-overflow:ellipsis}
+  .slots{display:flex;gap:4px;margin-top:8px}
+  .slots i{flex:1;height:6px;border-radius:3px;background:var(--line-hi)}
+  .slots i.on{background:var(--accent);box-shadow:0 0 8px rgba(246,217,70,.5)}
+  .slots i.off{background:transparent;border:1px dashed var(--line-hi)}
+
+  /* ── MAIN: LANES + FLEET ────────────────────────────────── */
+  .main{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,1.05fr);gap:12px;min-height:0}
+  .lanes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;min-height:0}
+  .lane{display:flex;flex-direction:column;padding:12px 14px;gap:9px}
+  .lane.green{border-color:rgba(12,163,12,.45)}
+  .lane.amber{border-color:rgba(250,178,25,.55)}
+  .lane.red{border-color:rgba(208,59,59,.7);box-shadow:inset 0 0 40px rgba(208,59,59,.12)}
+  .lanehead{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .slotname{font-family:var(--mono);font-size:11px;letter-spacing:.22em;color:var(--ink-3)}
+  .lanectl{display:flex;align-items:center;gap:8px}
+  .stopjob{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;cursor:pointer;
+    color:var(--ink);background:transparent;border:1px solid var(--line-hi);border-radius:4px;padding:2px 8px}
+  .stopjob:hover{border-color:currentColor}
+  .stopjob[disabled]{opacity:.55;cursor:default}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;
+         letter-spacing:.1em;text-transform:uppercase;padding:4px 9px;border-radius:999px;
+         border:1px solid var(--line-hi);color:var(--ink);white-space:nowrap}
+  .badge .ico{font-size:12px}
+  .badge.green{border-color:rgba(12,163,12,.6)} .badge.green .ico{color:var(--good)}
+  .badge.amber{border-color:rgba(250,178,25,.6)} .badge.amber .ico{color:var(--warn)}
+  .badge.red{border-color:rgba(208,59,59,.75)} .badge.red .ico{color:var(--bad)}
+  .badge.grey .ico{color:var(--grey)}
+  .job{display:flex;gap:14px;align-items:center;min-width:0}
+  .ring{flex:none;width:96px;height:96px;position:relative}
+  .ring svg{width:96px;height:96px;transform:rotate(-90deg)}
+  .ring .pct{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+             justify-content:center;font-family:var(--mono)}
+  .ring .pct b{font-size:20px;font-weight:600}
+  .ring .pct span{font-size:9.5px;color:var(--ink-3);letter-spacing:.12em}
+  .jobtext{min-width:0}
+  .dn{font-family:var(--mono);font-size:22px;font-weight:600;white-space:nowrap;overflow:hidden;
+      text-overflow:ellipsis}
+  .cl{font-size:13px;color:var(--ink-2);margin-top:2px;white-space:nowrap;overflow:hidden;
+      text-overflow:ellipsis}
+  .elapsed{font-family:var(--mono);font-size:30px;font-weight:600;margin-top:6px;line-height:1}
+  .elapsed small{font-size:12px;color:var(--ink-3);font-weight:400;margin-left:6px;letter-spacing:.04em}
+  .why{font-size:12px;color:var(--ink-2)}
+  .facts{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;font-size:12px;color:var(--ink-2)}
+  .facts b{font-family:var(--mono);color:var(--ink);font-weight:600}
+  .facts .badge{padding:3px 8px;font-size:10.5px}
+  .sw{padding:8px 12px 10px;overflow:hidden;display:flex;flex-direction:column;gap:7px}
+  .swm{border:1px solid var(--line);border-radius:9px;padding:6px 10px;background:var(--panel-2)}
+  .swm.free{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 10px}
+  .swm .h{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12.5px}
+  .swm .h .host{font-family:var(--mono);color:var(--ink-2);font-size:11px;white-space:nowrap;
+                overflow:hidden;text-overflow:ellipsis}
+  .swm .who{font-size:12.5px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .swm .who b{font-family:var(--mono)}
+  .wait{margin-top:6px}
+  .wait .t{display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink-2);gap:8px}
+  .wait .t span:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .wait .bar{height:5px;border-radius:3px;background:var(--line-hi);margin-top:3px;overflow:hidden}
+  .wait .bar i{display:block;height:100%;background:var(--warn);border-radius:3px}
+  .pipe{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+  .pipe div{font-family:var(--mono);font-size:9px;letter-spacing:.06em;text-align:center;
+            color:var(--ink-3);padding-top:9px;position:relative;white-space:nowrap;overflow:hidden}
+  .pipe div::before{content:"";position:absolute;left:0;right:0;top:0;height:4px;border-radius:2px;
+                    background:var(--line-hi)}
+  .pipe div.done{color:var(--ink-2)}
+  .pipe div.done::before{background:var(--accent);opacity:.65}
+  .pipe div.now{color:var(--ink)}
+  .pipe div.now::before{background:var(--accent);box-shadow:0 0 10px var(--accent);
+                        animation:blink 1.4s ease-in-out infinite}
+  /* THE RUN'S LOG (D-743): every line whole, wrapped, scrollable. A line that overflowed used
+     to be squeezed onto the next until none could be read. It follows the newest line unless
+     you have scrolled up to read; ⤢ opens it large. */
+  .termwrap{flex:1;min-height:150px;display:flex;position:relative}
+  .term{flex:1;min-height:0;background:#05080c;border:1px solid var(--line);border-radius:8px;
+        padding:8px 10px;font-family:var(--mono);font-size:11.5px;line-height:1.45;color:#9fb4c3;
+        overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;
+        scrollbar-width:thin;scrollbar-color:var(--line-hi) transparent}
+  .term div{flex:none;white-space:pre-wrap;overflow-wrap:anywhere;padding:1px 0}
+  .term div:first-child{margin-top:auto}
+  .tx{position:absolute;top:6px;right:8px;font-family:var(--mono);font-size:11px;color:var(--ink-2);
+      background:rgba(5,8,12,.85);border:1px solid var(--line-hi);border-radius:5px;padding:2px 7px;cursor:pointer}
+  .tx:hover{color:var(--ink);border-color:var(--accent)}
+  .modal{position:fixed;inset:0;z-index:20;background:rgba(2,4,7,.78);display:flex;align-items:center;
+         justify-content:center;padding:28px}
+  .modal[hidden]{display:none}
+  .mbox{width:min(1200px,100%);height:min(86vh,100%);background:var(--surface);border:1px solid var(--line-hi);
+        border-radius:12px;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  .mhead{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;
+         border-bottom:1px solid var(--line);font-family:var(--mono);font-size:13px;letter-spacing:.06em}
+  .mterm{flex:1;min-height:0;margin:12px 16px 16px;font-size:13px}
+  .term .w{color:var(--warn)} .term .e{color:#ff7a7a} .term .g{color:#5fd35f}
+  .term .cur::after{content:"▌";color:var(--accent);animation:blink 1s steps(1) infinite;margin-left:2px}
+  .idle{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+        color:var(--ink-3);text-align:center;font-size:13px}
+  .radar{width:90px;height:90px;border-radius:50%;border:1px solid var(--line-hi);position:relative;
+         background:radial-gradient(circle, transparent 30%, rgba(246,217,70,.04) 31%, transparent 32%,
+                    transparent 62%, rgba(246,217,70,.04) 63%, transparent 64%)}
+  .radar::after{content:"";position:absolute;inset:0;border-radius:50%;
+    background:conic-gradient(from 0deg, rgba(246,217,70,.35), transparent 70deg);
+    animation:sweep 3.2s linear infinite}
+  .radar.off::after{display:none}
+  @keyframes sweep{to{transform:rotate(360deg)}}
+  .idle b{font-family:var(--mono);letter-spacing:.2em;color:var(--ink-2);font-size:12px}
+
+  .side{display:grid;grid-template-rows:minmax(0,2.1fr) minmax(0,1fr) minmax(0,.55fr);gap:12px;min-height:0}
+  .fleet{display:flex;flex-direction:column;gap:6px;padding:8px 12px 10px;overflow:hidden}
+  .node{border:1px solid var(--line);border-radius:9px;padding:6px 10px;background:var(--panel-2);
+        display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:2px 9px;align-items:center}
+  .node.planned .meta{display:none}
+  .node.red{border-color:rgba(208,59,59,.6)} .node.amber{border-color:rgba(250,178,25,.5)}
+  .node.planned{border-style:dashed;opacity:.75}
+  .node .hb{width:10px;height:10px;border-radius:50%;background:var(--grey)}
+  .node.green .hb{background:var(--good);box-shadow:0 0 9px var(--good);animation:blink 2.2s ease-in-out infinite}
+  .node.amber .hb{background:var(--warn);box-shadow:0 0 9px var(--warn)}
+  .node.red .hb{background:var(--bad);box-shadow:0 0 9px var(--bad)}
+  .node .nm{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .node .meta{grid-column:2/5;font-family:var(--mono);font-size:10.5px;color:var(--ink-3);
+              white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .node .meta b{color:var(--ink-2);font-weight:500}
+  .chips{display:flex;gap:4px}
+  .chip{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;padding:2px 6px;border-radius:4px;
+        border:1px solid var(--line-hi);color:var(--ink-2)}
+  /* COMPUTE (D-743): what each machine is using and what is free, measured by its runner. */
+  .fleet{overflow-y:auto!important;scrollbar-width:thin;scrollbar-color:var(--line-hi) transparent}
+  .cmp{grid-column:1/5;display:flex;flex-direction:column;gap:5px;margin-top:6px}
+  .cmp.stale{opacity:.55}
+  .cl{display:grid;grid-template-columns:50px minmax(0,1fr) 134px;gap:8px;align-items:center}
+  .ck{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--ink-3)}
+  .cv{font-family:var(--mono);font-size:10.5px;color:var(--ink-2);white-space:nowrap;text-align:right;
+      overflow:hidden;text-overflow:ellipsis}
+  .cv b{color:var(--ink);font-weight:600}
+  .cbar{height:10px;border-radius:3px;background:var(--line);display:flex;gap:2px;overflow:hidden}
+  .cbar i{display:block;height:100%;min-width:2px;flex:none}
+  .cbar i:hover{filter:brightness(1.3)}
+  .spark{height:26px;width:100%;display:block}
+  .cnote{font-size:10.5px;color:var(--ink-3)}
+  .clegend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:10.5px;color:var(--ink-2);padding:2px 2px 0}
+  .clegend span{display:inline-flex;align-items:center;gap:5px}
+  .clegend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+  .uses{display:flex;flex-wrap:wrap;gap:5px 8px;align-items:center;font-size:11.5px;color:var(--ink-2)}
+  .use{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line-hi);border-radius:5px;padding:2px 7px;
+       font-family:var(--mono);font-size:10.5px;color:var(--ink)}
+  .use i{width:8px;height:8px;border-radius:2px}
+  .use b{font-weight:600}
+  .queue{padding:10px 12px;overflow:hidden;display:flex;flex-direction:column;gap:6px}
+  .qrow{display:grid;grid-template-columns:22px minmax(0,1fr) auto auto;gap:8px;align-items:center;
+        font-size:12.5px;padding:6px 8px;border-radius:7px;background:var(--panel-2);border:1px solid var(--line)}
+  .qrow .n{font-family:var(--mono);color:var(--accent);font-size:11px}
+  .qrow .t{font-family:var(--mono);color:var(--ink-2);font-size:11px}
+  .empty{color:var(--ink-3);font-size:12.5px;padding:6px 2px}
+
+  /* ── BOTTOM: CHARTS + FEED ──────────────────────────────── */
+  .bottom{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.2fr);gap:12px;min-height:0}
+  .chart{display:flex;flex-direction:column}
+  .chart .plot{flex:1;min-height:0;position:relative;margin:4px 10px 4px}
+  .chart svg{display:block;width:100%;height:100%;overflow:visible}
+  .legend{display:flex;gap:14px;font-size:11.5px;color:var(--ink-2);padding:0 14px 9px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+  .axis text{fill:var(--ink-3);font-family:var(--mono);font-size:10px}
+  .axis line,.grid line{stroke:var(--line);stroke-width:1}
+  .refline{stroke:var(--ink-2);stroke-width:1.5;stroke-dasharray:5 4}
+  .refline.p90{stroke-dasharray:2 4;stroke:var(--ink-3)}
+  .reflabel{fill:var(--ink-2);font-family:var(--mono);font-size:10px}
+  .bar:hover{filter:brightness(1.25)}
+  .feed{padding:8px 12px 10px;overflow-x:hidden;overflow-y:auto;display:flex;flex-direction:column;
+        scrollbar-width:thin;scrollbar-color:var(--line-hi) transparent}
+  .feed table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+  .feed td{padding:5px 6px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;
+           text-overflow:ellipsis}
+  .feed td.t{font-family:var(--mono);color:var(--ink-3)}
+  .feed td.d{font-family:var(--mono);color:var(--ink)}
+  .feed td.c{color:var(--ink-2)}
+  .feed td.s{font-family:var(--mono);text-align:right;color:var(--ink-2)}
+  .o-done{color:var(--good)} .o-failed{color:var(--bad)} .o-stopped{color:var(--warn)}
+  .feed td .oi{display:block;font-size:10.5px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis}
+  .ev{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 8px;border-radius:6px;
+      border:1px solid var(--line-hi);color:var(--ink);font-family:var(--mono);letter-spacing:.02em;white-space:nowrap}
+  .ev.caution{border-color:rgba(250,178,25,.6)} .ev.caution .ico{color:var(--warn)}
+  .feed .lbl{color:var(--ink-2)}
+
+  /* ── TICKER ─────────────────────────────────────────────── */
+  .ticker{display:flex;align-items:center;gap:12px;height:30px;border-top:1px solid var(--line);
+          font-family:var(--mono);font-size:12px;color:var(--ink-2);overflow:hidden;white-space:nowrap;
+          position:sticky;bottom:0;z-index:5;background:var(--bg);padding:0 18px}
+  .ticker .tag{color:var(--accent);letter-spacing:.2em;font-size:10.5px;flex:none}
+  .ticker .run{display:inline-block;padding-left:100%;animation:tick 38s linear infinite}
+  .ticker .run.still{padding-left:0;animation:none}
+  @keyframes tick{to{transform:translateX(-100%)}}
+  .ticker .foot{margin-left:auto;flex:none;color:var(--ink-3);font-size:10.5px;padding-left:12px}
+
+  .tip{position:fixed;z-index:9;pointer-events:none;background:#0d151e;border:1px solid var(--line-hi);
+       border-radius:8px;padding:8px 10px;font-size:12px;color:var(--ink);box-shadow:0 8px 24px rgba(0,0,0,.5);
+       display:none;max-width:280px}
+  .tip b{font-family:var(--mono)}
+  .tip .m{color:var(--ink-2);font-size:11.5px;margin-top:2px}
+  .stale .main,.stale .bottom,.stale .kpis,.stale .parity{opacity:.45;filter:grayscale(.6)}
+  .hidecursor{cursor:none}
+
+  /* ── PARITY (D-741) ─────────────────────────────────────── */
+  .nav{display:flex;gap:6px}
+  .nav a,.nav button{text-decoration:none}
+  .nav .on{color:var(--ink);border-color:var(--accent);box-shadow:0 0 10px rgba(246,217,70,.25)}
+  .parity{display:flex;flex-direction:column;gap:12px;scroll-margin-top:12px;padding-bottom:8px}
+  .sechead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+           border-top:1px solid var(--line-hi);padding-top:16px;margin-top:6px}
+  .sechead h2{margin:0;font-family:var(--mono);font-size:15px;letter-spacing:.2em;font-weight:600}
+  .sechead h2 b{color:var(--accent);font-weight:600}
+  .sechead .sub{font-family:var(--mono);font-size:11px;color:var(--ink-3);letter-spacing:.08em;margin-top:4px}
+  .sechead .acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .sechead .meta{font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+  .prow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+  .prow .chart{height:300px}
+  .prow.wide{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}
+  .ptable{padding:8px 12px 10px;overflow:auto;max-height:440px;scrollbar-width:thin;
+          scrollbar-color:var(--line-hi) transparent}
+  .ptable table{width:100%;border-collapse:collapse;font-size:12px}
+  .ptable th{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--ink-3);
+             text-transform:uppercase;text-align:left;font-weight:500;padding:6px 6px;
+             border-bottom:1px solid var(--line-hi);position:sticky;top:0;background:#0c131b}
+  .ptable td{padding:6px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+  .ptable td.n,.ptable th.n{text-align:right;font-family:var(--mono)}
+  .ptable td.d{font-family:var(--mono);color:var(--ink)}
+  .ptable td.t{font-family:var(--mono);color:var(--ink-3)}
+  .ptable td.c{color:var(--ink-2);max-width:200px;overflow:hidden;text-overflow:ellipsis}
+  .ptable a{color:var(--accent);text-decoration:none;font-family:var(--mono);font-size:11px}
+  .ptable a:hover{text-decoration:underline}
+  .ptable .why{display:block;font-size:10.5px;color:var(--ink-3);white-space:normal;max-width:360px}
+  .pmsg{padding:28px 18px;color:var(--ink-2);font-size:13.5px;text-align:center}
+  .pmsg b{font-family:var(--mono);color:var(--ink)}
+  .parity .kpi .s{white-space:normal;line-height:1.4}
+  /* Run parity from here (D-742) */
+  .prow.runrow{grid-template-columns:minmax(0,1.15fr) minmax(0,1fr)}
+  .runbox{display:flex;flex-direction:column;padding-bottom:12px}
+  .tabs{display:flex;gap:6px;padding:10px 14px 0;flex-wrap:wrap}
+  .tab{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--ink-2);background:transparent;
+       border:1px solid var(--line-hi);border-radius:6px;padding:6px 10px;cursor:pointer}
+  .tab.on{color:var(--ink);border-color:var(--accent);box-shadow:0 0 10px rgba(246,217,70,.25)}
+  .tabpane{padding:10px 14px 0;display:flex;flex-direction:column;gap:8px}
+  .tabpane[hidden],.prow [hidden]{display:none}
+  .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .frow label{font-family:var(--mono);font-size:11px;color:var(--ink-3);display:flex;gap:6px;align-items:center}
+  .runbox input:not([type=checkbox]):not([type=radio]),.runbox textarea,.runbox select{background:#05080c;
+       border:1px solid var(--line-hi);border-radius:7px;color:var(--ink);font-family:var(--mono);font-size:13px;
+       padding:8px 10px;min-width:0;color-scheme:dark}
+  .runbox input:focus,.runbox textarea:focus,.runbox select:focus{outline:none;border-color:var(--accent);
+       box-shadow:0 0 0 2px rgba(246,217,70,.2)}
+  .runbox textarea{width:100%;resize:vertical;line-height:1.5}
+  .runbox select{width:100%}
+  #oneJob{flex:2 1 220px} #oneClient,#setClient,#perClient{flex:1 1 150px}
+  .act{font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;color:var(--ink);background:var(--panel-2);
+       border:1px solid var(--line-hi);border-radius:7px;padding:8px 14px;cursor:pointer;white-space:nowrap}
+  .act:hover:not(:disabled){border-color:var(--accent)}
+  .act.go{border-color:rgba(246,217,70,.6);background:rgba(246,217,70,.12)}
+  .act.sm{padding:4px 9px;font-size:10.5px}
+  .act:disabled{opacity:.4;cursor:default}
+  .out{font-size:12.5px;color:var(--ink-2);display:flex;flex-direction:column;gap:6px}
+  .out:empty{display:none}
+  .out .say.err{color:#ff8a8a}
+  .out .lbl2{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;color:var(--ink-3);text-transform:uppercase;margin-top:4px}
+  .out .lbl2 .why{text-transform:none;letter-spacing:0;font-family:var(--sans);font-size:11.5px;color:var(--ink-2)}
+  .pick{display:flex;gap:8px;align-items:flex-start;padding:6px 8px;border:1px solid var(--line);border-radius:7px;
+        cursor:pointer;background:var(--panel-2)}
+  .pick:has(input:checked){border-color:var(--accent)}
+  .pick input{margin-top:3px;accent-color:#F6D946}
+  .pick .nm{display:block;font-family:var(--mono);color:var(--ink);font-size:12px;word-break:break-all}
+  .pick .why{display:block;font-size:11px;color:var(--ink-3)}
+  .pv{width:100%;border-collapse:collapse;font-size:12px}
+  .pv td{padding:4px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+  .pv td.d{font-family:var(--mono);color:var(--ink);white-space:nowrap}
+  .pv td.w{color:var(--ink-3);font-size:11px}
+  .pv button.link{background:none;border:0;padding:0;color:var(--accent);font-family:var(--mono);font-size:12px;cursor:pointer}
+  .pvwrap{max-height:260px;overflow:auto;scrollbar-width:thin;scrollbar-color:var(--line-hi) transparent}
+  .chk{display:flex;gap:7px;align-items:center;font-size:11.5px;color:var(--ink-3);padding:10px 14px 0}
+  .chk input{accent-color:#F6D946}
+  .ptasks{padding:8px 12px 10px;display:flex;flex-direction:column;gap:8px;overflow:auto;max-height:560px;
+          scrollbar-width:thin;scrollbar-color:var(--line-hi) transparent}
+  .task{border:1px solid var(--line);border-radius:9px;padding:9px 11px;background:var(--panel-2)}
+  .task.running,.task.starting{border-color:rgba(246,217,70,.5);box-shadow:inset 0 0 24px rgba(246,217,70,.06)}
+  .task.failed{border-color:rgba(208,59,59,.6)} .task.choose,.task.stalled{border-color:rgba(250,178,25,.55)}
+  .task .th{display:flex;align-items:center;gap:8px;justify-content:space-between}
+  .task .tk{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;color:var(--ink-3)}
+  .task .nm{display:block;font-family:var(--mono);font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .task .bar{height:5px;border-radius:3px;background:var(--line-hi);margin-top:8px;overflow:hidden}
+  .task .bar i{display:block;height:100%;background:var(--accent);border-radius:3px;box-shadow:0 0 8px rgba(246,217,70,.5);transition:width .6s}
+  .task .tm{font-size:11.5px;color:var(--ink-2);margin-top:5px}
+  .task .rcs{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+  .rc{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;color:var(--ink);
+      border:1px solid var(--line-hi);border-radius:5px;padding:2px 6px;text-decoration:none}
+  a.rc:hover{border-color:var(--accent)}
+  .rc i{width:7px;height:7px;border-radius:50%;flex:none}
+  .task .res{font-size:12px;color:var(--ink);margin-top:7px;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
+  .task .res a{color:var(--accent);text-decoration:none;font-family:var(--mono);font-size:11px}
+  .task .why2{font-size:11.5px;color:var(--ink-2);margin-top:6px}
+  .badge.run{border-color:rgba(246,217,70,.6)} .badge.run .ico{color:var(--accent);display:inline-block;animation:sweep 1.6s linear infinite}
+  @media (max-width:1500px){ .parity .kpis{grid-template-columns:repeat(4,minmax(0,1fr))} }
+
+  /* HISTORY (D-744) */
+  .history{display:flex;flex-direction:column;gap:12px;padding-bottom:12px}
+  .hfilter{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 12px 0}
+  .hfilter input,.hfilter select{background:#05080c;border:1px solid var(--line-hi);border-radius:7px;color:var(--ink);
+       font-family:var(--mono);font-size:12px;padding:6px 9px;color-scheme:dark}
+  .hfilter input{flex:1 1 220px;min-width:0}
+  .hfilter .cnt{font-family:var(--mono);font-size:11px;color:var(--ink-3)}
+  .ptable tr.click{cursor:pointer}
+  .ptable tr.click:hover td{background:rgba(246,217,70,.05)}
+  .ptable tr.more td{background:#0a1018;white-space:normal;color:var(--ink-2);font-size:11.5px;line-height:1.55}
+  .ptable tr.more b{color:var(--ink);font-family:var(--mono);font-weight:600}
+  .ptable.tall{max-height:560px}
+  .rsp{width:120px;height:26px;display:block}
+  .evb{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) 44px;gap:8px;align-items:center;font-size:12px;padding:4px 0}
+  .evb .lb{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .evb .bar{height:10px;border-radius:3px;background:var(--line);overflow:hidden}
+  .evb .bar i{display:block;height:100%;background:#3987e5;border-radius:3px}
+  .evb .n{font-family:var(--mono);text-align:right;color:var(--ink)}
+
+  /* A smaller screen still reads: the wall stacks and scrolls rather than clipping. */
+  @media (max-width:1200px){
+    .ops{height:auto;grid-template-rows:none}
+    .kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+    .main,.bottom,.prow,.prow.wide,.prow.runrow{grid-template-columns:1fr} .lanes{grid-template-columns:1fr}
+    .lane{min-height:300px} .chart{min-height:240px} .feed{max-height:460px}
+    header{grid-template-columns:1fr} .clockbox{justify-self:start;flex-wrap:wrap}
+  }
+
+  /* ── we.are.sdi (D-754) ──────────────────────────────────────────────────────────
+     The look of wearesdi.com on the dark ground: the wordmark, SDI yellow for the brand
+     (warnings keep their amber, so the two never read as one), the geometric display face,
+     pill-shaped primary buttons and the halftone dot circle. Tokens only, so light mode
+     follows. */
+  .sdi-word{display:inline-block;height:1em;width:auto;vertical-align:-.12em;color:var(--sdi-word-ink,currentColor)}
+  .sdi-word .d{fill:var(--accent)}
+  .sdi-dots{position:absolute;pointer-events:none;border-radius:50%;opacity:.16;z-index:0;
+    background-image:radial-gradient(var(--accent) 1.1px, transparent 1.6px);background-size:9px 9px;
+    -webkit-mask-image:radial-gradient(circle at center,#000 58%,transparent 71%);
+            mask-image:radial-gradient(circle at center,#000 58%,transparent 71%)}
+  header{position:relative}
+  header > :not(.sdi-dots){position:relative;z-index:1}
+  header .sdi-dots{width:220px;height:220px;left:-60px;top:-110px}
+  .brand .mark-word{height:30px;color:var(--ink);flex:none;margin-right:6px;padding-right:16px;
+                    border-right:1px solid var(--line-hi)}
+</style>
+</head>
+<body>
+<div class="wall" id="wall">
+  <header>
+    <span class="sdi-dots" aria-hidden="true"></span>
+    <div class="brand">
+      <svg class="sdi-word mark-word" viewBox="0 0 950 169" role="img" aria-label="we.are.sdi" fill="currentColor"><path d="M158.915 36.7773L135.389 114.85C133.118 122.35 130.447 133.08 129.137 138.467C127.991 133.14 125.689 122.658 123.777 115.372L103.183 36.7773H80.9663L59.639 115.365C57.7134 122.531 55.2616 133.193 54.0544 138.537C52.7665 133.175 50.1337 122.393 48.0313 114.866L25.7238 36.7773H2.41797L42.8867 164.183H64.817L86.1457 87.545C88.1938 80.2145 90.5008 70.1606 91.6815 64.8782C92.7926 70.1676 94.9785 80.2145 97.0252 87.5408L118.11 164.183H139.793L181.494 36.7773H158.915Z"/><path d="M198.247 89.3881C201.717 65.0993 215.393 51.2041 235.907 51.2041C257.026 51.2041 269.942 65.1035 271.475 89.3881H198.247ZM235.907 33.6262C200.848 33.6262 175.402 61.7925 175.402 100.602C175.402 140.036 200.782 167.576 237.122 167.576C266.097 167.576 286.107 151.905 292.022 124.58L292.29 123.331H271.037L270.838 124.105C266.638 140.412 254.981 149.03 237.122 149.03C214.607 149.03 199.568 132.667 197.679 106.238H294.716V105.207C294.716 61.0546 272.181 33.6262 235.907 33.6262Z"/><path d="M423.094 99.3426V116.845C423.094 129.476 413.093 149.514 386.253 149.514C374.763 149.514 361.066 146.034 361.066 129.453C361.066 111.983 374.55 109.012 395.107 106.475C405.222 105.353 416.174 102.542 423.094 99.3426ZM442.876 145.211V75.1457C442.876 48.0778 427.173 34.3525 396.207 34.3525C365.325 34.3525 345.882 50.5756 344.199 77.7479L344.132 78.8422H365.115L365.189 77.8927C366.611 59.6855 376.543 51.2036 396.449 51.2036C413.721 51.2036 422.85 58.4756 422.85 72.2358C422.85 84.7721 413.6 87.9131 394.162 89.8791C365.81 92.711 338.128 98.1354 338.128 129.937C338.128 152.214 355.493 166.609 382.369 166.609C399.062 166.609 412.196 160.665 422.446 148.455C422.81 156.828 424.039 161.374 426.552 163.882L426.853 164.184H447.488V161.874L447.029 161.569C445.354 160.452 442.876 154.482 442.876 145.211Z"/><path d="M544.015 89.3881C547.485 65.0993 561.162 51.2041 581.676 51.2041C602.794 51.2041 615.711 65.1035 617.244 89.3881H544.015ZM581.676 33.6262C546.616 33.6262 521.17 61.7925 521.17 100.602C521.17 140.036 546.551 167.576 582.89 167.576C611.865 167.576 631.875 151.905 637.79 124.58L638.059 123.331H616.805L616.606 124.105C612.407 140.412 600.749 149.03 582.89 149.03C560.375 149.03 545.337 132.667 543.447 106.238H640.484V105.207C640.484 61.0546 617.95 33.6262 581.676 33.6262Z"/><path d="M851.701 149.272C829.697 149.272 816.561 131.258 816.561 101.086C816.561 71.215 829.932 52.6584 851.46 52.6584C875.53 52.6584 890.484 71.215 890.484 101.086C890.484 143.012 866.185 149.272 851.701 149.272ZM889.27 52.9591C880.17 40.7959 866.17 33.8678 850.487 33.8678C816.91 33.8678 794.351 60.7839 794.351 100.843C794.351 141.529 816.576 167.82 850.973 167.82C867.235 167.82 879.136 162.367 889.27 150.196V164.182H910.994V0.13501H889.27V52.9591Z"/><path d="M927.143 164.182H948.867V36.7761H927.143V164.182Z"/><path d="M927.143 21.2634H948.867V0.135254H927.143V21.2634Z"/><path d="M743.393 88.1957C721.16 83.7055 710.475 80.996 710.475 68.5976C710.475 57.8517 719.302 51.688 734.692 51.688C752.847 51.688 761.398 58.5214 763.285 74.5371L763.393 75.4463H785.617L785.479 74.2949C782.352 48.0054 764.958 34.1101 735.178 34.1101C706.259 34.1101 688.993 47.3649 688.993 69.568C688.993 98.3525 713.23 103.337 736.664 108.156C761.031 113.28 768.617 116.918 768.617 129.693C768.617 142.319 758.639 149.272 740.518 149.272C719.615 149.272 708.61 141.227 705.884 123.957L705.746 123.087H683.493L683.602 124.216C686.301 152.334 706.342 167.819 740.032 167.819C771.687 167.819 790.585 153.204 790.585 128.724C790.585 97.7135 765.514 92.6566 743.393 88.1957Z"/><path d="M525.691 57.6969V37.1089L525.044 36.8513C522.561 35.86 520.488 35.3225 516.649 35.3225C502.335 35.3225 488.734 42.983 479.81 55.9426V36.7775H458.086V164.183H479.81V93.5711C479.81 69.2586 497.61 56.5371 515.193 56.5371C519.064 56.5371 520.872 56.7877 523.607 57.6969H525.691Z"/><path class="d" d="M304.438 145.847H322.879V164.158H304.438V145.847Z"/><path class="d" d="M650.643 145.691H669.084V164.002H650.643V145.691Z"/></svg>
+      <div>
+        <h1>SDI INTELLIGENCE <b>//</b> LIVE ESTIMATING</h1>
+        <div class="sub">GRID CONTROL</div>
+      </div>
+    </div>
+    <div class="banner grey" id="banner"><span class="ico">○</span><span id="bannerText">Connecting…</span></div>
+    <div class="clockbox">
+      <div class="link"><span class="live-dot" id="liveDot"></span><span id="linkText">connecting</span></div>
+      <nav class="nav" aria-label="Sections">
+        <button class="fsbtn" id="navOps" type="button" title="Live operations (O)">OPERATIONS</button>
+        <button class="fsbtn" id="navParity" type="button" title="Parity: AI against manual (P)">PARITY</button>
+        <button class="fsbtn" id="navHistory" type="button" title="Every run, estimate and comparison (H)">HISTORY</button>
+        <button class="fsbtn" id="cycleBtn" type="button" title="Show operations and parity in turn, 45 s each, for a wall screen. Scrolling yourself stops it. ?cycle=45 in the address starts it">⟳ CYCLE</button>
+      </nav>
+      <button class="fsbtn" id="fsBtn" type="button" title="Full screen (F)">⛶<span class="wide"> FULL SCREEN</span></button>
+      <div><div class="clock" id="clock">--:--:--</div><div class="date" id="date"></div></div>
+    </div>
+  </header>
+
+  <div class="ops" id="ops">
+  <section class="kpis" id="kpis"></section>
+
+  <section class="main">
+    <div class="lanes" id="lanes"></div>
+    <div class="side">
+      <div class="panel">
+        <div class="ptitle"><span><b>Fleet Grid Runners</b></span><span class="r" id="fleetCount"></span></div>
+        <div class="fleet" id="fleet"></div>
+      </div>
+      <div class="panel">
+        <div class="ptitle"><span><b>SolidWorks</b> · licence</span><span class="r" id="swLimit"></span></div>
+        <div class="sw" id="sw"></div>
+      </div>
+      <div class="panel">
+        <div class="ptitle"><span><b>Queue · whole grid</b></span><span class="r" id="queueCount"></span></div>
+        <div class="queue" id="queue"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="bottom">
+    <div class="panel chart">
+      <div class="ptitle"><span><b>Run time</b> · last 30 estimates</span><span class="r">minutes</span></div>
+      <div class="plot" id="trend"></div>
+      <div class="legend"><span><i style="background:var(--s-done)"></i>Completed</span>
+        <span><i style="background:var(--s-failed)"></i>Failed</span>
+        <span>┄ median · ⋯ 90th percentile, last 7 days</span></div>
+    </div>
+    <div class="panel chart">
+      <div class="ptitle"><span><b>Activity</b> · last 24 hours</span><span class="r">jobs finished per hour</span></div>
+      <div class="plot" id="activity"></div>
+      <div class="legend"><span><i style="background:var(--s-done)"></i>Estimates completed</span>
+        <span><i style="background:var(--s-failed)"></i>Failed</span>
+        <span><i style="background:var(--s-extract)"></i>Pack extracts</span></div>
+    </div>
+    <div class="panel feed">
+      <div class="ptitle" style="padding:2px 2px 6px"><span><b>Recent</b> · finished</span><span class="r" id="recentCount"></span></div>
+      <table id="recent"></table>
+    </div>
+  </section>
+  </div>
+
+  <!-- ══ NEW DRAWING PACKS ON THE DESIGN SHARE (design sweep) ══════════════════════════════
+       Swept hourly on the estimating machine (src/design_sweep.py); new or changed pack folders
+       under the client folders are candidate jobs to discuss with design. Dismiss takes one off. -->
+  <section class="parity" id="designSweep">
+    <div class="sechead">
+      <div>
+        <h2>NEW DRAWING PACKS <b>//</b> CANDIDATE JOBS FOR DESIGN</h2>
+        <div class="sub" id="dsSub">New or changed pack folders under the design share's client folders</div>
+      </div>
+      <div class="acts"><span class="meta" id="dsRead">waiting for the first sweep…</span></div>
+    </div>
+    <div class="panel"><div id="dsList"><div class="empty">No sweep has reported yet.</div></div></div>
+  </section>
+
+  <!-- PARITY DRILL-DOWN: one filed comparison, line by line (control panel) -->
+  <div id="pdOverlay" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:60;overflow:auto;padding:28px 16px">
+    <div class="panel" style="max-width:1100px;margin:0 auto;padding:18px 20px">
+      <div class="ptitle"><span id="pdTitle"><b>Comparison</b></span><span class="r"><button class="fsbtn" type="button" id="pdClose">CLOSE</button></span></div>
+      <div id="pdBody"><div class="empty">reading…</div></div>
+    </div>
+  </div>
+
+  <!-- ══ PARITY: THE AI ESTIMATE AGAINST THE MANUAL ONE (D-741) ══════════════════════════ -->
+  <section class="parity" id="parity">
+    <div class="sechead">
+      <div>
+        <h2>PARITY <b>//</b> AI AGAINST MANUAL ESTIMATES</h2>
+        <div class="sub" id="pSub">Each drawing's newest comparison · bands at the comparator's own thresholds</div>
+      </div>
+      <div class="acts">
+        <span class="meta" id="pRead">reading the parity folder…</span>
+        <button class="fsbtn" id="pRefresh" type="button" title="Read the parity folder again now">↻ READ AGAIN</button>
+        <a class="fsbtn" href="/estimating#pjCard" target="_blank" rel="noopener" style="text-decoration:none">PARITY BY JOB NUMBER ↗</a>
+      </div>
+    </div>
+    <!-- RE-ESTIMATE, THEN COMPARE: a fresh estimate of each job on the current build, from the
+         pack its last AI run used, at the same quantities; each comparison files when it finishes. -->
+    <div class="prow runrow">
+      <div class="panel runbox">
+        <div class="ptitle"><span><b>Re-estimate, then compare</b> · fresh AI run against the manual one</span><span class="r">runs a full estimate per job</span></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="rrJobs" placeholder="job numbers, e.g. 0358141 12677-01" style="flex:1;min-width:260px">
+          <select id="rrMethod"><option value="both">Full estimate</option><option value="targeted">Targeted</option><option value="deterministic">Drawing reader only</option></select>
+          <button class="fsbtn" type="button" id="rrGo">RE-ESTIMATE AND COMPARE</button>
+        </div>
+        <div id="rrOut" class="empty" style="margin-top:8px">Each job is re-run from the drawings its last AI estimate used. The comparisons appear under Parity runs as the estimates finish.</div>
+      </div>
+    </div>
+    <!-- RUN PARITY FROM HERE (D-742): one job, a set of jobs or a period, and each one's
+         progress and outcome live beside it, wherever it was started. -->
+    <div class="prow runrow">
+      <div class="panel runbox">
+        <div class="ptitle"><span><b>Run parity</b> · AI estimate against the manual one</span><span class="r">nothing is compared until you press Compare</span></div>
+        <div class="tabs" role="tablist">
+          <button class="tab on" type="button" data-tab="one">ONE JOB</button>
+          <button class="tab" type="button" data-tab="set">A SET OF JOBS</button>
+          <button class="tab" type="button" data-tab="period">A PERIOD</button>
+        </div>
+        <div class="tabpane" id="tab-one">
+          <div class="frow"><input id="oneJob" autocomplete="off" placeholder="Job or drawing number, e.g. 12002-02-GA">
+            <input id="oneClient" autocomplete="off" placeholder="Client (optional)">
+            <button class="act" type="button" id="oneFind">FIND</button></div>
+          <div class="out" id="oneOut"></div>
+        </div>
+        <div class="tabpane" id="tab-set" hidden>
+          <textarea id="setJobs" rows="4" placeholder="Job or drawing numbers: one per line, or separated by commas. A bare job number, such as 12002, takes every drawing estimated under it."></textarea>
+          <div class="frow"><input id="setClient" autocomplete="off" placeholder="Client (optional)">
+            <button class="act" type="button" id="setPreview">PREVIEW</button>
+            <button class="act go" type="button" id="setRun" disabled>COMPARE ALL</button></div>
+          <div class="out" id="setOut"></div>
+        </div>
+        <div class="tabpane" id="tab-period" hidden>
+          <div class="frow"><label>From <input type="date" id="perFrom"></label><label>To <input type="date" id="perTo"></label>
+            <input id="perClient" autocomplete="off" placeholder="Client (optional)"></div>
+          <div class="frow"><button class="act" type="button" id="perPreview">PREVIEW</button>
+            <button class="act go" type="button" id="perRun" disabled>COMPARE ALL</button></div>
+          <div class="out" id="perOut"></div>
+        </div>
+        <label class="chk"><input type="checkbox" id="viaExcel"> Resolve formulas through Excel: slower, only for a manual sheet whose saved values are missing</label>
+      </div>
+      <div class="panel" style="display:flex;flex-direction:column">
+        <div class="ptitle"><span><b>Parity running</b> · and finished in the last 12 hours</span><span class="r" id="pTasksN"></span></div>
+        <div class="ptasks" id="pTasks"><div class="empty">Nothing running.</div></div>
+      </div>
+    </div>
+    <div id="pBody">
+      <div class="panel pmsg" id="pMsg">Reading the parity folder…</div>
+    </div>
+    <div id="pMain" hidden>
+      <section class="kpis" id="pKpis"></section>
+      <div class="prow" style="margin-top:12px">
+        <div class="panel chart">
+          <div class="ptitle"><span><b>Where parity stands</b> · unit cost variance</span><span class="r" id="pDistN"></span></div>
+          <div class="plot" id="pDist"></div>
+          <div class="legend"><span><i style="background:var(--good)"></i>✓ match</span>
+            <span><i style="background:var(--warn)"></i>▲ warning</span>
+            <span><i style="background:var(--bad)"></i>✕ outside</span>
+            <span>← AI cheaper · AI dearer →</span></div>
+        </div>
+        <div class="panel chart">
+          <div class="ptitle"><span><b>Median variance</b> · by week</span><span class="r">% of the manual unit cost</span></div>
+          <div class="plot" id="pTrend"></div>
+          <div class="legend"><span>┄ the comparator's match and warning thresholds · each drawing once a week</span></div>
+        </div>
+        <div class="panel chart">
+          <div class="ptitle"><span><b>Comparisons</b> · by week</span><span class="r">drawings compared</span></div>
+          <div class="plot" id="pWeeks"></div>
+          <div class="legend"><span><i style="background:var(--good)"></i>✓ match</span>
+            <span><i style="background:var(--warn)"></i>▲ warning</span>
+            <span><i style="background:var(--bad)"></i>✕ outside</span>
+            <span><i style="background:var(--grey)"></i>○ not comparable</span></div>
+        </div>
+      </div>
+      <div class="prow" style="margin-top:12px">
+        <div class="panel chart" style="height:340px">
+          <div class="ptitle"><span><b>Cost lines</b> · median variance</span><span class="r" id="pAreasN"></span></div>
+          <div class="plot" id="pAreas"></div>
+          <div class="legend"><span>← AI under · AI over → · colour by the median's band · n = comparisons reading both sides</span></div>
+        </div>
+        <div class="panel" style="height:340px;display:flex;flex-direction:column">
+          <div class="ptitle"><span><b>By client</b></span><span class="r" id="pClientsN"></span></div>
+          <div class="ptable" id="pClients"></div>
+        </div>
+        <div class="panel" style="height:340px;display:flex;flex-direction:column">
+          <div class="ptitle"><span><b>Re-estimated</b> · first run against latest</span><span class="r" id="pMoversN"></span></div>
+          <div class="ptable" id="pMovers"></div>
+        </div>
+      </div>
+      <div class="prow wide" style="margin-top:12px">
+        <div class="panel" style="display:flex;flex-direction:column">
+          <div class="ptitle"><span><b>Parity runs</b> · newest first</span><span class="r" id="pRecentN"></span></div>
+          <div class="ptable" id="pRecent"></div>
+        </div>
+        <div class="panel" style="display:flex;flex-direction:column">
+          <div class="ptitle"><span><b>Period comparisons</b></span><span class="r" id="pPeriodsN"></span></div>
+          <div class="ptable" id="pPeriods"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ HISTORY: EVERY RUN, EVERY FILED ESTIMATE, EVERY COMPARISON (D-744) ══════════════════ -->
+  <section class="history" id="history">
+    <div class="sechead">
+      <div>
+        <h2>HISTORY <b>//</b> RUNS, ESTIMATES AND PARITY</h2>
+        <div class="sub" id="hSub">This service's runs, every estimate filed in AISheets, and every parity comparison</div>
+      </div>
+      <div class="acts">
+        <span class="meta" id="hRead">not read yet</span>
+        <button class="fsbtn" id="hRefresh" type="button" title="Read the history again now">↻ READ AGAIN</button>
+      </div>
+    </div>
+    <section class="kpis" id="hKpis"></section>
+    <div class="prow">
+      <div class="panel chart">
+        <div class="ptitle"><span><b>Runs</b> · per day</span><span class="r" id="hDailyN"></span></div>
+        <div class="plot" id="hDaily"></div>
+        <div class="legend"><span><i style="background:var(--s-done)"></i>Completed</span>
+          <span><i style="background:var(--s-failed)"></i>Failed</span>
+          <span><i style="background:var(--grey)"></i>Stopped</span>
+          <span><i style="background:var(--s-extract)"></i>Pack extracts</span></div>
+      </div>
+      <div class="panel chart">
+        <div class="ptitle"><span><b>Run time</b> · median per day</span><span class="r">minutes, completed estimates</span></div>
+        <div class="plot" id="hTimes"></div>
+        <div class="legend"><span>┄ the median over the whole period</span></div>
+      </div>
+      <div class="panel chart">
+        <div class="ptitle"><span><b>Estimates filed</b> · per month, AISheets</span><span class="r" id="hMonthsN"></span></div>
+        <div class="plot" id="hMonths"></div>
+        <div class="legend"><span>every run folder with its workbook and own summary</span></div>
+      </div>
+    </div>
+    <div class="prow">
+      <div class="panel" style="height:360px;display:flex;flex-direction:column">
+        <div class="ptitle"><span><b>What read the models</b> · completed estimates</span><span class="r" id="hEvN"></span></div>
+        <div class="ptable" id="hEvidence"></div>
+      </div>
+      <div class="panel" style="height:360px;display:flex;flex-direction:column">
+        <div class="ptitle"><span><b>By client</b></span><span class="r" id="hClientsN"></span></div>
+        <div class="ptable" id="hClients"></div>
+      </div>
+      <div class="panel" style="height:360px;display:flex;flex-direction:column">
+        <div class="ptitle"><span><b>Re-estimated drawings</b> · unit cost run by run</span><span class="r" id="hRepeatsN"></span></div>
+        <div class="ptable" id="hRepeats"></div>
+      </div>
+    </div>
+    <div class="panel" style="display:flex;flex-direction:column">
+      <div class="ptitle"><span><b>Every run</b> · this service's record</span><span class="r" id="hRunsN"></span></div>
+      <div class="hfilter"><input id="hRunsQ" autocomplete="off" placeholder="Filter by drawing, client, machine or what read the models">
+        <select id="hRunsO"><option value="">every outcome</option><option value="done">completed</option><option value="failed">failed</option><option value="stopped">stopped</option></select>
+        <select id="hRunsT"><option value="">last 30 days</option><option value="7">last 7 days</option><option value="1">last 24 hours</option><option value="today">today</option></select>
+        <span class="cnt" id="hRunsC"></span></div>
+      <div class="ptable tall" id="hRuns"></div>
+    </div>
+    <div class="prow wide">
+      <div class="panel" style="display:flex;flex-direction:column">
+        <div class="ptitle"><span><b>Every parity comparison</b> · filed</span><span class="r" id="hParityN"></span></div>
+        <div class="hfilter"><input id="hParityQ" autocomplete="off" placeholder="Search by job, drawing or client"><span class="cnt" id="hParityC"></span></div>
+        <div class="ptable tall" id="hParity"></div>
+      </div>
+      <div class="panel" style="display:flex;flex-direction:column">
+        <div class="ptitle"><span><b>Every filed estimate</b> · newest first</span><span class="r" id="hFiledN"></span></div>
+        <div class="hfilter"><input id="hFiledQ" autocomplete="off" placeholder="Filter by drawing or client">
+          <select id="hFiledT"><option value="">all time</option><option value="365">last 12 months</option><option value="90">last 3 months</option><option value="30">last 30 days</option><option value="7">last 7 days</option></select>
+          <span class="cnt" id="hFiledC"></span></div>
+        <div class="ptable tall" id="hFiled"></div>
+      </div>
+    </div>
+  </section>
+</div>
+<div class="ticker"><span class="tag">ALERTS</span><span style="overflow:hidden;flex:1"><span class="run still" id="ticker">—</span></span>
+  <span class="foot" id="foot"></span></div>
+<div class="tip" id="tip"></div>
+<div class="modal" id="filesModal" hidden role="dialog" aria-label="Files in the drawing pack">
+  <div class="mbox"><div class="mhead"><span id="filesTitle"></span>
+    <button class="fsbtn" type="button" id="filesClose">✕ CLOSE (Esc)</button></div>
+    <div class="term mterm" id="filesBody"></div></div>
+</div>
+<div class="modal" id="logModal" hidden role="dialog" aria-label="Run log">
+  <div class="mbox"><div class="mhead"><span id="logTitle"></span>
+    <button class="fsbtn" type="button" id="logClose">✕ CLOSE (Esc)</button></div>
+    <div class="term mterm" id="logBody"></div></div>
+</div>
+
+<script>
+"use strict";
+const API_KEY = "";                       // set if SDI_API_KEY is enabled, as on the estimating page
+const POLL_MS = 4000;
+const SLOTS = 3;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const ICON = {green:"✓", amber:"▲", red:"✕", grey:"○"};
+const WORD = {green:"On pace", amber:"Attention", red:"Action", grey:"Planned"};
+/* WHAT READ THE MODELS, AS A FACT (D-739): never a grade of the price. Only the Document
+   Manager fallback, not yet validated, carries a caution. */
+function evidenceChip(ev){
+  if(!ev) return "";
+  return `<span class="ev${ev.caution ? " caution" : ""}" title="${esc(ev.why || "")}">${ev.caution ? '<span class="ico">▲</span>' : ""}${esc(ev.label)}</span>`;
+}
+
+let snap = null, offset = 0, lastOk = 0, commit = "";
+
+// A TIME FRAME (D-746): the epoch second a list starts from, by this device's clock.
+function sinceOf(v){
+  if(!v) return 0;
+  if(v === "today"){ const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() / 1000; }
+  return Date.now() / 1000 - Number(v) * 86400;
+}
+function dayOf(ts){
+  const d = new Date(ts * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function fmtDur(s){
+  if(s == null || !isFinite(s)) return "—";
+  s = Math.max(0, Math.round(s));
+  if(s < 60) return s + "s";
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return h ? `${h}h ${String(m).padStart(2,"0")}m` : `${m}m ${String(x).padStart(2,"0")}s`;
+}
+function fmtClock(ts){
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit"});
+}
+function nowS(){ return (Date.now() + offset) / 1000; }
+function badge(rag, label){
+  return `<span class="badge ${rag}"><span class="ico">${ICON[rag] || "○"}</span>${esc(label)}</span>`;
+}
+function lineClass(t){
+  if(/SWITCHING TO THE DOCUMENT MANAGER|without its models|\bERROR\b|\bFAILED\b|Traceback/i.test(t)) return "e";
+  if(/Waiting for|Still waiting|not yet validated/i.test(t)) return "w";
+  if(/APPLIED|wrote |filed|\bdone\b|turn taken|turn given back/i.test(t)) return "g";
+  return "";
+}
+
+/* ── POLL ───────────────────────────────────────────────── */
+let pollT = null, polling = false;
+function pollSoon(){ setTimeout(() => { clearTimeout(pollT); poll(); }, 700); }
+async function poll(){
+  if(polling) return;
+  polling = true;
+  try{
+    const r = await fetch("/api/estimate/wall", {headers:{"X-SDI-Key": API_KEY}, cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    commit = r.headers.get("X-SDI-Commit") || j.service_commit || commit;
+    offset = j.now * 1000 - Date.now();
+    snap = j; lastOk = Date.now();
+    $("wall").classList.remove("stale");
+    render();
+  }catch(e){
+    $("liveDot").classList.add("lost");
+    $("linkText").textContent = "link lost · retrying (" + (e && e.message ? e.message : e) + ")";
+    $("liveDot").title = $("linkText").textContent;
+    if(Date.now() - lastOk > 20000) $("wall").classList.add("stale");
+  }finally{
+    polling = false;
+    clearTimeout(pollT);
+    pollT = setTimeout(poll, POLL_MS);
+  }
+}
+
+/* ── RENDER ─────────────────────────────────────────────── */
+function render(){
+  const s = snap; if(!s) return;
+  const b = $("banner");
+  b.className = "banner " + s.banner_rag;
+  b.querySelector(".ico").textContent = ICON[s.banner_rag] || "○";
+  $("bannerText").textContent = s.banner || "";
+  renderKpis(s.kpis, s.expected_s);
+  renderLanes(s);
+  serviceHost = s.service_host || "";
+  renderFleet(s.fleet || [], s.compute || []);
+  renderQueue(s.queue || [], s.grid || []);
+  renderSolidWorks(s.solidworks || [], s.sw_wait_limit_s);
+  renderTrend(s.series.run_times || [], s.kpis);
+  renderActivity(s.series.activity_24h || []);
+  renderRecent(s.recent || []);
+  renderTicker(s.alerts || []);
+  renderParity(s.parity);
+  renderParityTasks(s.parity_tasks || []);
+  renderDesignSweep(s.design_sweep || {});
+}
+
+/* THE FILES IN A NEW DRAWING PACK (JG, 10 Nov 2026): "some sort of a file explorer view of the
+   files in the new design folders". Listed by the sweep, which has the rights on the share; shown
+   folder by folder, drawing files marked, newest change first within each folder. */
+async function openFiles(c){
+  $("filesTitle").textContent = `${c.client} · ${c.name} · reading the list…`;
+  $("filesBody").innerHTML = ""; $("filesModal").hidden = false;
+  let r;
+  try{ r = await api("/api/estimate/design-sweep/files?folder=" + encodeURIComponent(c.folder)); }
+  catch(e){ $("filesTitle").textContent = `${c.client} · ${c.name}: ${e.message}`; return; }
+  r = {...c, ...r};
+  const files = r.files || [], more = r.more || 0;
+  const by = {};
+  files.forEach(f => { const i = f.path.lastIndexOf("/"); const dir = i < 0 ? "" : f.path.slice(0, i);
+                       (by[dir] = by[dir] || []).push({...f, name: i < 0 ? f.path : f.path.slice(i + 1)}); });
+  const kb = n => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+  const html = Object.keys(by).sort().map(dir => `<div style="margin:8px 0 2px;color:var(--accent)">📁 ${esc(dir || r.name)}</div>`
+    + by[dir].sort((a, b) => String(b.modified).localeCompare(String(a.modified))).map(f =>
+      `<div style="padding-left:18px;${f.drawing ? "" : "color:var(--ink-3)"}">${f.drawing ? "▣" : "·"} ${esc(f.name)} <span style="color:var(--ink-3)">· ${kb(f.size)} · ${esc(String(f.modified).replace("T", " ").slice(0, 16))}</span></div>`).join("")).join("");
+  $("filesTitle").textContent = `${r.client} · ${r.name} · ${files.length}${more ? " of " + (files.length + more) : ""} files · ${r.folder}`;
+  $("filesBody").innerHTML = html + (more ? `<div class="empty">+ ${more} more not listed</div>` : "");
+}
+function closeFiles(){ $("filesModal").hidden = true; }
+document.addEventListener("click", e => { if(e.target && e.target.id === "filesModal") closeFiles(); });
+document.addEventListener("keydown", e => { if(e.key === "Escape") closeFiles(); });
+function renderDesignSweep(d){
+  const c = d.candidates || [];
+  if(d.state === "never"){ setText("dsRead", "no sweep yet"); $("dsList").innerHTML = `<div class="empty">${esc(d.why || "No sweep has reported yet.")}</div>`; return; }
+  const late = d.state === "late" ? " · LATE: the sweep has not reported on time" : "";
+  const ix = d.index || {};
+  const idx = ix.error ? ` · drawing index NOT refreshed: ${ix.error}`
+            : ix.folders ? ` · drawing index ${ix.folders} folders, ${ix.drawings} drawings, built ${(ix.built_at || "").slice(11, 16)}` : "";
+  setText("dsRead", `swept ${fmtStamp((d.swept_at || "").replace("T", " ").replace("Z", ""))} · ${d.clients || 0} client folder(s), ${d.packs || 0} pack(s) · next ${(d.next_at || "").slice(11, 16)}${idx}${late}`);
+  setText("dsSub", d.baseline ? "First sweep: the packs already there are the baseline; new ones are flagged from the next sweep"
+                              : `Root ${d.root || ""} · candidates kept until dismissed or two weeks old`);
+  if(!c.length){ $("dsList").innerHTML = `<div class="empty">No new or changed drawing pack since the last look.${(d.errors || []).length ? " Errors: " + esc(d.errors.join("; ")) : ""}</div>`; return; }
+  $("dsList").innerHTML = `<table><tr><th>Flagged</th><th>Client</th><th>Pack folder</th><th>Job</th><th class="n">Files</th><th>Status</th><th>Estimated?</th><th></th></tr>`
+    + c.map((r, i) => `<tr><td class="t">${fmtStamp((r.flagged_at || "").replace("T", " ").replace("Z", ""))}</td>
+        <td class="c">${esc(r.client)}</td><td class="d" title="${esc(r.folder)}">${esc(r.name)}</td><td>${esc(r.job || "")}</td>
+        <td class="n">${r.files ?? ""}</td><td>${r.status === "new" ? "NEW" : "CHANGED"}</td>
+        <td>${r.estimated ? "an AI estimate is filed" : "not yet"}</td>
+        <td>${r.listed ? `<button class="fsbtn" type="button" data-dsfiles="${i}">files ▸</button> ` : ""}<button class="fsbtn" type="button" data-ds="${i}">dismiss</button></td></tr>`).join("") + "</table>";
+  document.querySelectorAll("[data-dsfiles]").forEach(b => b.onclick = () => openFiles(c[Number(b.dataset.dsfiles)]));
+  document.querySelectorAll("[data-ds]").forEach(b => b.onclick = async () => {
+    const r = c[Number(b.dataset.ds)];
+    try { renderDesignSweep(await api("/api/estimate/design-sweep/dismiss", {folder: r.folder})); }
+    catch(e){ b.textContent = "could not dismiss"; b.title = e.message; }
+  });
+}
+
+function renderKpis(k, exp){
+  const rate = k.success_rate_7d;
+  const rateRag = rate == null ? "grey" : rate >= 90 ? "green" : rate >= 75 ? "amber" : "red";
+  const rateWord = rate == null ? "no finished runs yet" : {green:"healthy", amber:"watch", red:"low"}[rateRag];
+  const slots = Array.from({length: SLOTS}, (_, i) =>
+    `<i class="${i < k.running ? "on" : i < k.max_runs ? "" : "off"}"></i>`).join("");
+  const tiles = [
+    ["Runs today", `${k.runs_today}`, `✓ ${k.done_today} done · ✕ ${k.failed_today} failed · ${k.extracts_today} extracts`],
+    ["Completed · 24 h", `${k.done_24h}`, "estimates finished in the last day"],
+    ["Success · 7 days", rate == null ? "—" : `${rate}<small>%</small>`,
+     `${badge(rateRag, rateWord)} <span style="margin-left:6px">${k.judged_7d} finished</span>`],
+    ["Median run · 7 days", fmtDur(k.median_s_7d), `fastest ${fmtDur(k.fastest_s_7d)}`],
+    ["90th pct · 7 days", fmtDur(k.p90_s_7d), "9 in 10 estimates finish inside this"],
+    ["Queue", `${k.queued}`, `average wait ${fmtDur(k.mean_wait_s_7d)}, last 7 days`],
+    ["Capacity", `${k.running}<small>/ ${k.max_runs}</small>`,
+     `${k.utilisation_pct}% of slots busy<div class="slots">${slots}</div>`],
+    ["ETA error", k.eta && k.eta.n ? "±" + fmtDur(k.eta.median_abs_error_s) : "—",
+     k.eta && k.eta.n ? `${k.eta.inside_pct}% inside their window · ${k.eta.n} runs`
+                      : "measuring: needs finished runs given a window"],
+  ];
+  $("kpis").innerHTML = tiles.map(([key, v, sub]) =>
+    `<div class="panel kpi"><div class="k">${esc(key)}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join("");
+}
+
+function ring(frac, rag){
+  const R = 42, C = 2 * Math.PI * R, f = Math.max(0, Math.min(1, frac || 0));
+  const col = {green:"#0ca30c", amber:"#fab219", red:"#d03b3b"}[rag] || "#F6D946";
+  return `<svg viewBox="0 0 96 96" aria-hidden="true">
+    <circle cx="48" cy="48" r="${R}" fill="none" stroke="#182634" stroke-width="7"/>
+    <circle cx="48" cy="48" r="${R}" fill="none" stroke="${col}" stroke-width="7" stroke-linecap="round"
+      stroke-dasharray="${(C * f).toFixed(1)} ${C.toFixed(1)}" style="filter:drop-shadow(0 0 6px ${col}88)"/>
+  </svg>`;
+}
+
+/* WHAT A RUN IS USING (D-743): its engine's own processes; SolidWorks while it holds the
+   licence; Excel when it is the only run on its machine. Each says what it is. */
+const CMP = {estimate:"#3987e5", solidworks:"#d95926", excel:"#199e70", other:"#5b6b78"};
+const gb = v => v == null ? "—" : (v >= 10 ? v.toFixed(0) : v.toFixed(1)) + " GB";
+const cpuTxt = v => v == null ? "—" : (v >= 10 ? Math.round(v) : v.toFixed(1)) + "%";
+function laneCompute(c){
+  if(!c) return `<div class="uses"><span>Using:</span><span style="color:var(--ink-3)">not measured: this runner does not report its machine yet</span></div>`;
+  const bits = [];
+  if(c.per_process) bits.push(`<span class="use" title="The engine and the processes it started"><i style="background:${CMP.estimate}"></i>engine <b>${cpuTxt(c.cpu_pct)}</b> CPU · <b>${gb(c.mem_gb)}</b></span>`);
+  if(c.solidworks) bits.push(`<span class="use" title="SolidWorks, while this run holds the licence"><i style="background:${CMP.solidworks}"></i>SolidWorks <b>${cpuTxt(c.solidworks.cpu_pct)}</b> · <b>${gb(c.solidworks.mem_gb)}</b></span>`);
+  if(c.excel) bits.push(`<span class="use" title="Excel; this is the only run on the machine"><i style="background:${CMP.excel}"></i>Excel <b>${cpuTxt(c.excel.cpu_pct)}</b> · <b>${gb(c.excel.mem_gb)}</b></span>`);
+  const machine = `<span style="color:var(--ink-3)">${esc(c.host)} ${cpuTxt(c.machine_cpu_pct)} busy · ${gb(c.machine_mem_free_gb)} free${c.fresh ? "" : " · reading is old"}</span>`;
+  return `<div class="uses"><span>Using:</span>${bits.join("") || '<span style="color:var(--ink-3)">per-process use needs psutil on this machine</span>'}${machine}</div>`;
+}
+function logLines(lines, cursor){
+  return lines.map((t, j) => `<div class="${lineClass(t)}${cursor && j === lines.length - 1 ? " cur" : ""}">${esc(t)}</div>`).join("");
+}
+function keepScroll(sel){
+  const kept = {};
+  document.querySelectorAll(sel).forEach(t => { kept[t.dataset.run] = {top: t.scrollTop, end: t.scrollHeight - t.scrollTop - t.clientHeight < 14}; });
+  return () => document.querySelectorAll(sel).forEach(t => {
+    const k = kept[t.dataset.run];
+    t.scrollTop = !k || k.end ? t.scrollHeight : k.top;
+  });
+}
+// WHAT THE RUN IS DOING OR WAITING FOR (10 Nov 2026): SolidWorks, xAI with its retry countdown,
+// or the stage it has reached; and whether the console has said anything lately, so a live
+// process printing nothing is not read as work.
+function doingLine(d){
+  if(!d || !d.what) return "";
+  const left = d.next_try_at ? Math.max(0, Math.round(d.next_try_at - Date.now() / 1000)) : null;
+  const tail = left != null ? ` · next try in ${left} s` : "";
+  const quiet = d.fresh ? "" : ` · <span style="color:var(--ink-3)">no new console line for ${fmtDur(d.silent_s)}: process alive, nothing reported</span>`;
+  return `<div class="why"><b>${d.waiting ? "Waiting: " : "Now: "}${esc(d.what)}</b>${d.detail ? " · " + esc(d.detail) : ""}${tail}${quiet}</div>`;
+}
+// FINISHED IS NOT THE SAME AS COMPLETE (10 Nov 2026): a finished estimate says what its review
+// tally says, missing costs in red and provisional in amber.
+function qualityWord(r){
+  const q = r.quality;
+  if(r.outcome !== "done" || !q || !q.state) return null;
+  return q;
+}
+function renderLanes(s){
+  const live = s.live || [], k = s.kpis, html = [];
+  const restore = keepScroll(".lanes .term[data-run]");
+  for(let i = 0; i < SLOTS; i++){
+    const r = live[i];
+    if(r){
+      const exp = r.expected_s;
+      const frac = exp ? r.elapsed_s / exp : null;
+      const extract = !!r.job_type;
+      const stages = (s.stages || []).map((name, j) =>
+        `<div class="${j < r.stage_index ? "done" : j === r.stage_index ? "now" : ""}">${esc(name)}</div>`).join("");
+      const tail = r.log_tail || [];
+      html.push(`<div class="panel lane ${r.rag}" data-start="${r.started_at || 0}">
+        <div class="lanehead"><span class="slotname">RUN ${i + 1} · ${esc(r.runner || "")}</span><span class="lanectl">${stopBtn(r)}${badge(r.rag, WORD[r.rag])}</span></div>
+        <div class="job">
+          <div class="ring">${ring(frac == null ? 0 : frac, r.rag)}
+            <div class="pct"><b>${frac == null ? "—" : Math.round(frac * 100) + "%"}</b><span>OF USUAL</span></div></div>
+          <div class="jobtext">
+            <div class="dn">${esc(r.drawing_number || r.run_id)}</div>
+            <div class="cl">${esc(r.client || "")}${extract ? " · " + esc(r.job_type.replace("_", " ")) : ""}</div>
+            <div class="elapsed" data-elapsed><span>${fmtDur(r.elapsed_s)}</span><small>${exp ? "usual " + fmtDur(exp) : "no history yet"}</small></div>
+          </div>
+        </div>
+        ${doingLine(r.doing)}
+        <div class="why">${esc(r.rag_reason || "")}${r.silent_s > 60 ? " · last log line " + fmtDur(r.silent_s) + " ago" : ""}</div>
+        ${extract ? "" : `<div class="facts">
+          <span>Finish <b>${r.eta_lo_at ? fmtClock(r.eta_lo_at) + "–" + fmtClock(r.eta_hi_at) : "—"}</b>${r.overdue_s > 0 ? ` <span style="color:var(--ink-2)">· past its window by ${fmtDur(r.overdue_s)}</span>` : r.eta_at ? ` <span style="color:var(--ink-3)">· likely ${fmtClock(r.eta_at)}</span>` : ` <span style="color:var(--ink-3)">· no history yet</span>`}</span>
+          ${r.last_result ? `<span>last run <b>£${Number(r.last_result.engine_price_gbp).toFixed(2)}</b> at ${fmtClock(r.last_result.finished_at)}</span>` : ""}
+        </div>
+        <div class="facts"><span>Models: ${evidenceChip(r.evidence)}</span></div>`}
+        ${laneCompute(r.compute)}
+        ${extract ? "" : `<div class="pipe">${stages}</div>`}
+        <div class="termwrap"><div class="term" data-run="${esc(r.run_id)}" title="Scroll to read back; ⤢ opens it large">${logLines(tail, true)}</div>
+          <button class="tx" type="button" data-log="${esc(r.run_id)}" title="Open this run's log large">⤢</button></div>
+      </div>`);
+    }else{
+      const on = i < (k.max_runs || 1);
+      /* D-753a: allowed is not staffed. A free slot needs an idle online runner; with every
+         runner busy, a queued estimate waits, and the lane says so and how to add one. */
+      const staffed = on && (i - live.length) < (k.free_runners == null ? 1 : k.free_runners);
+      const word = !on ? "Off" : staffed ? "Free" : "No runner";
+      html.push(`<div class="panel lane">
+        <div class="lanehead"><span class="slotname">RUN ${i + 1}</span>${badge(staffed ? "green" : "grey", word)}</div>
+        <div class="idle"><div class="radar${staffed ? "" : " off"}"></div>
+          <b>${!on ? "SLOT OFF" : staffed ? "SLOT FREE" : "NO RUNNER FREE"}</b>
+          <div>${!on ? `The service runs ${k.max_runs} estimate${k.max_runs > 1 ? "s" : ""} at once.<br>Raise SDI_MAX_CONCURRENT_RUNS to open it.`
+                : staffed ? "The next queued estimate starts here."
+                : "Allowed, but every runner is busy, so a queued estimate waits for one to finish.<br>A second runner on this desktop: install-runner-slot.ps1 -Slot 2."}</div></div>
+      </div>`);
+    }
+  }
+  $("lanes").innerHTML = html.join("");
+  restore();
+  renderLog();
+}
+
+/* ⤢ THE LOG, LARGE: the same lines, big enough to read across the room; it follows the run. */
+let logRun = null;
+function renderLog(){
+  if(!logRun || !snap) return;
+  const r = (snap.live || []).find(x => String(x.run_id) === String(logRun));
+  if(!r){ $("logTitle").textContent = "That run has finished."; return; }
+  $("logTitle").textContent = `${r.drawing_number || r.run_id} · ${r.client || ""} · ${r.runner || ""} · last ${ (r.log_tail || []).length } lines`;
+  const b = $("logBody"), end = !b.childElementCount || b.scrollHeight - b.scrollTop - b.clientHeight < 14;
+  b.innerHTML = logLines(r.log_tail || [], true);
+  if(end) b.scrollTop = b.scrollHeight;
+}
+/* STOP ANY JOB FROM GRID CONTROL (JG, 10 Nov 2026): "be able to stop individual jobs whether they
+   are set off as individual jobs or started from the AI self running and also be able to stop
+   jobs through the Grid Control". The same stop as the estimating page: the service abandons
+   the run, and the runner is told to end the engine on its next heartbeat. A job Self-Running
+   queued is held on its sheet after this, not queued again, until somebody marks it Re-Run. */
+const stopping = {};
+function stopBtn(r, service){
+  if(!r || !r.run_id) return "";
+  const id = esc(r.run_id), sent = stopping[r.run_id];
+  return `<button class="stopjob" type="button" data-stop-job="${id}" data-service="${esc(service || "")}" data-name="${esc(r.drawing_number || r.run_id)}"${sent ? " disabled" : ""}
+    title="Stop this job: the run is abandoned and its Grid Runner ends the engine">${sent ? "Stopping…" : "Stop"}</button>`;
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest && e.target.closest("[data-stop-job]");
+  if(!b || b.disabled) return;
+  const id = b.dataset.stopJob;
+  if(!confirm(`Stop ${b.dataset.name}?\n\nThe run is abandoned and its Grid Runner ends the engine. `
+              + "A job from AI Self-Running is not queued again until it is marked Re-Run.")) return;
+  stopping[id] = true; b.disabled = true; b.textContent = "Stopping…";
+  try{
+    if(b.dataset.service) await api("/api/estimate/grid/stop", {service: b.dataset.service, run_id: id});
+    else await api("/api/estimate/" + encodeURIComponent(id) + "/abandon", {});
+  }
+  catch(err){ delete stopping[id]; b.disabled = false; b.textContent = "Stop"; alert("Not stopped: " + err.message); }
+});
+function openLog(id){ logRun = id; $("logBody").innerHTML = ""; $("logModal").hidden = false; renderLog(); }
+function closeLog(){ logRun = null; $("logModal").hidden = true; }
+document.addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest("[data-log]");
+  if(b) openLog(b.dataset.log);
+  if(e.target === $("logModal")) closeLog();
+});
+$("logClose").addEventListener("click", closeLog);
+$("filesClose").addEventListener("click", closeFiles);
+document.addEventListener("keydown", e => { if(e.key === "Escape" && logRun) closeLog(); });
+
+/* A MACHINE'S CPU AND MEMORY (D-743): one bar each, the running estimates, SolidWorks, Excel
+   and everything else in order, and what is free as the empty track; the last fifteen
+   minutes of both as a trace. */
+function cbar(segs, other, total, unit, fmt){
+  if(total == null || !total) return '<div class="cbar"></div>';
+  const w = v => Math.max(0, Math.min(100, 100 * v / total)).toFixed(2) + "%";
+  return `<div class="cbar">${segs.filter(x => x.value > 0).map(x =>
+    `<i style="width:${w(x.value)};background:${CMP[x.kind] || CMP.other}" data-tip="<b>${esc(x.label)}</b><div class='m'>${fmt(x.value)}${unit}</div>"></i>`).join("")}${other > 0 ? `<i style="width:${w(other)};background:${CMP.other}" data-tip="<b>Everything else</b><div class='m'>Windows, the browser and other programs: ${fmt(other)}${unit}</div>"></i>` : ""}</div>`;
+}
+function sparkline(hist, now){
+  if(!hist || hist.length < 2) return '<svg class="spark"></svg>';
+  const x = t => Math.max(0, Math.min(100, 100 - (now - t) / 9)).toFixed(2);      // 900 s wide
+  const y = v => (24 - Math.max(0, Math.min(100, v)) * 0.22).toFixed(2);
+  const line = (i, col, dash) => {
+    const pts = hist.filter(h => h[i] != null).map(h => `${x(h[0])},${y(h[i])}`).join(" ");
+    return pts ? `<polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.5" ${dash ? 'stroke-dasharray="3 3"' : ""} vector-effect="non-scaling-stroke"/>` : "";
+  };
+  const cpus = hist.map(h => h[1]).filter(v => v != null), mems = hist.map(h => h[2]).filter(v => v != null);
+  const tip = `<b>Last 15 minutes</b><div class='m'>CPU now ${cpuTxt(cpus[cpus.length - 1])}, peak ${cpuTxt(Math.max(...cpus, 0))}</div><div class='m'>Memory now ${cpuTxt(mems[mems.length - 1])} used, peak ${cpuTxt(Math.max(...mems, 0))}</div>`;
+  return `<svg class="spark" viewBox="0 0 100 26" preserveAspectRatio="none" data-tip="${esc(tip)}"><line x1="0" x2="100" y1="24" y2="24" stroke="#182634" vector-effect="non-scaling-stroke"/>${line(2, "#a3b6c4", true)}${line(1, "#F6D946", false)}</svg>`;
+}
+function peakTxt(hist){
+  const cpus = (hist || []).map(h => h[1]).filter(v => v != null);
+  return cpus.length ? "CPU peak " + cpuTxt(Math.max(...cpus)) : "";
+}
+function machineCompute(m, now){
+  if(!m) return "";
+  if(!m.connected) return `<div class="cmp"><span class="cnote">Compute shows here once its runner connects.</span></div>`;
+  const cpu = m.cpu || {}, mem = m.mem || {};
+  return `<div class="cmp${m.fresh ? "" : " stale"}">
+    <div class="cl"><span class="ck">CPU</span>${cbar(cpu.segments || [], cpu.other, 100, "% of the machine", v => cpuTxt(v).replace("%", ""))}<span class="cv"><b>${cpuTxt(m.cpu_pct)}</b> · ${cpuTxt(cpu.free)} free</span></div>
+    <div class="cl"><span class="ck">MEMORY</span>${cbar(mem.segments || [], mem.other, m.mem_total_gb, " GB", v => v.toFixed(1))}<span class="cv"><b>${m.mem_used_gb != null ? m.mem_used_gb.toFixed(0) : "—"}</b> / ${gb(m.mem_total_gb)} · ${mem.free != null ? mem.free.toFixed(0) : "—"} free</span></div>
+    <div class="cl"><span class="ck">15 MIN</span>${sparkline(m.history, now)}<span class="cv">${peakTxt(m.history)}</span></div>
+    <span class="cnote">${[m.threads ? m.threads + " threads" : "", m.disk_free_gb != null ? "disk " + gb(m.disk_free_gb) + " free" : "", (m.fresh ? "measured " : "last measured ") + fmtDur(m.age_s) + " ago"].filter(Boolean).join(" · ")}</span>
+    ${m.note ? `<span class="cnote">${esc(m.note)}</span>` : ""}
+  </div>`;
+}
+let serviceHost = "";
+/* THE SECOND GRID RUNNER'S COMPUTE CHECK, SHOWN (JG, 10 Nov 2026): "we also need to be able to see
+   that it's at least tried to check for compute resources on the second grid runner". Each check
+   says when, what it measured, and whether it left room for a run or held the slot back. */
+function gateLine(g){
+  if(!g || (g.slot || 1) < 2) return "";
+  const when = g.at ? fmtClock(g.at) : "?";
+  return `<div class="meta gate">Compute check, slot ${esc(g.slot)}, at <b>${when}</b>: ${esc(g.measured || "")} → `
+    + (g.ok ? "<b>room for a run</b>, asking for work" : "<b>holding</b>, not the room for one more run") + "</div>";
+}
+function renderFleet(fleet, compute){
+  compute = compute || [];
+  const byHost = {}; compute.forEach(m => { byHost[String(m.host).toUpperCase()] = m; });
+  const shown = new Set();
+  const up = fleet.filter(f => f.online).length;
+  $("fleetCount").textContent = `${up} of ${fleet.length} online`;
+  if(!fleet.length){ $("fleet").innerHTML = `<div class="empty">No Grid Runner has checked in with this service${serviceHost ? " on " + esc(serviceHost) : ""}. Each service keeps its own queue: a run started on another machine's service shows on that service's Grid Control, not here.</div>`; return; }
+  const capName = {sw_extract:"SW", xai_extract:"xAI", dm_extract:"DM", desktop_token:"TURN"};
+  $("fleet").innerHTML = fleet.map(f => {
+    const caps = (f.capabilities || []).filter(c => capName[c]).map(c => `<span class="chip">${capName[c]}</span>`).join("");
+    const seen = f.seconds_since_seen == null ? "" : `seen <b>${fmtDur(f.seconds_since_seen)}</b> ago`;
+    const job = f.job ? ` · on <b>${esc(f.job.drawing_number)}</b>` : "";
+    const host = String(f.hostname || "").toUpperCase();
+    const m = shown.has(host) ? null : byHost[host];        // one machine, shown once
+    if(m) shown.add(host);
+    return `<div class="node ${f.rag}${f.planned ? " planned" : ""}">
+      <span class="hb"></span><span class="nm">${esc(f.label)}</span><span class="chips">${caps}</span>${badge(f.rag, f.rag === "green" ? (f.job ? "Working" : "Ready") : WORD[f.rag])}
+      <div class="meta">${esc(f.label !== f.hostname ? f.hostname + " · " : "")}${esc(f.rag_reason)}${job}${seen ? " · " + seen : ""}${f.build ? " · build <b>" + esc(f.build.slice(0, 7)) + "</b>" : ""}</div>
+      ${gateLine(f.gate)}
+      ${machineCompute(m, nowS())}
+    </div>`;
+  }).join("") + (compute.some(m => m.connected) ? `<div class="clegend">
+      <span><i style="background:${CMP.estimate}"></i>Estimates</span><span><i style="background:${CMP.solidworks}"></i>SolidWorks</span>
+      <span><i style="background:${CMP.excel}"></i>Excel</span><span><i style="background:${CMP.other}"></i>Everything else</span>
+      <span><i style="background:var(--line);outline:1px solid var(--line-hi)"></i>Free</span>
+      <span style="color:var(--ink-3)">trace: <span style="color:#F6D946">━</span> CPU <span style="color:#a3b6c4">┅</span> memory</span></div>` : "");
+}
+
+/* THE REST OF THE GRID (JG, 10 Nov 2026): "whether it's on local machine and on port 8071 or 8072,
+   the control grid still needs to see it". The other services' running jobs and queue, each named
+   by its service, each with Stop (sent to that service through this one). */
+function gridRows(grid){
+  const n = nowS(), out = [];
+  (grid || []).forEach(g => {
+    if(!g.ok){ out.push(`<div class="qrow"><span class="n">↔</span><span><b>${esc(g.label)}</b> <span style="color:var(--ink-2)">${esc(g.error || "not answering")}</span></span><span></span><span></span></div>`); return; }
+    (g.live || []).forEach(r => out.push(`<div class="qrow"><span class="n">▶</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")} · running on ${esc(g.label)}${r.runner ? " · " + esc(r.runner) : ""}</span></span>
+      <span class="t">${fmtDur(r.elapsed_s)}${r.silent_s > 300 ? " · silent " + fmtDur(r.silent_s) : ""}</span>${stopBtn(r, g.service)}</div>`));
+    (g.queue || []).forEach(r => out.push(`<div class="qrow"><span class="n">·</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")} · queued on ${esc(g.label)}</span></span>
+      <span class="t">waiting ${fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r, g.service)}</div>`));
+  });
+  return out;
+}
+function renderQueue(q, grid){
+  const others = gridRows(grid);
+  $("queueCount").textContent = (q.length ? `${q.length} waiting here` : "none here")
+    + ((grid || []).length ? ` · ${(grid || []).map(g => g.label).join(", ")} too` : "");
+  if(!q.length && !others.length){ $("queue").innerHTML = '<div class="empty">Nothing waiting. A new estimate starts as soon as it is queued.</div>'; return; }
+  if(!q.length){ $("queue").innerHTML = others.join(""); return; }
+  const n = nowS();
+  $("queue").innerHTML = q.slice(0, 6).map((r, i) => `<div class="qrow"><span class="n">#${i + 1}</span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}</span></span>
+      <span class="t">${r.start_at ? "starts ~" + fmtClock(r.start_at) + " · done ~" + fmtClock(r.finish_at) : "waiting " + fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r)}</div>`).join("")
+    + (q.length > 6 ? `<div class="empty">+ ${q.length - 6} more</div>` : "") + others.join("");
+}
+
+/* ── THE DESKTOP'S SOLIDWORKS: who has the licence, since when, and who waits (D-738) ── */
+function renderSolidWorks(machines, limit){
+  $("swLimit").textContent = limit ? `${Math.round(limit / 60)} min wait, then Document Manager` : "";
+  if(!machines.length){ $("sw").innerHTML = '<div class="empty">No machine is reporting.</div>'; return; }
+  const n = nowS();
+  $("sw").innerHTML = machines.map(m => {
+    const h = m.holder;
+    const state = h ? badge("amber", "In use") : m.waiting.length ? badge("amber", "Busy") : badge("green", "Free");
+    const who = h ? `<div class="who"><b>${esc(h.drawing_number)}</b> <span style="color:var(--ink-2)">${esc(h.client || "")}</span> · has it <b data-since="${h.since}">${fmtDur(n - h.since)}</b></div>`
+              : m.waiting.length ? `<div class="who" style="color:var(--ink-2)">${esc(m.said_holder || "Another run on this machine has it")}</div>`
+              : `<div class="who" style="color:var(--ink-3)">Nobody is reading models. The next run takes it at once.</div>`;
+    const waits = m.waiting.map(w => {
+      const pct = Math.min(100, 100 * w.waited_s / (w.limit_s || 1));
+      return `<div class="wait"><div class="t"><span><b>${esc(w.drawing_number)}</b> waiting</span>
+        <span>${fmtDur(w.waited_s)} of ${fmtDur(w.limit_s)}</span></div>
+        <div class="bar"><i style="width:${pct.toFixed(1)}%"></i></div></div>`;
+    }).join("");
+    if(!h && !m.waiting.length)                    // a free machine is one line
+      return `<div class="swm free"><span class="host" style="font-family:var(--mono);color:var(--ink-2);font-size:11px">${esc(m.host)}</span>${state}</div>`;
+    return `<div class="swm"><div class="h"><span class="host">${esc(m.host)}</span>${state}</div>${who}${waits}</div>`;
+  }).join("");
+}
+
+/* ── CHARTS: inline SVG, thin marks, 2px gaps, recessive axes, a tooltip on every mark ── */
+function box(el){ const r = el.getBoundingClientRect(); return {w: Math.max(120, r.width), h: Math.max(80, r.height)}; }
+function niceMax(v){ if(v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); const m = v / p;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p; }
+
+function renderTrend(rows, k){
+  const el = $("trend"), {w, h} = box(el);
+  const L = 34, R = 96, T = 8, B = 18, pw = w - L - R, ph = h - T - B;
+  const mins = rows.map(r => (r.seconds || 0) / 60);
+  const ymax = niceMax(Math.max(1, ...mins, (k.p90_s_7d || 0) / 60));
+  const y = v => T + ph - (v / ymax) * ph;
+  const n = Math.max(rows.length, 1), slot = pw / n, bw = Math.max(3, Math.min(22, slot - 2));
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g>`;
+  g += `<g class="axis">${[0, .5, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("")}</g>`;
+  if(!rows.length) g += `<text x="${L + pw / 2}" y="${T + ph / 2}" text-anchor="middle" class="reflabel">No finished estimates yet</text>`;
+  rows.forEach((r, i) => {
+    const v = mins[i], x = L + i * slot + (slot - bw) / 2, top = y(v), hh = Math.max(1.5, T + ph - top);
+    const col = r.outcome === "failed" ? "var(--s-failed)" : "var(--s-done)";
+    const tip = `<b>${esc(r.drawing)}</b><div class="m">${esc(r.client)} · ${r.outcome === "failed" ? "✕ failed" : "✓ completed"}</div><div class="m">${fmtDur(r.seconds)} · finished ${r.finished_at ? fmtClock(r.finished_at) : ""}</div>`;
+    // 4px rounded data-end, square at the baseline.
+    const rr = Math.min(4, bw / 2, hh);
+    g += `<path class="bar" data-tip="${esc(tip)}" fill="${col}" d="M${x},${T + ph} V${top + rr} Q${x},${top} ${x + rr},${top} H${x + bw - rr} Q${x + bw},${top} ${x + bw},${top + rr} V${T + ph} Z"/>`;
+    g += `<rect data-tip="${esc(tip)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  // Two reference lines, each labelled at its right end; labels closer than 13px are pushed
+  // apart (the 90th percentile up, the median down) so neither sits on the other.
+  const yMed = k.median_s_7d ? y(k.median_s_7d / 60) : null;
+  const yP90 = k.p90_s_7d ? y(k.p90_s_7d / 60) : null;
+  let lMed = yMed, lP90 = yP90;
+  if(yMed != null && yP90 != null && Math.abs(yMed - yP90) < 13){
+    const mid = (yMed + yP90) / 2; lP90 = mid - 7; lMed = mid + 7;
+  }
+  [[yMed, lMed, k.median_s_7d, "median", ""], [yP90, lP90, k.p90_s_7d, "p90", " p90"]].forEach(([yy, ly, s, lbl, cls]) => {
+    if(yy == null) return;
+    g += `<line class="refline${cls}" x1="${L}" x2="${L + pw}" y1="${yy}" y2="${yy}"/>`;
+    g += `<text class="reflabel" x="${L + pw + 6}" y="${ly + 3}">${lbl} ${fmtDur(s)}</text>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Run time of the last ${rows.length} finished estimates, in minutes">${g}</svg>`;
+}
+
+function renderActivity(hours){
+  const el = $("activity"), {w, h} = box(el);
+  const L = 26, R = 8, T = 8, B = 18, pw = w - L - R, ph = h - T - B;
+  const tot = hours.map(x => x.done + x.failed + x.extracts);
+  const ymax = niceMax(Math.max(1, ...tot));
+  const y = v => T + ph - (v / ymax) * ph;
+  const slot = pw / 24, bw = Math.max(3, slot - 3);
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g>`;
+  g += `<g class="axis">${[0, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("")}`;
+  hours.forEach((x, i) => { if(i % 4 === 0) g += `<text x="${L + i * slot + slot / 2}" y="${T + ph + 13}" text-anchor="middle">${fmtClock(x.hour_start)}</text>`; });
+  g += `</g>`;
+  hours.forEach((x, i) => {
+    const bx = L + i * slot + (slot - bw) / 2;
+    let base = T + ph;
+    const segs = [["done", "var(--s-done)"], ["failed", "var(--s-failed)"], ["extracts", "var(--s-extract)"]]
+      .filter(([kk]) => x[kk] > 0);
+    segs.forEach(([kk, col], j) => {
+      const hh = (x[kk] / ymax) * ph;
+      const top = base - hh + (j > 0 ? 2 : 0);            // a 2px surface gap between stacked fills
+      const isTop = j === segs.length - 1, rr = isTop ? Math.min(4, bw / 2, hh) : 0;
+      g += `<path fill="${col}" d="M${bx},${base} V${top + rr} ${rr ? `Q${bx},${top} ${bx + rr},${top} H${bx + bw - rr} Q${bx + bw},${top} ${bx + bw},${top + rr}` : `H${bx + bw}`} V${base} Z"/>`;
+      base = base - hh;
+    });
+    const tip = `<b>${fmtClock(x.hour_start)}–${fmtClock(x.hour_start + 3600)}</b><div class="m">✓ ${x.done} completed · ✕ ${x.failed} failed · ${x.extracts} extracts</div>`;
+    g += `<rect data-tip="${esc(tip)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Jobs finished per hour over the last 24 hours">${g}</svg>`;
+}
+
+/* WHAT STILL NEEDS A PERSON on a finished run, from the engine's own tally (D-739): missing
+   costing items apart from decisions and from provisional assumptions. */
+function openItems(o){
+  if(!o) return "";
+  if(!o.total) return '<span class="oi">nothing open</span>';
+  const bits = [];
+  if(o.missing) bits.push(`${o.missing} missing`);
+  if(o.decisions) bits.push(`${o.decisions} to decide`);
+  if(o.quantity_checks) bits.push(`${o.quantity_checks} qty check${o.quantity_checks > 1 ? "s" : ""}`);
+  if(o.provisional) bits.push(`${o.provisional} provisional`);
+  return `<span class="oi" title="${esc(o.phrase || "")}">${esc(bits.join(" · ") || o.total + " open")}</span>`;
+}
+
+function renderRecent(rows){
+  $("recentCount").textContent = rows.length ? `last ${rows.length}` : "";
+  if(!rows.length){ $("recent").innerHTML = '<tr><td class="c">Nothing has finished yet.</td></tr>'; return; }
+  const word = {done:"Completed", failed:"Failed", stopped:"Stopped"};
+  const icon = {done:"✓", failed:"✕", stopped:"■"};
+  // Every run the service sends (12): the panel scrolls inside itself, nothing is cut off.
+  $("recent").innerHTML = '<colgroup><col style="width:52px"><col style="width:31%"><col>'
+    + '<col style="width:96px"><col style="width:58px"></colgroup>' + rows.map(r => `<tr>
+      <td class="t">${r.finished_at ? fmtClock(r.finished_at) : ""}</td>
+      <td class="d">${esc(r.drawing_number)}</td>
+      <td class="c">${esc(r.client || "")}${r.job_type ? " · extract" : ""}${openItems(r.open_items)}</td>
+      <td class="o">${qualityWord(r) ? badge(r.quality.rag, r.quality.state === "complete" ? "Complete" : r.quality.state === "missing costs" ? "Missing costs" : r.quality.state === "provisional" ? "Provisional" : "Not reviewed") : `<span class="o-${r.outcome}">${icon[r.outcome] || "·"}</span> <span class="lbl">${word[r.outcome] || esc(r.outcome)}</span>`}</td>
+      <td class="s">${fmtDur(r.seconds)}</td></tr>`).join("");
+}
+
+function renderTicker(alerts){
+  const t = $("ticker");
+  if(!alerts.length){
+    t.className = "run still";
+    t.textContent = "No alerts. Every run on pace and every runner checked in.";
+  }else{
+    t.className = "run";
+    t.textContent = alerts.map(a => "▲ " + a).join("     ◆     ");
+  }
+}
+
+/* ── THE SECOND HAND: clocks and run timers tick between reads ── */
+function tick(){
+  const d = new Date(Date.now() + offset);
+  $("clock").textContent = d.toLocaleTimeString("en-GB", {hour12:false});
+  $("date").textContent = d.toLocaleDateString("en-GB", {weekday:"short", day:"2-digit", month:"short", year:"numeric"}).toUpperCase();
+  const n = nowS();
+  document.querySelectorAll(".lane[data-start]").forEach(el => {
+    const st = Number(el.dataset.start); const sp = el.querySelector("[data-elapsed] span");
+    if(st && sp) sp.textContent = fmtDur(n - st);
+  });
+  document.querySelectorAll("[data-since]").forEach(el => {
+    const st = Number(el.dataset.since); if(st) el.textContent = fmtDur(n - st);
+  });
+  if(lastOk){
+    const age = (Date.now() - lastOk) / 1000;
+    if(age < 15){
+      $("liveDot").classList.remove("lost");
+      $("linkText").textContent = `live · updated ${Math.round(age)}s ago`;
+      $("liveDot").title = $("linkText").textContent;
+    }
+  }
+  $("foot").textContent = (commit ? "service " + String(commit).slice(0, 7) + (serviceHost ? " on " + serviceHost : "") + " · " : "") + "refreshes every " + POLL_MS / 1000 + "s";
+}
+
+/* ── TOOLTIP, FULL SCREEN, AN IDLE CURSOR ──────────────────── */
+const tip = $("tip");
+document.addEventListener("mousemove", e => {
+  const t = e.target.closest && e.target.closest("[data-tip]");
+  if(t){ tip.innerHTML = t.getAttribute("data-tip"); tip.style.display = "block";
+         const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8);
+         tip.style.left = x + "px"; tip.style.top = Math.max(8, e.clientY - tip.offsetHeight - 10) + "px"; }
+  else tip.style.display = "none";
+  document.body.classList.remove("hidecursor");
+  clearTimeout(window.__cur); window.__cur = setTimeout(() => document.body.classList.add("hidecursor"), 3000);
+});
+function fullscreen(){
+  if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen().catch(() => {});
+}
+$("fsBtn").addEventListener("click", fullscreen);
+const typing = e => e.target && /^(input|textarea|select)$/i.test(e.target.tagName);
+document.addEventListener("keydown", e => { if(!typing(e) && (e.key === "f" || e.key === "F")) fullscreen(); });
+let resizeT; addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => { render(); renderHistory(); }, 150); });
+
+
+/* ══ PARITY (D-741): drawn from the service's `parity`, read from the parity share ════════
+   Green, amber and red are the comparator's own bands, always with ✓ ▲ ✕ and a word: within
+   its match threshold, within its warning threshold, outside it. Direction is position: left
+   of level the AI is cheaper, right of it dearer. Nothing here is worked out on the page. */
+const BAND = {match:"var(--good)", warning:"var(--warn)", fail:"var(--bad)"};
+const OUTCOME = {match:["green", "Match"], warning:["amber", "Warning"], fail:["red", "Outside"],
+                 "quantities differ":["grey", "Quantities differ"], "not compared":["grey", "Not compared"],
+                 review:["grey", "To review"]};
+function pct(v, signed){
+  if(v == null || !isFinite(v)) return "—";
+  const a = Math.abs(v), t = a >= 100 ? a.toFixed(0) : a >= 10 ? a.toFixed(1) : a.toFixed(2);
+  return (signed ? (v > 0 ? "+" : v < 0 ? "−" : "±") : "") + t + "%";
+}
+function gbp(v){ return v == null || !isFinite(v) ? "—" : "£" + Number(v).toLocaleString("en-GB", {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function fmtStamp(st){
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?: (\d{2})-(\d{2}))?/.exec(String(st || ""));
+  if(!m) return esc(st || "");
+  const mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(m[2]) - 1];
+  return `${Number(m[3])} ${mon}${m[4] ? " " + m[4] + ":" + m[5] : ""}`;
+}
+function bandOf(absPct, th){ return absPct == null ? null : absPct <= th.match ? "match" : absPct <= th.warning ? "warning" : "fail"; }
+function outcomeBadge(o){ const [rag, word] = OUTCOME[o] || ["grey", o || "—"]; return badge(rag, word); }
+function setText(id, t){ const el = $(id); if(el) el.textContent = t; }
+
+let parityKey = "";
+function renderParity(p){
+  const msg = $("pMsg"), main = $("pMain");
+  if(!p){ return; }
+  const age = p.age_s == null ? "" : p.age_s < 90 ? "just now" : Math.round(p.age_s / 60) + " min ago";
+  setText("pRead", p.state === "ready"
+    ? `read ${age}${p.refreshing ? " · reading again…" : ""} · every ${Math.round((p.every_s || 300) / 60)} min`
+    : p.state === "reading" ? "reading the parity folder…" : "not read");
+  if(p.state !== "ready" || p.reachable === false){
+    main.hidden = true; msg.hidden = false;
+    msg.innerHTML = p.state === "reading" ? "Reading the parity folder… the first read can take a minute on the share."
+      : p.reachable === false ? `${esc(p.note || "The parity folder could not be read.")}<br><span style="color:var(--ink-3)">Set SDI_PARITY_ROOT on this service if it lives elsewhere.</span>`
+      : `The parity view could not be read: <b>${esc(p.read_error || "no answer")}</b>`;
+    return;
+  }
+  // Redraw only when the read or the screen changed: the share is read every few minutes.
+  const key = `${p.read_at}|${innerWidth}x${innerHeight}`;
+  if(key === parityKey) return;
+  parityKey = key;
+  msg.hidden = true; main.hidden = false;
+  const k = p.kpis || {}, th = p.thresholds || {match:3, warning:10};
+  setText("pSub", `Each drawing's newest comparison · ✓ within ±${th.match}% · ▲ within ±${th.warning}% · ✕ outside · ${p.root || ""}`);
+  renderParityKpis(k, th);
+  renderParityDist(p.distribution || [], th, k);
+  renderParityTrend(p.trend || [], th);
+  renderParityWeeks(p.trend || []);
+  renderParityAreas(p.cost_areas || {}, th);
+  renderParityClients(p.by_client || [], p.clients_left_out || 0, th);
+  renderParityMovers(p.movers || {});
+  renderParityRecent(p.recent || [], th);
+  renderParityPeriods(p.periods || [], th);
+}
+
+function renderParityKpis(k, th){
+  const l30 = k.last_30_days || {}, ch = k.median_abs_change_30d;
+  const within = k.within_warning_pct;
+  const notComp = (k.drawings || 0) - (k.compared || 0);
+  const tiles = [
+    ["Drawings compared", `${k.compared ?? 0}<small>/ ${k.drawings ?? 0}</small>`,
+     `${k.comparisons ?? 0} comparisons filed · ${k.this_week ?? 0} this week`],
+    [`Within ±${th.warning}%`, within == null ? "—" : `${within}<small>%</small>`,
+     `✓ ${k.match ?? 0} match · ▲ ${k.warning ?? 0} warning · ✕ ${k.fail ?? 0} outside`],
+    [`Within ±${th.match}%`, k.within_match_pct == null ? "—" : `${k.within_match_pct}<small>%</small>`,
+     `${k.match ?? 0} of ${k.compared ?? 0} at the match threshold`],
+    ["Median variance", k.median_abs_pct == null ? "—" : `${pct(k.median_abs_pct)}`,
+     `mean ${pct(k.mean_abs_pct)} · unit cost against the manual`],
+    ["Direction", k.median_signed_pct == null ? "—" : pct(k.median_signed_pct, true),
+     `AI dearer on ${k.ai_dearer ?? 0} · cheaper on ${k.ai_cheaper ?? 0}`],
+    ["Median · last 30 days", l30.median_abs_pct == null ? "—" : pct(l30.median_abs_pct),
+     ch == null ? `${l30.compared ?? 0} comparable · nothing in the 30 days before to set against`
+       : `${ch < 0 ? "▼ down" : ch > 0 ? "▲ up" : "= level"}${ch ? " " + Math.abs(ch).toFixed(1) + " pts" : ""} on the 30 days before · ${l30.compared ?? 0} comparable`],
+    ["Re-estimated", `${k.re_estimated ?? 0}`,
+     k.re_estimated ? `▼ closer on ${k.closer ?? 0} · ▲ further on ${k.further ?? 0}` : "no drawing compared from two AI runs yet"],
+    ["Not comparable", `${notComp}`,
+     `${k.quantities_differ ?? 0} quantities differ · ${k.not_compared ?? 0} not compared · ${k.review ?? 0} to review`],
+  ];
+  $("pKpis").innerHTML = tiles.map(([key, v, sub]) =>
+    `<div class="panel kpi"><div class="k">${esc(key)}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join("");
+}
+
+function emptyPlot(el, w, h, text){
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}"><text x="${w / 2}" y="${h / 2}" text-anchor="middle" class="reflabel">${esc(text)}</text></svg>`;
+}
+function roundTopBar(x, top, bw, base, col, tip){
+  const hh = Math.max(1.5, base - top), rr = Math.min(4, bw / 2, hh);
+  return `<path class="bar" ${tip ? `data-tip="${esc(tip)}"` : ""} fill="${col}" d="M${x},${base} V${top + rr} Q${x},${top} ${x + rr},${top} H${x + bw - rr} Q${x + bw},${top} ${x + bw},${top + rr} V${base} Z"/>`;
+}
+
+function renderParityDist(bins, th, k){
+  const el = $("pDist"), {w, h} = box(el);
+  const total = bins.reduce((a, b) => a + b.count, 0);
+  setText("pDistN", total ? `${total} drawing${total > 1 ? "s" : ""}` : "");
+  if(!total){ emptyPlot(el, w, h, "No comparable comparison filed yet"); return; }
+  const L = 26, R = 8, T = 16, B = 30, pw = w - L - R, ph = h - T - B;
+  const ymax = niceMax(Math.max(1, ...bins.map(b => b.count)));
+  const y = v => T + ph - (v / ymax) * ph;
+  const slot = pw / bins.length, bw = Math.max(6, Math.min(56, slot - 8));
+  const short = b => b.lo == null ? `< −${Math.abs(b.hi)}` : b.hi == null ? `> +${b.lo}` : b.lo < 0 && b.hi > 0 ? `±${b.hi}` : `${b.lo > 0 ? "+" : "−"}${Math.abs(b.lo)}…${Math.abs(b.hi)}`;
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g>`;
+  g += `<g class="axis">${[0, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("")}`;
+  bins.forEach((b, i) => { g += `<text x="${L + i * slot + slot / 2}" y="${T + ph + 14}" text-anchor="middle">${esc(short(b))}%</text>`; });
+  g += `</g>`;
+  const mid = L + 3.5 * slot;
+  g += `<line class="refline p90" x1="${mid}" x2="${mid}" y1="${T - 6}" y2="${T + ph}"/>`;
+  bins.forEach((b, i) => {
+    const x = L + i * slot + (slot - bw) / 2;
+    const word = {match:"✓ match", warning:"▲ warning", fail:"✕ outside"}[b.band];
+    const tip = `<b>${esc(b.label)}</b><div class="m">${word} · ${b.count} drawing${b.count === 1 ? "" : "s"}</div>${b.drawings.length ? `<div class="m">${b.drawings.map(esc).join("<br>")}${b.count > b.drawings.length ? "<br>…" : ""}</div>` : ""}`;
+    if(b.count) g += roundTopBar(x, y(b.count), bw, T + ph, BAND[b.band], tip);
+    if(b.count) g += `<text class="reflabel" x="${x + bw / 2}" y="${y(b.count) - 5}" text-anchor="middle">${b.count}</text>`;
+    g += `<rect data-tip="${esc(tip)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Drawings by unit cost variance band">${g}</svg>`;
+}
+
+function renderParityTrend(weeks, th){
+  const el = $("pTrend"), {w, h} = box(el);
+  const pts = weeks.map((x, i) => ({i, v: x.median_abs_pct, x}));
+  const vals = pts.filter(p => p.v != null).map(p => p.v);
+  if(!vals.length){ emptyPlot(el, w, h, `No comparable comparison in the last ${weeks.length} weeks`); return; }
+  const L = 34, R = 70, T = 10, B = 20, pw = w - L - R, ph = h - T - B;
+  const ymax = niceMax(Math.max(th.warning * 1.25, ...vals));
+  const y = v => T + ph - (Math.min(v, ymax) / ymax) * ph;
+  const slot = pw / Math.max(weeks.length, 1), cx = i => L + i * slot + slot / 2;
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g>`;
+  g += `<g class="axis">${[0, .5, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}%</text>`).join("")}`;
+  weeks.forEach((x, i) => { if(i % 2 === (weeks.length - 1) % 2) g += `<text x="${cx(i)}" y="${T + ph + 14}" text-anchor="middle">${esc(x.label)}</text>`; });
+  g += `</g>`;
+  let lm = y(th.match), lw = y(th.warning);
+  if(Math.abs(lm - lw) < 13){ const m = (lm + lw) / 2; lw = m - 7; lm = m + 7; }
+  [[th.warning, lw, "warning"], [th.match, lm, "match"]].forEach(([v, ly, word]) => {
+    g += `<line class="refline p90" x1="${L}" x2="${L + pw}" y1="${y(v)}" y2="${y(v)}"/>`;
+    g += `<text class="reflabel" x="${L + pw + 6}" y="${ly + 3}">${word} ${v}%</text>`;
+  });
+  // The line breaks over a week with nothing comparable rather than drawing through it.
+  let d = "", open = false;
+  pts.forEach(p => { if(p.v == null){ open = false; return; } d += `${open ? "L" : "M"}${cx(p.i).toFixed(1)},${y(p.v).toFixed(1)} `; open = true; });
+  g += `<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  pts.forEach(p => {
+    const x = p.x;
+    const tip = `<b>Week of ${esc(x.label)}</b><div class="m">${x.compared ? `median ${pct(x.median_abs_pct)} · ${x.within_warning_pct}% within ±${th.warning}%` : "nothing comparable"}</div><div class="m">✓ ${x.match} · ▲ ${x.warning} · ✕ ${x.fail} · ○ ${x.not_comparable} not comparable</div>`;
+    if(p.v != null) g += `<circle cx="${cx(p.i)}" cy="${y(p.v)}" r="4" fill="var(--accent)" stroke="var(--bg)" stroke-width="2"/>`;
+    g += `<rect data-tip="${esc(tip)}" x="${L + p.i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  const last = [...pts].reverse().find(p => p.v != null);
+  if(last) g += `<text class="reflabel" x="${cx(last.i)}" y="${y(last.v) - 9}" text-anchor="middle" style="fill:var(--ink)">${pct(last.v)}</text>`;
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Median unit cost variance by week">${g}</svg>`;
+}
+
+function renderParityWeeks(weeks){
+  const el = $("pWeeks"), {w, h} = box(el);
+  if(!weeks.some(x => x.drawings)){ emptyPlot(el, w, h, `No comparison filed in the last ${weeks.length} weeks`); return; }
+  const L = 26, R = 8, T = 10, B = 20, pw = w - L - R, ph = h - T - B;
+  const ymax = niceMax(Math.max(1, ...weeks.map(x => x.drawings)));
+  const y = v => T + ph - (v / ymax) * ph;
+  const slot = pw / weeks.length, bw = Math.max(4, Math.min(30, slot - 4));
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g>`;
+  g += `<g class="axis">${[0, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("")}`;
+  weeks.forEach((x, i) => { if(i % 2 === (weeks.length - 1) % 2) g += `<text x="${L + i * slot + slot / 2}" y="${T + ph + 14}" text-anchor="middle">${esc(x.label)}</text>`; });
+  g += `</g>`;
+  weeks.forEach((x, i) => {
+    const bx = L + i * slot + (slot - bw) / 2;
+    let base = T + ph;
+    const segs = [["match", "var(--good)"], ["warning", "var(--warn)"], ["fail", "var(--bad)"], ["not_comparable", "var(--grey)"]].filter(([kk]) => x[kk] > 0);
+    segs.forEach(([kk, col], j) => {
+      const hh = (x[kk] / ymax) * ph, top = base - hh + (j > 0 ? 2 : 0);
+      const isTop = j === segs.length - 1, rr = isTop ? Math.min(4, bw / 2, hh) : 0;
+      g += `<path fill="${col}" d="M${bx},${base} V${top + rr} ${rr ? `Q${bx},${top} ${bx + rr},${top} H${bx + bw - rr} Q${bx + bw},${top} ${bx + bw},${top + rr}` : `H${bx + bw}`} V${base} Z"/>`;
+      base -= hh;
+    });
+    const tip = `<b>Week of ${esc(x.label)}</b><div class="m">${x.drawings} drawing${x.drawings === 1 ? "" : "s"} · ${x.comparisons} comparison${x.comparisons === 1 ? "" : "s"} filed</div><div class="m">✓ ${x.match} match · ▲ ${x.warning} warning · ✕ ${x.fail} outside · ○ ${x.not_comparable} not comparable</div>`;
+    g += `<rect data-tip="${esc(tip)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Drawings compared per week by outcome">${g}</svg>`;
+}
+
+function renderParityAreas(ca, th){
+  const el = $("pAreas"), {w, h} = box(el), areas = ca.areas || [];
+  setText("pAreasN", ca.from_comparisons ? `from ${ca.from_comparisons} line-by-line comparison${ca.from_comparisons > 1 ? "s" : ""}` : "");
+  if(!areas.length){ emptyPlot(el, w, h, "No line-by-line comparison filed yet"); return; }
+  const LBL = Math.min(190, w * 0.36), R = 44, T = 6, B = 16, pw = w - LBL - R, ph = h - T - B;
+  const ext = niceMax(Math.max(th.warning * 1.5, ...areas.map(a => Math.abs(a.median_signed_pct || 0))));
+  const x = v => LBL + pw / 2 + (Math.max(-ext, Math.min(ext, v)) / ext) * (pw / 2);
+  const row = ph / areas.length, bh = Math.max(6, Math.min(18, row - 6));
+  let g = `<g class="axis">${[-ext, 0, ext].map(v => `<text x="${x(v)}" y="${T + ph + 12}" text-anchor="middle">${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v)}%</text>`).join("")}</g>`;
+  [-th.warning, -th.match, th.match, th.warning].forEach(v => { g += `<line class="refline p90" x1="${x(v)}" x2="${x(v)}" y1="${T}" y2="${T + ph}"/>`; });
+  g += `<line x1="${x(0)}" x2="${x(0)}" y1="${T}" y2="${T + ph}" stroke="var(--ink-3)" stroke-width="1"/>`;
+  areas.forEach((a, i) => {
+    const cy = T + i * row + row / 2, v = a.median_signed_pct || 0, band = bandOf(a.median_abs_pct, th) || "match";
+    const x0 = x(0), x1 = x(v), lo = Math.min(x0, x1), wd = Math.max(1.5, Math.abs(x1 - x0)), rr = Math.min(4, wd / 2, bh / 2);
+    const fit = Math.max(8, Math.floor((LBL - 14) / 6.4));        // characters the label column holds
+    const name = a.label.length > fit ? a.label.slice(0, fit - 1) + "…" : a.label;
+    if(a.kind === "commercial" && (i === 0 || areas[i - 1].kind !== "commercial")){
+      const sy = T + i * row;
+      g += `<line x1="8" x2="${w - 4}" y1="${sy}" y2="${sy}" stroke="var(--line-hi)" stroke-dasharray="3 4"/>`;
+      g += `<text x="8" y="${sy + 10}" class="reflabel" style="fill:var(--ink-3);font-size:9px;letter-spacing:.14em">COMMERCIAL</text>`;
+    }
+    const word = {match:"✓ match", warning:"▲ warning", fail:"✕ outside"}[band];
+    const tip = `<b>${esc(a.label)}</b><div class="m">${a.kind} · median ${pct(a.median_signed_pct, true)} · ${word}</div><div class="m">median size ${pct(a.median_abs_pct)} · ${a.outside_warning} of ${a.count} outside ±${th.warning}%</div>`;
+    g += `<text x="${LBL - 8}" y="${cy + 4}" text-anchor="end" style="fill:var(--ink-2);font-size:11.5px">${esc(name)}</text>`;
+    // The data end is rounded, the end at level is square.
+    const d = v >= 0
+      ? `M${lo},${cy - bh / 2} H${lo + wd - rr} Q${lo + wd},${cy - bh / 2} ${lo + wd},${cy - bh / 2 + rr} V${cy + bh / 2 - rr} Q${lo + wd},${cy + bh / 2} ${lo + wd - rr},${cy + bh / 2} H${lo} Z`
+      : `M${lo + wd},${cy - bh / 2} H${lo + rr} Q${lo},${cy - bh / 2} ${lo},${cy - bh / 2 + rr} V${cy + bh / 2 - rr} Q${lo},${cy + bh / 2} ${lo + rr},${cy + bh / 2} H${lo + wd} Z`;
+    g += `<path class="bar" data-tip="${esc(tip)}" fill="${BAND[band]}" d="${d}"/>`;
+    g += `<text class="reflabel" x="${v >= 0 ? lo + wd + 5 : lo - 5}" y="${cy + 4}" text-anchor="${v >= 0 ? "start" : "end"}">${pct(v, true)}</text>`;
+    g += `<text class="reflabel" x="${w - 4}" y="${cy + 4}" text-anchor="end" style="fill:var(--ink-3)">n=${a.count}</text>`;
+    g += `<rect data-tip="${esc(tip)}" x="0" y="${T + i * row}" width="${w}" height="${row}" fill="transparent"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Median variance by cost line, AI against manual">${g}</svg>`;
+}
+
+function renderParityClients(rows, more, th){
+  setText("pClientsN", rows.length ? `${rows.length}${more ? " of " + (rows.length + more) : ""} client${rows.length + more > 1 ? "s" : ""}` : "");
+  if(!rows.length){ $("pClients").innerHTML = '<div class="empty">No comparison filed yet.</div>'; return; }
+  $("pClients").innerHTML = `<table><tr><th>Client</th><th class="n">Drawings</th><th class="n">Comparable</th><th class="n">Within ±${th.warning}%</th><th class="n">Median</th><th class="n">Direction</th></tr>`
+    + rows.map(r => `<tr><td class="c" title="${esc(r.client)}">${esc(r.client)}</td><td class="n">${r.drawings}</td><td class="n">${r.compared}</td>
+      <td class="n">${r.within_warning_pct == null ? "—" : r.within_warning_pct + "%"}</td><td class="n">${pct(r.median_abs_pct)}</td><td class="n">${pct(r.median_signed_pct, true)}</td></tr>`).join("") + "</table>";
+}
+
+function renderParityMovers(m){
+  const rows = m.rows || [];
+  setText("pMoversN", m.drawings ? `${m.drawings} drawing${m.drawings > 1 ? "s" : ""}` : "");
+  if(!rows.length){ $("pMovers").innerHTML = '<div class="empty">No drawing has been compared from two AI runs yet. Re-estimate a compared drawing and compare it again to see whether the gap closed.</div>'; return; }
+  $("pMovers").innerHTML = `<table><tr><th>Drawing</th><th class="n">Runs</th><th class="n">First</th><th class="n">Latest</th><th>Gap</th></tr>`
+    + rows.map(r => {
+      const c = r.change_abs_pct, moved = c < -0.5 ? `▼ closer by ${Math.abs(c).toFixed(1)} pts` : c > 0.5 ? `▲ further by ${c.toFixed(1)} pts` : "= about the same";
+      return `<tr><td class="d" title="${esc(r.client || "")}">${esc(r.drawing)}</td><td class="n">${r.runs}</td>
+        <td class="n" title="${esc(r.first_stamp || "")}">${pct(r.first_pct, true)}</td><td class="n" title="${esc(r.last_stamp || "")}">${pct(r.last_pct, true)}</td>
+        <td>${esc(moved)}</td></tr>`;
+    }).join("") + "</table>";
+}
+
+function renderParityRecent(rows, th){
+  setText("pRecentN", rows.length ? `last ${rows.length}` : "");
+  if(!rows.length){ $("pRecent").innerHTML = '<div class="empty">No comparison filed yet. Parity by job number on the estimating page files one.</div>'; return; }
+  $("pRecent").innerHTML = `<table><tr><th>Filed</th><th>Drawing</th><th>Client</th><th>Outcome</th><th class="n">Variance</th><th class="n">AI</th><th class="n">Manual</th><th>Report</th></tr>`
+    + rows.map(r => {
+      const why = r.error ? r.error : r.quantity_note || "";
+      const links = [r.folder ? `<a href="#" data-pd="${esc(r.folder)}">detail</a>` : "",
+                     r.report_url ? `<a href="${esc(r.report_url)}" target="_blank" rel="noopener">report ↗</a>` : "",
+                     r.listen_url ? `<a href="${esc(r.listen_url)}" target="_blank" rel="noopener">listen</a>` : ""].filter(Boolean).join(" · ");
+      return `<tr><td class="t">${fmtStamp(r.stamp)}</td><td class="d">${esc(r.drawing)}</td><td class="c" title="${esc(r.client || "")}">${esc(r.client || "")}</td>
+        <td>${outcomeBadge(r.outcome)}${why ? `<span class="why">${esc(why)}</span>` : ""}</td>
+        <td class="n">${pct(r.signed_pct, true)}</td><td class="n">${gbp(r.ai_unit)}</td><td class="n">${gbp(r.manual_unit)}</td><td>${links || "—"}</td></tr>`;
+    }).join("") + "</table>";
+}
+
+const _pdLine = l => `<tr><td>${esc(l.kind || "")}</td><td>${esc(l.label || "")}</td><td class="n">${gbp(l.ai)}</td><td class="n">${gbp(l.manual)}</td><td class="n">${pct(l.pct, true)}</td><td>${esc(l.status || "")}</td><td>${esc(l.cell || "")}</td></tr>`;
+async function openParityDetail(folder){
+  $("pdOverlay").hidden = false; $("pdBody").innerHTML = '<div class="empty">reading…</div>';
+  try {
+    const d = await api("/api/estimate/parity/detail?folder=" + encodeURIComponent(folder));
+    const h = d.headline || {}, q = d.quantity || {}, m = d.match || {};
+    $("pdTitle").innerHTML = `<b>${esc(d.drawing || d.job || "")}</b> · ${esc(d.client || "")} · ${esc(fmtStamp(d.stamp || ""))}`;
+    const files = [["report", d.report_url], ["AI workbook", d.ai_url], ["manual sheet", d.manual_url], ["detail json", d.detail_json_url], ["listen", d.listen_url]]
+      .filter(x => x[1]).map(x => `<a href="${esc(x[1])}" target="_blank" rel="noopener">${x[0]}</a>`).join(" · ");
+    const lines = d.lines || [];
+    const diffs = (d.differences || []).map(x => `<li>${esc(typeof x === "string" ? x : JSON.stringify(x))}</li>`).join("");
+    $("pdBody").innerHTML = `
+      <table><tr><th>Outcome</th><th class="n">AI unit</th><th class="n">Manual unit</th><th class="n">Variance</th><th>Unit cost from</th></tr>
+        <tr><td>${outcomeBadge(d.outcome)}</td><td class="n">${gbp(q.ai_unit_at_manual_qty ?? h.ai_unit_cost_gbp)}</td><td class="n">${gbp(h.manual_unit_cost_gbp)}</td><td class="n">${pct(q.pct_at_manual_qty ?? h.pct_variance, true)}</td><td>${esc(h.unit_cost_source || "")}</td></tr></table>
+      <p class="empty">Matched: ${esc(m.how || "")} ${m.reason ? "· " + esc(m.reason) : ""} · quantities AI ${esc(q.ai ?? "")} / manual ${esc(q.manual ?? "")}${q.note ? " · " + esc(q.note) : ""}${(d.revision || {}).differs ? " · REVISIONS DIFFER" : ""}</p>
+      <h3 style="margin:14px 0 6px">Line by line <span class="empty">(${lines.length} line(s) from ${esc(d.lines_from || "the workbooks")})</span></h3>
+      ${lines.length ? `<table><tr><th>Kind</th><th>Line</th><th class="n">AI</th><th class="n">Manual</th><th class="n">Variance</th><th>Status</th><th>Cell</th></tr>${lines.map(_pdLine).join("")}</table>` : '<div class="empty">No line detail was filed with this comparison.</div>'}
+      ${diffs ? `<h3 style="margin:14px 0 6px">Largest differences</h3><ul>${diffs}</ul>` : ""}
+      ${d.error ? `<p class="empty">Error: ${esc(d.error)}</p>` : ""}
+      <p class="empty">${files || "no files linked"}</p>`;
+  } catch(e){ $("pdBody").innerHTML = `<div class="empty">Could not read the comparison: ${esc(e.message)}</div>`; }
+}
+document.addEventListener("click", ev => {
+  const a = ev.target.closest && ev.target.closest("[data-pd]");
+  if(a){ ev.preventDefault(); openParityDetail(a.dataset.pd); }
+});
+$("pdClose").onclick = () => { $("pdOverlay").hidden = true; };
+$("rrGo").onclick = async () => {
+  const jobs = ($("rrJobs").value || "").split(/[\s,;]+/).filter(Boolean);
+  if(!jobs.length){ $("rrOut").textContent = "Type one or more job numbers."; return; }
+  if(!confirm(`Run a fresh estimate of ${jobs.length} job(s) and compare each with its manual estimate?`)) return;
+  $("rrOut").textContent = "queueing…";
+  try {
+    const r = await api("/api/estimate/parity/rerun", {jobs, method: $("rrMethod").value});
+    $("rrOut").innerHTML = (r.results || []).map(x => x.queued
+      ? `<div>${esc(x.job)}: queued (${esc(x.client)} / ${esc(x.drawing)}, ${x.units} off${(x.breaks || []).length > 1 ? ", breaks " + x.breaks.join("/") : ""})</div>`
+      : `<div>${esc(x.job)}: not queued, ${esc(x.why || "")}</div>`).join("") + `<div class="empty">${esc(r.note || "")}</div>`;
+  } catch(e){ $("rrOut").textContent = "Not queued: " + e.message; }
+};
+
+function renderParityPeriods(rows, th){
+  setText("pPeriodsN", rows.length ? `last ${rows.length}` : "");
+  if(!rows.length){ $("pPeriods").innerHTML = '<div class="empty">No period comparison run yet. Run one from Parity by job number: one period, or Period A against Period B.</div>'; return; }
+  $("pPeriods").innerHTML = `<table><tr><th>Period</th><th class="n">Comparable</th><th class="n">Median</th><th class="n">Within ±${th.warning}%</th><th></th></tr>`
+    + rows.map(r => `<tr><td class="c" title="${esc(r.name)}">${r.kind === "two periods" && r.a && r.b ? `A ${esc(r.a[0])}…${esc(r.a[1])}<span class="why">B ${esc(r.b[0])}…${esc(r.b[1])}</span>` : `${esc(r.start || "")} … ${esc(r.end || "")}`}</td>
+      <td class="n">${r.compared ?? "—"}</td><td class="n">${pct(r.median_abs_pct)}</td><td class="n">${r.within_warning_pct == null ? "—" : r.within_warning_pct + "%"}</td>
+      <td>${r.summary_url ? `<a href="${esc(r.summary_url)}" target="_blank" rel="noopener">summary ↗</a>` : ""}</td></tr>`).join("") + "</table>";
+}
+
+/* ══ RUN PARITY FROM HERE (D-742) ═══════════════════════════════════════════════════════
+   JG, 7 Nov 2026: "I want to run one off jobs, compare a whole set of jobs v manual etc. and
+   see the output in the main screen". The rules are the service's (src/parity_job.py): the
+   newest AI run, the manual sheet chosen only when the choice is clear, a pair already compared
+   reused. This only asks, shows what would happen, and starts it. */
+async function api(path, body){
+  const opt = {headers:{"X-SDI-Key": API_KEY}, cache:"no-store"};
+  if(body !== undefined){ opt.method = "POST"; opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const r = await fetch(path, opt);
+  let j = null; try{ j = await r.json(); }catch(e){}
+  if(!r.ok){
+    const d = j && j.detail;
+    throw new Error(typeof d === "string" ? d : d && d.error ? d.error : "the service said " + r.status);
+  }
+  return j;
+}
+function tab(name){
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
+  ["one", "set", "period"].forEach(t => { $("tab-" + t).hidden = t !== name; });
+}
+document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => tab(b.dataset.tab)));
+function busy(btn, on, text){
+  if(!btn) return;
+  if(!btn.dataset.text) btn.dataset.text = btn.textContent;
+  btn.disabled = on; btn.textContent = on && text ? text : btn.dataset.text;
+}
+function say(el, html, cls){ el.innerHTML = `<div class="say ${cls || ""}">${html}</div>`; }
+function addSay(el, html, cls){ el.insertAdjacentHTML("beforeend", `<div class="say ${cls || ""}">${html}</div>`); }
+const viaExcel = () => $("viaExcel").checked;
+
+/* ── ONE JOB: find both sides, show them, compare ── */
+let oneFound = null;
+async function findOne(){
+  const job = $("oneJob").value.trim(), client = $("oneClient").value.trim();
+  if(!job){ say($("oneOut"), "Type a job or drawing number first.", "err"); return; }
+  busy($("oneFind"), true, "FINDING…");
+  say($("oneOut"), "Looking in AISheets and the manual estimates…");
+  try{
+    const f = await api(`/api/estimate/parity/find?job=${encodeURIComponent(job)}&client=${encodeURIComponent(client)}`);
+    oneFound = {job, client: client || f.client || "", body: f};
+    renderFind(f);
+  }catch(e){ say($("oneOut"), esc(e.message), "err"); }
+  finally{ busy($("oneFind"), false); }
+}
+function renderFind(f){
+  const ai = f.ai || [], man = f.manual || [], d = f.decision || {};
+  let h = "";
+  if(!ai.length) h += `<div class="say err">✕ No AI estimate of ${esc(f.job)} is filed in AISheets: no run folder holds both the engine's workbook and its summary. Run the estimate first.</div>`;
+  else h += `<div class="lbl2">AI estimate · newest first</div><select id="oneAi">${ai.slice(0, 15).map((r, i) =>
+    `<option value="${esc(r.workbook)}">${esc(r.drawing)} · ${esc(r.client)} · ${fmtStamp(r.stamp)} · ${r.units} off${i === 0 ? " · newest" : ""}</option>`).join("")}</select>`;
+  if(!man.length) h += `<div class="say err">✕ No manual estimate for ${esc(f.job)} was found: no job folder or workbook starts with that number.</div>`;
+  else{
+    h += `<div class="lbl2">Manual estimate · ${d.clear ? "✓ clear" : "▲ choose one"} <span class="why">${esc(d.reason || "")}</span></div>`;
+    h += man.slice(0, 8).map(c => `<label class="pick"><input type="radio" name="oneMan" value="${esc(c.path)}"${d.clear && c.path === d.path ? " checked" : ""}>
+      <span><span class="nm">${esc(c.name || c.path)}</span><span class="why">${esc([c.client, c.year, c.why, c.modified_text].filter(Boolean).join(" · "))}</span></span></label>`).join("");
+  }
+  if(ai.length && man.length) h += `<div class="frow"><button class="act go" type="button" id="oneGo">COMPARE AND FILE</button></div>`;
+  $("oneOut").innerHTML = h;
+  if($("oneGo")) $("oneGo").addEventListener("click", compareOne);
+}
+async function compareOne(){
+  const f = oneFound && oneFound.body, picked = document.querySelector('input[name="oneMan"]:checked');
+  if(!picked){ addSay($("oneOut"), "Choose the manual estimate first.", "err"); return; }
+  // A path is sent only when it differs from what the service would choose itself.
+  const d = f.decision || {}, ai = $("oneAi").value, newest = (f.ai[0] || {}).workbook;
+  const body = {job: oneFound.job, client: oneFound.client || null, read_via_excel: viaExcel()};
+  if(!d.clear || picked.value !== d.path) body.manual_path = picked.value;
+  if(ai !== newest) body.ai_path = ai;
+  busy($("oneGo"), true, "STARTING…");
+  try{
+    const r = await api("/api/estimate/parity/job", body);
+    addSay($("oneOut"), r.already_running ? "That comparison is already running. Follow it under Parity running." : "✓ Started. Follow it under Parity running →");
+    pollSoon();
+  }catch(e){ addSay($("oneOut"), esc(e.message), "err"); }
+  finally{ busy($("oneGo"), false); }
+}
+function chooseOne(job, client){
+  tab("one"); $("oneJob").value = job || ""; $("oneClient").value = client || "";
+  $("oneJob").scrollIntoView({behavior:"smooth", block:"center"});
+  findOne();
+}
+$("oneFind").addEventListener("click", findOne);
+$("oneJob").addEventListener("keydown", e => { if(e.key === "Enter") findOne(); });
+
+/* ── A SET, OR A PERIOD: preview what would happen, then compare all ── */
+const WOULD = {"would compare":["✓", "will be compared"], "no manual":["○", "no manual estimate"],
+               ambiguous:["▲", "manual sheet not clear"], "no AI run":["○", "no AI estimate"]};
+function renderPreview(el, body, runBtn){
+  const rows = body.rows || [];
+  const count = k => rows.filter(r => r.outcome === k).length;
+  const go = count("would compare");
+  let h = `<div class="say">${go} will be compared · ${count("no manual")} no manual estimate · ${count("ambiguous")} manual sheet not clear`
+        + `${count("no AI run") ? " · " + count("no AI run") + " no AI estimate" : ""}${body.stats && body.stats.runs_collapsed ? " · " + body.stats.runs_collapsed + " older run(s) of the same drawing left out" : ""}</div>`;
+  if((body.not_job_numbers || []).length) h += `<div class="say err">Left out, not job numbers: ${esc(body.not_job_numbers.slice(0, 12).join(", "))}</div>`;
+  if(rows.length) h += `<div class="pvwrap"><table class="pv">` + rows.slice(0, 120).map(r => {
+    const [ico, word] = WOULD[r.outcome] || ["·", r.outcome];
+    const name = r.outcome === "ambiguous"
+      ? `<button class="link" type="button" data-choose="${esc(r.drawing)}" data-client="${esc(r.client || "")}" title="Choose the sheet under One job">${esc(r.drawing)}</button>`
+      : esc(r.drawing);
+    return `<tr><td class="d">${name}</td><td>${esc(r.client || "")}</td><td>${ico} ${esc(word)}</td><td class="w">${esc(r.outcome === "would compare" ? (r.why || "") : (r.note || ""))}</td></tr>`;
+  }).join("") + `</table></div>` + (rows.length > 120 ? `<div class="say">and ${rows.length - 120} more</div>` : "");
+  if(go) h += `<div class="say">A drawing already compared with the same manual sheet is reused, not compared again.</div>`;
+  if(count("ambiguous")) h += `<div class="say">▲ A sheet that is not clear is never guessed: press its drawing number to choose it under One job.</div>`;
+  el.innerHTML = h;
+  runBtn.disabled = !go;
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest("[data-choose]");
+  if(b) chooseOne(b.dataset.choose, b.dataset.client || "");
+});
+function setBody(preview){
+  return {text: $("setJobs").value, client: $("setClient").value.trim(), preview, read_via_excel: viaExcel()};
+}
+function periodBody(preview){
+  return {start: $("perFrom").value, end: $("perTo").value, client: $("perClient").value.trim(), preview, read_via_excel: viaExcel()};
+}
+async function preview(kind){
+  const [btn, run, out, url, body] = kind === "set"
+    ? [$("setPreview"), $("setRun"), $("setOut"), "/api/estimate/parity/jobs", setBody(true)]
+    : [$("perPreview"), $("perRun"), $("perOut"), "/api/estimate/parity/period", periodBody(true)];
+  if(kind === "period" && (!body.start || !body.end)){ say(out, "Choose both dates first.", "err"); return; }
+  busy(btn, true, "READING…"); run.disabled = true;
+  say(out, "Reading AISheets and the manual estimates. A long list or a long period takes a minute…");
+  try{ renderPreview(out, await api(url, body), run); }
+  catch(e){ say(out, esc(e.message), "err"); }
+  finally{ busy(btn, false); }
+}
+async function compareAll(kind){
+  const [run, out, url, body] = kind === "set"
+    ? [$("setRun"), $("setOut"), "/api/estimate/parity/jobs", setBody(false)]
+    : [$("perRun"), $("perOut"), "/api/estimate/parity/period", periodBody(false)];
+  busy(run, true, "STARTING…");
+  try{
+    const r = await api(url, body);
+    addSay(out, r.already_running ? "That set is already running. Follow it under Parity running." : "✓ Started. Each drawing's outcome appears under Parity running as it lands →");
+    pollSoon();
+  }catch(e){ addSay(out, esc(e.message), "err"); }
+  finally{ busy(run, false); run.disabled = true; }
+}
+$("setPreview").addEventListener("click", () => preview("set"));
+$("perPreview").addEventListener("click", () => preview("period"));
+$("setRun").addEventListener("click", () => compareAll("set"));
+$("perRun").addEventListener("click", () => compareAll("period"));
+// A preview answers for what was typed then: change it and the preview must be read again.
+["setJobs", "setClient"].forEach(id => $(id).addEventListener("input", () => { $("setRun").disabled = true; }));
+["perFrom", "perTo", "perClient"].forEach(id => $(id).addEventListener("input", () => { $("perRun").disabled = true; }));
+
+/* ── PARITY RUNNING: every comparison of the last twelve hours, wherever it was started ── */
+const KIND = {job:"ONE JOB", jobs:"A SET OF JOBS", period:"A PERIOD", "two periods":"TWO PERIODS"};
+const ROWWORD = {match:"✓", warning:"▲", fail:"✕", "quantities differ":"qty differ", "no manual":"no manual",
+                 ambiguous:"not clear", "no AI run":"no AI estimate", failed:"failed", "not compared":"not compared"};
+function taskBadge(state){
+  if(state === "running" || state === "starting") return '<span class="badge run"><span class="ico">◌</span>Running</span>';
+  return {done: badge("green", "Done"), failed: badge("red", "Failed"), choose: badge("amber", "Choose the sheet"),
+          stalled: badge("amber", "No progress")}[state] || badge("grey", state);
+}
+function renderParityTasks(tasks){
+  const running = tasks.filter(t => t.state === "running" || t.state === "starting").length;
+  $("navParity").textContent = running ? `PARITY ● ${running}` : "PARITY";
+  setText("pTasksN", tasks.length ? `${running} running · ${tasks.length - running} finished` : "");
+  if(!tasks.length){
+    $("pTasks").innerHTML = '<div class="empty">Nothing running. Start one on the left: a comparison started from the estimating page or the phone shows here too.</div>';
+    return;
+  }
+  const n = nowS();
+  $("pTasks").innerHTML = tasks.map(t => {
+    const live = t.state === "running" || t.state === "starting";
+    const frac = t.of ? Math.min(1, (t.done || 0) / t.of) : null;
+    const took = t.started_at ? fmtDur((live ? n : t.updated_at) - t.started_at) : "";
+    const when = [t.started_at ? "started " + fmtClock(t.started_at) : "", took ? (live ? took + " so far" : "took " + took) : ""].filter(Boolean).join(" · ");
+    let h = `<div class="task ${esc(t.state)}"><div class="th"><span style="min-width:0"><span class="tk">${KIND[t.kind] || esc(t.kind)}</span><span class="nm" title="${esc(t.label)}">${esc(t.label)}</span></span>${taskBadge(t.state)}</div>`;
+    if(frac != null && t.kind !== "job") h += `<div class="bar"><i style="width:${(frac * 100).toFixed(1)}%"></i></div><div class="tm">${t.done || 0} of ${t.of} drawings compared${when ? " · " + when : ""}</div>`;
+    else h += `<div class="tm">${live && t.step ? esc(t.step) + " · " : ""}${when}</div>`;
+    if(t.kind !== "job" && (t.rows || []).length) h += `<div class="rcs">${t.rows.map(r => {
+      const col = BAND[r.outcome] || "var(--grey)", w = ROWWORD[r.outcome] || r.outcome;
+      const inner = `<i style="background:${col}"></i>${esc(r.drawing)} ${esc(w)}${r.pct != null && BAND[r.outcome] ? " " + pct(r.pct) : ""}`;
+      return r.report_url ? `<a class="rc" href="${esc(r.report_url)}" target="_blank" rel="noopener" title="${esc(r.client || "")} · ${esc(r.outcome)}">${inner}</a>`
+                          : `<span class="rc" title="${esc(r.client || "")} · ${esc(r.outcome)}">${inner}</span>`;
+    }).join("")}${t.rows_total > t.rows.length ? `<span class="rc">+ ${t.rows_total - t.rows.length} earlier</span>` : ""}</div>`;
+    if(t.finished && t.stats) {
+      const st = t.stats;
+      h += `<div class="res"><span>✓ ${st.match || 0} · ▲ ${st.warning || 0} · ✕ ${st.fail || 0} · ${st.compared || 0} comparable of ${st.drawings || 0}${st.median_abs_pct != null ? " · median " + pct(st.median_abs_pct) : ""}</span>${t.summary_url ? `<a href="${esc(t.summary_url)}" target="_blank" rel="noopener">summary ↗</a>` : ""}</div>`;
+    }
+    if(t.result){
+      const r = t.result;
+      h += `<div class="res">${outcomeBadge(r.outcome)}<span>AI ${gbp(r.ai_unit)} against manual ${gbp(r.manual_unit)} · ${pct(r.signed_pct, true)}</span>${r.report_url ? `<a href="${esc(r.report_url)}" target="_blank" rel="noopener">report ↗</a>` : ""}${r.listen_url ? `<a href="${esc(r.listen_url)}" target="_blank" rel="noopener">listen</a>` : ""}</div>`;
+      if(r.quantity_note) h += `<div class="why2">${esc(r.quantity_note)}</div>`;
+    }
+    if(t.state === "choose") h += `<div class="why2">${esc(t.error)}</div><div class="res"><button class="act sm" type="button" data-choose="${esc(t.label)}">CHOOSE THE SHEET</button></div>`;
+    else if(t.state === "failed" && t.error) h += `<div class="why2">✕ ${esc(t.error)}</div>`;
+    else if(t.state === "stalled") h += `<div class="why2">▲ Nothing written for ${fmtDur(n - t.updated_at)}: the comparison may have stopped. Start it again.</div>`;
+    return h + "</div>";
+  }).join("");
+}
+
+$("pRefresh").addEventListener("click", async () => {
+  setText("pRead", "reading the parity folder again…");
+  try{ await fetch("/api/estimate/wall/parity?refresh=1", {headers:{"X-SDI-Key": API_KEY}, cache:"no-store"}); }catch(e){}
+});
+
+/* ══ HISTORY (D-744) ═══════════════════════════════════════════════════════════════════════
+   Read when the page opens and once a minute after, never on the four-second beat: it is the
+   record, not the moment. The service's runs come from its own thirty-day record; every filed
+   estimate from AISheets, read in the background; every comparison from the parity folder. */
+let hist = null, histAt = 0, histBusy = false;
+const OUTW = {done:["green", "Completed"], failed:["red", "Failed"], stopped:["amber", "Stopped"]};
+const dayLabel = t => { const d = new Date(t * 1000); return `${d.getDate()} ${d.toLocaleString("en-GB", {month:"short"})}`; };
+const minutes = s => s == null ? null : s / 60;
+async function readHistory(force){
+  if(histBusy) return;
+  histBusy = true;
+  try{
+    hist = await api(`/api/estimate/wall/history${force ? "?refresh=1" : ""}`);
+    histAt = Date.now();
+    renderHistory();
+  }catch(e){ setText("hRead", "could not read: " + e.message); }
+  finally{ histBusy = false; }
+}
+function renderHistory(){
+  if(!hist) return;
+  const sv = hist.service || {}, t = sv.totals || {}, f = hist.filed || {}, ft = f.totals || {};
+  const fAge = f.age_s == null ? "" : f.age_s < 90 ? "just now" : Math.round(f.age_s / 60) + " min ago";
+  setText("hRead", `runs read now · AISheets ${f.state === "ready" ? "read " + fAge : f.state === "reading" ? "being read…" : "not read"}`);
+  setText("hSub", `This service's runs over the last ${sv.days} days (it keeps ${hist.kept_days}) · every estimate filed in AISheets${ft.first_day ? " since " + ft.first_day : ""} · every parity comparison`);
+  const tiles = [
+    [`Estimates · ${sv.days} days`, `${t.estimates ?? 0}`, `✓ ${t.done ?? 0} · ✕ ${t.failed ?? 0} failed · ■ ${t.stopped ?? 0} stopped · ${t.extracts ?? 0} extracts`],
+    ["Success", t.success_pct == null ? "—" : `${t.success_pct}<small>%</small>`, "completed of those that finished or failed"],
+    ["Median run", fmtDur(t.median_s), `90th percentile ${fmtDur(t.p90_s)} · fastest ${fmtDur(t.fastest_s)}`],
+    ["Engine time", `${t.engine_hours ?? 0}<small>h</small>`, `over ${t.drawings ?? 0} drawings for ${t.clients ?? 0} clients`],
+    ["Open items", t.open_items_median == null ? "—" : `${t.open_items_median}`, `median per completed run · ${t.with_review ?? 0} runs with a review tally`],
+    ["Filed estimates", f.state === "ready" ? `${ft.estimates ?? 0}` : "—", f.state === "ready" ? `all time · ${ft.drawings} drawings · ${ft.clients} clients` : (f.read_error ? esc(f.read_error) : "AISheets is being read")],
+    ["Re-estimated", f.state === "ready" ? `${ft.re_estimated ?? 0}` : "—", "drawings estimated more than once, all time"],
+    ["Median unit cost", f.state === "ready" && ft.median_unit_gbp != null ? gbp(ft.median_unit_gbp) : "—", f.state === "ready" ? `of ${ft.priced} priced estimates · ${ft.not_priced} with no price read` : ""],
+  ];
+  $("hKpis").innerHTML = tiles.map(([k, v, sub]) => `<div class="panel kpi"><div class="k">${esc(k)}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join("");
+  renderHDaily(sv.daily || []); renderHTimes(sv.daily || [], t); renderHMonths(f);
+  renderHEvidence(sv.evidence || [], sv.machines || []); renderHClients(sv.clients || [], f.clients || []);
+  renderHRepeats(f); renderHRuns(); renderHFiled();
+}
+function renderHDaily(days){
+  const el = $("hDaily"), {w, h} = box(el);
+  const total = days.reduce((a, d) => a + d.done + d.failed + d.stopped + d.extracts, 0);
+  setText("hDailyN", total ? `${total} finished` : "");
+  if(!total){ emptyPlot(el, w, h, "Nothing finished in this period"); return; }
+  const L = 26, R = 8, T = 10, B = 20, pw = w - L - R, ph = h - T - B;
+  const ymax = niceMax(Math.max(1, ...days.map(d => d.done + d.failed + d.stopped + d.extracts)));
+  const y = v => T + ph - (v / ymax) * ph, slot = pw / days.length, bw = Math.max(3, Math.min(22, slot - 3));
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g><g class="axis">`;
+  g += [0, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("");
+  days.forEach((d, i) => { if(i % 5 === (days.length - 1) % 5) g += `<text x="${L + i * slot + slot / 2}" y="${T + ph + 14}" text-anchor="middle">${dayLabel(d.day_start)}</text>`; });
+  g += `</g>`;
+  days.forEach((d, i) => {
+    const bx = L + i * slot + (slot - bw) / 2; let base = T + ph;
+    const segs = [["done", "var(--s-done)"], ["failed", "var(--s-failed)"], ["stopped", "var(--grey)"], ["extracts", "var(--s-extract)"]].filter(([k]) => d[k] > 0);
+    segs.forEach(([k, col], j) => {
+      const hh = (d[k] / ymax) * ph, top = base - hh + (j > 0 ? 2 : 0), rr = j === segs.length - 1 ? Math.min(4, bw / 2, hh) : 0;
+      g += `<path fill="${col}" d="M${bx},${base} V${top + rr} ${rr ? `Q${bx},${top} ${bx + rr},${top} H${bx + bw - rr} Q${bx + bw},${top} ${bx + bw},${top + rr}` : `H${bx + bw}`} V${base} Z"/>`;
+      base -= hh;
+    });
+    const tip = `<b>${dayLabel(d.day_start)}</b><div class="m">✓ ${d.done} completed · ✕ ${d.failed} failed · ■ ${d.stopped} stopped · ${d.extracts} extracts</div>${d.median_s ? `<div class="m">median run ${fmtDur(d.median_s)}</div>` : ""}`;
+    g += `<rect data-tip="${esc(tip)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Runs finished per day">${g}</svg>`;
+}
+function renderHTimes(days, t){
+  const el = $("hTimes"), {w, h} = box(el);
+  const vals = days.map(d => minutes(d.median_s)).filter(v => v != null);
+  if(!vals.length){ emptyPlot(el, w, h, "No completed estimate in this period"); return; }
+  const L = 34, R = 70, T = 10, B = 20, pw = w - L - R, ph = h - T - B;
+  const ymax = niceMax(Math.max(...vals, minutes(t.median_s) || 0) * 1.1);
+  const y = v => T + ph - (v / ymax) * ph, slot = pw / days.length, cx = i => L + i * slot + slot / 2;
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g><g class="axis">`;
+  g += [0, .5, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("");
+  days.forEach((d, i) => { if(i % 5 === (days.length - 1) % 5) g += `<text x="${cx(i)}" y="${T + ph + 14}" text-anchor="middle">${dayLabel(d.day_start)}</text>`; });
+  g += `</g>`;
+  if(t.median_s){ g += `<line class="refline p90" x1="${L}" x2="${L + pw}" y1="${y(minutes(t.median_s))}" y2="${y(minutes(t.median_s))}"/><text class="reflabel" x="${L + pw + 6}" y="${y(minutes(t.median_s)) + 3}">median ${fmtDur(t.median_s)}</text>`; }
+  let path = "", open = false;
+  days.forEach((d, i) => { const v = minutes(d.median_s); if(v == null){ open = false; return; } path += `${open ? "L" : "M"}${cx(i).toFixed(1)},${y(v).toFixed(1)} `; open = true; });
+  g += `<path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>`;
+  days.forEach((d, i) => {
+    const v = minutes(d.median_s);
+    if(v != null) g += `<circle cx="${cx(i)}" cy="${y(v)}" r="4" fill="var(--accent)" stroke="var(--bg)" stroke-width="2"/>`;
+    g += `<rect data-tip="${esc(`<b>${dayLabel(d.day_start)}</b><div class='m'>${v != null ? "median " + fmtDur(d.median_s) + " over " + d.done + " completed" : "no completed estimate"}</div>`)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Median run time per day">${g}</svg>`;
+}
+function renderHMonths(f){
+  const el = $("hMonths"), {w, h} = box(el), ms = f.months || [];
+  const total = ms.reduce((a, m) => a + m.estimates, 0);
+  setText("hMonthsN", f.state === "ready" ? `${total} in ${ms.length} months` : "");
+  if(f.state !== "ready"){ emptyPlot(el, w, h, f.state === "reading" ? "Reading AISheets…" : (f.read_error || "AISheets could not be read")); return; }
+  if(!total){ emptyPlot(el, w, h, "No estimate filed in these months"); return; }
+  const L = 30, R = 8, T = 16, B = 20, pw = w - L - R, ph = h - T - B;
+  const ymax = niceMax(Math.max(1, ...ms.map(m => m.estimates)));
+  const y = v => T + ph - (v / ymax) * ph, slot = pw / ms.length, bw = Math.max(4, Math.min(30, slot - 4));
+  let g = `<g class="grid">${[0, .5, 1].map(f => `<line x1="${L}" x2="${L + pw}" y1="${y(ymax * f)}" y2="${y(ymax * f)}"/>`).join("")}</g><g class="axis">`;
+  g += [0, 1].map(f => `<text x="${L - 6}" y="${y(ymax * f) + 3}" text-anchor="end">${Math.round(ymax * f)}</text>`).join("");
+  const mon = k => { const [yy, mm] = k.split("-"); return ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(mm) - 1] + (mm === "01" ? " " + yy.slice(2) : ""); };
+  ms.forEach((m, i) => { if(i % 3 === (ms.length - 1) % 3) g += `<text x="${L + i * slot + slot / 2}" y="${T + ph + 14}" text-anchor="middle">${mon(m.month)}</text>`; });
+  g += `</g>`;
+  ms.forEach((m, i) => {
+    const x = L + i * slot + (slot - bw) / 2;
+    const tip = `<b>${mon(m.month)} ${m.month.slice(0, 4)}</b><div class="m">${m.estimates} estimates · ${m.drawings} drawings · ${m.clients} clients</div>`;
+    if(m.estimates) g += roundTopBar(x, y(m.estimates), bw, T + ph, "var(--s-done)", tip);
+    g += `<rect data-tip="${esc(tip)}" x="${L + i * slot}" y="${T}" width="${slot}" height="${ph}" fill="transparent"/>`;
+  });
+  const last = ms[ms.length - 1];
+  if(last && last.estimates) g += `<text class="reflabel" x="${L + (ms.length - 1) * slot + slot / 2}" y="${y(last.estimates) - 5}" text-anchor="middle" style="fill:var(--ink)">${last.estimates}</text>`;
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Estimates filed per month">${g}</svg>`;
+}
+function renderHEvidence(ev, machines){
+  const n = ev.reduce((a, e) => a + e.count, 0);
+  setText("hEvN", n ? `${n} runs` : "");
+  const top = Math.max(1, ...ev.map(e => e.count));
+  $("hEvidence").innerHTML = (ev.length ? ev.map(e => `<div class="evb"><span class="lb" title="${esc(e.label)}">${e.caution ? "▲ " : ""}${esc(e.label)}</span><span class="bar"><i style="width:${(100 * e.count / top).toFixed(1)}%"></i></span><span class="n">${e.count}</span></div>`).join("")
+      : '<div class="empty">No completed estimate in this period.</div>')
+    + (machines.length ? `<table style="margin-top:10px"><tr><th>Machine</th><th class="n">Runs</th><th class="n">Busy</th><th class="n">Failed</th></tr>${machines.map(m => `<tr><td class="d">${esc(m.machine)}</td><td class="n">${m.runs}</td><td class="n">${fmtDur(m.busy_s)}</td><td class="n">${m.failed}</td></tr>`).join("")}</table>` : "");
+}
+function renderHClients(recent, all){
+  const allBy = {}; all.forEach(c => { allBy[c.client.toLowerCase()] = c; });
+  const names = [...new Set([...recent.map(c => c.client), ...all.map(c => c.client)])];
+  setText("hClientsN", names.length ? `${names.length} clients` : "");
+  if(!names.length){ $("hClients").innerHTML = '<div class="empty">No runs yet.</div>'; return; }
+  const recBy = {}; recent.forEach(c => { recBy[c.client.toLowerCase()] = c; });
+  $("hClients").innerHTML = `<table><tr><th>Client</th><th class="n">Runs · period</th><th class="n">Failed</th><th class="n">Median</th><th class="n">Filed · all time</th><th class="n">Last</th></tr>`
+    + names.slice(0, 60).map(nm => { const r = recBy[nm.toLowerCase()] || {}, a = allBy[nm.toLowerCase()] || {};
+      return `<tr><td class="c" title="${esc(nm)}">${esc(nm)}</td><td class="n">${r.estimates ?? "—"}</td><td class="n">${r.failed ?? "—"}</td><td class="n">${fmtDur(r.median_s)}</td><td class="n">${a.estimates ?? "—"}</td><td class="t">${a.last ? esc(a.last) : r.last_at ? dayLabel(r.last_at) : ""}</td></tr>`; }).join("") + "</table>";
+}
+function priceSpark(points){
+  const vals = points.map(p => p[1]).filter(v => v != null);
+  if(vals.length < 2) return "";
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+  const pts = vals.map((v, i) => `${(4 + i * 112 / (vals.length - 1)).toFixed(1)},${(22 - (v - lo) / span * 18).toFixed(1)}`);
+  return `<svg class="rsp" viewBox="0 0 120 26"><polyline points="${pts.join(" ")}" fill="none" stroke="#F6D946" stroke-width="1.5"/>${pts.map(p => `<circle cx="${p.split(",")[0]}" cy="${p.split(",")[1]}" r="2.6" fill="#F6D946"/>`).join("")}</svg>`;
+}
+function renderHRepeats(f){
+  const rows = f.repeats || [];
+  setText("hRepeatsN", f.state === "ready" ? `${(f.totals || {}).re_estimated || 0} drawings` : "");
+  if(f.state !== "ready"){ $("hRepeats").innerHTML = `<div class="empty">${f.state === "reading" ? "Reading AISheets…" : esc(f.read_error || "AISheets could not be read.")}</div>`; return; }
+  if(!rows.length){ $("hRepeats").innerHTML = '<div class="empty">No drawing has been estimated twice yet.</div>'; return; }
+  $("hRepeats").innerHTML = `<table><tr><th>Drawing</th><th class="n">Runs</th><th>Unit cost, run by run</th><th class="n">Latest</th><th class="n">Since first</th></tr>`
+    + rows.map(r => `<tr title="${esc(r.client)} · at ${r.units} off${r.other_quantities ? " · " + r.other_quantities + " run(s) at another quantity, not compared" : ""}${r.not_priced ? " · " + r.not_priced + " run(s) with no price read" : ""}"><td class="d">${esc(r.drawing)}</td><td class="n">${r.runs}</td><td>${priceSpark(r.points)}</td><td class="n">${gbp(r.last_unit_gbp)}</td>
+      <td class="n">${r.change_gbp == null ? "—" : (r.change_gbp < 0 ? "▼ " : r.change_gbp > 0 ? "▲ " : "= ") + gbp(Math.abs(r.change_gbp)) + (r.change_pct != null ? " · " + Math.abs(r.change_pct) + "%" : "")}</td></tr>`).join("") + "</table>";
+}
+let hOpen = new Set();
+function renderHRuns(){
+  if(!hist) return;
+  const rows = (hist.service || {}).runs || [], q = $("hRunsQ").value.trim().toLowerCase(), o = $("hRunsO").value;
+  const t = $("hRunsT").value, since = sinceOf(t);
+  const keep = rows.filter(r => (!o || r.outcome === o) && (!since || (r.finished_at || 0) >= since)
+    && (!q || `${r.drawing_number} ${r.client} ${r.runner} ${r.evidence}`.toLowerCase().includes(q)));
+  setText("hRunsN", `${rows.length} runs${(hist.service || {}).runs_left_out ? " · " + hist.service.runs_left_out + " older not listed" : ""}`);
+  setText("hRunsC", q || o || t ? `${keep.length} shown` : "");
+  if(!keep.length){ $("hRuns").innerHTML = '<div class="empty">No run matches.</div>'; return; }
+  $("hRuns").innerHTML = `<table><tr><th>Finished</th><th>Drawing</th><th>Client</th><th class="n">Qty</th><th>Outcome</th><th class="n">Time</th><th class="n">Unit cost</th><th>Machine</th><th>Models</th><th>Open</th></tr>`
+    + keep.map(r => {
+      let [rag, word] = OUTW[r.outcome] || ["grey", r.outcome]; const oi = r.open_items;
+      if(qualityWord(r)){ rag = r.quality.rag; word = r.quality.label; }
+      const open = oi ? (oi.total ? `${oi.total} open` : "nothing open") : "—";
+      const when = r.finished_at ? `${dayLabel(r.finished_at)} ${fmtClock(r.finished_at)}` : "";
+      let h = `<tr class="click" data-run="${esc(r.run_id)}"><td class="t">${when}</td><td class="d">${esc(r.drawing_number || "")}${r.job_type ? ' <span style="color:var(--ink-3)">· extract</span>' : ""}</td><td class="c">${esc(r.client || "")}</td><td class="n">${r.units ?? ""}</td><td>${badge(rag, word)}</td><td class="n">${fmtDur(r.seconds)}</td><td class="n">${gbp(r.engine_price_gbp)}</td><td class="t">${esc(String(r.runner || "").replace(/-[0-9a-f]{6,}(-s\d+)?$/, ""))}</td><td class="c" title="${esc(r.evidence)}">${r.evidence_caution ? "▲ " : ""}${esc(r.evidence)}</td><td class="t">${esc(open)}</td></tr>`;
+      if(hOpen.has(r.run_id)){
+        const qp = (r.quantity_prices || []).map(x => `${x.quantity} off ${gbp(x.unit_gbp)}`).join(" · ");
+        h += `<tr class="more"><td colspan="10">Run <b>${esc(r.run_id)}</b> · queued ${r.queued_at ? fmtClock(r.queued_at) : "?"}, waited ${fmtDur(r.wait_seconds)} for a runner${r.sw_waited_s ? ", " + fmtDur(r.sw_waited_s) + " for SolidWorks" : ""} · ran ${fmtDur(r.seconds)} on ${esc(r.runner || "?")}${r.requested_by ? " · asked by " + esc(r.requested_by) : ""}<br>
+          ${qp ? "Unit cost by quantity: <b>" + esc(qp) + "</b><br>" : ""}${oi && oi.phrase ? "Open: " + esc(oi.phrase) + "<br>" : ""}${r.error ? '<span style="color:#ff8a8a">✕ ' + esc(r.error) + "</span><br>" : ""}${r.walkthrough_url ? `<a href="${esc(r.walkthrough_url)}" target="_blank" rel="noopener">walkthrough ↗</a>` : ""}</td></tr>`;
+      }
+      return h;
+    }).join("") + "</table>";
+}
+$("hRuns").addEventListener("click", e => {
+  const tr = e.target.closest && e.target.closest("tr.click");
+  if(!tr || e.target.closest("a")) return;
+  const id = tr.dataset.run; hOpen.has(id) ? hOpen.delete(id) : hOpen.add(id); renderHRuns();
+});
+$("hRunsQ").addEventListener("input", renderHRuns);
+$("hRunsO").addEventListener("change", renderHRuns);
+$("hRunsT").addEventListener("change", renderHRuns);
+function renderHFiled(){
+  if(!hist) return;
+  const f = hist.filed || {}, rows = f.recent || [], q = $("hFiledQ").value.trim().toLowerCase();
+  if(f.state !== "ready"){ $("hFiled").innerHTML = `<div class="empty">${f.state === "reading" ? "Reading AISheets…" : esc(f.read_error || "AISheets could not be read.")}</div>`; return; }
+  const t = $("hFiledT").value, from = t ? dayOf(sinceOf(t)) : "";
+  const keep = rows.filter(r => (!from || String(r.stamp || "").slice(0, 10) >= from)
+    && (!q || `${r.drawing} ${r.client}`.toLowerCase().includes(q)));
+  setText("hFiledN", `newest ${rows.length} of ${(f.totals || {}).estimates || 0}`);
+  // ONLY THE NEWEST ARE LISTED: a period reaching past the oldest listed is said to be partial.
+  const partial = from && rows.length < ((f.totals || {}).estimates || 0)
+    && String((rows[rows.length - 1] || {}).stamp || "").slice(0, 10) > from;
+  setText("hFiledC", q || t ? `${keep.length} shown${partial ? " · only the newest " + rows.length + " are listed" : ""}` : "");
+  $("hFiled").innerHTML = keep.length ? `<table><tr><th>Filed</th><th>Drawing</th><th>Client</th><th class="n">Qty</th><th class="n">Unit cost</th><th></th></tr>`
+    + keep.map(r => `<tr><td class="t">${fmtStamp(r.stamp)}</td><td class="d">${esc(r.drawing)}</td><td class="c">${esc(r.client)}</td><td class="n">${r.units}</td><td class="n">${gbp(r.unit_gbp)}</td><td>${r.book_url ? `<a href="${esc(r.book_url)}" target="_blank" rel="noopener">book ↗</a>` : ""}</td></tr>`).join("") + "</table>"
+    : '<div class="empty">No estimate matches.</div>';
+}
+$("hFiledQ").addEventListener("input", renderHFiled);
+$("hFiledT").addEventListener("change", renderHFiled);
+let hParityT = null;
+async function searchParity(){
+  const q = $("hParityQ").value.trim();
+  try{
+    const r = await api(`/api/estimate/parity/reports${q ? "?q=" + encodeURIComponent(q) : ""}`);
+    const rows = r.reports || [];
+    setText("hParityN", `${rows.length} comparison${rows.length === 1 ? "" : "s"}${rows.length >= 200 ? " (newest 200)" : ""}`);
+    setText("hParityC", q ? `matching "${q}"` : "");
+    $("hParity").innerHTML = rows.length ? `<table><tr><th>Filed</th><th>Drawing</th><th>Client</th><th>Outcome</th><th class="n">Variance</th><th class="n">AI</th><th class="n">Manual</th><th>Report</th></tr>`
+      + rows.map(x => { const hd = x.headline || {}, qq = x.quantity || {};
+        const ai = qq.ai_unit_at_manual_qty ?? hd.ai_unit_cost_gbp, mu = hd.manual_unit_cost_gbp;
+        const sp = ai != null && mu ? (ai - mu) / Math.abs(mu) * 100 : null;
+        return `<tr><td class="t">${fmtStamp(x.stamp)}</td><td class="d">${esc(x.drawing)}</td><td class="c">${esc(x.client)}</td><td>${outcomeBadge(x.outcome)}</td><td class="n">${pct(sp, true)}</td><td class="n">${gbp(ai)}</td><td class="n">${gbp(mu)}</td><td>${x.report_url ? `<a href="${esc(x.report_url)}" target="_blank" rel="noopener">report ↗</a>` : ""}${x.listen_url ? ` · <a href="${esc(x.listen_url)}" target="_blank" rel="noopener">listen</a>` : ""}</td></tr>`; }).join("") + "</table>"
+      : '<div class="empty">No comparison matches.</div>';
+  }catch(e){ $("hParity").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+$("hParityQ").addEventListener("input", () => { clearTimeout(hParityT); hParityT = setTimeout(searchParity, 400); });
+$("hRefresh").addEventListener("click", () => { setText("hRead", "reading again…"); readHistory(true); searchParity(); });
+setTimeout(() => { readHistory(false); searchParity(); }, 1200);
+setInterval(() => readHistory(false), 60000);
+
+/* ── SECTIONS: OPERATIONS AND PARITY, AND A CYCLE BETWEEN THEM FOR THE WALL SCREEN ── */
+/* THE PAGE MOVES ONLY WHEN SOMEBODY ASKS (D-744). JG, 7 Nov 2026: "The control panel scrolls
+   down by itself. let's stop that". PARITY used to be a link to #parity, so the address kept it
+   and every refresh glided down to parity on its own. The buttons now move the page without
+   touching the address, a page opened with a #section in it starts at the top, and CYCLE runs
+   only when switched on and stops the moment anybody scrolls. ?view=parity opens at parity on
+   purpose, for a wall screen. */
+function show(id, smooth){
+  const top = id === "ops" ? 0 : document.getElementById(id).getBoundingClientRect().top + scrollY - 8;
+  scrollTo({top, behavior: smooth === false ? "auto" : "smooth"});
+}
+if(location.hash){
+  history.replaceState(null, "", location.pathname + location.search);
+  scrollTo({top: 0, behavior: "auto"});
+}
+$("navOps").addEventListener("click", () => show("ops"));
+$("navParity").addEventListener("click", () => show("parity"));
+$("navHistory").addEventListener("click", () => show("history"));
+function markSection(){
+  const onHistory = $("history").getBoundingClientRect().top < innerHeight * 0.45;
+  const onParity = !onHistory && $("parity").getBoundingClientRect().top < innerHeight * 0.45;
+  $("navHistory").classList.toggle("on", onHistory);
+  $("navParity").classList.toggle("on", onParity); $("navOps").classList.toggle("on", !onParity && !onHistory);
+}
+addEventListener("scroll", markSection, {passive:true});
+let cycleT = null;
+function cycle(on, secs){
+  clearInterval(cycleT); cycleT = null;
+  $("cycleBtn").classList.toggle("on", !!on);
+  $("cycleBtn").textContent = on ? `⟳ CYCLE ON · ${secs || 45}s` : "⟳ CYCLE";
+  if(on) cycleT = setInterval(() => show($("navParity").classList.contains("on") ? "ops" : "parity"), (secs || 45) * 1000);
+}
+$("cycleBtn").addEventListener("click", () => cycle(!cycleT));
+// Somebody scrolling, swiping or paging is reading: the cycle stops for them.
+["wheel", "touchstart"].forEach(ev => addEventListener(ev, () => { if(cycleT) cycle(false); }, {passive:true}));
+document.addEventListener("keydown", e => {
+  if(typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if(cycleT && /^(ArrowUp|ArrowDown|PageUp|PageDown|Home|End| )$/.test(e.key)) cycle(false);
+  if(e.key === "p" || e.key === "P") show("parity");
+  if(e.key === "o" || e.key === "O") show("ops");
+  if(e.key === "h" || e.key === "H") show("history");
+});
+(() => {
+  const q = new URLSearchParams(location.search), c = Number(q.get("cycle"));
+  if(q.get("view") === "parity" || q.get("view") === "history") setTimeout(() => show(q.get("view"), false), 800);
+  if(c >= 10) cycle(true, c);
+})();
+markSection();
+
+tick(); setInterval(tick, 1000);
+poll();
+</script>
+</body>
+</html>

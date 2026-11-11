@@ -96,9 +96,18 @@ def _price_at(line: Dict[str, Any], qty: int) -> Optional[float]:
     if _unit in (None, ""):
         return None
     try:
-        return round(float(_unit), 5)
+        _u = float(_unit)
     except (TypeError, ValueError):
         return None
+    # A UNIT RATE WITH AN ORDER MINIMUM (D-689): the plater's minimum is spread over the
+    # order, so it governs a small order and drops away at volume.
+    _min = line.get("order_minimum_gbp")
+    if _min not in (None, "") and qty:
+        try:
+            return round(max(_u, float(_min) / float(qty)), 5)
+        except (TypeError, ValueError):
+            pass
+    return round(_u, 5)
 
 
 def lines_from_record(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -147,6 +156,12 @@ def lines_from_record(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
     except Exception:                                                  # noqa: BLE001
         _counts = {}
 
+    _minimums: Dict[str, Dict[str, Any]] = {}
+    for _pe in (((summary or {}).get("estimate_summary") or {}).get("part_estimates") or []):
+        if isinstance(_pe, dict) and isinstance(_pe.get("unit_with_order_minimum"), dict):
+            _minimums[str(_pe.get("part_number") or "").strip().upper()] = \
+                _pe["unit_with_order_minimum"]
+
     for ln in (job.get("lines") or []):
         if not isinstance(ln, dict):
             continue
@@ -170,6 +185,10 @@ def lines_from_record(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
                 _u = ln.get("engine_unit_gbp")
             if _u not in (None, ""):
                 rec["unit_gbp"] = _u
+            _m = _minimums.get(_code)
+            if _m and _u not in (None, "") and _m.get("unit_gbp") not in (None, ""):
+                rec["unit_gbp"] = _m["unit_gbp"]
+                rec["order_minimum_gbp"] = _m.get("order_minimum_gbp")
         if "order_gbp" in rec or "unit_gbp" in rec:
             out.append(rec)
     return out

@@ -749,6 +749,50 @@ def estimating_page(request: Request):
                                            "is not next to app.py"})
 
 
+# THE WALL MONITOR (D-737): a full-screen page of live runs, the fleet and the KPIs, for a
+# screen on the wall. Signed in like the estimating page; it reads /api/estimate/wall.
+_WALL_PAGE = Path(__file__).with_name("sdi-estimating-wall.html")
+
+
+@app.get("/estimating/wall")
+def estimating_wall_page(request: Request):
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    if _WALL_PAGE.exists():
+        return FileResponse(str(_WALL_PAGE), headers=_PAGE_HEADERS)
+    return JSONResponse(status_code=404,
+                        content={"detail": "sdi-estimating-wall.html is not next to app.py"})
+
+
+# THE WALKTHROUGH PAGE (D-610), behind the e-mail's button: the spoken walkthrough, its words,
+# the price at every quantity, the run's files and a box to ask about the estimate. Signed in
+# like the estimating page; the token in the URL is checked by the API the page calls, and this
+# route only serves the page.
+_WALKTHROUGH_PAGE = Path(__file__).with_name("sdi-walkthrough.html")
+
+
+@app.get("/estimating/walkthrough/{token}")
+def walkthrough_page(token: str, request: Request):
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    if _WALKTHROUGH_PAGE.exists():
+        return FileResponse(str(_WALKTHROUGH_PAGE), headers=_PAGE_HEADERS)
+    return JSONResponse(status_code=404,
+                        content={"detail": "sdi-walkthrough.html is not next to app.py"})
+
+
+# ONE VOICE SCRIPT FOR EVERY ESTIMATING PAGE (D-622): the e-mail page, the desk page and the
+# phone ask by voice and read answers aloud through the same code. Static, no job data in it.
+_VOICE_JS = Path(__file__).with_name("sdi-voice.js")
+
+
+@app.get("/estimating/sdi-voice.js")
+def estimating_voice_script():
+    if _VOICE_JS.exists():
+        return FileResponse(str(_VOICE_JS), media_type="text/javascript", headers=_PAGE_HEADERS)
+    return JSONResponse(status_code=404, content={"detail": "sdi-voice.js is not next to app.py"})
+
+
 # THE TECHNICAL DESIGN WORKFLOW MAPS. Two standalone pages from Technical Design (full and
 # compact), served from workflows/ beside this file so they travel with the portal to every
 # box it runs on. A fixed list, not a path parameter read from disk: nothing a URL names can
@@ -844,7 +888,7 @@ def knowledge_map(request: Request, x_sdi_key: str | None = Header(default=None)
 _LOGO_EXTS = (".svg", ".png", ".jpg", ".jpeg", ".webp")
 _LOGO_FALLBACK = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">'
-    '<circle cx="50" cy="50" r="50" fill="#e8a33d"/>'
+    '<circle cx="50" cy="50" r="50" fill="#F6D946"/>'
     '<text x="50" y="66" text-anchor="middle" font-family="Inter,Arial,sans-serif" '
     'font-weight="800" font-size="54" fill="#000">S</text></svg>'
 )

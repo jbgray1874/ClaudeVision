@@ -162,8 +162,11 @@ def _text_of(part: Dict[str, Any]) -> str:
     # banding_statements: the sheet's own sentences about the edges, harvested from the
     # part's pages by document_builder (harvest_banding_statements, D-513) — the path by
     # which "EDGED ALL AROUND" written on the drawing reaches this reader.
+    # edging_route_words: what the drawing read said when it routed this part through edge
+    # banding — "Part view also prints 300 EDGED" (D-733) — stamped by stamp_edging_route_words.
     for key in ("drawing_notes", "textual_notes", "notes_text", "surface_finishes",
-                "callouts", "stated_banding_rows", "banding_statements"):
+                "callouts", "stated_banding_rows", "banding_statements",
+                "edging_route_words"):
         _v = part.get(key)
         if isinstance(_v, (list, tuple)):
             bits.extend(_clean(x) for x in _v)
@@ -568,11 +571,47 @@ def banded_length_mm(part: Any) -> Dict[str, Any]:
                                  "because it was assumed"))
             return out
 
+    _how = ""
     if says_banding:
         _mm, _how = _named_edge_length(text, part)
         if _mm:
             out.update(mm=round(_mm, 1), basis="note_named_edges", evidence=_how)
             return out
+
+    # 2a ── AN "N EDGED" DIMENSION OVER THE BLANK (D-733). 12677-01-GA's panels print "300
+    #       EDGED" over a 298 mm blank and "273 EDGED" over 271 mm: the edged size is the cut
+    #       size plus the edging on both ends, so the edges across that dimension are banded,
+    #       1 mm each. A dimension that fits both sides of a square blank bands all four.
+    if says_banding:
+        _ed = _edged_dimension(text, _l, _w)
+        if _ed:
+            out.update(mm=_ed["mm"], basis="edged_dimension", evidence=_ed["evidence"],
+                       edge_thickness_mm=_ed["edge_thickness_mm"])
+            return out
+
+    # 2b ── A MITRED PIECE OF A BOX WHOSE SHEET CALLS OUT EDGING (D-677). The box's sheet
+    #       says the edges are edged and draws the joints as mitres; this piece's flat and
+    #       drawing agree on which of its edges are bevelled (bevel_reading). A mitred edge
+    #       is a joint and takes no edging, so the edging runs on the rest of its outline.
+    #       Stamped by stamp_exposed_edges_of_mitred_pieces, and said to be derived.
+    _ex = part.get("edging_on_exposed_edges")
+    if isinstance(_ex, dict):
+        try:
+            _ex_mm = float(_ex.get("mm") or 0.0)
+        except (TypeError, ValueError):
+            _ex_mm = 0.0
+        if _ex_mm > 0:
+            out.update(mm=round(_ex_mm, 1), basis="exposed_edges_beside_mitres",
+                       evidence=(f"{_ex.get('parent') or 'the box'}'s sheet calls out "
+                                 f"'{_ex.get('callout') or 'edging'}' without naming the "
+                                 f"edges; this piece's outline is "
+                                 f"{float(_ex.get('perimeter_mm') or 0):,.0f} mm, of which "
+                                 f"{float(_ex.get('bevelled_mm') or 0):,.0f} mm is mitred "
+                                 f"joint, so {_ex_mm:,.0f} mm is the edge that shows. "
+                                 f"Derived from the drawing, not stated by it: confirm"))
+            return out
+
+    if says_banding:
         if _how:
             out.update(basis="banding_stated_extent_unknown", evidence=_how)
             return out
@@ -593,3 +632,202 @@ def banded_length_mm(part: Any) -> Dict[str, Any]:
                          "banded edges. If this part is banded, the drawing does not "
                          "currently say so"))
     return out
+
+
+# ── THE EDGES OF A MITRED BOX THAT SHOW (D-677) ─────────────────────────────────────────
+#
+# 12203-65-01J's sheet calls out "1mm EDGING" on the box and draws five panels joined at 45
+# degree mitres. It names no edge, so no panel had a banded length and the edging line was
+# never made. But the sheet has said two things: the box is edged, and its joints are mitres.
+# A mitred edge meets the next panel and cannot take edging; every other edge of the panel
+# shows. Where a panel's flat and drawing agree on which edges are bevelled (bevel_reading),
+# its edging is its outline less those edges. A panel with no bevel reading gets no length,
+# and the edging line says which panels were not measured.
+
+_EDGING_OPS = ("edge_banding", "edgebanding")
+
+
+def _ops_of(part: Dict[str, Any]) -> List[str]:
+    # AND THE OPERATIONS TAKEN OFF AN ASSEMBLY BECAUSE THEY BELONG TO ITS PIECES (D-679). The
+    # route compiler moves edge_banding off 12203-65-01J into removed_operations: an assembly
+    # cannot band. That is exactly the case this reads it for: the box is edged, on its pieces.
+    ops: List[str] = []
+    for key in ("textual_operations", "inferred_operations", "operations",
+                "required_operations", "removed_operations"):
+        v = part.get(key)
+        if isinstance(v, (list, tuple)):
+            ops.extend(str(x).strip().lower() for x in v if isinstance(x, str))
+    return ops
+
+
+def _edging_callout(part: Dict[str, Any], route_quote: str = "") -> str:
+    """The words on this part's own record that say it is edged, or "" when none do. The
+    quote the reader kept for its edging operation counts ("1mm EDGING" on 12203-65-01J, in
+    operation_evidence): it is the drawing's own words, and it carries the edging's
+    thickness."""
+    _ev = part.get("operation_evidence") if isinstance(part.get("operation_evidence"), dict) else {}
+    quotes = " ".join(_clean(_ev.get(op)) for op in _EDGING_OPS if _ev.get(op))
+    # And the quote of the reader's own edging route for this part (D-679): "1mm EDGING" is
+    # the evidence of 12203-65-01J's edge_banding route, kept with the route, not the part.
+    quotes = (quotes + " " + _clean(route_quote)).strip()
+    text = (_text_of(part) + " " + quotes.upper().replace("-", " ")).strip()
+    for w in _BANDING_WORDS:
+        if w in text:
+            m = re.search(r"(?:\d+(?:\.\d+)?\s*MM\s*)?" + re.escape(w), text)
+            return (m.group(0) if m else w).strip()
+    if any(op in _EDGING_OPS for op in _ops_of(part)) or route_quote:
+        return "edge banding"
+    return ""
+
+
+_EDGED_DIM_RE = re.compile(r"(?<![\d.])(\d{2,5}(?:\.\d+)?)\s*(?:MM\s*)?EDGED\b")
+
+
+def _edged_dimension(text: str, length: Optional[float],
+                     width: Optional[float]) -> Optional[Dict[str, Any]]:
+    """The banded length an "N EDGED" dimension states, or None (D-733).
+
+    N exceeds the blank on one axis by the edging on both ends of it (0.4 to 3 mm a side), so
+    the two edges across that axis are banded: 2 x the other side. Where N fits both axes (a
+    square blank, or both dimensions stated), all four are."""
+    if not (length and width):
+        return None
+    axes = {"length": float(length), "width": float(width)}
+    hit: Dict[str, float] = {}
+    for m in _EDGED_DIM_RE.finditer(str(text or "").upper()):
+        n = float(m.group(1))
+        for name, dim in axes.items():
+            each = (n - dim) / 2.0
+            if 0.4 <= each <= 3.0 and name not in hit:
+                hit[name] = round(each, 2)
+    if not hit:
+        return None
+    t = max(hit.values())
+    if len(hit) == 2:
+        mm = 2.0 * (axes["length"] + axes["width"])
+        which = "all four edges"
+    elif "length" in hit:
+        mm = 2.0 * axes["width"]
+        which = f"the two {axes['width']:g} mm ends"
+    else:
+        mm = 2.0 * axes["length"]
+        which = f"the two {axes['length']:g} mm sides"
+    stated = ", ".join(sorted({m.group(0).strip() for m in
+                               _EDGED_DIM_RE.finditer(str(text or "").upper())}))
+    return {"mm": round(mm, 1), "edge_thickness_mm": t,
+            "evidence": (f"the drawing prints '{stated}' over a {axes['length']:g} x "
+                         f"{axes['width']:g} mm blank: the edged size is the cut size plus "
+                         f"{t:g} mm of edging on each end, so {which} are banded "
+                         f"({mm:,.0f} mm). Read from the drawing's dimension; confirm the "
+                         f"edging spec")}
+
+
+def edging_route_words(summary: Any) -> Dict[str, List[str]]:
+    """{part number: what the drawing read said} for every edging route it READ (not inferred)
+    on that part — its evidence and its notes (D-733). An inferred edging route is a guess
+    about the drawing, not the drawing's words, and is not used."""
+    out: Dict[str, List[str]] = {}
+    llm = (summary or {}).get("llm_full_extract") if isinstance(summary, dict) else None
+    for r in ((llm or {}).get("routes") or []) if isinstance(llm, dict) else []:
+        if (not isinstance(r, dict) or r.get("inferred")
+                or str(r.get("operation") or "").strip().lower() not in _EDGING_OPS):
+            continue
+        words = [_clean(r.get(k)) for k in ("evidence", "drawing_note", "quote", "notes")]
+        words = [w for w in words if w]
+        for pn in r.get("part_numbers") or []:
+            key = _clean(pn).upper()
+            if key and words:
+                out.setdefault(key, [])
+                out[key].extend(w for w in words if w not in out[key])
+    return out
+
+
+def stamp_edging_route_words(parts: Any, summary: Any) -> int:
+    """Put each part's own edging route words on it, for banded_length_mm. Returns how many."""
+    words = edging_route_words(summary)
+    n = 0
+    for p in parts or []:
+        if isinstance(p, dict):
+            w = words.get(_clean(p.get("part_number")).upper())
+            if w:
+                p["edging_route_words"] = list(w)
+                n += 1
+    return n
+
+
+def edging_route_quotes(summary: Any) -> Dict[str, str]:
+    """{part number: the drawing's words} for every edging route the whole-document read
+    made, from its own quote."""
+    out: Dict[str, str] = {}
+    llm = (summary or {}).get("llm_full_extract") if isinstance(summary, dict) else None
+    for r in ((llm or {}).get("routes") or []) if isinstance(llm, dict) else []:
+        if not isinstance(r, dict) or str(r.get("operation") or "").strip().lower() \
+                not in _EDGING_OPS:
+            continue
+        q = _clean(r.get("evidence") or r.get("drawing_note") or r.get("quote"))
+        for pn in r.get("part_numbers") or []:
+            key = _clean(pn).upper()
+            if key and q:
+                out.setdefault(key, q)
+    return out
+
+
+def stamp_exposed_edges_of_mitred_pieces(parts: Any,
+                                         quotes: Any = None) -> Dict[str, List[str]]:
+    """Stamp `edging_on_exposed_edges` on each bevelled piece of a part whose record says it is
+    edged. Returns {"measured": [codes], "not_measured": [codes]} for the pieces of edged
+    parts: a piece with no bevel reading is named, not guessed."""
+    plist = [p for p in (parts or []) if isinstance(p, dict)]
+    by_pn = {str(p.get("part_number") or "").strip().upper(): p
+             for p in plist if p.get("part_number")}
+    measured: List[str] = []
+    not_measured: List[str] = []
+    for piece in plist:
+        parent_pn = str(piece.get("dxf_minted_piece_of") or piece.get("dxf_flat_of_parent")
+                        or "").strip().upper()
+        parent = by_pn.get(parent_pn)
+        if not parent or parent is piece:
+            continue
+        callout = _edging_callout(parent, (quotes or {}).get(parent_pn, "")
+                                  if isinstance(quotes, dict) else "")
+        if not callout:
+            continue
+        pn = str(piece.get("part_number") or "").strip().upper()
+        be = piece.get("bevelled_edges") if isinstance(piece.get("bevelled_edges"), dict) else {}
+        try:
+            perim = float(be.get("outline_perimeter_mm") or 0.0)
+            bev = float(be.get("length_mm") or 0.0)
+        except (TypeError, ValueError):
+            perim = bev = 0.0
+        if perim <= 0 or bev <= 0:
+            if pn and pn not in not_measured:
+                not_measured.append(pn)
+            continue
+        shows = max(0.0, perim - bev)
+        if shows < 1.0:
+            continue                       # every edge is a joint: nothing on it shows
+        piece["edging_on_exposed_edges"] = {
+            "mm": round(shows, 1), "perimeter_mm": round(perim, 1),
+            "bevelled_mm": round(bev, 1), "parent": parent_pn, "callout": callout,
+            "basis": "exposed_edges_beside_mitres"}
+        if pn and pn not in measured:
+            measured.append(pn)
+        # THE BOX'S OWN EDGING TIME FOLLOWS ITS PIECES' METRES: the labour is kept on the box
+        # (D-669), so the box carries the total its pieces show, per box.
+        try:
+            per = float(piece.get("quantity") or 1)
+        except (TypeError, ValueError):
+            per = 1.0
+        tot = parent.setdefault("edging_on_its_pieces", {"mm": 0.0, "pieces": []})
+        if pn not in tot["pieces"]:
+            tot["pieces"].append(pn)
+            tot["mm"] = round(float(tot.get("mm") or 0.0) + shows * per, 1)
+    for pn in not_measured:
+        parent_pn = str((by_pn.get(pn) or {}).get("dxf_minted_piece_of")
+                        or (by_pn.get(pn) or {}).get("dxf_flat_of_parent") or "").upper()
+        tot = (by_pn.get(parent_pn) or {}).get("edging_on_its_pieces")
+        if isinstance(tot, dict):
+            tot.setdefault("not_measured", [])
+            if pn not in tot["not_measured"]:
+                tot["not_measured"].append(pn)
+    return {"measured": measured, "not_measured": not_measured}

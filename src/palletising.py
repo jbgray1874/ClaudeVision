@@ -158,13 +158,19 @@ def _plan_assembled(unit: Dict[str, Any], qty: int, lim: Dict[str, Any]) -> Dict
     }
 
 
-def plan_shipment(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]:
+def plan_shipment(parts: List[Dict[str, Any]], order_qty: Any,
+                  unit_weight_floor_kg: Any = None) -> Dict[str, Any]:
     """The order as cartons and pallets, with the measured figures and the one assumption apart.
 
     Reads only what the engine already has: each part's blank, gauge, material density and
     per-assembly quantity, times the order quantity. A part with no blank contributes nothing
     and is counted as skipped, so a plan resting on two parts out of nine can be seen for what
     it is — the same discipline as describe_order.
+
+    `unit_weight_floor_kg` is the unit weight the pack itself states (SCRUM-178), handed
+    down by describe_order when parts went unweighed: the carton and pallet counts are then
+    by the stated weight rather than the partial sum, and the re-plan at every quantity
+    break carries the same floor instead of quietly dropping back to the lower bound.
     """
     lim = _limits()
     try:
@@ -240,6 +246,14 @@ def plan_shipment(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
             "flags": ["shipment_not_countable"],
         }
 
+    # THE PACK'S STATED WEIGHT AS A FLOOR (SCRUM-178): describe_order hands it down when the
+    # measured blanks fall short because parts went unweighed, so a 33 kg podium is not
+    # boxed and hauled as the 1.84 kg its two weighable parts came to.
+    _floor = _num(unit_weight_floor_kg)
+    floored = bool(_floor and float(_floor) * qty > weight_kg)
+    if floored:
+        weight_kg = float(_floor) * qty
+
     pf = float(lim["packing_factor"]) or 0.8
     packed_vol_m3 = solid_vol_m3 / pf
 
@@ -249,6 +263,12 @@ def plan_shipment(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
         f"['packing_factor'] to tune every job."
     ]
     flags: List[str] = []
+    if floored:
+        assumptions.append(
+            f"The pack states {float(_floor):g} kg a unit; the measured blanks give less "
+            f"because parts were not weighed, so the stated weight sets the carton and "
+            f"pallet counts.")
+        flags.append("stated_weight_floor")
 
     # ── cartons ──────────────────────────────────────────────────────────────────────
     ci = lim["carton_internal_mm"]

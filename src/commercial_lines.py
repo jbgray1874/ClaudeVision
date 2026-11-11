@@ -29,7 +29,7 @@ estimator changing the quantity can see what the number was built from.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import config
 
@@ -106,6 +106,12 @@ def _density_for(material: Any) -> float:
     return _DEFAULT_DENSITY_KG_M3
 
 
+def _identity_key(value: Any) -> str:
+    """One drawing number however it is spaced or joined (D-721): "11908-22 GA" on the
+    sheet and "11908-22-GA" as the declared product are one product."""
+    return _re.sub(r"[\s\-_./]+", "", str(value or "")).upper()
+
+
 def _product_root(parts: Any) -> Optional[str]:
     """The one record that owns members and is owned by nothing — the product — or None where
     the parts name no such record or more than one (D-562)."""
@@ -137,26 +143,50 @@ def product_envelope(summary: Any, parts: Any = None) -> Optional[Dict[str, Any]
     "1644mm" on 401918-01-GA, and a box sized to that is a box for the person."""
     s = summary if isinstance(summary, dict) else {}
     sw = s.get("solidworks_native") if isinstance(s.get("solidworks_native"), dict) else {}
+    # THE DECLARED PRODUCT'S OWN MODEL FIRST (D-735). 12002-02-GA's carton was sized 447 x 386
+    # x 10 mm, the arm sub-assembly's box: the "top assembly" is the one whose BOM the job
+    # takes, and here it was the arm. The product's own model record answers the product's
+    # size; a top assembly the model shows is another assembly's child never does.
+    _declared_key = _identity_key(s.get("declared_product"))
+    _abb = sw.get("assembly_bbox_mm") if isinstance(sw.get("assembly_bbox_mm"), dict) else {}
+    if _declared_key and _abb:
+        try:
+            from source_connectors.solidworks import model_assembly_stem as _mstem
+        except Exception:                                            # noqa: BLE001
+            def _mstem(_n: Any) -> str:                              # type: ignore[misc]
+                return ""
+        for _title, _box in sorted(_abb.items()):
+            if _declared_key not in {_identity_key(_title), _identity_key(_mstem(_title))}:
+                continue
+            _bb = [v for v in (_num(x) for x in (_box or [])) if v]
+            if len(_bb) == 3:
+                d = sorted(_bb, reverse=True)
+                return {"length": d[0], "width": d[1], "height": d[2],
+                        "source": f"the SolidWorks model of {_title}: its bounding box",
+                        "of": str(_title)}
+    _top = str(sw.get("top_assembly") or "")
+    _subs = {_identity_key(x) for x in (sw.get("sub_assemblies") or [])}
+    _top_is_a_child = bool(_top) and _identity_key(_top) in _subs
     bb = [v for v in (_num(x) for x in (sw.get("top_assembly_bbox_mm") or [])) if v]
-    if len(bb) == 3:
+    if len(bb) == 3 and not _top_is_a_child:
         d = sorted(bb, reverse=True)
         return {"length": d[0], "width": d[1], "height": d[2],
                 "source": "the SolidWorks top assembly's bounding box",
                 "of": str(sw.get("top_assembly") or s.get("declared_product") or "")}
-    declared = _re.sub(r"\s+", "", str(s.get("declared_product") or "")).upper()
+    declared = _declared_key
     if not declared:
         # NO DECLARED PRODUCT, SO ONLY THE ONE ROOT WILL DO (D-562). The first version took
         # the first record carrying an overall size, which on a pack read without a product
         # name could be a component's — a box sized to a bracket. The product is the record
         # that owns members and is owned by nothing; with two such roots, or none, nothing
         # here can say which is the product, and the packer is left to the parts.
-        declared = _product_root(parts) or ""
+        declared = _identity_key(_product_root(parts) or "")
         if not declared:
             return None
     for p in parts or ():
         if not isinstance(p, dict):
             continue
-        pn = _re.sub(r"\s+", "", str(p.get("part_number") or "")).upper()
+        pn = _identity_key(p.get("part_number"))
         if declared and pn != declared:
             continue
         env = p.get("product_envelope_mm") if isinstance(p.get("product_envelope_mm"), dict) else {}
@@ -176,12 +206,34 @@ def product_envelope(summary: Any, parts: Any = None) -> Optional[Dict[str, Any]
     return None
 
 
+def product_stated_weight(summary: Any) -> Optional[Dict[str, Any]]:
+    """The unit weight the pack itself states, {kg, where}, or None (SCRUM-178).
+
+    The GA's title block is the one place the whole product's weight is written down, and
+    until now nothing on the shipping side read it: 12678-01-GA states 33.07 kg, two parts
+    of thirteen could be weighed for 1.84 kg, and the courier was asked for a 2 kg parcel.
+    Read next to product_envelope, passed the same way, used only as a floor."""
+    try:
+        from size_reading import stated_product_weight_kg
+        return stated_product_weight_kg(summary)
+    except Exception:                                                # noqa: BLE001
+        return None
+
+
+# Blank sources that are a guess, not a reading of the part (D-721).
+_GUESSED_BLANK_SOURCES = frozenset({"document_text_largest_numbers"})
+
+
 def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
-                   envelope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                   envelope: Optional[Dict[str, Any]] = None,
+                   stated_weight: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The shipment, in the terms a haulier or a packer would ask for.
 
     `envelope` is the assembled product's overall size (product_envelope), where the run
     established one: with it, the product ships assembled by the packing policy (D-551).
+    `stated_weight` is the unit weight the pack itself states (product_stated_weight):
+    where parts went unweighed and the stated figure is heavier than the measured sum,
+    the stated figure is the shipment's weight (SCRUM-178).
 
     Built from what the engine already measured, not from anything new: every part's blank,
     its gauge, its material's density, and how many of the assembly are being made. A part
@@ -280,6 +332,26 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
             continue
         L, W = _num(part.get("blank_length_mm")), _num(part.get("blank_width_mm"))
         _blank_from = "the flat blank on the part's record"
+        # A GUESSED BLANK GIVES WAY TO A MEASURED OR COSTED ONE (D-721). The record's blank
+        # can be the last-resort reading, the largest numbers in the document text; on
+        # 11908-22 that was 400 x 350 for all five panels, 4.73 kg against the GA's 1.419,
+        # while the workbook costed each panel at its DXF size. The packer is told the same
+        # blank the material was charged on.
+        if str(part.get("blank_length_mm_source") or "") in _GUESSED_BLANK_SOURCES:
+            _me0 = (part.get("material_estimate")
+                    if isinstance(part.get("material_estimate"), dict) else {})
+            _better = (_num(_me0.get("blank_length_mm")), _num(_me0.get("blank_width_mm")))
+            _from0 = "the blank its material was costed on"
+            if not all(_better):
+                try:
+                    from document_builder import flat_blank_mm as _fb0    # noqa: PLC0415
+                    _better = tuple(_num(v) for v in _fb0(part))
+                    _from0 = "the flat blank measured from the drawing's geometry"
+                except Exception:                                    # noqa: BLE001
+                    _better = (None, None)
+            if len(_better) == 2 and all(_better) and (_better[0], _better[1]) != (L, W):
+                L, W = _better
+                _blank_from = _from0
         if not (L and W):
             _blank_from = "the flat blank measured from the drawing's geometry"
             # THROUGH THE SHARED RESOLVER. A DXF-measured flat is held under the geometry
@@ -345,10 +417,42 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
             "per_assembly": per, "kg_each": round(_line_kg, 3),
             "kg_in_order": round(_line_kg * per * qty, 3),
         })
+    # THE PACK'S OWN WEIGHT BEATS A PARTIAL SUM (SCRUM-178). On 12678-01-GA two parts of
+    # thirteen could be weighed — 1.84 kg — while the GA's title block states 33.07 kg, and
+    # the courier was asked to price a 2 kg parcel for a 33 kg podium. A measured total
+    # that is missing named parts is a lower bound, not the unit's weight: where the pack
+    # states a heavier figure and parts went unweighed, the stated figure is the shipment's
+    # weight, and both figures are kept so the covering note can show the gap. A stated
+    # weight never lightens a fully measured order, and a fully weighed order keeps its
+    # measured sum whatever the pack says — the gap then belongs to the weigh, not here.
+    measured_kg = weight_kg
+    _sw = stated_weight if isinstance(stated_weight, dict) else {}
+    _sw_kg = _num(_sw.get("kg"))
+    # AND ONLY A WEIGHT THAT BELONGS TO THE PRODUCT DRIVES (second 12678 review): a
+    # figure read off a sheet that could not be matched to the declared product is an
+    # unverified observation. It never takes charge on the strength of a warning
+    # string; it is recorded as an open question and the measured figure stands.
+    _sw_ok = _sw.get("verified", True) is not False
+    _stated_in_charge = bool(_sw_kg and skipped and _sw_kg > measured_kg and _sw_ok)
+    if _stated_in_charge:
+        weight_kg = float(_sw_kg)
     out = {
         "schema": SCHEMA, "order_quantity": qty,
         "unit_weight_kg": round(weight_kg, 2) if weight_kg else None,
         "order_weight_kg": round(weight_kg * qty, 2) if weight_kg else None,
+        "stated_unit_weight_kg": round(float(_sw_kg), 2) if _stated_in_charge else None,
+        "measured_unit_weight_kg": round(measured_kg, 2) if _stated_in_charge else None,
+        "weight_basis": (
+            f"the pack states {float(_sw_kg):g} kg a unit "
+            f"({_sw.get('where') or 'its own sheet'}); the measured blanks give "
+            f"{round(measured_kg, 2):g} kg with {skipped} part(s) unweighed, so the stated "
+            f"weight drives packaging and delivery") if _stated_in_charge else None,
+        "stated_weight_unverified": (
+            f"a stated weight of {float(_sw_kg):g} kg was found "
+            f"({_sw.get('where') or 'a sheet of the pack'}) but could not be matched to "
+            f"the declared product, so it does NOT drive the shipment; the measured "
+            f"figure stands and the weight stays an open question"
+            ) if (_sw_kg and not _sw_ok) else None,
         "largest_part_mm": [longest, widest] if longest and widest else None,
         "parts_measured": counted, "parts_without_a_blank": skipped,
         # Counted separately from an ordinary miss: a part left out because its recorded
@@ -381,7 +485,9 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any,
         # THE SAME PARTS THE WEIGHT WAS BUILT FROM. Handing this the unfiltered list left the
         # carton and pallet count resting on the assembly envelope the weight had just been
         # cleared of — half a fix, and the half nobody reads.
-        out["shipment"] = palletising.plan_shipment(shippable, order_qty)
+        out["shipment"] = palletising.plan_shipment(
+            shippable, order_qty,
+            unit_weight_floor_kg=float(_sw_kg) if _stated_in_charge else None)
         out["shippable_parts"] = shippable          # for a re-plan at each break (D-449)
     except Exception:                                                # noqa: BLE001
         out["shipment"] = None
@@ -956,7 +1062,9 @@ def _box_cartons_from_shipment(order: Dict[str, Any], qty: int, box_costing: Any
         if nq is None and ship_parts:
             try:
                 import palletising
-                nq = _num((palletising.plan_shipment(ship_parts, q) or {})
+                nq = _num((palletising.plan_shipment(
+                    ship_parts, q,
+                    unit_weight_floor_kg=_num(order.get("stated_unit_weight_kg"))) or {})
                           .get("carton_count"))
             except Exception:                                        # noqa: BLE001
                 nq = None
@@ -1098,7 +1206,10 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
                         if unit == "kg":
                             return weight_each * q if weight_each else None
                         plan = (order.get("shipment") if q == qty else
-                                (_pal.plan_shipment(shippable, q) if shippable else None)) or {}
+                                (_pal.plan_shipment(
+                                    shippable, q,
+                                    unit_weight_floor_kg=_num(order.get("stated_unit_weight_kg")))
+                                 if shippable else None)) or {}
                         n = _num(plan.get("pallet_count" if unit == "pallet" else "carton_count"))
                         return float(n) if n else None
 
@@ -1335,7 +1446,9 @@ def _counted_shipment_price(code: str, order: Dict[str, Any]) -> Optional[Dict[s
         else:
             try:
                 import palletising
-                p = palletising.plan_shipment(order.get("shippable_parts") or [], q) or {}
+                p = palletising.plan_shipment(
+                    order.get("shippable_parts") or [], q,
+                    unit_weight_floor_kg=_num(order.get("stated_unit_weight_kg"))) or {}
             except Exception:                                        # noqa: BLE001
                 return None
         n = _num(p.get("pallet_count" if unit == "pallet" else "carton_count"))
@@ -1640,13 +1753,34 @@ def shipment_shape(order: Dict[str, Any]) -> str:
     return "pallet"
 
 
+def packed_size_phrase(order: Mapping[str, Any]) -> str:
+    """The size the packing was worked from, in words, or "" (D-717).
+
+    A UNIT THAT SHIPS ASSEMBLED IS PACKED AT ITS OWN SIZE, NOT ITS FLAT. 12676-01-GA2's stand
+    is one folded sheet: the carton was sized around the assembled unit, 304.2 x 254 x
+    240.5 mm, while the summary said "largest panel 665 x 254mm", the flat blank before
+    folding, so the packaging line read as if a flat sheet were boxed. The flat is named only
+    when the order is packed by its parts."""
+    au = order.get("assembled_unit") if isinstance(order, Mapping) else None
+    dims = [_num(d) for d in ((au or {}).get("envelope_mm") or [])]
+    if len(dims) == 3 and all(dims):
+        return f"packed as the assembled unit, {' x '.join(f'{round(d, 1):g}' for d in dims)}mm"
+    size = order.get("largest_part_mm") if isinstance(order, Mapping) else None
+    if size and len(size) == 2 and _num(size[0]) and _num(size[1]):
+        return f"largest panel {_num(size[0]):.0f} x {_num(size[1]):.0f}mm"
+    return ""
+
+
 def packaging_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = None,
-                   envelope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    order = describe_order(parts, order_qty, envelope=envelope)
+                   envelope: Optional[Dict[str, Any]] = None,
+                   stated_weight: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    order = describe_order(parts, order_qty, envelope=envelope, stated_weight=stated_weight)
     order["customer"] = str(customer or "").strip()
-    size = order.get("largest_part_mm")
-    where = (f"largest panel {size[0]:.0f} x {size[1]:.0f}mm, " if size else "")
-    weight = (f"about {order['order_weight_kg']:.0f} kg total, "
+    where = packed_size_phrase(order)
+    where = f"{where}, " if where else ""
+    weight = (f"about {order['order_weight_kg']:.0f} kg total"
+              + (" (the pack's stated weight)" if order.get("stated_unit_weight_kg") else "")
+              + ", "
               if order.get("order_weight_kg") else "")
     count = _count_phrase(order)
     count = (f"{count}, " if count else "")
@@ -1661,11 +1795,13 @@ def packaging_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = 
 
 
 def delivery_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = None,
-                  envelope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    order = describe_order(parts, order_qty, envelope=envelope)
+                  envelope: Optional[Dict[str, Any]] = None,
+                  stated_weight: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    order = describe_order(parts, order_qty, envelope=envelope, stated_weight=stated_weight)
     order["customer"] = str(customer or "").strip()
-    weight = (f"about {order['order_weight_kg']:.0f} kg" if order.get("order_weight_kg")
-              else "a part pallet")
+    weight = ((f"about {order['order_weight_kg']:.0f} kg"
+               + (" (the pack's stated weight)" if order.get("stated_unit_weight_kg") else ""))
+              if order.get("order_weight_kg") else "a part pallet")
     ship = order.get("shipment") or {}
     pallets = ship.get("pallet_count")
     on = (f" on {pallets} pallet(s)" if pallets else "")

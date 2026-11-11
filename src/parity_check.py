@@ -166,6 +166,15 @@ def _open_rows(path: Path) -> List[List[Any]]:
         book.release_resources()
 
 
+def _a1(r0: int, c0: int) -> str:
+    """A 0-based grid position as the cell a person finds in Excel ("M45")."""
+    n, letters = c0 + 1, ""
+    while n:
+        n, rem = divmod(n - 1, 26)
+        letters = chr(65 + rem) + letters
+    return f"{letters}{r0 + 1}"
+
+
 def _label(row: List[Any]) -> str:
     return " ".join(str(v or "") for v in row[:8]).strip().lower()
 
@@ -193,6 +202,8 @@ def read_house_workbook(path: Path) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "path": str(path), "headline": {}, "totals": {k: None for k, _ in TOTAL_LABELS},
         "blocks": {b: [] for b in BLOCK_ORDER}, "labour_rows": [], "problems": [],
+        # WHERE EACH FIGURE WAS READ, so a comparison can point at the cell (SCRUM-157).
+        "total_cells": {},
     }
 
     # Where each block starts, and where the labour table starts.
@@ -213,6 +224,7 @@ def read_house_workbook(path: Path) -> Dict[str, Any]:
                     v = _f(row[c])
                     if v is not None:
                         out["totals"][field] = round(v, 2)
+                        out["total_cells"][field] = _a1(r, c)
                         break
         if lab.startswith("quantity"):
             out["headline"].setdefault("quantity", _f(row[3]))
@@ -244,7 +256,8 @@ def read_house_workbook(path: Path) -> Dict[str, Any]:
                 continue
             line = {"block": name, "description": desc,
                     "code": _key(row[cols["part_code"]]) if "part_code" in cols
-                            and len(row) > cols["part_code"] else _lead_code(desc)}
+                            and len(row) > cols["part_code"] else _lead_code(desc),
+                    "cell": _a1(rr, cols["total_value_gbp"])}
             for field, c in cols.items():
                 if field in ("description", "part_code") or len(row) <= c:
                     continue
@@ -277,11 +290,12 @@ def read_house_workbook(path: Path) -> Dict[str, Any]:
                     continue
                 if _is_total_row(op) or op.lower().startswith("operation"):
                     continue
-                line = {"operation": op}
+                line = {"operation": op, "cell": _a1(rr, cols["total_value_gbp"])}
                 for field, c in cols.items():
                     if len(row) > c:
                         line[field] = row[c] if field in ("operation", "description",
-                                                          "department") else _f(row[c])
+                                                          "department", "part_numbers") \
+                            else _f(row[c])
                 out["labour_rows"].append(line)
         else:
             out["problems"].append("labour: could not find a value column from its header")

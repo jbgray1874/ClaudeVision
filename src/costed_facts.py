@@ -160,6 +160,9 @@ DXF_REASON_SENTENCES: Dict[str, str] = {
         "say which"),
     "numbered_piece_or_separate_item_unresolved": (
         "could be a numbered piece or a separate item — not attached; say which"),
+    "unnumbered_view_beside_numbered_pieces": (
+        "a drawing of the whole part beside its numbered piece flats — kept as evidence on "
+        "the part, not cut geometry, and its circles not read as holes"),
     "distinct_blanks_no_children_in_scope_pick_best": (
         "a different view of a part whose flat was costed from another export — not costed "
         "as a second blank"),
@@ -1377,6 +1380,57 @@ def is_timber_board(mat: Any) -> bool:
     return any(k in m for k in TIMBER_BOARD_TOKENS)
 
 
+def _is_plastic_material(mat: Any) -> bool:
+    m = f" {str(mat or '').upper()} "
+    return any(k in m for k in _PLASTIC_SHEET_TOKENS)
+
+
+def _bond_family(source: Any, target: Any) -> str:
+    """What a bonded assembly is made of, for the words its joint is asked in (D-708):
+    "plastic", "board" (timber and wood-based board), or "" when its members are neither, are
+    both, or say nothing. Read from the assembly and every part under it."""
+    if not isinstance(source, Mapping):
+        return ""
+    recs: Dict[str, Mapping[str, Any]] = {}
+    kids: Dict[str, Set[str]] = {}
+    for p in list(job_parts(source)) + list(
+            (source.get("manufacturing_writeup") or {}).get("parts") or []):
+        if not isinstance(p, Mapping) or not p.get("part_number"):
+            continue
+        pn = str(p["part_number"]).upper()
+        recs.setdefault(pn, p)
+        for c in p.get("assembly_children") or []:
+            kids.setdefault(pn, set()).add(str(c).upper())
+        for a in p.get("parent_assemblies") or []:
+            kids.setdefault(str(a).upper(), set()).add(pn)
+    shadow = ((source.get("estimate_summary") or {}).get("canonical_route_shadow") or {}) \
+        if isinstance(source.get("estimate_summary"), Mapping) else {}
+    for n in shadow.get("nodes") or []:
+        if not isinstance(n, Mapping) or not n.get("part_number"):
+            continue
+        for c in n.get("children") or []:
+            cpn = c.get("part_number") if isinstance(c, Mapping) else c
+            if cpn:
+                kids.setdefault(str(n["part_number"]).upper(), set()).add(str(cpn).upper())
+    seen: Set[str] = set()
+    todo = [str(target or "").upper()]
+    while todo and len(seen) < 500:
+        pn = todo.pop()
+        if pn in seen:
+            continue
+        seen.add(pn)
+        todo.extend(kids.get(pn) or ())
+    words: List[str] = []
+    for pn in seen:
+        r = recs.get(pn) or {}
+        words += [str(r.get(k) or "") for k in ("normalized_material", "material_stated")]
+        words += [str(m) for m in (r.get("materials") or [])]
+    words = [w for w in words if w.strip()]
+    plastic = any(_is_plastic_material(w) for w in words)
+    board = any(is_timber_board(w) for w in words)
+    return "plastic" if plastic and not board else "board" if board and not plastic else ""
+
+
 def is_other_sheet_material(material) -> bool:
     """True when this material is costed in the workbook's Other Sheet Material block.
 
@@ -2044,6 +2098,14 @@ def thickness_conflict(part: Mapping[str, Any],
         if _costed:
             kept, kept_src = _costed, "production_substitution"
         rivals = [(v, s) for v, s in rivals if abs(v - kept) > 0.05]
+    # A FACED BOARD'S FINISHED THICKNESS IS NOT A RIVAL TO ITS CORE (D-722): 9 mm MDF with a
+    # laminate each side is an 11 mm board, and a reader that measured the 11 has not
+    # disagreed with the one that read the 9.
+    try:
+        from construction_note import finished_over_core as _fin
+        rivals = [(v, s) for v, s in rivals if not _fin(dict(part), kept, v)]
+    except Exception:                                            # noqa: BLE001
+        pass
     if not rivals:
         return None
     # "NEITHER OUTRANKS A PERSON" — so when a person HAS ruled, the question is answered.
@@ -2236,6 +2298,23 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
                     "label": (label + " at a market sheet price"
                               + (f" of £{_sheet:,.2f}" if _sheet else "")
                               + " — an AI lookup, not a supplier price; replace before quoting")}
+        # A CATALOGUE PRICE FOR ANOTHER BOARD IS NOT FIRM FOR THE SPECIFIED ONE (D-693).
+        # 12693-01-04J is specified MRMDF in EGGER: U999 ST2 and was nested on a plain-MDF row
+        # of SDI Live's, called firm because the row is real. It is real money for a board
+        # the drawing did not specify: provisional, with what is missing said by name.
+        _not_in = [str(x) for x in (me.get("specification_not_in_price") or []) if x]
+        if _not_in:
+            _sheet = _num(me.get("sheet_price_gbp"))
+            _what = (", ".join(_not_in[:-1]) + " and " + _not_in[-1]) if len(_not_in) > 1 \
+                else _not_in[0]
+            return {"class": "board_specification_gap", "firmness": INDICATIVE_HOUSE,
+                    "owner": "estimator",
+                    "label": (label + " at "
+                              + str(me.get("specification_figure_source") or "a family rate")
+                              + (f", £{_sheet:,.2f} a sheet" if _sheet else "")
+                              + f" — NOT the specified {me.get('specified_board') or 'board'}: "
+                              + _what + (" is" if len(_not_in) == 1 else " are")
+                              + " not in this figure; purchasing to price the specified board")}
         return {"class": f"nest_{block}", "firmness": FIRM, "owner": None, "label": label}
     if kind == "assembly" and not money:
         return {"class": "nil_by_design", "firmness": NIL, "owner": "nobody",
@@ -2465,6 +2544,22 @@ def _operations_from_decisions(source: Any, part_number: Any) -> List[str]:
     return out
 
 
+def operation_charge_counts(source: Any, part_number: Any) -> Dict[str, int]:
+    """{operation: how many priced workbook rows charge it to this part} (SCRUM-134).
+
+    `operations` names each operation once, by design, so it cannot show the same operation
+    charged twice: laser cutting on two rows for one part reads exactly like laser cutting on
+    one. This counts the rows, so a duplicate charge is visible on the record and the replay
+    gate can catch it. A count above one is not always wrong (two folding set-ups on two tools
+    can be right), which is why the gate takes reviewed exceptions rather than forbidding it.
+    """
+    counts: Dict[str, int] = {}
+    for r in priced_rows_for_part(source, part_number):
+        for op in dict.fromkeys(_row_engine_ops(r)):
+            counts[op] = counts.get(op, 0) + 1
+    return counts
+
+
 def route_operations_for_part(source: Any, part_number: Any) -> List[str]:
     """The operations the canonical route REQUIRES of this part, read from the route itself.
 
@@ -2634,6 +2729,15 @@ def _hierarchy_children(source: Any) -> Dict[str, Set[str]]:
     return children
 
 
+# The compiler's review marks for a weld charged on an assembly and on its member where the
+# drawings themselves tell the two welds apart: both sheets draw their own, or the member is a
+# weldment in its own right whose sheet draws the welds that make it (D-685).
+_SETTLED_BY_THE_DRAWINGS = frozenset({
+    "joining_on_assembly_and_member_both_drawn",
+    "joining_member_is_a_weldment_of_its_own",
+})
+
+
 def parent_child_overlaps(source: Any) -> Optional[List[Dict[str, Any]]]:
     """Every operation charged on an assembly and AGAIN on something it contains, as EVENTS.
 
@@ -2652,7 +2756,9 @@ def parent_child_overlaps(source: Any) -> Optional[List[Dict[str, Any]]]:
         202-and-06M and 201-and-202, never 201-and-06M on top of them.
       * SETTLED BY THE DRAWINGS. Where the compiler read an arc weld drawn on the assembly's
         own sheet and on the member's (field_provenance review
-        'joining_on_assembly_and_member_both_drawn'), each charge is its own drawn weld.
+        'joining_on_assembly_and_member_both_drawn'), each charge is its own drawn weld. So
+        where the member is a weldment in its own right whose own sheet draws its welds
+        ('joining_member_is_a_weldment_of_its_own', D-685): its line is its own joints.
       * THE DECISION IDS ARE THE PAIR'S, not the operation's first six.
     A legacy decision with no target (older extracts, test shapes) keeps the old reading:
     each participant is its own charge.
@@ -2714,8 +2820,7 @@ def parent_child_overlaps(source: Any) -> Optional[List[Dict[str, Any]]]:
         _review = str(((d.get("field_provenance") or {}) if isinstance(
             d.get("field_provenance"), Mapping) else {}).get("review") or "")
         events.setdefault(op, []).append(
-            (_id, holders, members, bool(tgt),
-             _review == "joining_on_assembly_and_member_both_drawn"))
+            (_id, holders, members, bool(tgt), _review in _SETTLED_BY_THE_DRAWINGS))
     asked: Dict[Tuple[str, str], str] = {}
     for iss in (shadow.get("issues") or []):
         if not isinstance(iss, Mapping):
@@ -2930,11 +3035,16 @@ def costed_job(source: Any) -> Dict[str, Any]:
             # the route records tubebend on 7332-01-002 while `operations` is empty, because
             # those rows carry no decision ids.
             "route_operations": route_operations_for_part(source, pn),
+            # How many priced rows charge each operation to this part, so the same operation
+            # charged twice is visible on the record (SCRUM-134).
+            "operation_charges": operation_charge_counts(source, pn),
             "length": length,
             "section_profile": profile,
             "review_flags": flags,
             "plating_members": list(part.get("_plating_members_costed") or []),
             "plating_excluded": list(part.get("_plating_members_deferred") or []),
+            # Plated members whose mass was not resolved (D-686): in the tank, not in the kilos.
+            "plating_unmassed": list(part.get("_plating_members_unmassed") or []),
         })
 
     # ── EVERY SHEET ROW THAT CARRIES MONEY IS ON THE RECORD ─────────────────────
@@ -2998,7 +3108,7 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 "price_origin": _origin,
                 "operations": [], "route_operations": [], "length": None,
                 "section_profile": None, "review_flags": [],
-                "plating_members": [], "plating_excluded": [],
+                "plating_members": [], "plating_excluded": [], "plating_unmassed": [],
             })
 
     # ── the gap lists, once ─────────────────────────────────────────────────────
@@ -3045,6 +3155,7 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 parent = l["part_number"][:-6]
             plating = {"charged": True, "line": l["part_number"], "parent": parent,
                        "members": l["plating_members"], "excluded": l["plating_excluded"],
+                       "unmassed": l.get("plating_unmassed") or [],
                        "ext_gbp": _money_of(l), "label": l["price_origin"]["label"]}
             break
 
@@ -3117,6 +3228,9 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "part": plating.get("parent") or plating.get("line"), "kind": "manufacturing_decision",
             "issue": f"Which members of {plating.get('parent') or 'the weldment'} are plated after welding",
             "assumption": (f"mass priced on {', '.join(plating.get('members') or []) or 'no member'}"
+                           + (f"; plated with the weldment but no mass resolved, so not in the "
+                              f"priced weight: {', '.join(plating.get('unmassed'))}"
+                              if plating.get("unmassed") else "")
                            + (f"; excluded because their own detail states another finish: "
                               f"{', '.join(plating.get('excluded'))}" if plating.get("excluded") else "")),
             "action": "confirm the plated member list and the process against the plater's quote",
@@ -3287,6 +3401,30 @@ def costed_job(source: Any) -> Dict[str, Any]:
         elif "gbp_parts" in mq:           # empty: nothing is costed on the reading — no money
             _gbp = round(sum(_money_of(_by_pn[str(c).upper()]) for c in mq.get("gbp_parts") or []
                              if str(c).upper() in _by_pn), 2) or None
+        elif mq.get("operations") or mq.get("operation"):
+            # A QUESTION ABOUT AN OPERATION IS WORTH THAT OPERATION'S ROWS (D-698). The weld-rate
+            # question on 12693-01-01M took the part's line money, its £59.17 of tube, and the
+            # covering email said "£59.17 rides on it" of a TIG rate. The question is asked once
+            # for every part that carries it (its words name no part), so what rides on it is
+            # the rows charging that operation on any of those parts, each row once, or no
+            # figure; never a part's material line.
+            _q_ops = {str(o) for o in (mq.get("operations") or []) if o}
+            if mq.get("operation"):
+                _q_ops.add(str(mq["operation"]))
+            _q_pns = {_pn.upper()} | {
+                str(_p.get("part_number") or "").upper() for _p in job_parts(source)
+                if isinstance(_p, Mapping) and any(
+                    isinstance(_x, Mapping) and _x.get("issue") == mq.get("issue")
+                    for _x in (_p.get("manufacturing_questions") or []))}
+            _q_rows = [r for r in (_workbook_rows(source) or [])
+                       if {str(o) for o in (r.get("engine_operations") or [])} & _q_ops
+                       and _q_pns & {str(x).upper() for x in (r.get("part_numbers") or [])}]
+            _gbp = round(sum(_num(r.get("total_value_gbp")) for r in _q_rows), 2) or None
+            _nums = [str(r.get("workbook_row")) for r in _q_rows if r.get("workbook_row")]
+            if _gbp:
+                _assume += (f" (£{_gbp:,.2f} a unit"
+                            + (f", Estimate row{'s' if len(_nums) > 1 else ''} "
+                               f"{', '.join(_nums)}" if _nums else "") + ")")
         else:
             _line = _by_pn.get(_pn.upper())
             _gbp = (_money_of(_line) if _line is not None else None) or None
@@ -3484,16 +3622,53 @@ def costed_job(source: Any) -> Dict[str, Any]:
             _bonded = [_k for _k in _bonded if not _stated_bond(source, _k)]
     except Exception:                                                # noqa: BLE001
         pass
-    if _bonded:
+    # THE JOINT IS ASKED IN THE WORDS OF WHAT IS JOINED (D-708). This question was written
+    # for acrylic — "with the flame-polish that goes with it", "solvent cement" — and since
+    # joinery took glue rows it was asked of 12693-03-04J, an MDF insert, word for word. Each
+    # assembly is now asked in its own material's terms, with the money its glue rows carry,
+    # and a board assembly that also has bench work is asked whether the bench time already
+    # covers the bonding (the 12693-03 review: £19.73 bench beside £13.53 glue).
+    _rows_all = _workbook_rows(source) or []
+
+    def _rows_on(_op: str, _target: str) -> List[Dict[str, Any]]:
+        return [r for r in _rows_all
+                if _op in {str(o) for o in (r.get("engine_operations") or [])}
+                and _target.upper() in {str(x).upper() for x in (r.get("part_numbers") or [])}]
+
+    _by_family: Dict[str, List[str]] = {}
+    for _k in _bonded:
+        _by_family.setdefault(_bond_family(source, _k), []).append(_k)
+    for _family, _names in _by_family.items():
+        _glue = [r for _k in _names for r in _rows_on("glue", _k)]
+        _gbp = round(sum(_num(r.get("total_value_gbp")) for r in _glue), 2) or None
+        _nums = sorted({str(r.get("workbook_row")) for r in _glue if r.get("workbook_row")})
+        _money = ((f" (£{_gbp:,.2f} a unit" + (f", Estimate row{'s' if len(_nums) > 1 else ''} "
+                                               f"{', '.join(_nums)}" if _nums else "") + ")")
+                  if _gbp else "")
+        _each = "" if len(_names) == 1 else " each"
+        if _family == "plastic":
+            _assume = (f"one bonding event{_each} (Glue, with the flame-polish that goes with "
+                       f"it){_money} — no drawing states the joint")
+            _act = ("confirm per assembly: solvent cement, adhesive, or a push/tab fit with no "
+                    "glue; drop the glue rows where it is not bonded")
+        elif _family == "board":
+            _bench = [_k for _k in _names if _rows_on("bench_work", _k)]
+            _assume = (f"one gluing of its pieces{_each} (Glue){_money} — no drawing states "
+                       f"the joint")
+            _act = ("confirm per assembly: wood glue or contact adhesive, or dowels, biscuits "
+                    "or screws with no glue; drop the glue rows where it is not bonded"
+                    + (f"; and say whether the bench work on {', '.join(_bench)} already "
+                       f"includes the gluing, so it is not charged twice" if _bench else ""))
+        else:
+            _assume = (f"one bonding event{_each} (Glue){_money} — no drawing states the joint")
+            _act = ("confirm per assembly: adhesive, or a mechanical fixing with no glue; drop "
+                    "the glue rows where it is not bonded")
         decisions.append({
-            "part": ", ".join(_bonded), "kind": "manufacturing_decision",
-            "issue": (f"How {', '.join(_bonded)} {'is' if len(_bonded) == 1 else 'are'} "
+            "part": ", ".join(_names), "kind": "manufacturing_decision",
+            "issue": (f"How {', '.join(_names)} {'is' if len(_names) == 1 else 'are'} "
                       f"joined"),
-            "assumption": ("one bonding event each (Glue, with the flame-polish that goes with "
-                           "it) — no drawing states the joint"),
-            "action": ("confirm per assembly: solvent cement, adhesive, or a push/tab fit "
-                       "with no glue; drop the glue rows where it is not bonded"),
-            "owner": "estimator", "gbp_at_stake": None})
+            "assumption": _assume, "action": _act,
+            "owner": "estimator", "gbp_at_stake": _gbp})
 
     # ── A WELD THE ENGINE INFERRED IS PRICED, AND PUT TO A PERSON ────────────────
     # 12614-01-GA (26 Sep): the header case was welded and dressed on the extract's own
@@ -3561,6 +3736,20 @@ def costed_job(source: Any) -> Dict[str, Any]:
                   and _tgt.upper() in {str(pn).upper() for pn in (r.get("part_numbers") or [])}]
         _w_gbp = round(sum(_num(r.get("total_value_gbp")) for r in _wrows), 2)
         _why = str(_d.get("reason") or "").strip()
+        # THE PACK'S WELD SPECIFICATION NAMES THE PROCESS, NOT THE JOINT (SCRUM-181).
+        # 12678-01-GA's question said "quotes no weld note from the drawing" under a GA
+        # whose border prints "ALL WELDS TO BE TIG UNLESS STATED". The legend still
+        # proves no weld EXISTS — that rule stands — but for a weld already charged it
+        # is the pack's one statement of process, so the question quotes it and asks
+        # about the joint, instead of claiming no note exists.
+        _wps = _wrec.get("weld_process_stated") if isinstance(
+            _wrec.get("weld_process_stated"), Mapping) else {}
+        _spec_said = ""
+        if str(_wps.get("source") or "") == "pack_specification":
+            _spec_said = (f" for this joint — though the pack's weld specification "
+                          f"states {str(_wps.get('process') or '').upper() or 'a process'}"
+                          f" as the default for every weld, which names the process, "
+                          f"not the joint —")
         decisions.append({
             "part": _tgt, "kind": "manufacturing_decision",
             # Charged as welded AND dressed: both operations are this row's question.
@@ -3570,7 +3759,8 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "assumption": (f"charged as welded and dressed"
                            f"{f' (£{_w_gbp:,.2f} a unit)' if _w_gbp else ''}"
                            f"{f' — {_why}' if _why else ''}; the inference quotes no weld "
-                           f"note from the drawing, and {_drawn}"),
+                           f"note{_spec_said}"
+                           f"{'' if _spec_said else ' from the drawing,'} and {_drawn}"),
             "action": ("confirm it is welded; if it is assembled mechanically (studs, "
                        "nutserts, screws), replace the Weld and Dress rows with the "
                        "mechanical joining labour, rather than only removing them"),

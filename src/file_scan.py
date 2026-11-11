@@ -389,6 +389,32 @@ def _json_default(value: Any) -> Any:
     return str(value)
 
 
+def _is_vector_path_list(value: Any) -> bool:
+    """A page's raw vector paths as PyMuPDF gives them: a list of dicts each with 'items'."""
+    return (isinstance(value, list) and bool(value) and isinstance(value[0], dict)
+            and "items" in value[0])
+
+
+def persisted_summary(value: Any) -> Any:
+    """The summary as the run's files save it: every page's raw vector paths become their count.
+
+    THE SAVED RUN KEEPS WHAT THE VECTORS MEASURED, NOT EVERY VECTOR (D-598x). An 18-page pack
+    printed to PDF with its lettering as outlines carries 4,600 to 28,000 paths a page; each
+    page's list was saved twice (the page's vision record, and again inside its analysis), so one
+    run wrote a 513 MB JSON, a 141 MB text file and a 990 MB SQL script, each copied again to the
+    archive. The readers measure the paths in memory during the run, and the geometry summary
+    keeps what they found; no reader of a saved run reads the raw paths. The run's own summary
+    is not changed: containers are rebuilt on the way down, and everything else is shared."""
+    if isinstance(value, dict):
+        return {k: ({"raw_vector_paths": len(v),
+                     "not_saved": "measured during the run; the geometry summary keeps the result"}
+                    if k == "drawings" and _is_vector_path_list(v) else persisted_summary(v))
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [persisted_summary(v) for v in value]
+    return value
+
+
 def _is_excluded_doc(path: Path) -> bool:
     """A7: True if the file is a non-part document (setup/route/MO sheet) that must
     never be ingested as a drawing. Driven by config so future patterns inherit."""
@@ -941,6 +967,11 @@ def pdf_readings(pdf_path: Path) -> Dict[str, Any]:
     again on bytes nothing had changed.
     """
     skip_vision = os.getenv("SKIP_VISION_EXTRACTION", "").lower() in {"1", "true", "yes"}
+    try:                                       # D-753: no vision pass on a deterministic-only run
+        from run_readers import whole_reads_off as _det_only_vis     # targeted mode too
+        skip_vision = skip_vision or _det_only_vis()
+    except Exception:                                                   # noqa: BLE001
+        pass
     pdf_path = Path(pdf_path)
 
     def _make() -> Dict[str, Any]:
@@ -1188,6 +1219,32 @@ def image_only_pages(summary: Any) -> List[str]:
             continue
         doc = re.split(r"[\\/]", str(pg.get("source_pdf_path") or ""))[-1] or "the pack"
         out.append(f"{doc} page {pg.get('page_number')}")
+    return out
+
+
+# A page with no text layer and at least this many vector paths is a drawing whose lettering
+# was printed as outlines. The HPP pack's lightest sheet carries 3,927; a raster scan, a
+# photo or a render placed on a page carries a handful.
+OUTLINED_SHEET_MIN_PATHS = 1000
+
+
+def outlined_drawing_pages(summary: Any) -> List[str]:
+    """The pages that are drawing sheets with their lettering printed as outlines (D-599).
+
+    No text layer, so no reader finds a word and the page role is never design intent; but the
+    line work is a CAD drawing's, thousands of paths, and its dimensions are printed facts. The
+    vision read takes it as a drawing sheet, not a picture to size by eye."""
+    out: List[str] = []
+    for pg in ((summary or {}).get("pages") or []) if isinstance(summary, dict) else []:
+        if not isinstance(pg, dict) or str(pg.get("pdfplumber_text")
+                                           or pg.get("normalized_text") or "").strip():
+            continue
+        drawn = (pg.get("vision_extraction") or {}).get("drawings")
+        paths = (len(drawn) if isinstance(drawn, list)
+                 else int(drawn.get("raw_vector_paths") or 0) if isinstance(drawn, dict) else 0)
+        if paths >= OUTLINED_SHEET_MIN_PATHS:
+            doc = re.split(r"[\\/]", str(pg.get("source_pdf_path") or ""))[-1] or "the pack"
+            out.append(f"{doc} page {pg.get('page_number')}")
     return out
 
 
@@ -1808,6 +1865,8 @@ def _write_primary_outputs(
     variance_rows: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     failures: List[Dict[str, Any]] = []
+    # The files carry the saved form (D-598x); the run's own summary keeps its paths.
+    run_summary, summary = summary, persisted_summary(summary)
 
     try:
         with json_path.open("w", encoding="utf-8") as handle:
@@ -1936,6 +1995,9 @@ def _write_primary_outputs(
         write_postgres_insert_sql(summary, sql_path)
     except Exception as exc:
         failures.append({"stage": "write_sql", "error": str(exc)})
+    # The SQL writer files the variance rows it built on the summary it was given.
+    if "pricing_variance_rows" in summary and "pricing_variance_rows" not in run_summary:
+        run_summary["pricing_variance_rows"] = summary["pricing_variance_rows"]
 
     return failures
 
@@ -2610,6 +2672,15 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
     # 3 mm mild steel. A material that arrives after the price is a note, not a material.
     _inherit_sheet_material_to_parts(summary["manufacturing_writeup"]["parts"],
                                      summary.get("pages") or [])
+    # A LAMINATED BOARD IS ITS CORE PLUS ITS LAMINATE (JG, 10 Nov 2026, 12674-01-GA): the GA's
+    # FINISH reaches the board parts that state none, and a finished thickness that is a stock
+    # board plus laminate is priced as that core with the laminate on its faces.
+    try:
+        import laminated_board as _lb
+        for _line in _lb.apply(summary["manufacturing_writeup"]["parts"], summary.get("pages") or []):
+            print(f"   [laminate] {_line}", flush=True)
+    except Exception as _lb_exc:                                    # noqa: BLE001
+        print(f"   [laminate] not read ({type(_lb_exc).__name__}: {_lb_exc})", flush=True)
     # AND A WIRE PART'S GAUGE AND OUTLINE (D-437), read off the same sheets, before the
     # costing reaches for a default gauge and an assumed length.
     try:
@@ -2674,6 +2745,18 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
               flush=True)
 
 
+    # A BEVEL READ FROM THE DRAWING, AGAIN WHERE IT WAS NOT TAKEN (D-679): the scan reads it
+    # once (_finalize_scan_summary); this pass is what a replay of a saved record runs, so the
+    # current reader asks the drawing for every panel whose bevel the saved run did not take.
+    try:
+        from bevel_reading import apply_bevel_readings as _bevels
+        _bev2 = _bevels(summary["manufacturing_writeup"]["parts"], summary)
+        if _bev2:
+            print(f"   [bevel] {', '.join(_bev2)}: bevel read from the drawing, the flat's "
+                  f"inner lines agreeing", flush=True)
+    except Exception as _bev_exc:                                    # noqa: BLE001
+        print(f"   [bevel] not read ({type(_bev_exc).__name__}: {_bev_exc})", flush=True)
+
     # A SECTION SCHEDULE ON A PART'S OWN SHEET REACHES ITS RECORD (D-576), after every
     # pre-costing pass that could have lost it: the requirement is captured from the sheet's
     # words, a record with no members and no pieces is given them, and the hand-off audit
@@ -2687,6 +2770,85 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
     except Exception as _sc_exc:                                     # noqa: BLE001
         print(f"   [section-coverage] not prepared ({type(_sc_exc).__name__}: {_sc_exc})",
               flush=True)
+
+    # THE PACK'S GENERAL CONSTRUCTION NOTE (SCRUM-179), before anything is priced: the
+    # GA's one statement of the whole product's build-up refines a bare family word and
+    # carries the laminate to the boards, so 12678-01-GA's "MDF - LAMINATED CLEAF
+    # TARANTA FD10" is costed as pre-faced board rather than read as WOOD and priced as
+    # raw sheet. After the own-sheet material pass above, so a part's own statement has
+    # already landed and the note only fills what the pack left generic.
+    try:
+        import construction_note as _cnote
+        _note = _cnote.read(summary)
+        if _note:
+            _touched = _cnote.apply(_note, summary["manufacturing_writeup"]["parts"])
+            if _touched:
+                print(f"   [construction] '{_note['text']}' ({_note['where']}) -> "
+                      f"{len(_touched)} board part(s): {', '.join(_touched[:6])}",
+                      flush=True)
+    except Exception as _cn_exc:                                     # noqa: BLE001
+        print(f"   [construction] note not applied ({type(_cn_exc).__name__}: {_cn_exc})",
+              flush=True)
+
+    # THE PACK'S WELD SPECIFICATION NAMES THE PROCESS OF EVERY CHARGED WELD (SCRUM-181):
+    # process only, never existence — the specification legend still puts no weld on any
+    # part. A part already carrying an arc-weld operation and no process of its own takes
+    # the pack default, so the sheet row says which process the rate must suit and the
+    # TIG rate gap is asked instead of the question claiming no weld note exists.
+    try:
+        from weld_symbols import apply_pack_weld_default as _wpack
+        _wtouched = _wpack(summary["manufacturing_writeup"]["parts"],
+                           summary.get("pages") or [])
+        if _wtouched:
+            print(f"   [weld process] the pack's specification names the process on "
+                  f"{len(_wtouched)} welded part(s): {', '.join(_wtouched[:6])}",
+                  flush=True)
+    except Exception as _wp_exc:                                     # noqa: BLE001
+        print(f"   [weld process] pack default not applied "
+              f"({type(_wp_exc).__name__}: {_wp_exc})", flush=True)
+
+    # LAST OF THE PRE-COSTING PASSES, SO THE REPLAY RUNS IT TOO, AND BEFORE THE PRICE: the ledger and the
+    # gap check read the part records once every deterministic source has written them (a row's
+    # material, a sheet's material, a stated cut list), so a gap is a gap and a stated fact is on
+    # the ledger. A material inherited from the document after costing is an inference, and the
+    # gap it fills stays named here.
+    # THE HOLES, THREADS AND COUNTERSINKS EACH SHEET STATES, ON THEIR PART (SCRUM-194): from the
+    # reader's own findings, with count, page and words, and the work they ask for.
+    try:
+        import reader_findings as _rf2
+        _nf = _rf2.attach_stated_features(summary)
+        if _nf:
+            print(f"   [stated-features] {_nf} hole/thread/countersink callout(s) put on their parts "
+                  f"with their counts", flush=True)
+    except Exception as _sf_exc:                                      # noqa: BLE001
+        print(f"   [stated-features] not attached ({type(_sf_exc).__name__}: {_sf_exc})", flush=True)
+    # THE DRAWING LEDGER (SCRUM-194 requirement 2): every fact the drawing's own text gave a
+    # made part, captured once the deterministic build is done and before costing, to be held
+    # to the calculated workbook after Excel as the LLM read's ledger is.
+    try:
+        import drawing_read_ledger as _drl
+        summary["drawing_ledger"] = _drl.capture(summary)
+        print(f"   [drawing-ledger] {len(summary['drawing_ledger'].get('items') or [])} fact(s) the "
+              f"drawing states on {summary['drawing_ledger'].get('parts_read', 0)} part(s), each to be "
+              f"charged, covered, excluded or held", flush=True)
+    except Exception as _dl_exc:                                      # noqa: BLE001
+        summary["drawing_ledger"] = {"schema": "drawing_ledger.v1", "items": [],
+                                     "error": f"{type(_dl_exc).__name__}: {_dl_exc}"}
+    # THE GAPS THE DETERMINISTIC READ LEFT, ASKED ONE AT A TIME (SCRUM-194 requirement 3):
+    # for each made part missing a material, a gauge or section, a size or a quantity, the
+    # model is shown that part's own pages only and asked one question; the answer is checked
+    # against the sheet's own readings before it is used, written as llm_assisted, and every
+    # ask is on the record. A deterministic-only run asks nothing and records each gap.
+    try:
+        import gap_fill as _gf
+        _gfr = _gf.run(summary)
+        if _gfr.get("items"):
+            print(f"   [gap-fill] {len(_gfr['items'])} gap(s) on made parts; asked {_gfr.get('asked', 0)}, "
+                  f"filled {_gfr.get('filled', 0)}, open {len(_gfr.get('open') or [])}"
+                  + (f" ({_gfr.get('why_not_asked')})" if _gfr.get("why_not_asked") else ""), flush=True)
+    except Exception as _gf_exc:                                      # noqa: BLE001
+        summary["gap_fill"] = {"schema": "gap_fill.v1", "items": [],
+                               "error": f"{type(_gf_exc).__name__}: {_gf_exc}"}
 
 
 def _finalize_scan_summary(
@@ -2837,6 +2999,19 @@ def _finalize_scan_summary(
         # _reconcile_dualpath_into_part_estimates after estimate_document. Removed by the
         # pipeline audit (docs/PIPELINE_WRITER_INVENTORY.md, stage 0).
 
+    # THE READER'S OWN FINDINGS, BEFORE THE BUILD CAN MERGE, FILTER OR DROP THEM (SCRUM-194
+    # requirement 2; reviewer, 9 Nov 2026): page by page, with the value, units, words and the
+    # part the page names, so the retention trace can audit each transition and a finding no
+    # part was given stays visible.
+    try:
+        import reader_findings as _rf
+        summary["reader_findings"] = _rf.capture(summary)
+        print(f"   [reader-findings] {len(summary['reader_findings'].get('items') or [])} finding(s) on "
+              f"{summary['reader_findings'].get('pages_read', 0)} page(s), "
+              f"{summary['reader_findings'].get('unassigned', 0)} not given to a part", flush=True)
+    except Exception as _rf_exc:                                      # noqa: BLE001
+        summary["reader_findings"] = {"schema": "reader_findings.v1", "captured": "scan", "items": [],
+                                      "error": f"{type(_rf_exc).__name__}: {_rf_exc}"}
     _debug("start build_document_writeup")
     summary["manufacturing_writeup"] = build_document_writeup(summary)
     _debug("done build_document_writeup")
@@ -3360,6 +3535,10 @@ def _finalize_scan_summary(
                     "reason": _sw_job.meta.get("native_unread_reason"),
                     "analyser_error": _sw_job.meta.get("analyser_error"),
                 }
+                # A backup that was tried and failed is part of why nothing was read.
+                for _dmk in ("docmgr_backup_reason", "docmgr_error"):
+                    if _sw_job.meta.get(_dmk):
+                        summary["solidworks_native"][_dmk] = _sw_job.meta.get(_dmk)
                 print(f"   [solidworks] {_sw_job.meta.get('native_files_present')} native model "
                       f"file(s) are in this job folder but were NOT read: "
                       f"{_sw_job.meta.get('native_unread_reason')}", flush=True)
@@ -3505,6 +3684,10 @@ def _finalize_scan_summary(
                     "extract_path": _sw_job.meta.get("extract_path"),
                     "top_assembly": _sw_job.meta.get("top_assembly"),
                     "top_assembly_bbox_mm": _sw_job.meta.get("top_assembly_bbox_mm"),
+                    # EVERY ASSEMBLY'S OWN BOX AND WHICH ARE SUB-ASSEMBLIES (D-735): the
+                    # product's envelope is the declared product's own box.
+                    "assembly_bbox_mm": _sw_job.meta.get("assembly_bbox_mm"),
+                    "sub_assemblies": _sw_job.meta.get("sub_assemblies"),
                     # CHOSEN, WHEN IT COULD NOT BE READ. The top assembly's full-depth BOM
                     # becomes the job's component list at rank 90; on a folder of fifteen
                     # assemblies the extract can rule out anything that is somebody's child
@@ -3548,6 +3731,33 @@ def _finalize_scan_summary(
                               f"of the same number: {', '.join(_pc_asked)}", flush=True)
                 except Exception as _e_pc:                           # noqa: BLE001
                     print(f"   [dxf] piece/model check skipped ({_e_pc})", flush=True)
+                # WHICH READER, AND WHY (SCRUM-184). A COM extract reports solidworks_api
+                # exactly as before; a Document Manager backup read says so here, with the
+                # reason the worker could not run and what the files did not save.
+                from source_connectors.solidworks import extract_reader_summary as _sw_reader
+                summary["solidworks_native"].update(_sw_reader(_sw_job))
+                if summary["solidworks_native"].get("extract_reader") == "solidworks_docmgr":
+                    # The parts left with NO measured blank — a part whose DXF stands is not one.
+                    _dm_need = (_swc or {}).get("needs_solidworks_worker_parts") or []
+                    print(f"   [solidworks] read by the Document Manager BACKUP reader — "
+                          f"{summary['solidworks_native'].get('docmgr_backup_reason')}. Saved "
+                          f"values only: nothing was measured, and its values rank below a DXF "
+                          f"and below the SolidWorks worker."
+                          + (f" {len(_dm_need)} formed part(s) saved no flat pattern and need "
+                             f"the worker: {', '.join(_dm_need[:8])}" if _dm_need else ""),
+                          flush=True)
+                elif summary["solidworks_native"].get("docmgr_topped_up"):
+                    # D-706: SolidWorks read most files; the backup read the ones it could not.
+                    _dm_top = summary["solidworks_native"]["docmgr_topped_up"]
+                    print(f"   [solidworks] {len(_dm_top)} model file(s) SolidWorks could not "
+                          f"read were read by the Document Manager BACKUP reader in this run: "
+                          f"{', '.join(Path(str(p)).name for p in _dm_top[:8])}. Saved values "
+                          f"only for those; every other file keeps the worker's values.",
+                          flush=True)
+                if summary["solidworks_native"].get("docmgr_still_unread"):
+                    print(f"   [solidworks] still unread by either reader: "
+                          f"{', '.join(Path(str(p)).name for p in summary['solidworks_native']['docmgr_still_unread'][:8])}",
+                          flush=True)
                 if _sw_job.meta.get("extract_stale"):
                     print("   [solidworks] EXTRACT IS STALE — the native models have changed "
                           "since it was taken. The estimate is built on older geometry and "
@@ -3672,6 +3882,20 @@ def _finalize_scan_summary(
     # Explicit SDI_LLM_FULL_EXTRACT=0/false/no/off disables it; =1/true/yes/on forces it on.
     _llm_flag = _os_llm.getenv("SDI_LLM_FULL_EXTRACT", "").strip().lower()
     _llm_off = _llm_flag in {"0", "false", "no", "off"}
+    # D-753: no whole-pack read on a deterministic-only run, and so no cached one either:
+    # extract_full_pack is where the cache is read, and it is not called.
+    try:
+        from run_readers import run_was_deterministic_only as _det_only_llm, llm_mode as _llm_mode
+        if _det_only_llm():
+            _llm_off = True
+            print("   [llm-full-extract] OFF — deterministic-only run: no language model reads "
+                  "the drawings and no cached read is applied", flush=True)
+        elif _llm_mode() == "targeted":
+            _llm_off = True
+            print("   [llm-full-extract] OFF — targeted mode: the model is asked only about the "
+                  "gaps the deterministic read leaves (gap fill)", flush=True)
+    except Exception:                                                   # noqa: BLE001
+        pass
     _llm_on = (_llm_flag in {"1", "true", "yes", "on"}
                or (_llm_flag == "" and bool(_os_llm.getenv("XAI_API_KEY"))))
     if pdf_path and _llm_on and not _llm_off:
@@ -3777,6 +4001,13 @@ def _finalize_scan_summary(
                 print(f"   [llm-full-extract] drove tube+{_c['tube']} qty+{_c.get('qty', 0)} "
                       f"material+{_c['material']} weight+{_c['weight']} thickness+{_c['thickness']} "
                       f"assembly-flagged+{_c['assembly_flagged']} into the estimate", flush=True)
+                # WHAT THE READ SAID THAT REACHED NO PRICED PART (D-749), loud, every run.
+                _lost = _c.get("unmatched") or []
+                if _lost:
+                    print(f"   [llm-full-extract] {len(_lost)} part(s) the read described reached "
+                          f"NO priced part, so their facts are not in the price: "
+                          + "; ".join(f"{u.get('part_number')} ({', '.join(u.get('facts') or {})})"
+                                      for u in _lost[:8]), flush=True)
             else:
                 print(f"   [llm-full-extract] no job returned ({_job.get('error', '')})", flush=True)
         except Exception as _e_llm:
@@ -3813,6 +4044,13 @@ def _finalize_scan_summary(
         # denied a borrowed blank is indistinguishable from one the rule never considered —
         # and it is the borrow being denied that stops a ball bearing arriving with the
         # cross member's flat pattern, a laser op and 269 seconds against it.
+        _nob = _inf.get("refused_no_blank") or []
+        if _nob:
+            print(f"   [inference] {len(_nob)} part(s) NOT lent another part's blank — a "
+                  f"section is cut to length and an assembly is sized through its members "
+                  f"(D-661): " + ", ".join(str(r.get("part") or r.get("description") or "an "
+                                                   "unnamed row") for r in _nob[:8])
+                  + (f" (+{len(_nob) - 8} more)" if len(_nob) > 8 else ""), flush=True)
         _ref = _inf.get("refused_bought_in") or []
         if _ref:
             # NAME THE ONES SOMEBODY IS LOOKING FOR. The first version printed the first six
@@ -4316,6 +4554,23 @@ def _finalize_scan_summary(
             for _h in _hier:
                 print(f"   [hierarchy] {_h['part_number']} holds "
                       f"{', '.join(_h['children'])} (from the SolidWorks model)", flush=True)
+            # A REACHED CHILD WITH A READABLE MODEL IS PRICED, NOT ONLY ASKED (SCRUM-155):
+            # the bracket steel 12678-01-GA charged welding on and no material for.
+            try:
+                from source_connectors.solidworks import mint_model_children
+                mint_model_children(summary["manufacturing_writeup"]["parts"],
+                                    _sw_job_late)
+            except Exception as _mint_exc:                           # noqa: BLE001
+                print(f"   [hierarchy] model-only children not minted "
+                      f"({type(_mint_exc).__name__}: {_mint_exc})", flush=True)
+            # A HOLLOW BOARD BOX IS COSTED AS ITS PANELS (SCRUM-180): 12678's plinth.
+            try:
+                from source_connectors.solidworks import mint_hollow_board_panels
+                mint_hollow_board_panels(summary["manufacturing_writeup"]["parts"],
+                                         _sw_job_late)
+            except Exception as _hb_exc:                             # noqa: BLE001
+                print(f"   [hierarchy] hollow board panels not minted "
+                      f"({type(_hb_exc).__name__}: {_hb_exc})", flush=True)
             _sw_meta = getattr(_sw_job_late, "meta", {}) or {}
             _edges = sum(len(v) for v in (getattr(_sw_job_late, "hierarchy", {}) or {}).values())
             _asms = len(getattr(_sw_job_late, "assembly_pns", []) or [])
@@ -4518,6 +4773,25 @@ def _finalize_scan_summary(
               f"{type(_row_ev_err).__name__}: {_row_ev_err}", flush=True)
 
     try:
+        # A BOARD PART'S OWN TABLE LISTS ITS PIECES (D-688): 12693-01-04J's sheet prints its
+        # 18 mm top and three 12 mm pieces as sized rows, and with no flat to corroborate,
+        # nothing read them. Here, after every reader has given the part its material, its
+        # row evidence and its route, so each piece takes the part's final stock and cutting;
+        # and before the detail-sheet sizing, the person's confirmations and the canonical
+        # graph, so each of those sees the pieces as parts of the job.
+        from drawing_job_merge import mint_pieces_listed_on_own_table
+        _listed = mint_pieces_listed_on_own_table(
+            summary["manufacturing_writeup"]["parts"],
+            (summary.get("document_analysis") or {}).get("bom_rows") or [])
+        for _lp in _listed:
+            print(f"   [bom-evidence] {_lp} is costed as the pieces its own parts table lists "
+                  f"— no flat of its own; sizes and counts from the table, to confirm",
+                  flush=True)
+    except Exception as _lp_err:                                       # noqa: BLE001
+        print(f"   [bom-evidence] listed pieces not read: "
+              f"{type(_lp_err).__name__}: {_lp_err}", flush=True)
+
+    try:
         # THE PART'S OWN DETAIL SHEET SIZES IT — beside the BOM-row stamper above and for the
         # same reason. The row gives material, gauge and mass; the sheet gives the blank. Both
         # go through source_precedence, so a DXF or a model still outranks either, and a part
@@ -4543,6 +4817,34 @@ def _finalize_scan_summary(
         if _n_dg:
             print(f"   [detail-geometry] {_n_dg} part(s) sized from their own detail sheet "
                   f"(pdf_overall_dims rank — a measured blank still wins)", flush=True)
+        # A SECTION IS CUT TO LENGTH, AND ITS OWN SHEET PRINTS THE LENGTH (D-661): read here,
+        # checked against the weight that sheet states, for a section no reader gave one.
+        from detail_page_geometry import apply_section_lengths_from_own_sheets
+        _sec_len = apply_section_lengths_from_own_sheets(_parts_dg, summary)
+        if _sec_len:
+            print(f"   [detail-geometry] {', '.join(_sec_len)}: section length read off "
+                  f"their own sheet, checked against its stated weight", flush=True)
+        # A WIRE WITH NO SIZE IS SIZED BY ITS OWN WEIGHT (D-692): of the figures its own sheet
+        # prints, the one diameter-and-length pairing that weighs what the sheet states. Here,
+        # after every reader that could give it a printed Ø or a schedule length (and after
+        # its own sheet's weight is re-read above), and before it is costed.
+        from detail_page_geometry import apply_round_stock_sizes_from_own_weight
+        _round_w = apply_round_stock_sizes_from_own_weight(_parts_dg, summary)
+        if _round_w:
+            print(f"   [detail-geometry] {', '.join(_round_w)}: round stock sized from the "
+                  f"figures on its own sheet that its stated weight singles out", flush=True)
+        # A BEVEL IS READ FROM THE PANEL'S OWN DRAWING; ITS FLAT ONLY AGREES (D-670): the lines
+        # inside a flat's outline are a bevel's edge only where the sheet says bevel.
+        try:
+            from bevel_reading import apply_bevel_readings
+            _bev = apply_bevel_readings(_parts_dg, summary)
+            if _bev:
+                print(f"   [detail-geometry] {', '.join(_bev)}: bevel read from the drawing, "
+                      f"the flat's inner lines agreeing — solid panels, bevelled edges "
+                      f"recorded", flush=True)
+        except Exception as _bev_exc:                                # noqa: BLE001
+            print(f"   [detail-geometry] bevel reading skipped "
+                  f"({type(_bev_exc).__name__}: {_bev_exc})", flush=True)
         # THE OTHER HAND TAKES ITS BASE'S PROVISIONAL BLANK (D-508), now that the base has one,
         # and THEN every part read off a drawing is held against the assembly it sits in.
         from detail_page_geometry import (check_parts_against_their_assembly,
@@ -4937,9 +5239,28 @@ def _finalize_scan_summary(
         _minted_hands = mint_missing_hand_records(
             summary["manufacturing_writeup"]["parts"],
             (summary.get("document_analysis") or {}).get("bom_rows") or [])
+        # THE ADHESIVE AND WAX A GLUED BOARD ASSEMBLY USES (D-723).
+        try:
+            from joinery_consumables import mint as _mint_consumables
+            _cons = _mint_consumables(summary["manufacturing_writeup"]["parts"], summary)
+            if _cons:
+                print(f"   [consumables] {', '.join(_cons)} added as share-of-pack "
+                      f"allowance(s) for glued board assemblies", flush=True)
+        except Exception as _e_cons:                                 # noqa: BLE001
+            print(f"   [consumables] skipped: {type(_e_cons).__name__}: {_e_cons}",
+                  flush=True)
         if _minted_hands:
-            print(f"   [canonical-part-graph] {', '.join(_minted_hands)} minted as the other "
-                  f"hand of an existing part — a BOM row the pack never drew", flush=True)
+            _bill_rows = {str(_p.get("part_number") or "") for _p in
+                          summary["manufacturing_writeup"]["parts"]
+                          if isinstance(_p, dict) and _p.get("_minted_bill_row")}
+            _as_hands = [_m for _m in _minted_hands if _m not in _bill_rows]
+            _as_rows = [_m for _m in _minted_hands if _m in _bill_rows]
+            if _as_hands:
+                print(f"   [canonical-part-graph] {', '.join(_as_hands)} minted as the other "
+                      f"hand of an existing part — a BOM row the pack never drew", flush=True)
+            if _as_rows:
+                print(f"   [canonical-part-graph] {', '.join(_as_rows)} kept as line(s) from "
+                      f"the bill — no reader made them records; not handed parts", flush=True)
             _mirrored_late = mirror_provisional_blanks(
                 summary["manufacturing_writeup"]["parts"])
             if _mirrored_late:
@@ -5328,7 +5649,20 @@ def _finalize_scan_summary(
             # and notes facts; the bill that comes back is held against the body and weight the
             # sheet states, put back once with what broke, and a fitting it does not draw is
             # asked, not costed. A render is read exactly as before.
-            _sheet_read = bool(_design_intent_pages)
+            # A SHEET WHOSE LETTERING IS OUTLINES IS STILL A SHEET (D-599). No text layer means no
+            # page role, and the HPP pack's 18 dimensioned sheets went to the render prompt and
+            # were sized "from human-scale cues".
+            _outlined = outlined_drawing_pages(summary)
+            if _outlined and not _design_intent_pages:
+                print(f"   [concept] {len(_outlined)} page(s) are drawing sheets with their "
+                      f"lettering printed as outlines ({', '.join(_outlined[:4])}"
+                      f"{'…' if len(_outlined) > 4 else ''}) — read as drawings, their "
+                      f"dimensions facts", flush=True)
+                summary.setdefault("review_flags", []).append(
+                    f"READ AS DRAWING SHEETS: {len(_outlined)} page(s) carry no text layer but are "
+                    f"CAD line work with the lettering drawn as outlines; the vision read took "
+                    f"their printed dimensions as facts. Check the sizes against the sheets.")
+            _sheet_read = bool(_design_intent_pages) or bool(_outlined)
             _sheet_check: Dict[str, Any] = {}
             _set_aside: List[Dict[str, Any]] = []
             # THE PREVIOUS READ, KEPT UNLESS THE PAGES SAY OTHERWISE (D-492): a re-read asked

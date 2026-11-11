@@ -265,9 +265,12 @@ SOURCE_NOTES: Dict[str, str] = {
     "SDI's knowledge base": "A value SDI has previously confirmed for this part or material.",
     "an SDI override rule": "A pattern rule in the engine set this — not an observation of this "
                             "drawing.",
-    "a note on the drawing": "Found in the drawing's own note text by a keyword recogniser — "
-                             "WELD AND DRESS, TAP M4, FOLD. The drawing says it; a recogniser "
-                             "rather than a person read it.",
+    # No example words here (D-757): "WELD AND DRESS, TAP M4, FOLD" stood in this sentence
+    # beside every note-sourced operation and was read as a quotation from 0358141's sheet.
+    # The words the recogniser actually read are quoted next to it, from the record.
+    "a note on the drawing": "Found in the drawing's own note text by a keyword recogniser. "
+                             "The words it read are quoted alongside. The drawing says it; a "
+                             "recogniser rather than a person read it.",
     "an unrecorded source": "The value is being used and nothing stamped where it came from. "
                             "That is a gap in the engine's record-keeping, not evidence the "
                             "value is wrong — but it cannot be traced back to a drawing.",

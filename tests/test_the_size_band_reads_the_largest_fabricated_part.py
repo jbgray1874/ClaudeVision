@@ -145,8 +145,14 @@ def test_the_labour_block_actually_calls_the_helper_at_the_band_site():
     body = ast.unparse(tree)
     assert "_max_part_area_m2, _max_part_area_pn = _largest_fabricated_part_area(" in body, (
         "the helper's return is not bound to the names the band pick reads")
-    assert "_THROUGHPUT_SIZE_BANDS.get(wb_op" in body and "_max_part_area_m2 > 0" in body, (
-        "the band pick no longer reads _max_part_area_m2 -- the helper's answer is unused")
+    # D-658: each row is banded on its OWN largest fabricated part; the job's largest is the
+    # fallback for a row whose parts carry no area. Both answers must reach the band pick.
+    assert "area, pn = _largest_fabricated_part_area(own) if own else (0.0, None)" in body, (
+        "the row's own parts are not sized for the band")
+    assert "band_area_for_row(g.get('parts') or [], _all_pes_pw, _band_children)" in body, (
+        "the band site does not ask for the row's own area")
+    assert "_THROUGHPUT_SIZE_BANDS.get(wb_op" in body and "_band_area > 0" in body, (
+        "the band pick no longer reads the chosen area -- the helper's answer is unused")
 
 
 def test_the_shelf_lands_in_band_c_and_only_pack_moves():
@@ -161,3 +167,90 @@ def test_the_shelf_lands_in_band_c_and_only_pack_moves():
     pcoat = config.THROUGHPUT_SIZE_BANDS["P.Coat"]
     assert pack["B"] != pack["C"], "if pack B and C were equal the bug would have hidden here too"
     assert pcoat["B"] == pcoat["C"] == pcoat["D"], "P.Coat is flat across bands; it never moved"
+
+
+# ── D-658 / D-659: each row on its own parts ────────────────────────────────────────────
+
+def _sheet_part(pn, length, width):
+    return {"part_number": pn, "material_estimate": {"stock_form": "sheet",
+                                                     "blank_length_mm": length,
+                                                     "blank_width_mm": width}}
+
+
+# 12684-02 as the canonical tree holds it: GA -> 101SA (M01, M02) and 102SA (M04, 103SA).
+TREE = {"12684-02-GA": ["12684-02-101SA", "12684-02-102SA", "BI-UPC"],
+        "12684-02-101SA": ["12684-02-M01", "12684-02-M02"],
+        "12684-02-102SA": ["12684-02-M04", "12684-02-103SA"],
+        "12684-02-103SA": ["12684-02-M06", "12684-02-M07"]}
+HOOK_ROW = ["12684-02-101SA", "12684-02-M01", "12684-02-M02"]
+
+
+def _band(area):
+    e1, e2, e3 = config.THROUGHPUT_AREA_EDGES
+    return "A" if area < e1 else "B" if area < e2 else "C" if area < e3 else "D"
+
+
+def _pack(baseplate_mm):
+    return [_sheet_part("12684-02-M01", 39.7, 30.0),
+            _sheet_part("12684-02-M04", *baseplate_mm)]
+
+
+def test_correcting_the_baseplate_does_not_move_the_hook_rows_band():
+    """THE DEFECT, BOTH WAYS. 12684-02, 3 Nov 2026: M04 was corrected from a borrowed 39.7 x 30
+    to its drawn 504 x 313, and the hooks' P.Coat row moved from 638/hr to 319/hr because the
+    band was the JOB's largest part. Under that old rule the hook row's band follows the
+    baseplate; under the row rule it does not move."""
+    from wb_populate import _largest_fabricated_part_area, band_area_for_row
+    before, after = _pack((39.7, 30.0)), _pack((504.0, 313.0))
+    old_before = _band(_largest_fabricated_part_area(before)[0])
+    old_after = _band(_largest_fabricated_part_area(after)[0])
+    assert old_before != old_after, "the old job-wide rule moved the hook row with the baseplate"
+    new_before = band_area_for_row(HOOK_ROW, before, TREE)
+    new_after = band_area_for_row(HOOK_ROW, after, TREE)
+    assert new_before == new_after, "the hook row's band must not follow the baseplate"
+    assert new_after[1] == "12684-02-M01" and _band(new_after[0]) == "A"
+
+
+def test_the_frame_row_does_follow_its_own_baseplate():
+    from wb_populate import band_area_for_row
+    area, pn, why = band_area_for_row(["12684-02-102SA"], _pack((504.0, 313.0)), TREE)
+    assert pn == "12684-02-M04" and abs(area - 0.504 * 0.313) < 1e-6
+    assert why == "a part inside an assembly this row carries"
+
+
+def test_the_final_pack_row_is_banded_on_what_is_inside_the_box():
+    from wb_populate import band_area_for_row
+    area, pn, _ = band_area_for_row(["12684-02-GA"], _pack((504.0, 313.0)), TREE)
+    assert pn == "12684-02-M04", "the frame, and so the baseplate, is in the box"
+
+
+def test_a_row_with_no_measured_area_gets_no_other_parts_band():
+    """No fallback to the job's largest part (D-659): an unrelated part never sets a row's band."""
+    from wb_populate import band_area_for_row
+    parts = [_sheet_part("12684-02-M04", 504.0, 313.0)]
+    area, pn, why = band_area_for_row(HOOK_ROW, parts, TREE)
+    assert (area, pn) == (0.0, None)
+    assert "has a measured area" in why
+
+
+def test_the_band_site_reads_the_row_through_its_own_tree_and_says_an_allowance():
+    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    site = src[src.index("# ── SIZE-BANDED DEFAULT"):src.index("# ── P.COAT BY HANGING GEOMETRY")]
+    assert "band_area_for_row(\n            g.get(\"parts\") or [], _all_pes_pw, _band_children)" in site
+    assert "_max_part_area_m2" not in site.split("band_area_for_row(")[1].split(")")[0], (
+        "the job's largest part is passed to the row's band again")
+    assert "ALLOWANCE for this row" in site and "Confirm this row's throughput" in site
+
+
+def test_a_band_set_while_part_of_the_row_is_unmeasured_is_called_provisional():
+    """D-660: the hook row is banded on the bracket while the arm's drawing is unresolved, so the
+    rate is provisional and the row says which part carries no area."""
+    from wb_populate import unmeasured_row_parts
+    parts = [_sheet_part("12684-02-M01", 39.7, 30.0),
+             {"part_number": "12684-02-M02", "material_estimate": {"stock_form": "sheet"}},
+             {"part_number": "12684-02-101SA", "is_sub_assembly": True}]
+    assert unmeasured_row_parts(HOOK_ROW, parts) == ["12684-02-M02"]
+    assert unmeasured_row_parts(["12684-02-M01"], parts) == []
+    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    site = src[src.index("# ── SIZE-BANDED DEFAULT"):src.index("# ── P.COAT BY HANGING GEOMETRY")]
+    assert '"provisional": bool(_unmeasured)' in site and "PROVISIONAL:" in site

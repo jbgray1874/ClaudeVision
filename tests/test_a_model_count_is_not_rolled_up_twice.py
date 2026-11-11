@@ -103,6 +103,30 @@ def test_a_part_under_two_parents_is_decided_by_the_bom_not_the_total():
     apply_native_to_pre_estimate(parts, model)
     ext = next(p for p in parts if p["part_number"] == "11650-04-03A")
     assert ext["quantity"] == 1, "the product total was written for a multi-parent part"
+    # SCRUM-105: here the model's own total CAN be attributed — 2 under the GA x1 and 1
+    # under each of 3 sets reassemble to exactly 5 — so the per-parent split is derived
+    # and rides on the record; the product total is still never written as `quantity`.
+    assert ext["quantity_by_parent"] == {"11650-06-GA": 2, "11650-06-SA01": 1}
+    assert any("reassembling to exactly 5" in f for f in ext["review_flags"]), \
+        ext["review_flags"]
+    # Through the graph, in the scan's own order (the model's edges wired first): the
+    # GA's 2 plus 3 sets of 1 is the model's 5.
+    from source_connectors.solidworks import apply_native_hierarchy_to_parts
+    apply_native_hierarchy_to_parts(parts, model)
+    assert _costed_qty(parts, "11650-04-03A") == 5
+
+
+def test_a_shared_total_nothing_reassembles_is_left_to_the_bom():
+    """Where neither reading of the edge figures reassembles the model's total, no split
+    is invented: the record keeps its own count and says the BOM decides."""
+    parts = _kit_parts()
+    model = _model()
+    model.hierarchy["11650-06-GA"].append(("11650-04-03A", 2.0))
+    model.bom[1] = NativeBomRow(part_number="11650-04-03A", quantity=7)
+    apply_native_to_pre_estimate(parts, model)
+    ext = next(p for p in parts if p["part_number"] == "11650-04-03A")
+    assert ext["quantity"] == 1, "the product total was written for a multi-parent part"
+    assert "quantity_by_parent" not in ext
     assert any("sits under 2 assemblies" in f for f in ext["review_flags"]), ext["review_flags"]
 
 

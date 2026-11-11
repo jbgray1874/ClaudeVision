@@ -137,6 +137,58 @@ def parse_args() -> argparse.Namespace:
              "extraction happen either way, because the cache KEY is computed from them.",
     )
     parser.add_argument(
+        "--deterministic-only",
+        action="store_true",
+        help="THE DRAWING READER ON ITS OWN (D-753, SCRUM-194). No language model reads the "
+             "drawings, and no answer one gave before is replayed: the whole-pack read and its "
+             "inference pass, the vision BOM reader, the page vision pass, the DXF "
+             "interpretation, the note scan and the concept read are all off, cached answers "
+             "included. The PDF text and tables, the deterministic BOM reader, the vector "
+             "geometry, DXF flat patterns and the SolidWorks extract run as normal. This is "
+             "the test that the printed BOM, part-to-page links, materials, gauges and stated "
+             "dimensions come from the drawing reader itself. Prices are still looked up as on "
+             "any run. Not an estimate to quote.",
+    )
+    parser.add_argument(
+        "--targeted",
+        action="store_true",
+        help="TARGETED MODEL HELP (SCRUM-194 requirement 3). The deterministic readers run "
+             "first; the whole-pack read, the vision BOM reader, the page vision pass and the DXF "
+             "interpretation are off, and the model is asked one question per gap on that part's "
+             "own pages (gap_fill). The same as SDI_LLM_MODE=targeted, for this run only.",
+    )
+    parser.add_argument(
+        "--solidworks-only",
+        action="store_true",
+        help="THE SOLIDWORKS MODELS AS THE READER. No language model reads the drawings (as "
+             "--deterministic-only); the SolidWorks analyser is driven on the pack's models and "
+             "the Document Manager stand-in is off, so what the run knows of the parts and "
+             "their geometry is SolidWorks' own. The PDF text is still read for the parts "
+             "list and title blocks. A pack with no models says so. Not an estimate to quote.",
+    )
+    parser.add_argument(
+        "--docmgr-only",
+        action="store_true",
+        help="THE SOLIDWORKS DOCUMENT MANAGER AS THE READER. No language model reads the "
+             "drawings; the COM analyser is not driven, and the Document Manager reads the "
+             "pack's models instead (needs SDI_SW_DOCMGR_KEY on this machine). The PDF text "
+             "is still read for the parts list and title blocks. Not an estimate to quote.",
+    )
+    parser.add_argument(
+        "--bom-routes-only",
+        action="store_true",
+        help="A PRE-RUN FOR ESTIMATING: read the pack and compile the routes exactly as an "
+             "estimate would, then stop before the workbook. Writes only the BOMs and Routes "
+             "(xlsx and page) and the record, with nothing priced shown. Combines with any "
+             "reader mode.",
+    )
+    parser.add_argument(
+        "--bom-routes-out",
+        type=str,
+        default=None,
+        help="Folder for --bom-routes-only's files (default: the engine's output folder).",
+    )
+    parser.add_argument(
         "--folder-as-job",
         action="store_true",
         help="Group all PDFs in each folder into one pooled BOM + single bay estimate (overrides config default).",
@@ -787,6 +839,80 @@ def main() -> None:
         print("   " + "=" * 68)
         print("")
 
+    # ── --deterministic-only: NO LANGUAGE MODEL READS THE DRAWINGS (D-753) ─────────────
+    # The 8 Nov review: reusing cached LLM facts can prove a transfer fix, never that the
+    # deterministic reader supplied those facts; "no new LLM call" is not "no LLM dependence".
+    # So every reader that asks a model about the drawing is off, AND every cached answer. Set
+    # as environment, like --llm-only, so the gates deep in the scan see it without a flag
+    # threaded through every signature (run_readers.run_was_deterministic_only).
+    if getattr(args, "deterministic_only", False):
+        if getattr(args, "llm_only", False):
+            raise SystemExit("--deterministic-only and --llm-only ask opposite questions; "
+                             "pass one of them.")
+        os.environ["SDI_DETERMINISTIC_ONLY"] = "1"
+        os.environ["SDI_LLM_FULL_EXTRACT"] = "0"
+        os.environ["SKIP_VISION_EXTRACTION"] = "1"
+        os.environ["SDI_DXF_LLM_INTERPRET"] = "0"
+        from run_readers import DETERMINISTIC_ONLY_OFF as _det_off
+        print("")
+        print("   " + "=" * 68)
+        print("   DETERMINISTIC-ONLY RUN. No language model reads the drawings, and no")
+        print("   earlier answer from one is reused. OFF for this run:")
+        for _w in _det_off:
+            print(f"     - {_w}")
+        print("   ON as normal: PDF text and tables, the deterministic BOM reader, vector")
+        print("   geometry, DXF flat patterns and the SolidWorks extract. Prices are looked")
+        print("   up as on any run. This tests the drawing reader; it is not a quote.")
+        print("   " + "=" * 68)
+        print("")
+
+    # ── ONE READER MODE PER RUN, CHOSEN ON THE PAGE (run modes) ─────────────────────
+    _modes = [m for m, on in (("--llm-only", getattr(args, "llm_only", False)),
+                              ("--deterministic-only", getattr(args, "deterministic_only", False)),
+                              ("--targeted", getattr(args, "targeted", False)),
+                              ("--solidworks-only", getattr(args, "solidworks_only", False)),
+                              ("--docmgr-only", getattr(args, "docmgr_only", False))) if on]
+    if len(_modes) > 1 and set(_modes) != {"--deterministic-only"}:
+        raise SystemExit(f"{' and '.join(_modes)} ask different questions; pass one reader mode.")
+    if getattr(args, "targeted", False):
+        os.environ["SDI_LLM_MODE"] = "targeted"
+    if getattr(args, "solidworks_only", False) or getattr(args, "docmgr_only", False):
+        _dm = bool(getattr(args, "docmgr_only", False))
+        # No model reads the drawings (the deterministic-only switches), and the model reader
+        # is the one asked for and no other.
+        os.environ["SDI_DETERMINISTIC_ONLY"] = "1"
+        os.environ["SDI_LLM_FULL_EXTRACT"] = "0"
+        os.environ["SKIP_VISION_EXTRACTION"] = "1"
+        os.environ["SDI_DXF_LLM_INTERPRET"] = "0"
+        os.environ["SDI_APPLY_SOLIDWORKS"] = "1"
+        os.environ["SDI_SW_RUN_ANALYSER"] = "0" if _dm else "1"
+        os.environ["SDI_SW_DOCMGR"] = "1" if _dm else "0"
+        os.environ["SDI_READER_MODE"] = "docmgr" if _dm else "solidworks"
+        print("")
+        print("   " + "=" * 68)
+        print(f"   {'DOCUMENT MANAGER' if _dm else 'SOLIDWORKS'}-ONLY RUN. The pack's models are read by "
+              f"{'the SolidWorks Document Manager' if _dm else 'the SolidWorks analyser'} alone;")
+        print("   no language model reads the drawings and no cached answer is reused. The PDF")
+        print("   text is still read for the parts list and the title blocks. This measures")
+        print("   what the models give; it is not an estimate to quote.")
+        print("   " + "=" * 68)
+        print("")
+    if getattr(args, "bom_routes_only", False):
+        os.environ["SDI_BOM_ROUTES_ONLY"] = "1"
+
+    # ── SDI_LLM_MODE=targeted: THE MODEL IS ASKED ONLY ABOUT THE GAPS (SCRUM-194 req. 3) ──
+    if (not getattr(args, "deterministic_only", False)
+            and os.getenv("SDI_LLM_MODE", "").strip().lower() == "targeted"):
+        from run_readers import TARGETED_MODE_OFF as _tgt_off
+        print("")
+        print("   " + "=" * 68)
+        print("   TARGETED MODEL MODE. The deterministic readers run first; the model is then")
+        print("   asked one question per gap, on that part's own pages (gap fill). OFF:")
+        for _w in _tgt_off:
+            print(f"     - {_w}")
+        print("   " + "=" * 68)
+        print("")
+
     # ── --fresh-read: ASK THE MODEL AGAIN ───────────────────────────────────────────
     # SET AS ENVIRONMENT, like SDI_LLM_ONLY, because the two caches sit at opposite ends of
     # the pipeline -- one inside the per-page vision reader, one inside the whole-pack
@@ -1004,13 +1130,46 @@ def main() -> None:
         # Stamped here, immediately after the scan, so there is no window in which a
         # deliverable can be built by something that does not know what kind of run it is.
         summary["llm_only"] = bool(getattr(args, "llm_only", False))
+        # D-753: a saved run says it was read with no language model, for every reader after.
+        summary["deterministic_only"] = bool(getattr(args, "deterministic_only", False))
+        try:
+            from run_readers import llm_mode as _llm_mode_rec
+            summary["llm_mode"] = _llm_mode_rec()
+        except Exception:                                            # noqa: BLE001
+            pass
+        summary["reader_mode"] = (os.getenv("SDI_READER_MODE") or (
+            "llm_only" if getattr(args, "llm_only", False) else
+            "deterministic" if getattr(args, "deterministic_only", False) else
+            "targeted" if summary.get("llm_mode") == "targeted" else "full"))
+        if getattr(args, "bom_routes_only", False):
+            summary["bom_routes_only"] = True
         _time_stage("enrichment_reader_provenance", True)
         summary["fresh_read"] = bool(getattr(args, "fresh_read", False))
+        # WHICH MACHINE, WHICH RUNNER, WHICH BUILD — onto the run, for the book's first page
+        # (D-601). Stamped by the process that costs the job, so a report re-rendered
+        # elsewhere still names the machine that ran it.
+        try:
+            from run_provenance import record as _record_run
+            _rp_now = _record_run(summary)
+            # WHAT ARRIVED AGAINST WHAT WAS SENT (D-604), in the log before any costing.
+            _sub, _got = _rp_now.get("submitted_scope") or {}, _rp_now.get("received_scope") or {}
+            if _sub:
+                print(f"   [scope] submitted: brief {_sub.get('brief_chars') or 0} chars, "
+                      f"reference {', '.join(_sub.get('reference_documents') or []) or 'none'}"
+                      f" — received: brief {_got.get('brief_chars') or 0} chars, reference "
+                      f"{', '.join(_got.get('reference_documents') or []) or 'none'}",
+                      flush=True)
+            elif _rp_now.get("submission_gap"):
+                print(f"   [scope] no submitted scope: {_rp_now['submission_gap']}", flush=True)
+        except Exception as _rp_exc:                             # noqa: BLE001
+            print(f"   [run] could not record the run's machine and build ({_rp_exc})",
+                  flush=True)
         try:
             from run_readers import readers_that_ran as _readers
             summary["readers_that_ran"] = _readers(
                 llm_only=bool(getattr(args, "llm_only", False)),
-                dxf_enabled=bool(auto_discover_dxf))
+                dxf_enabled=bool(auto_discover_dxf),
+                deterministic_only=bool(getattr(args, "deterministic_only", False)))
         except Exception as _rr_exc:
             # SAID, NOT SWALLOWED. The report falls back to deriving this from the flag, which
             # is correct but coarser; a silent failure here would look like a full run.
@@ -1210,11 +1369,12 @@ def main() -> None:
                 _canon = (summary.get("saved_output_paths") or {}).get("json")
                 if _canon and Path(_canon).exists():
                     try:
-                        from file_scan import _json_default as _jd
+                        from file_scan import _json_default as _jd, persisted_summary as _saved
                     except Exception:
-                        _jd = str
+                        _jd, _saved = str, (lambda s: s)
+                    # The saved form, as the first write made it: vector counts, not paths (D-598x).
                     with open(_canon, "w", encoding="utf-8") as _fh_rw:
-                        json.dump(summary, _fh_rw, indent=2, ensure_ascii=False, default=_jd)
+                        json.dump(_saved(summary), _fh_rw, indent=2, ensure_ascii=False, default=_jd)
                     print(f"  Reconciled JSON re-written (material +\u00a3{_bought_in_total:.2f}, labour +\u00a3{_assembly_cost:.2f})")
             except Exception as _exc_rc:
                 print(f"  (totals reconciliation skipped: {_exc_rc})")
@@ -1323,6 +1483,23 @@ def main() -> None:
         if not getattr(args, "generate_ai_spreadsheet", False):
             _time_stage("enrichment_console_observations", False)
         _time_stage("post_scan_enrichment", False)
+        # ── THE PRE-RUN STOPS HERE: BOMs AND ROUTES, NO WORKBOOK (--bom-routes-only) ──
+        if getattr(args, "bom_routes_only", False):
+            try:
+                from bom_and_route_extract import write_both as _write_pre
+                _pre_out = Path(getattr(args, "bom_routes_out", None) or (OUTPUT_DIR / "estimates"))
+                _pre_out.mkdir(parents=True, exist_ok=True)
+                _pre = _write_pre(summary, _pre_out, job=str(scan_label or ""), want="both")
+                _rec_path = _pre_out / f"{Path(str(scan_label or 'job')).name}_pre_run_record.json"
+                _rec_path.write_text(json.dumps(summary, default=str), encoding="utf-8")
+                _files = [str(_pre[k]) for k in ("xlsx", "html") if _pre.get(k)] + [str(_rec_path)]
+                print(f"   -> PRE-RUN: {_pre.get('boms', 0)} BOM row(s), {_pre.get('routes', 0)} route "
+                      f"decision(s); no workbook, nothing priced shown", flush=True)
+                print("PACK_EXTRACT_OUTPUTS=" + json.dumps(_files), flush=True)
+            except Exception as _pre_err:                            # noqa: BLE001
+                print(f"   -> PRE-RUN FAILED: {type(_pre_err).__name__}: {_pre_err}", flush=True)
+                raise
+            continue
         _time_stage("populate_workbook", True)
         try:
             from wb_populate import populate_workbook
@@ -2182,6 +2359,23 @@ def main() -> None:
                 from read_charge_contract import record as _record_read_charges
                 _record_read_charges(_target, xlsx_path)
                 summary["read_charge_result"] = _target.get("read_charge_result")
+                from read_charge_contract import record_drawing as _record_drawing_charges
+                _record_drawing_charges(_target, xlsx_path)
+                summary["drawing_charge_result"] = _target.get("drawing_charge_result")
+                # EACH READER FINDING THROUGH THE BUILD, THE COSTING AND THE WORKBOOK (SCRUM-194
+                # requirement 2): the pre-build findings, each with its three transitions and a
+                # verdict; a finding no part was given stays visible. Reporting, not a hold:
+                # the drawing ledger above is the release condition.
+                try:
+                    import findings_trace as _ftr
+                    _target["findings_trace"] = summary["findings_trace"] = _ftr.audit(
+                        _target, _target.get("drawing_charge_result"))
+                    _fc = (summary["findings_trace"] or {}).get("counts") or {}
+                    if summary["findings_trace"].get("applicable"):
+                        print(f"   [findings-trace] {json.dumps(_fc)}", flush=True)
+                except Exception as _ft_exc:                              # noqa: BLE001
+                    summary["findings_trace"] = {"applicable": False,
+                                                 "why": f"{type(_ft_exc).__name__}: {_ft_exc}"}
             except Exception as _rc_exc:                                 # noqa: BLE001
                 _target["read_charge_result"] = summary["read_charge_result"] = {
                     "schema": "read_charge_contract.v1", "applicable": True, "passed": False,
@@ -2255,24 +2449,48 @@ def main() -> None:
             # none of that. A file that cannot say how it was produced will eventually be
             # read as an ordinary estimate, which for an LLM-only run is the one outcome
             # every warning in this engine exists to prevent.
-            if getattr(args, "llm_only", False) and _canon_json2:
+            #
+            # AND WHICH RUN, MACHINE AND BUILD, ON EVERY RUN (D-601). The report is built from
+            # this file, and the run ID, the run provenance and the fresh-read flag are set on
+            # the summary after the scan first wrote it — so the 30 Oct HPP report printed none
+            # of them. They go on the file here, before the report reads it.
+            if _canon_json2:
                 try:
                     _p = Path(_canon_json2)
                     _d = json.loads(_p.read_text(encoding="utf-8"))
-                    _d["llm_only"] = True
-                    _d["read_by"] = ("BOM from the vision model alone (--llm-only); "
-                                     "title-block text still read by pdfplumber; DXF flat "
-                                     "patterns and the SolidWorks extract off — a MEASUREMENT "
-                                     "of the model's BOM reading, not an estimate; its total "
-                                     "must not be quoted")
-                    _p.write_text(json.dumps(_d, indent=2, ensure_ascii=False),
+                    # The run ID rides INSIDE run_provenance, not as the top-level key: the
+                    # customer quotation prints that key as its reference, and putting
+                    # SDI's run detail on the customer's document is not this change.
+                    _rp = summary.get("run_provenance")
+                    if isinstance(_rp, dict):
+                        _d["run_provenance"] = dict(
+                            _rp, run_id=str(summary.get("run_id") or _rp.get("run_id") or ""),
+                            # THE CUSTOMER THE RUN WAS GIVEN (D-604), beside the scope
+                            # submitted, so the book can compare the two.
+                            received_customer=str(summary.get("customer") or ""))
+                    if "fresh_read" in summary:
+                        _d["fresh_read"] = bool(summary["fresh_read"])
+                    if getattr(args, "deterministic_only", False):
+                        _d["deterministic_only"] = True
+                        _d["read_by"] = ("the drawing reader alone (--deterministic-only): no "
+                                         "language model read the drawings and no cached "
+                                         "answer was reused — a TEST of the deterministic "
+                                         "reader, not an estimate to quote")
+                    if getattr(args, "llm_only", False):
+                        _d["llm_only"] = True
+                        _d["read_by"] = ("BOM from the vision model alone (--llm-only); "
+                                         "title-block text still read by pdfplumber; DXF flat "
+                                         "patterns and the SolidWorks extract off — a "
+                                         "MEASUREMENT of the model's BOM reading, not an "
+                                         "estimate; its total must not be quoted")
+                    _p.write_text(json.dumps(_d, indent=2, ensure_ascii=False, default=str),
                                   encoding="utf-8")
                 except Exception as _se:
                     # SAID, NOT SWALLOWED. Downstream readers decide what to suppress from
                     # this flag; if it did not land they are deciding without it.
-                    print(f"   [deliverables] WARNING could not stamp llm_only on the JSON "
-                          f"({_se}) — anything reading it later cannot tell this was a "
-                          f"measurement run.", flush=True)
+                    print(f"   [deliverables] WARNING could not stamp the run's mode and "
+                          f"identity on the JSON ({_se}) — anything reading it later cannot "
+                          f"tell a measurement run, or name the machine and build.", flush=True)
 
             # Resolve the pinned manual estimate ONCE (explicit-only, no discovery) so
             # both the client quote (customer name from the ...\<CUSTOMER>\... path) and
@@ -2365,6 +2583,21 @@ def main() -> None:
                         except Exception as _p_exc:              # noqa: BLE001
                             print(f"   [deliverables] parity report skipped ({_p_exc}) — the "
                                   f"bundle above is unaffected.", flush=True)
+
+                        # D-623 (SCRUM-157): the line-by-line comparison a person reads. Cost
+                        # apart from sell, commercial lines, scope part by part, quantities and
+                        # revisions, each difference linked to its lines and cells. Isolated.
+                        try:
+                            import parity_compare as _pcmp
+                            _d = _pcmp.compare(Path(_canon_json2), Path(_manual))
+                            _dj, _dh = _pcmp.write(
+                                _d, _out_dir, re.sub(r"[^\w\- ]", "", str(scan_label)).strip())
+                            (summary.setdefault("saved_output_paths", {}))["parity_detail"] = _dh
+                            print(f"   [deliverables] parity, line by line -> {Path(_dh).name}",
+                                  flush=True)
+                        except Exception as _d_exc:              # noqa: BLE001
+                            print(f"   [deliverables] line-by-line parity skipped ({_d_exc}) — "
+                                  f"the bundle above is unaffected.", flush=True)
                     elif not _explicit:
                         print("   [deliverables] no --parity-workbook passed — new-job report only "
                               "(no parity section). Pass --parity-workbook <path> to compare against a "
@@ -2576,6 +2809,15 @@ def main() -> None:
                 _sop["covering_email"] = str(_note_path)
                 print(f"   [covering-note] {_note_path.name} — {_note['subject']}",
                       flush=True)
+                # THE SAME NOTE, SPOKEN (D-609): its words beside the workbook, and the sound
+                # where this machine has a speech synthesiser. Never stops the run.
+                if _note.get("spoken"):
+                    try:
+                        from walkthrough_audio import write_walkthrough as _walkthrough
+                        _wt_ok, _wt_said = _walkthrough(_note["spoken"], Path(xlsx_path))
+                        print(f"   [walkthrough] {_wt_said}", flush=True)
+                    except Exception as _wt_exc:                    # noqa: BLE001
+                        print(f"   [walkthrough] not written ({_wt_exc})", flush=True)
             except Exception as _note_exc:
                 print(f"   [covering-note] not written ({_note_exc}) — the mail service will "
                       f"fall back to its own short note.", flush=True)
@@ -2601,6 +2843,28 @@ def main() -> None:
                 print(f"   [record] NOT pinned ({_pin_exc}) — {Path(str(_canon_pin)).name} is "
                       f"the job's latest record and the next run of it will overwrite it.",
                       flush=True)
+
+        # THE OPEN ITEMS, ONE STRUCTURED LINE (D-739), so the service and the wall monitor can
+        # show what still needs a person beside a finished run without ever reading an
+        # estimate: missing costing-critical items apart from provisional assumptions.
+        try:
+            from costed_facts import outstanding_summary as _osum_wall
+            _ow = _osum_wall(summary.get("costed_job") or summary)
+            print("REVIEW_TALLY=" + json.dumps({
+                "total": _ow.get("total"), "blocking": _ow.get("blocking"),
+                "advisory": _ow.get("advisory"),
+                "missing": (_ow.get("prices_missing") or 0) + (_ow.get("stated_not_carried") or 0)
+                           + (_ow.get("labour_not_on_sheet") or 0),
+                "decisions": (_ow.get("manufacturing") or 0) + (_ow.get("rulings") or 0)
+                             + (_ow.get("consistency_checks") or 0),
+                "provisional": (_ow.get("market_figures") or 0) + (_ow.get("provisional") or 0)
+                               + (_ow.get("sizes_assumed") or 0) + (_ow.get("indicative") or 0),
+                # Counted in the total and neither blocking nor advisory in the tally's rule.
+                "quantity_checks": max(0, int(_ow.get("total") or 0) - int(_ow.get("blocking") or 0)
+                                       - int(_ow.get("advisory") or 0)),
+                "phrase": str(_ow.get("phrase") or "")[:300]}, default=str), flush=True)
+        except Exception as _ow_exc:                                  # noqa: BLE001
+            print(f"   [review] the open-item tally could not be said ({_ow_exc})", flush=True)
 
         print("\nPage text preview:\n")
         for page in summary["pages"]:

@@ -124,13 +124,17 @@ def test_the_service_files_this_runs_brief_and_removes_a_stale_one(routes, tmp_p
         else "enquiry_brief" in routes.EstimateRequest.__fields__
 
 
-def test_the_page_sends_the_brief_with_an_llm_read_only():
+def test_the_page_sends_the_brief_with_an_llm_read_and_with_an_estimate():
+    """D-598y: an estimate of a drawing no reader can read falls back to the vision read, so
+    the estimate's own request carries the brief too."""
     page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text(
         encoding="utf-8")
     assert 'id="enquiryBrief"' in page
     assert page.count('enquiry_brief: ($("enquiryBrief").value') == 1
     i = page.index('enquiry_brief: ($("enquiryBrief").value')
     assert 'method: "llm"' in page[i - 200:i]
+    engine = page[page.index("runBtn.onclick"):page.index('api("/api/estimate",{method:"POST"')]
+    assert 'enquiry_brief: (document.getElementById("enquiryBrief").value' in engine
 
 
 # ── D-361 ──────────────────────────────────────────────────────────────────────────────

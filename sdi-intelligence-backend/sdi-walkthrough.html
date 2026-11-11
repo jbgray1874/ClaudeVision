@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,300;9..144,400&display=swap" rel="stylesheet">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estimate Walkthrough</title>
+<!-- THE WALKTHROUGH PAGE (D-610). Opened from the buttons in a finished estimate's e-mail:
+     the spoken walkthrough, its words, the price at every quantity, the run's files, and a box
+     to ask questions about the estimate, answered from the estimate's own record. Internal: the
+     estimate may be provisional and nothing here is a customer quotation.
+     THE QUESTION BOX LEADS (D-613). JG, 1 Nov 2026: the e-mail's button "takes you to the app
+     with the prompt part". On a phone the prices and the box are what fits on the first
+     screen; #ask focuses the box, #listen goes to the player.
+     ASK BY VOICE OR BY TYPING; ALWAYS SEE THE ANSWER, HEAR IT TOO IF WANTED (D-620, D-622). JG,
+     1 Nov 2026: "can the prompting be by voice user only, or text only? both ways would be
+     ideal. summary voiced or texted back or both". The review: show the recognised words so a
+     job number can be corrected, never send them unchecked; always show the written answer
+     and its source; Listen and Stop on each answer, automatic reading optional. The speech
+     is /estimating/sdi-voice.js, shared with the desk and the phone: the AM CRM's Azure
+     speech where it is configured, the browser's own otherwise. -->
+<style>
+  :root{
+    --bg:#0c0c0b; --panel:#141412; --line:#2b2b26; --ink:#f2f2ea; --muted:#b6b6a7;
+    --brand:#F6D946; --brand-fill:#F6D946; --bad:#ff6b6b; --r:10px;
+    --body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f4f4f2; --panel:#ffffff; --line:#d9d8d3; --ink:#17171a; --muted:#5b5b63;
+           --brand:#7a6300; --brand-fill:#F6D946; --bad:#c0342f; }
+  }
+  *{ box-sizing:border-box }
+  body{ margin:0; background:var(--bg); color:var(--ink); font:16px/1.55 var(--body) }
+  main{ max-width:880px; margin:0 auto; padding:28px 16px 60px }
+  .eyebrow{ color:var(--brand); letter-spacing:.18em; font-size:12px; font-weight:700 }
+  h1{ font-size:28px; margin:6px 0 4px }
+  .sub{ color:var(--muted); margin:0 0 18px }
+  section{ background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+           padding:18px; margin:14px 0 }
+  h2{ font-size:17px; margin:0 0 10px }
+  audio{ width:100% }
+  table{ border-collapse:collapse; width:100%; max-width:420px }
+  th,td{ text-align:left; padding:6px 10px 6px 0; border-bottom:1px solid var(--line) }
+  td.n,th.n{ text-align:right; font-variant-numeric:tabular-nums }
+  .words{ white-space:pre-wrap }
+  ul.files{ margin:0; padding-left:18px }
+  a{ color:var(--brand) }
+  textarea{ width:100%; min-height:80px; background:var(--bg); color:var(--ink);
+            border:1px solid var(--line); border-radius:8px; padding:10px; font:inherit }
+  button{ margin-top:8px; background:var(--brand-fill); color:#111; border:0; border-radius:8px;
+          padding:10px 18px; font:600 15px var(--body); cursor:pointer }
+  button:disabled{ opacity:.6; cursor:default }
+  .qa{ margin-top:14px }
+  .q{ font-weight:600; margin-top:12px }
+  .a{ margin:4px 0 0; white-space:pre-wrap }
+  .err{ color:var(--bad) }
+  .rec{ font-variant-numeric:tabular-nums; border-left:3px solid var(--brand); padding-left:10px }
+  .note{ color:var(--muted); font-size:13px }
+  .chips{ display:flex; flex-wrap:wrap; gap:8px; margin:0 0 10px }
+  .chip{ margin:0; background:transparent; color:var(--brand); border:1px solid var(--line);
+         border-radius:16px; padding:6px 12px; font:500 14px var(--body) }
+  .top{ display:flex; justify-content:space-between; align-items:baseline; gap:12px;
+        flex-wrap:wrap }
+  .top a{ font-size:14px }
+  .askrow{ display:flex; gap:8px; flex-wrap:wrap; align-items:center }
+  .ghost{ background:transparent; color:var(--brand); border:1px solid var(--brand) }
+  .ghost.on{ background:var(--brand-fill); color:#111 }
+  .reply{ display:flex; gap:8px; align-items:center; margin-top:10px; font-size:14px;
+          cursor:pointer }
+  .say{ margin:6px 0 0; padding:4px 12px; font:500 13px var(--body) }
+  @media (max-width:560px){
+    h1{ font-size:23px }
+    main{ padding:18px 14px 48px }
+    section{ padding:14px }
+    #ask .askrow button{ flex:1 }
+  }
+
+  /* ── we.are.sdi (D-754) ──────────────────────────────────────────────────────────
+     The look of wearesdi.com on the dark ground: the wordmark, SDI yellow for the brand
+     (warnings keep their amber, so the two never read as one), the geometric display face,
+     pill-shaped primary buttons and the halftone dot circle. Tokens only, so light mode
+     follows. */
+  .sdi-word{display:inline-block;height:1em;width:auto;vertical-align:-.12em;color:var(--sdi-word-ink,currentColor)}
+  .sdi-word .d{fill:var(--brand)}
+  .sdi-dots{position:absolute;pointer-events:none;border-radius:50%;opacity:.16;z-index:0;
+    background-image:radial-gradient(var(--brand) 1.1px, transparent 1.6px);background-size:9px 9px;
+    -webkit-mask-image:radial-gradient(circle at center,#000 58%,transparent 71%);
+            mask-image:radial-gradient(circle at center,#000 58%,transparent 71%)}
+  .eyebrow .sdi-word{height:15px;margin-right:10px;color:var(--ink)}
+  h1,h2{font-family:'Outfit',var(--body)}
+</style>
+</head>
+<body>
+<main>
+  <div class="top"><div class="eyebrow"><svg class="sdi-word" viewBox="0 0 950 169" role="img" aria-label="we.are.sdi" fill="currentColor"><path d="M158.915 36.7773L135.389 114.85C133.118 122.35 130.447 133.08 129.137 138.467C127.991 133.14 125.689 122.658 123.777 115.372L103.183 36.7773H80.9663L59.639 115.365C57.7134 122.531 55.2616 133.193 54.0544 138.537C52.7665 133.175 50.1337 122.393 48.0313 114.866L25.7238 36.7773H2.41797L42.8867 164.183H64.817L86.1457 87.545C88.1938 80.2145 90.5008 70.1606 91.6815 64.8782C92.7926 70.1676 94.9785 80.2145 97.0252 87.5408L118.11 164.183H139.793L181.494 36.7773H158.915Z"/><path d="M198.247 89.3881C201.717 65.0993 215.393 51.2041 235.907 51.2041C257.026 51.2041 269.942 65.1035 271.475 89.3881H198.247ZM235.907 33.6262C200.848 33.6262 175.402 61.7925 175.402 100.602C175.402 140.036 200.782 167.576 237.122 167.576C266.097 167.576 286.107 151.905 292.022 124.58L292.29 123.331H271.037L270.838 124.105C266.638 140.412 254.981 149.03 237.122 149.03C214.607 149.03 199.568 132.667 197.679 106.238H294.716V105.207C294.716 61.0546 272.181 33.6262 235.907 33.6262Z"/><path d="M423.094 99.3426V116.845C423.094 129.476 413.093 149.514 386.253 149.514C374.763 149.514 361.066 146.034 361.066 129.453C361.066 111.983 374.55 109.012 395.107 106.475C405.222 105.353 416.174 102.542 423.094 99.3426ZM442.876 145.211V75.1457C442.876 48.0778 427.173 34.3525 396.207 34.3525C365.325 34.3525 345.882 50.5756 344.199 77.7479L344.132 78.8422H365.115L365.189 77.8927C366.611 59.6855 376.543 51.2036 396.449 51.2036C413.721 51.2036 422.85 58.4756 422.85 72.2358C422.85 84.7721 413.6 87.9131 394.162 89.8791C365.81 92.711 338.128 98.1354 338.128 129.937C338.128 152.214 355.493 166.609 382.369 166.609C399.062 166.609 412.196 160.665 422.446 148.455C422.81 156.828 424.039 161.374 426.552 163.882L426.853 164.184H447.488V161.874L447.029 161.569C445.354 160.452 442.876 154.482 442.876 145.211Z"/><path d="M544.015 89.3881C547.485 65.0993 561.162 51.2041 581.676 51.2041C602.794 51.2041 615.711 65.1035 617.244 89.3881H544.015ZM581.676 33.6262C546.616 33.6262 521.17 61.7925 521.17 100.602C521.17 140.036 546.551 167.576 582.89 167.576C611.865 167.576 631.875 151.905 637.79 124.58L638.059 123.331H616.805L616.606 124.105C612.407 140.412 600.749 149.03 582.89 149.03C560.375 149.03 545.337 132.667 543.447 106.238H640.484V105.207C640.484 61.0546 617.95 33.6262 581.676 33.6262Z"/><path d="M851.701 149.272C829.697 149.272 816.561 131.258 816.561 101.086C816.561 71.215 829.932 52.6584 851.46 52.6584C875.53 52.6584 890.484 71.215 890.484 101.086C890.484 143.012 866.185 149.272 851.701 149.272ZM889.27 52.9591C880.17 40.7959 866.17 33.8678 850.487 33.8678C816.91 33.8678 794.351 60.7839 794.351 100.843C794.351 141.529 816.576 167.82 850.973 167.82C867.235 167.82 879.136 162.367 889.27 150.196V164.182H910.994V0.13501H889.27V52.9591Z"/><path d="M927.143 164.182H948.867V36.7761H927.143V164.182Z"/><path d="M927.143 21.2634H948.867V0.135254H927.143V21.2634Z"/><path d="M743.393 88.1957C721.16 83.7055 710.475 80.996 710.475 68.5976C710.475 57.8517 719.302 51.688 734.692 51.688C752.847 51.688 761.398 58.5214 763.285 74.5371L763.393 75.4463H785.617L785.479 74.2949C782.352 48.0054 764.958 34.1101 735.178 34.1101C706.259 34.1101 688.993 47.3649 688.993 69.568C688.993 98.3525 713.23 103.337 736.664 108.156C761.031 113.28 768.617 116.918 768.617 129.693C768.617 142.319 758.639 149.272 740.518 149.272C719.615 149.272 708.61 141.227 705.884 123.957L705.746 123.087H683.493L683.602 124.216C686.301 152.334 706.342 167.819 740.032 167.819C771.687 167.819 790.585 153.204 790.585 128.724C790.585 97.7135 765.514 92.6566 743.393 88.1957Z"/><path d="M525.691 57.6969V37.1089L525.044 36.8513C522.561 35.86 520.488 35.3225 516.649 35.3225C502.335 35.3225 488.734 42.983 479.81 55.9426V36.7775H458.086V164.183H479.81V93.5711C479.81 69.2586 497.61 56.5371 515.193 56.5371C519.064 56.5371 520.872 56.7877 523.607 57.6969H525.691Z"/><path class="d" d="M304.438 145.847H322.879V164.158H304.438V145.847Z"/><path class="d" d="M650.643 145.691H669.084V164.002H650.643V145.691Z"/></svg><span>INTELLIGENCE</span></div>
+    <a href="/estimating">Open the estimating app</a></div>
+  <h1 id="title">Estimate walkthrough</h1>
+  <p class="sub" id="sub">Loading…</p>
+
+  <section id="pricesBox" hidden>
+    <h2>Price at each quantity</h2>
+    <table><thead><tr><th>Quantity</th><th class="n">Unit cost</th><th class="n">Order value</th></tr></thead>
+      <tbody id="prices"></tbody></table>
+    <p class="note">Ex VAT. The order value is the unit cost times the quantity. Internal cost
+      estimate; it may be provisional, and nothing on this page is a customer quotation.</p>
+  </section>
+
+  <section id="ask">
+    <h2>Ask about this estimate</h2>
+    <p class="note">Answered from this estimate's own figures and commentary. Where they do not
+      say, the answer says so and points to the workbook or the report.</p>
+    <div class="chips" id="chips">
+      <button type="button" class="chip">Why does the unit cost change with quantity?</button>
+      <button type="button" class="chip">What are the biggest costs?</button>
+      <button type="button" class="chip">What is still to confirm before this is quoted?</button>
+      <button type="button" class="chip">Where does the labour go?</button>
+    </div>
+    <textarea id="question" placeholder="Type a question, or tap Speak and ask it, e.g. Why is 1 off dearer than 10 off?"></textarea>
+    <div class="askrow">
+      <button id="askBtn" type="button">Ask</button>
+      <button id="micBtn" type="button" class="ghost">Speak</button>
+    </div>
+    <p class="note" id="micNote" hidden></p>
+    <label class="reply"><input type="checkbox" id="autoRead"> Read each answer aloud as it arrives</label>
+    <p class="note">Every answer is shown in writing with its source, and has Listen. A spoken
+      question goes into the box first: check it, especially a job number, then tap Ask. Speak
+      uses SDI's speech service where it is set up, otherwise your browser's own (Google's in
+      Chrome, Apple's on an iPhone), so type anything you would not say on a call.</p>
+    <div class="qa" id="answers"></div>
+  </section>
+
+  <section id="listen" hidden>
+    <h2>Listen</h2>
+    <audio id="audio" controls preload="metadata"></audio>
+  </section>
+
+  <section id="wordsBox" hidden>
+    <h2>Commentary</h2>
+    <button type="button" class="ghost say" id="sayWords" hidden>Listen</button>
+    <div class="words" id="words"></div>
+  </section>
+
+  <section id="filesBox" hidden>
+    <h2>Files</h2>
+    <ul class="files" id="files"></ul>
+  </section>
+</main>
+<script src="/estimating/sdi-voice.js"></script>
+<script>
+const TOKEN = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
+const API = "/api/estimate/walkthrough/" + encodeURIComponent(TOKEN);
+const API_KEY = "";                       // set if SDI_API_KEY is enabled, as on the estimating page
+const $ = id => document.getElementById(id);
+const api = (p, o = {}) => fetch(p, {...o, headers: {"X-SDI-Key": API_KEY, ...(o.headers || {})}});
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const gbp = v => "£" + Number(v).toLocaleString("en-GB", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const fileUrl = name => API + "/file/" + encodeURIComponent(name);
+
+async function load(){
+  let r, w;
+  try{ r = await api(API); w = await r.json(); }
+  catch(e){ $("sub").textContent = "The portal could not be reached: " + e.message; return; }
+  if(!r.ok){ $("sub").innerHTML = '<span class="err">' + esc(w.detail || ("Failed (" + r.status + ")")) + "</span>"; return; }
+  $("title").textContent = (w.drawing_number || "Estimate") + " — walkthrough";
+  $("sub").textContent = [w.client, w.units ? w.units + " off" : ""].filter(Boolean).join(" · ");
+  if(w.audio){ $("audio").src = fileUrl(w.audio); $("listen").hidden = false; }
+  const prices = (w.quantity_prices && w.quantity_prices.length) ? w.quantity_prices
+    : (w.unit_cost_gbp ? [{quantity: w.units || 1, unit_gbp: w.unit_cost_gbp}] : []);
+  if(prices.length){
+    $("prices").innerHTML = prices.map(p => "<tr><td>" + esc(p.quantity) + " off</td><td class='n'>"
+      + gbp(p.unit_gbp) + "</td><td class='n'>"
+      + (Number(p.quantity) > 0 ? gbp(Math.round(p.unit_gbp * p.quantity * 100) / 100) : "")
+      + "</td></tr>").join("");
+    $("pricesBox").hidden = false;
+  }
+  if(w.commentary){
+    $("words").textContent = w.commentary; $("wordsBox").hidden = false;
+    if(V) V.status().then(() => { if(V.canSpeak()){ $("sayWords").hidden = false;
+      $("sayWords").onclick = () => V.speak(w.commentary, $("sayWords")); } });
+  }
+  /* EVERY FILE IS A LINK (D-645). JG, 3 Nov 2026: the portal client estimate is available
+     every time; a quotation not yet released for a customer opens as the portal working copy. */
+  if((w.files || []).length){
+    $("files").innerHTML = w.files.map(n => "<li><a href='" + fileUrl(n) + "' target='_blank' rel='noopener'>"
+      + esc(n) + "</a></li>").join("");
+    $("filesBox").hidden = false;
+  }
+  goToHash();
+}
+
+function goToHash(){
+  const where = (location.hash || "").slice(1);
+  if(where === "ask"){ $("ask").scrollIntoView(); $("question").focus({preventScroll: true}); }
+  else if(where === "listen" && !$("listen").hidden){ $("listen").scrollIntoView(); }
+}
+
+// ── voice (D-620, D-622): /estimating/sdi-voice.js ─────────────────────────────────────
+const V = window.SDIVoice || null;
+if (V && V.useKey) V.useKey(API_KEY);     // the neural voice behind this page's own gate (D-673)
+const store = {
+  get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
+  set(k, v){ try{ localStorage.setItem(k, v); }catch(e){} }
+};
+let askedBy = "text";
+
+function micState(text, kind){
+  const n = $("micNote"); n.hidden = !text; n.textContent = text || "";
+  n.className = "note" + (kind === "err" ? " err" : "");
+}
+function micIdle(){ $("micBtn").textContent = "Speak"; $("micBtn").classList.remove("on"); }
+
+// THE WORDS GO INTO THE BOX, NEVER STRAIGHT TO A QUESTION. A misheard job number asked about
+// would be answered about the wrong job, confidently; the person checks it and taps Ask.
+function listen(){
+  if(!V){ micState("Voice is not available on this page; type the question.", "err"); return; }
+  V.listen({
+    onState: micState,
+    onInterim: t => { $("question").value = t; },
+    onDone: t => {
+      $("question").value = t; askedBy = "voice";
+      micState("Heard: \u201c" + t + "\u201d. Check it, especially any job number, then tap Ask.");
+      $("question").focus();
+    },
+    onEnd: micIdle
+  });
+  if(V.listening()){ $("micBtn").textContent = "Listening… tap to stop"; $("micBtn").classList.add("on"); }
+}
+
+async function ask(){
+  const by = askedBy; askedBy = "text";
+  const q = $("question").value.trim();
+  if(!q) return;
+  micState("");
+  const btn = $("askBtn"); btn.disabled = true; btn.textContent = "Asking…";
+  const item = document.createElement("div");
+  item.innerHTML = "<div class='q'>" + esc(q) + "</div><p class='a note'>Working out the answer…</p>";
+  $("answers").prepend(item);
+  try{
+    const r = await api(API + "/ask", {method: "POST", headers: {"Content-Type": "application/json"},
+                                       body: JSON.stringify({question: q})});
+    const j = await r.json();
+    const a = item.querySelector(".a");
+    a.className = "a" + (r.ok && j.status === "answered" ? "" : " note");
+    a.textContent = r.ok ? (j.answer || "No answer came back.") : (j.detail || ("Failed (" + r.status + ")"));
+    if(r.ok){
+      // THE SAME ANSWER, HEARD (D-622): the words on screen and the record's own figures, read
+      // after the explanation because they are the numbers that count. Nothing new is made
+      // up to be spoken, and the written answer always stays on screen.
+      const spoken = (j.answer || "") + ((j.recorded || []).length ? " From the record: " + j.recorded.join(" ") : "");
+      let sayBtn = null;
+      if(V && V.canSpeak()){
+        sayBtn = document.createElement("button");
+        sayBtn.type = "button"; sayBtn.className = "ghost say"; sayBtn.textContent = "Listen";
+        sayBtn.onclick = () => V.speak(spoken, sayBtn);
+        if($("autoRead").checked) V.speak(spoken, sayBtn);
+      }
+      // D-616: the record's own figures beside the explanation, what the model did not see,
+      // and where the answer came from: the run, the record and who answered.
+      if((j.recorded || []).length){
+        const fig = document.createElement("p"); fig.className = "a rec";
+        fig.textContent = "From the record: " + j.recorded.join(" ");
+        item.appendChild(fig);
+      }
+      if(j.coverage_note){
+        const cov = document.createElement("p"); cov.className = "a note";
+        cov.textContent = j.coverage_note; item.appendChild(cov);
+      }
+      const src = document.createElement("p"); src.className = "a note";
+      src.textContent = "Source: " + (j.record_name || "no record")
+        + (j.run_id ? " · run " + j.run_id : "")
+        + ((j.sources || []).length ? " · " + j.sources.join(", ") : "")
+        + " · answered by " + (j.model || "nobody: the record figures only")
+        + " · asked by " + (by === "voice" ? "voice" : "text");
+      item.appendChild(src);
+      if(sayBtn) item.appendChild(sayBtn);
+      $("question").value = "";
+    }
+  }catch(e){
+    item.querySelector(".a").textContent = "The portal could not be reached: " + e.message;
+  }
+  btn.disabled = false; btn.textContent = "Ask";
+}
+$("askBtn").onclick = ask;
+$("micBtn").onclick = listen;
+document.querySelectorAll("#chips .chip").forEach(c => c.onclick = () => {
+  askedBy = "text"; $("question").value = c.textContent; ask();
+});
+$("autoRead").checked = store.get("sdi.walkthrough.autoread") === "1";
+$("autoRead").onchange = () => {
+  store.set("sdi.walkthrough.autoread", $("autoRead").checked ? "1" : "0");
+  if(!$("autoRead").checked && V) V.stop();
+};
+if(V) V.status().then(() => {
+  if(!V.canSpeak()){ $("autoRead").disabled = true; $("autoRead").parentElement.title = "This browser cannot read aloud"; }
+});
+window.addEventListener("hashchange", goToHash);
+$("question").addEventListener("keydown", e => {
+  if(e.key === "Enter" && (e.ctrlKey || e.metaKey)) ask();
+});
+load();
+</script>
+</body>
+</html>

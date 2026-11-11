@@ -212,3 +212,48 @@ def test_unread_general_arrangements_say_converting_them_adds_nothing():
 def test_a_folder_with_both_leads_on_the_flats():
     msg = _flag(["AC0706-02_GA-REVG.DWG", "11650-04-01A_2MM PETG_REVG.DWG"])
     assert "1 of those are named as FLAT PATTERNS" in msg
+
+
+# ── D-727: melamine-faced MDF is a board of its own ───────────────────────────────────
+
+@pytest.mark.parametrize("name", ["R-03J_9mm Black MFMDF_revB.DXF", "R-03J_9mm MF MDF.DXF",
+                                  "R-03J_18mm MF-MDF_revA.DXF"])
+def test_a_faced_mdf_filename_reads_as_mfmdf_not_nothing(name):
+    """12677-01-03J's flat named "9mm Black MFMDF" read as no material at all."""
+    assert material_of(Path(name)) == "MFMDF"
+
+
+@pytest.mark.parametrize("text", ["PRE LAMINATED BOARD, MFMDF", "MELAMINE FACED MDF",
+                                  "PRE-LAMINATED MDF"])
+def test_a_title_block_that_names_faced_mdf_reads_as_mfmdf(text):
+    """The GA prints "PRE LAMINATED BOARD, MFMDF"; the generic BOARD came back instead."""
+    from drawing_job_merge import material_from_drawing_text
+    assert material_from_drawing_text(text) == "MFMDF"
+
+
+def test_plain_mdf_and_chipboard_keep_their_own_names():
+    from drawing_job_merge import material_from_drawing_text
+    assert material_of(Path("R-02J_6mm MDF+Lam_revB.DXF")) == "MDF"
+    assert material_from_drawing_text("MELAMINE FACED CHIPBOARD") == "MELAMINE FACED CHIPBOARD"
+    assert material_of(Path("R-01J_18mm MFC.DXF")) == "MELAMINE FACED CHIPBOARD"
+
+
+def test_the_engine_normalises_what_the_reader_says():
+    """The reader's word must be one the normaliser keeps, or it is a private spelling."""
+    import json_normaliser
+    assert json_normaliser.normalise_material("MFMDF") == "MFMDF"
+
+
+# ── D-727, the DXF reader's own filename rule ─────────────────────────────────────────
+
+@pytest.mark.parametrize("stem, want", [("R-03J_9mm Black MFMDF_revB", "MFMDF"),
+                                        ("R-03J_18mm MF MDF", "MFMDF"),
+                                        ("R-03J_18mm MFC", "MFC"),
+                                        ("R-03J_9mm PRE LAM", "MFC")])
+def test_the_flat_pattern_reader_keeps_faced_mdf_apart_from_faced_chipboard(stem, want):
+    """12677-01, 6 Nov 10:38: the flat-pattern reader's own rule turned "9mm Black MFMDF" into
+    MFC, and its answer is used before the shared vocabulary, so the panel was costed as
+    faced chipboard after the shared vocabulary had learned the word."""
+    import dxf_reader
+    assert dxf_reader._parse_material_from_stem(stem) == want
+    assert dxf_reader._parse_filename(Path(stem + ".DXF"))["material"] == want

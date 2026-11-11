@@ -196,15 +196,21 @@ def applied_finish_estimate(part: Dict[str, Any], blank_length_mm: Optional[floa
     except (TypeError, ValueError):
         qty = 1
 
+    # THE FACES THE PART'S OWN CONSTRUCTION STATES (laminated_board: core + laminate on both
+    # faces), else the one face the customer sees.
+    try:
+        faces = max(1, int(part.get("applied_finish_faces") or _DEFAULT_FACES))
+    except (TypeError, ValueError):
+        faces = _DEFAULT_FACES
     lines: List[Dict[str, Any]] = []
     for code in codes:
         line: Dict[str, Any] = {
             "finish_code": code, "stated_as": text.strip()[:200],
-            "faces": _DEFAULT_FACES, "area_m2_per_part": round(area_m2 * _DEFAULT_FACES, 6),
+            "faces": faces, "area_m2_per_part": round(area_m2 * faces, 6),
         }
         _rate = rate_for(code)
         if _rate and area_m2 > 0:
-            unit = area_m2 * _DEFAULT_FACES * _rate["rate_gbp_per_m2"]
+            unit = area_m2 * faces * _rate["rate_gbp_per_m2"]
             line.update({
                 "rate_gbp_per_m2": _rate["rate_gbp_per_m2"],
                 "unit_finish_cost_gbp": round(unit, 4),
@@ -224,7 +230,7 @@ def applied_finish_estimate(part: Dict[str, Any], blank_length_mm: Optional[floa
                 "reason": "no_rate_for_finish",
                 "note": (f"{code.replace('_', ' ').title()} is stated on the drawing and this "
                          f"engine holds no rate for it. "
-                         + (f"{area_m2 * _DEFAULT_FACES:.3f} m² per part, {qty} off — "
+                         + (f"{area_m2 * faces:.3f} m² per part, {qty} off — "
                             if area_m2 > 0 else "No blank size, so no area either — ")
                          + "price it, or add a £/m² to "
                            "config.APPLIED_FINISH_RATES_GBP_PER_M2 and every job stating this "

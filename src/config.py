@@ -79,6 +79,25 @@ HISTORY_DIR = INPUT_DIR / "history"
 
 load_dot_env()      # before any os.environ read below
 
+# ── THE GROK MODELS, NAMED ONCE (D-612) ─────────────────────────────────────────────────
+# JG, 1 Nov 2026: "we need to upgrade the model so we get the best possible llm... is it in the
+# .env file? must be in config.py?" It was in neither: grok-4.3 was written into a dozen modules
+# and two still fell back to grok-2, which xAI no longer serves. Every caller now asks
+# xai_models, which reads these. .env overrides them for one machine; nothing else names a model.
+#   SDI_XAI_MODEL         text and, unless set apart, the drawing reads (grok-4.3 = the previous)
+#   SDI_XAI_VISION_MODEL  the drawing reads only
+#   SDI_XAI_IMAGE_MODEL   the quote's artist's impression
+# A NEW MODEL IS A NEW READER. Reads and prices are stored per model, so the first run of each
+# job after a change reads its pages and asks its prices again, and its figures may move against
+# a baseline taken on the old one. `python src\xai_models.py` says whether this account has them.
+def _model_setting(*names: str) -> str:
+    return next((os.environ[n].strip() for n in names if os.environ.get(n, "").strip()), "")
+
+
+XAI_MODEL = _model_setting("SDI_XAI_MODEL", "XAI_MODEL") or "grok-4.7"
+XAI_VISION_MODEL = _model_setting("SDI_XAI_VISION_MODEL", "XAI_VISION_MODEL") or XAI_MODEL
+XAI_IMAGE_MODEL = _model_setting("SDI_XAI_IMAGE_MODEL") or "grok-imagine-image-2.0"
+
 OUTPUT_DIR = BASE_DIR / "output"
 JSON_DIR = OUTPUT_DIR / "json"
 LOG_DIR = OUTPUT_DIR / "logs"
@@ -284,8 +303,14 @@ FLAT_PATTERN_PATTERN = r"\bFLAT\s+PATTERN\b"
 SLOT_PATTERN = r"\bSLOT\b"
 LASER_PATTERN = r"\bLASER\b"
 WELD_PATTERN = r"\bWELD(?:ED|ING)?\b"
-TAP_PATTERN = r"\bTAP(?:PED|PING)?\b"
-CSK_PATTERN = r"\b(?:CSK|COUNTERSINK(?:ING)?)\b"
+# A THREAD CALLOUT WITH ITS PITCH IS A TAPPED HOLE (D-762): "(9x) M3x0.5", "M8 x 1.25".
+# A bolt's length is not a pitch ("M3 x 10mm", "M8 x 22"): the pitch is a decimal under 10.
+TAP_PATTERN = r"\bTAP(?:PED|PING)?\b|\bM\d{1,2}\s*[xX]\s*\d\.\d{1,2}\b(?!\s*MM)"
+# A COUNTERSINK ANGLE IS A COUNTERSINK (D-762): "6.3 X 90.00°" after a THRU hole, as the
+# drafting font prints the symbol. "CSK" in a fastener's name ("M3 x 10mm S/S CSK BOLT")
+# is the bolt's head style, not work on the part that lists it.
+CSK_PATTERN = (r"\b(?:CSK|COUNTERSINK(?:ING)?)\b(?!\s*(?:BOLT|SCREW|SET\s*SCREW|RIVET|HEAD)S?\b)"
+               r"|\d+(?:\.\d+)?\s*[xX]\s*(?:82|90|100|120)(?:\.0+)?\s*(?:°|DEG\b)")
 DRILL_PATTERN = r"\bDRILL(?:ED|ING)?\b"
 PUNCH_PATTERN = r"\bPUNCH(?:ED|ING)?\b"
 DEBURR_PATTERN = r"\bDEBURR\b"
@@ -385,6 +410,12 @@ ESTIMATE_COMPACT_UNUSED_SLOTS = os.getenv("SDI_ESTIMATE_COMPACT", "1").strip().l
 # but which face the sheet opens on, and they can toggle it back.
 SHOW_FORMULAS_ON_ESTIMATE = False
 SHOW_FORMULAS_SHEETS = ("Estimate",)
+# THE ESTIMATE SHEET'S COLUMNS G TO M AT HALF THE TEMPLATE'S WIDTH. James Gray, 4 Nov 2026:
+# "halve the column widths from G to M in the estimating sheet". The template carries them at
+# 42 to 73 characters; the book we write takes each one's own width times this factor. The
+# template on the share is not touched. (first column, last column, factor); None leaves the
+# template's widths as they are.
+ESTIMATE_COLUMN_WIDTH_SCALE = ("G", "M", 0.5)
 
 # --- One sheet for every quantity: the Material Price Break table -----------------
 #
@@ -622,12 +653,13 @@ QUOTE_RENDER = {
     "enabled": True,                  # SDI_QUOTE_RENDER_ENABLED=0 switches one machine off
     # THE DRAWING IS THE REFERENCE: the GA's first sheet goes to the image model as an image
     # EDIT, so the picture is of THIS unit. These are the edit model and its picture shape.
-    "model": "grok-imagine-image-2.0",
+    "model": XAI_IMAGE_MODEL,
     "aspect_ratio": "3:2",
     "resolution": "2k",
     "quality": "medium",
-    # When the edit endpoint refuses, the unit is drawn from its description instead.
-    "text_model": "grok-2-image",
+    # When the edit endpoint refuses, the unit is drawn from its description instead, by the
+    # same image model (D-612: this was grok-2-image, a model xAI no longer serves).
+    "text_model": XAI_IMAGE_MODEL,
     # The scene for a customer the table below does not name: their own store.
     "scene_template": "inside a {customer} store, on the shop floor",
     "default_scene": "on a bright, modern retail shop floor",
@@ -716,6 +748,34 @@ ROLL_GOODS_CATALOGUE = {
         "source": "Howard Thurley (SDI estimating/buying), 0355255 review, 9 Sep 2026",
     },
 }
+
+# --- Roll goods sold by the metre: a RESEARCHED market rate, dated and sourced (D-733) ---
+#
+# 12677-01-GA, 6 Nov 2026: four 233 mm strips of 20 mm VHB tape (0.932 m a unit) were left at
+# £0 because the run-time research found no price per metre. The review: "Price 0.932 m of 20
+# mm VHB tape ... from a suitable catalogue source or an explicitly justified provisional
+# allowance." This is the research done once, by hand, with everything a researched price must
+# carry: the listings it came from, the date, the unit and the quantity it was found at. It is
+# NOT a figure off an estimator's sheet (that rule stands below): it is the market, named, and
+# re-checkable by anybody against the same listings. Used only after SDI Live, the supplier
+# catalogue and the run-time research have all failed to answer, labelled INDICATIVE on the
+# line, and refused once older than `valid_days` so a stale market figure cannot price a job.
+ROLL_GOODS_RESEARCHED_METRE_RATES = (
+    {
+        "name": "3M VHB double-sided acrylic foam tape, 19-20 mm wide",
+        "all_words": ("VHB",),
+        "max_width_mm": 25.0,
+        "gbp_per_m": 2.06,
+        "unit": "m",
+        "quantity_basis": "one 19 mm x 33 m roll; median roll price £68.12 / 33 m",
+        "as_of": "2026-11-06",
+        "valid_days": 120,
+        "source": ("median of five UK ex-VAT listings for a 3M VHB 19 mm x 33 m roll: Rapid "
+                   "Online 3M LSE-060WF £48.15; RS Components 3M 7100395430 £65.21; RS "
+                   "Components 3M 4905F £68.12; Rapid Online 3M 5925F £79.69; RS Components "
+                   "3M 5925F £91.00"),
+    },
+)
 
 # --- What an estimator told us a thing costs: NOTHING, by rule --------------------
 #
@@ -1912,6 +1972,12 @@ PLATE_SUBCONTRACT_POLICY = {
     "vat_minimum_gbp": 95.0,
     "label": "plating — INDICATIVE zinc/passivate, verify against plater quote",
     "rate_covers": ("ZINC", "PASSIVAT", "GALVAN", "ELECTRO-ZINC", "ELECTROZINC"),
+    # A DECORATIVE WORD TAKES THE FINISH OFF THE CARD. "LIGHT AGED ZINC WITH WAXED FINISH"
+    # (12693-01's worktop) contains ZINC, and the card read that as its own trade process. An
+    # aged, antiqued, patinated or waxed effect is a decorative finish quoted job by job, the
+    # same lesson as the Harrods brass. Regular expressions, matched on the upper-cased text.
+    "not_covered_when": (r"\bAGED\b", r"\bANTIQU", r"\bPATIN", r"\bDISTRESS", r"\bWAX",
+                         r"\bEFFECT\b", r"\bBURNISH", r"\bRUSTIC\b", r"\bVINTAGE\b"),
 }
 
 # A NAMED PLATE SPEC IS A QUOTED PRICE, NOT A RATE PER KILO.
@@ -2257,6 +2323,16 @@ SPECIFICATION_LEGEND_STOPS = [
 #   "CORNERS TO BE WELDED") is not touched.
 SPECIFICATION_DEFAULT_SENTENCES = [
     r"\bALL\s+WELDS?\b[^.;\n•]{0,60}?\bUNLESS\s+(?:OTHERWISE\s+)?(?:STATED|SPECIFIED|NOTED|SHOWN|INDICATED)\b",
+    # THE SAME LEGEND WITH ITS SPACES LOST (D-757). 0358141's PDF text strips the spaces from
+    # its border: "ALLWELDSTOBEMIGUNLESSSTATED" and the heading "WELDSPECIFICATION", with no
+    # colon. Neither form above matched, so the keyword recogniser read "WELD" off the legend
+    # and charged Weld (CO2) and Dress Welds on two screw-fixed rub strips. The legend says how
+    # a weld is made, never that one exists, spaced or not. Matched only where the spaces are
+    # gone, so a spaced line still goes through the patterns above.
+    r"ALLWELDS?[A-Z0-9]{0,40}?UNLESS(?:OTHERWISE)?(?:STATED|SPECIFIED|NOTED|SHOWN|INDICATED)",
+    #   A heading alone is not work: "WELD SPECIFICATION" with no colon starts no block (the
+    #   block form above needs one), so only the heading words go.
+    r"WELD(?:ING)?\s*SPECIFICATIONS?",
     # The legend's how-to for wire-to-wire joints (json_normaliser strips the same line).
     r"\bRESISTANCE\s+WELDING\s+WIRE\s+TO\s+WIRE\b[^•\n]{0,80}",
     # A GRADE FOR A THICKNESS RANGE IS NOT A GAUGE (D-394). The material legend's "Q195 UP TO
@@ -2521,7 +2597,9 @@ CONCEPT_STOCK_FORM_WORDS = (
     ("angle", ("ANGLE IRON", "ANGLE")),
     ("channel", ("CHANNEL",)),
     # Sheets print these run together ("50MM FLATBAR 10MM THICK", "19MM ROUNDTUBE").
-    ("flat_bar", ("FLAT BAR", "FLATBAR")),
+    # A SQUARE BAR IS SOLID (D-653): weighed as a flat bar whose two sides are equal, never as
+    # a plate of its side's thickness. 12684-02's cross bars are "10mm SQUARE STEEL BAR".
+    ("flat_bar", ("FLAT BAR", "FLATBAR", "SQUARE BAR", "SQUAREBAR", "SQ BAR")),
     ("round_bar", ("ROUND BAR", "ROUNDBAR", "ROD")),
     ("tube", ("ROUND TUBE", "ROUNDTUBE", "CHS", "TUBE", "PIPE")),
     ("wire", ("WIRE",)),
@@ -2607,6 +2685,11 @@ READ_OPERATION_CHARGED_BY = {
     "powder_coating": ("powder_coating", "oven"),
     "wet_spray": ("wet_spray",),
     "welding": ("welding", "spot_welding", "resistance_welding"),
+    # THE READ SAYS ROLLING; THE SHEET'S ROW IS ROLL (D-603). With no entry the ledger looked
+    # for a "rolling" row that no sheet has, so the HPP halo and guard rail read "no calculated
+    # row charges it" beside a £23.74 Roll row that charged both. Tube bending is a different
+    # machine and does not cover a rolled skin, so it is not in the family.
+    "rolling": ("rolling", "roll"),
     "assembly": ("assembly", "assembly_acrylic", "bench_work"),
     "bench_work": ("bench_work", "assembly", "assembly_acrylic"),
     # A POLISHING SEQUENCE IS CHARGED ONLY BY POLISHING. Brushing before plating is a
@@ -3037,6 +3120,8 @@ _MATERIAL_TOKEN_SYNONYMS = {
     frozenset({"S275"}): "MILD STEEL",
     frozenset({"DC01"}): "MILD STEEL",
     frozenset({"FLEXI", "MDF"}): "MDF",
+    # MR MDF IS MDF FOR THE RATE KEY, THE DENSITY AND THE BLOCK. The grade is not dropped from
+    # what is bought: BOARD_GRADES carries it to the catalogue search (D-693).
     frozenset({"MOISTURE", "RESISTANT", "MDF"}): "MDF",
     frozenset({"MR", "MDF"}): "MDF",
     frozenset({"BIRCH", "PLY"}): "BIRCH_PLYWOOD",
@@ -3149,7 +3234,8 @@ def material_has_a_rate(material) -> bool:
 #
 #   APPLIED_FINISH_RATES_GBP_PER_M2 = {"VINYL_REEDED": 14.50, "UV_COAT": 6.00}
 #
-APPLIED_FINISH_RATES_GBP_PER_M2: dict = {}
+# LAMINATE: £18.00 per m² of laminated face (JG, 10 Nov 2026, the walnut laminate of 12674-01-GA).
+APPLIED_FINISH_RATES_GBP_PER_M2: dict = {"LAMINATE": 18.00}
 
 
 ACRYLIC_PRICE_GBP_PER_M2 = {
@@ -3338,6 +3424,12 @@ LABOUR_RULES = {
         "setup_min": 4.0,
         "min_run_min": 8.0,
         "sec_per_mm_contour": 0.04,
+        # A BEVELLED EDGE IS A SECOND PASS (D-677). 12203-65's panels are mitred at 45
+        # degrees on their joint edges: after the outline is cut, a bevel tool runs those
+        # edges again. Timed as that length at this feed, added after the minimum run, with
+        # its own tool set-up. HOUSE ALLOWANCES until CAM cycle times answer: confirm.
+        "bevel_sec_per_mm": 0.04,
+        "bevel_setup_min": 5.0,
     },
     "edge_banding": {
         "setup_min": 3.0,
@@ -3368,8 +3460,11 @@ LABOUR_RULES = {
 
 # Department labour rates (£/hr). THE DEPARTMENT'S CARD, NOT ANY ONE ESTIMATOR'S.
 #
-# These defaults were ingested from a completed SDI estimate workbook (job 1282) and
-# cross-checked against its labour lines, dept code in the comment. They are the FALLBACK:
+# THE 2027 CARD (D-704): James Ryan's blank estimate sheet of 3 Nov 2026, Estimate!I115:I146,
+# "to start using with immediate effect". The same 32 departments, codes and set-up minutes as
+# 2026; only the rates moved (most +2 to +4.5%, Laser (Metal) +13.4%). Before that these were
+# ingested from a completed SDI estimate workbook (job 1282), dept code in the comment. They
+# are the FALLBACK:
 # since D-122 the controlling source is the estimating template's own Labour / Rate / Dept
 # block, read at import.
 #
@@ -3380,14 +3475,14 @@ LABOUR_RULES = {
 # about by anybody who knows it is not their sheet. Per-figure attribution belongs in
 # SHOP_STATED_PROVENANCE, where a name is attached to a ruling somebody actually made.
 HOURLY_RATES_GBP = {
-    "laser_cutting": 68.19,          # LASM
-    "laser_cutting_acrylic": 41.21,  # LASA
-    "hole_machining": 25.13,         # DRIL
-    "folding": 40.47,                # FOLD
-    "powder_coating": 355.43,        # P/C (applied with throughput divisor)
-    "handling": 31.18,               # MANM (manual metal handling)
-    "assembly": 28.56,               # PACM (Assemble/pack metal)
-    "plater_pack": 28.56,            # PACM — the pack OUT to the plater, its own row
+    "laser_cutting": 77.29,          # LASM
+    "laser_cutting_acrylic": 42.45,  # LASA
+    "hole_machining": 25.88,         # DRIL
+    "folding": 41.44,                # FOLD
+    "powder_coating": 362.52,        # P/C (applied with throughput divisor)
+    "handling": 32.22,               # MANM (manual metal handling)
+    "assembly": 29.59,               # PACM (Assemble/pack metal)
+    "plater_pack": 29.59,            # PACM — the pack OUT to the plater, its own row
                                      # ("Two separate Operations this job" — H. Thurley)
     # AND THE PACK BACK, WHICH HAD BEEN BORROWING `handling`.
     #
@@ -3398,16 +3493,16 @@ HOURLY_RATES_GBP = {
     # which is 2 minutes a unit, not the 7.5/hr the stated figure makes. A stated time
     # cannot survive being merged into a department aggregate, so it gets its own key and
     # its own row, exactly as the pack-out does.
-    "plater_final_pack": 28.56,      # PACM — the pack BACK after plating, its own row
+    "plater_final_pack": 29.59,      # PACM — the pack BACK after plating, its own row
     # (see STATED_TIME_OPERATIONS below — these three must never share a workbook row)
     # Same fault, same shape, on the brushing rule. `manual_labour_metal` is the DEPARTMENT,
     # shared with deburr, bench work and insert labour, so Howard's stated 40 minutes was
     # pooled with all of it and the row fell to the corpus default of 79/hr. Its own key,
     # its own row, at the same MANM rate — and now visible to him as a brushing line.
-    "brush_before_plate": 31.18,     # MANM — brushing before the part goes to the platers
-    "assembly_acrylic": 25.43,       # PACP
-    "welding": 41.77,                # WELD (CO2)
-    "tube": 31.98,                   # TUBE
+    "brush_before_plate": 32.22,     # MANM — brushing before the part goes to the platers
+    "assembly_acrylic": 26.19,       # PACP
+    "welding": 43.64,                # WELD (CO2)
+    "tube": 32.92,                   # TUBE
     # TWO SPELLINGS, ONE LETTER, AND THE TUBE-BENDER WORKED FOR NOTHING.
     #
     # The estimator emits the operation "tube_bending". This table held only "tube_bend", so
@@ -3422,35 +3517,35 @@ HOURLY_RATES_GBP = {
     # Both keys are kept: "tube_bend" is referenced elsewhere and removing it would be the
     # same defect in the other direction. test_every_operation_has_an_hourly_rate now fails
     # the suite if any op the estimator can time is missing from this table.
-    "tube_bending": 32.84,           # TBEN — the name the engine actually emits
-    "tube_bend": 32.84,              # TBEN — kept as an alias
+    "tube_bending": 33.79,           # TBEN — the name the engine actually emits
+    "tube_bend": 33.79,              # TBEN — kept as an alias
     "wire_forming": 39.84,           # engine default (no single Tim wire-labour dept)
-    "spot_welding": 32.90,           # SPOT
-    "resistance_welding": 32.90,     # SPOT (resistance = spot)
-    "deburring": 31.18,              # engine default
-    "guillotine": 31.29,             # GUIL
-    "diamond_polish": 31.60,         # DPOL
-    "dress_welds": 28.68,            # DRES
-    "glue": 25.43,                   # GLUE
-    "punch": 43.77,                  # PUNC
-    "roll": 30.84,                   # ROLL
-    "saw": 31.89,                    # SAW
+    "spot_welding": 33.85,           # SPOT
+    "resistance_welding": 33.85,     # SPOT (resistance = spot)
+    "deburring": 32.22,              # MANM - the sheet charges deburring on Manual labour (Metal)
+    "guillotine": 32.07,             # GUIL
+    "diamond_polish": 32.55,         # DPOL
+    "dress_welds": 29.54,            # DRES
+    "glue": 26.19,                   # GLUE
+    "punch": 45.09,                  # PUNC
+    "roll": 31.76,                   # ROLL
+    "saw": 32.96,                    # SAW
     "linisher": 25.43,               # engine default
-    "manual_labour_metal": 31.18,    # MANM
-    "manual_labour_acrylic": 25.43,  # MANA
-    "cnc": 43.36,                    # CNC
-    "cnc_routing": 64.07,            # CNCJ
-    "cnc_joinery": 64.07,            # CNCJ
-    "wet_spray": 33.54,              # SPRY
-    "bench_work": 28.74,             # BENC
-    "edge_banding": 39.03,           # EDGE
-    "linebend": 25.43,               # LINE
-    "pin_router": 25.43,             # PINR
-    "robomac": 31.45,                # ROBO
-    "salvagnini": 39.43,             # SALV
-    "oven": 25.43,                   # OVEN
-    "packing_joinery": 28.74,        # PACJ
-    "machines_joinery": 28.74,       # MC J
+    "manual_labour_metal": 32.22,    # MANM
+    "manual_labour_acrylic": 26.19,  # MANA
+    "cnc": 44.66,                    # CNC
+    "cnc_routing": 65.99,            # CNCJ
+    "cnc_joinery": 65.99,            # CNCJ
+    "wet_spray": 34.15,              # SPRY
+    "bench_work": 29.60,             # BENC
+    "edge_banding": 39.99,           # EDGE
+    "linebend": 26.19,               # LINE
+    "pin_router": 26.19,             # PINR
+    "robomac": 32.23,                # ROBO
+    "salvagnini": 40.62,             # SALV
+    "oven": 26.19,                   # OVEN
+    "packing_joinery": 29.60,        # PACJ
+    "machines_joinery": 29.60,       # MC J
 }
 
 # The ONE stable mapping between the estimate sheet's own labour labels and the engine's
@@ -3534,15 +3629,32 @@ def read_template_rate_card():
     a PARTIAL card: the block is parsed whole and applied whole, because a rate card missing
     three of its rows prices a job with a mixture of this year's numbers and last year's.
     """
+    # THE TEMPLATE THE BOOK IS BUILT FROM, FIRST (D-704). The labour rows on every book are
+    # charged at the rate block of the AI workbook template; the engine's own figures read a
+    # separate local copy of the estimators' blank, so a rate update reached one and not the
+    # other. James Ryan's 2027 rates (3 Nov 2026) go into the AI template; this reads them
+    # from there. The local copy is the fallback, and the defaults below it the last resort.
+    _tried = []
+    for _path_rc in (estimate_template_path(), AI_ESTIMATE_XLSX_TEMPLATE):
+        if not _path_rc or str(_path_rc) in _tried:
+            continue
+        _tried.append(str(_path_rc))
+        _card_rc, _why_rc = _read_rate_card_from(_path_rc)
+        if _card_rc:
+            return _card_rc, _why_rc
+    return {}, _why_rc
+
+
+def _read_rate_card_from(_template_rc):
+    """{op: £/hr} and its source from one template file, or ({}, reason)."""
     try:
         import openpyxl as _oxl_rc
     except Exception:                                                # noqa: BLE001
         return {}, "openpyxl unavailable"
     try:
-        _wb_rc = _oxl_rc.load_workbook(AI_ESTIMATE_XLSX_TEMPLATE, data_only=True,
-                                       read_only=True)
+        _wb_rc = _oxl_rc.load_workbook(_template_rc, data_only=True, read_only=True)
     except Exception:                                                # noqa: BLE001
-        return {}, f"the estimating template could not be opened ({AI_ESTIMATE_XLSX_TEMPLATE})"
+        return {}, f"the estimating template could not be opened ({_template_rc})"
     try:
         _ws_rc = _wb_rc["Estimate"] if "Estimate" in _wb_rc.sheetnames else _wb_rc.worksheets[0]
         # The header is located rather than assumed, exactly as the ingester does: H="Labour",
@@ -3571,7 +3683,8 @@ def read_template_rate_card():
                 _card[_op_rc] = round(float(_rate), 4)
         if not _card:
             return {}, "the template's labour block named no rate this engine costs with"
-        return _card, f"the estimating template's Estimate!H:K labour block"
+        return _card, (f"the estimating template's Estimate!H:K labour block "
+                       f"({_os_cfg.path.basename(str(_template_rc))})")
     except Exception:                                                # noqa: BLE001
         return {}, "the estimating template's labour block could not be read"
     finally:
@@ -4161,7 +4274,7 @@ ORDER BY
         #   XAI_API_KEY   for Grok / xAI SDK
         #   OPENAI_API_KEY for OpenAI
         "llm_provider": "xai",  # "xai", "openai", or "none"
-        "xai_model": "grok-4.3",
+        "xai_model": XAI_MODEL,           # D-612: named once, at the top of this file
         "openai_model": "gpt-4.1-mini",
         # When enable_web_ai_fallback is True, call LLM for indicative prices if catalog URLs miss or are absent.
         "llm_market_estimate_fallback": True,
@@ -4223,6 +4336,17 @@ FALLBACK_PRICING_POLICY = {
 
 # openpyxl cannot save .xls; use an .xlsx copy of the blank estimate for --generate-ai-spreadsheet / write-back.
 AI_ESTIMATE_XLSX_TEMPLATE = SPREADSHEETS_DIR / "EmptyEstimating" / "Blank Estimate Sheet 2026.xlsx"
+
+# THE AI WORKBOOK TEMPLATE, as wb_populate.template_path() resolves it: SDI_WB_TEMPLATE wins,
+# otherwise the copy on the share (the double space is real). Must stay identical to
+# wb_populate.CELL_MAP["template_path"] and the runner's WB_TEMPLATE_DEFAULT; a test pins all
+# three. Its labour block is the rate card (D-704).
+WB_TEMPLATE_DEFAULT = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed"
+                       r"\AI Estimating\AISheets\Blank Estimate Sheet  WB 2026.xlsx")
+
+
+def estimate_template_path() -> str:
+    return (os.environ.get("SDI_WB_TEMPLATE") or "").strip().strip('"') or WB_TEMPLATE_DEFAULT
 
 # Applied HERE and not where it is defined, because the rate card is read OUT of the template
 # named on the line above. Everything `_apply_rate_cards` touches is already in place.
@@ -4416,7 +4540,8 @@ CUT_LIST_MASS_TOLERANCE = 0.15
 # ── WHAT A CODELESS PARTS-LIST ROW IS (D-383) ──────────────────────────────────────────────
 # Words that qualify a sheet or board rather than name it ("3mm CLEAR PETG SHEET" is PETG;
 # "18mm MR MDF" is MDF). The estimator's catalogue sheet-rate search and the parts-list row
-# classifier read this one list.
+# classifier read this one list. MR, FR and EXT are never the word a board is searched by, and
+# they are still required of the row that prices it: BOARD_GRADES (D-693).
 MATERIAL_QUALIFIER_WORDS = (
     "SHEET", "SHEETS", "PLATE", "PANEL", "BOARD", "STOCK", "MATERIAL", "GRADE",
     "CLEAR", "OPAL", "WHITE", "BLACK", "GREY", "GRAY", "MATT", "GLOSS", "SATIN",
@@ -4501,8 +4626,8 @@ FINISH_SHEEN_WORDS = ("GLOSS", "MATT", "MATTE", "SATIN", "SILK", "TEXTURE", "TEX
 # maker, a decor and two product references, which is what SDI Live files a board under and a
 # supplier lists it by. product_reference.py reads these fields off every part; the price
 # ladder asks SDI Live by the references first, then the market with them in the brief.
-PRODUCT_REFERENCE_FIELDS = ("colours", "colour", "surface_finishes", "finish",
-                            "material_text_as_printed", "decor", "product_reference")
+PRODUCT_REFERENCE_FIELDS = ("colours", "colour", "normalized_colour", "surface_finishes",
+                            "finish", "material_text_as_printed", "decor", "product_reference")
 # Qualifiers of a colour or finish that never name a product.
 PRODUCT_REFERENCE_STOP_WORDS = (
     "MATT", "MATTE", "GLOSS", "SATIN", "SILK", "TEXTURED", "TEXTURE", "SMOOTH", "FINISH",
@@ -4789,6 +4914,111 @@ BOARD_CATALOGUE_SYNONYMS = {
               ("LAMINATED", "CHIPBOARD")),
 }
 SHEET_BOARD_TOKENS = ("MDF", "PLYWOOD", "PLY", "CHIPBOARD", "OSB", "HARDBOARD")
+# A FACED BOARD NOBODY SELLS IS BUILT FROM WHAT SOMEBODY DOES (D-676). JG, 4 Nov 2026: "we need
+# everything priced." 12203-65/-66 are 10.8 and 13.8 mm MDF faced in Swiss Krono D4428OV: no
+# catalogue row sells that board, but SDI Live holds the laminate in that décor (LAMINATE234,
+# 2600 x 1300 x 0.8 mm) and plain MDF cores. The board is priced as the shop would build it:
+# one core sheet, the facing sheets that cover it on each face, adhesive and laminating time.
+# The core is the stocked thickness at or just under (drawn - faces x facing). ALL THE MONEY
+# COMES FROM SDI LIVE ROWS, each named on the line: core, facing and the adhesive's own pack
+# ("we can't hard code prices", JG 15 Sep 2026). What is held here is quantity and time only:
+# the faces, the adhesive spread a square metre and the laminating minutes are HOUSE
+# ALLOWANCES, NOT CONFIRMED, and every line built this way says so. A supplier price for the
+# finished board, or a catalogue row for it, always wins over this.
+FACED_BOARD_CONSTRUCTION = {
+    "enabled": True,
+    "faces": 2,                                    # both faces in the décor (no balancer)
+    "facing_word": "LAMINATE",
+    "facing_thicknesses_mm": (0.8, 0.7, 0.6, 1.0, 1.2),
+    "core_word_by_family": {"MFMDF": "MDF", "MFC": "CHIPBOARD"},
+    "core_thicknesses_mm": (3, 6, 9, 12, 15, 18, 22, 25),
+    # THE CORE IS PLAIN BOARD, AND CLOSE TO THE DRAWN BUILD (D-679). A row naming a face, a
+    # finish or a colour is a faced board, not a core ("18mm white matt MF MDF" carries the
+    # word MDF). A core more than this far under (drawn - faces x facing) builds a thinner
+    # board than drawn, and is not used.
+    "core_exclude_words": ("MF MDF", "MFMDF", "MF-MDF", "MELAMINE", "LAMINAT", "VENEER",
+                           "FACED", "FOIL", "PRIMED", "PAINTED", "LACQUER", "GLOSS",
+                           "TEXTURED", "MATT", "WHITE", "BLACK", "GREY", "GRAY", "OAK"),
+    "core_tolerance_mm": 1.0,
+    # THE LAMINATE'S BOND, NOT ANY CATALOGUE GLUE (D-678). The adhesive the shop bonds this
+    # laminate to an MDF core with. Every word below must be on the SDI Live row, so a wood
+    # glue, a spray can or a tape is never taken for it. SHOP ASSUMPTION: confirm the product.
+    # It is not the box's assembly glue: that is the Glue row on the assembly.
+    "adhesive_spec": {"name": "contact adhesive, laminate to MDF",
+                      "all_words": ("CONTACT", "ADHESIVE")},
+    # CONSUMPTION IN THE UNIT THE TIN IS BOUGHT IN. A row sold in any other unit is NOT
+    # converted (no density is assumed): it is named as the gap. HOUSE ALLOWANCE: confirm.
+    "adhesive_consumption_per_m2_per_face": {"unit": "kg", "amount": 0.15},
+    "laminating_minutes_per_m2_per_face": 6.0,     # HOUSE ALLOWANCE — confirm
+    "laminating_rate_key": "glue",                 # HOURLY_RATES_GBP: the Glue department
+}
+# ── THE ADHESIVE AND WAX A GLUED BOARD ASSEMBLY USES (D-723) ──────────────────────────────
+# 11908-22-GA's laminated MDF tray is glued at its mitres and rebates and its corner gaps are
+# filled with matching wax, and neither consumable was on the bill. Each line is a SHARE OF A
+# PACK, priced from the pack's own price in SDI's sources (never a whole pack per unit). The
+# shares are HOUSE ALLOWANCES, NOT CONFIRMED, and every line says so; the money is the pack's.
+BOARD_ASSEMBLY_CONSUMABLES = {
+    "enabled": True,
+    "adhesive": {"description": "Wood adhesive for the glued board joints",
+                 "reference_item": "PVA wood adhesive 1kg",
+                 "share_per_piece": 0.01,      # 10 g of a 1 kg pack per board piece glued
+                 "pack_kg": 1.0,               # the reference pack, so the share is a mass
+                 # SDI'S OWN TINS FIRST, BY THE KILO (D-725). 11908-22's 50 g reached the
+                 # sheet unpriced: no catalogue row is called "PVA wood adhesive 1kg" and the
+                 # market lookup came back empty. SDI Live's adhesive rows are asked in this
+                 # order, each row carrying every word and stating its pack in kg; the last is
+                 # the laminate bond the shop already buys (D-678), used as a DECLARED
+                 # stand-in so the allowance is priced, never blank.
+                 "catalogue_specs": [
+                     {"name": "PVA wood adhesive", "all_words": ["PVA"]},
+                     {"name": "wood glue", "all_words": ["WOOD", "GLUE"]},
+                     {"name": "wood adhesive", "all_words": ["WOOD", "ADHESIVE"]},
+                     {"name": "contact adhesive, laminate to MDF", "all_words": ["CONTACT", "ADHESIVE"],
+                      "stand_in": True},
+                 ],
+                 "basis": "HOUSE ALLOWANCE: 10 g of adhesive per board piece glued — confirm"},
+    "wax": {"description": "Matching wax filler for open corner gaps",
+            "reference_item": "hard wax filler stick",
+            "share_per_assembly": 0.1,         # a tenth of a filler stick per assembly
+            "basis": "HOUSE ALLOWANCE: a tenth of a filler stick per assembly — confirm"},
+}
+# ── A BOARD'S GRADE AND ITS DÉCOR ARE PART OF WHAT IS BOUGHT (D-693) ─────────────────────────
+#
+# 12693-01-04J's own sheet prints MATERIAL: MRMDF and COLOUR: EGGER: U999 ST2, and the workbook
+# priced it from a generic 18 mm MDF sheet at £38.49. A reviewer: "A generic £38.49 MDF sheet
+# rate does not establish that the required moisture-resistant board and surface specification
+# are included." The grade was dropped before the catalogue was asked (MR MDF is MDF for the
+# family, the density and the block, and the sheet-rate search reads MR as a qualifier), and
+# the décor was asked one code at a time, so U999 alone answered for any U999 texture.
+#
+# THE GRADE. A grade the drawing states travels with the part as a required property while the
+# family stays the family: a catalogue row is the specified board only when it states the grade
+# in one of these spellings (whole words; "M.R." and "M/R" read as MR; a grade glued to a board
+# word, "MRMDF", is that grade). Vocabulary only: a grade added here can price nothing, it can
+# only stop a row that does not state it from being called the specified board.
+BOARD_GRADES = {
+    "MR": {"name": "moisture resistant",
+           "spellings": ("MR", "MOISTURE RESISTANT", "MOISTURE RESISTING")},
+    "FR": {"name": "fire retardant",
+           "spellings": ("FR", "FIRE RETARDANT", "FLAME RETARDANT", "FIRE RATED")},
+    "EXT": {"name": "exterior",
+            "spellings": ("EXT", "EXTERIOR")},
+}
+# The board a word names, for the grade (a grade is read only on a board) and to keep a décor
+# found on another substrate from being called this board: U999 ST2 on MFC is not U999 ST2 MDF.
+# A faced family is its core's substrate (FACED_BOARD_CONSTRUCTION core_word_by_family).
+BOARD_SUBSTRATE_BY_WORD = {
+    "MDF": "MDF", "MFMDF": "MDF", "MFC": "CHIPBOARD", "CHIPBOARD": "CHIPBOARD",
+    "PARTICLEBOARD": "CHIPBOARD", "PLY": "PLYWOOD", "PLYWOOD": "PLYWOOD", "OSB": "OSB",
+    "HARDBOARD": "HARDBOARD",
+}
+# THE DÉCOR. A board maker names a décor by a décor code and a texture (surface) code: Egger
+# "U999 ST2", "H1145 ST10", "W1000 PM"; the texture is half of the product, and U999 PM or PT
+# is another board from U999 ST2. A code printed straight after a décor code that matches one
+# of these is the décor's texture; the décor is then the pair, and a row carrying the décor in
+# another texture, or none, is a near miss and not the product. Read only in that position, so
+# a two-letter code here cannot be taken from anywhere else on a drawing.
+DECOR_TEXTURE_CODES = (r"ST\d{1,3}", "PM", "PT", "PG", "HG", "SM", "MT", "PE", "SU")
 SOLID_TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "SOFTWOOD", "HARDWOOD", "OAK",
                        "SPRUCE", "BEECH", "BIRCH", "REDWOOD", "WHITEWOOD", "ASH")
 # Thinnest stock we will accept as a real thickness on a joinery part. Below this the value
@@ -4842,7 +5072,12 @@ SHEET_STEEL_RATE_FAMILY_TOLERANCE = 0.5
 WORKBOOK_INPUT_DEFAULTS = {
     "default_job_quantity": DEFAULT_JOB_QUANTITY,
     # L3 in workbook: Wire Cost Per Tonne. Blank sheet = £1600. Override via env or workbook scan.
-    "wire_cost_per_tonne_gbp": float(os.getenv("WORKBOOK_WIRE_COST_PER_TONNE_GBP", "1500.0")),  # SDI rate £1500/tonne
+    # THE WORKBOOK'S FIGURE, EVERY TIME ONE EXISTS (James Gray, 5 Nov 2026: "the workbook
+    # charges £1,600 per tonne, we take a workbook price where one exists every time"). The
+    # estimate reads the build template's own Wire Cost Per Tonne cell (D-697); this default
+    # answers only when no template can be read, and now matches that cell instead of the
+    # £1,500 that left 12693-01-GA's report stating a rate its sheet did not charge.
+    "wire_cost_per_tonne_gbp": float(os.getenv("WORKBOOK_WIRE_COST_PER_TONNE_GBP", "1600.0")),
     # L5 in workbook: Sheet Steel Cost Per Tonne. Blank sheet = £900. Override via env or workbook scan.
     "sheet_steel_cost_per_tonne_gbp": float(os.getenv("WORKBOOK_SHEET_STEEL_COST_PER_TONNE_GBP", "950.0")),  # F: Tim rate £950/tonne
     "scrap_pct": SCRAP_PERCENTAGE * 100.0,
@@ -4859,6 +5094,19 @@ WIRE_GAUGE_CALLOUT_MAX_MM = 12.0
 WIRE_OUTLINE_LABEL_WORDS = ("EXT.", "EXT", "EXTERNAL", "O/A", "OVERALL")
 WIRE_PART_WORDS = ("WIRE MESH", "WELDED WIRE", "WIRE FORM", "WIREWORK", "WIRE WORK", "WIRE ")
 WIRE_FRAME_WORDS = ("FRAME", "LOOP", "RING", "HOOP")
+
+# A ROUND STOCK'S SIZE FROM ITS OWN SHEET'S FIGURES AND ITS STATED WEIGHT (D-692,
+# detail_page_geometry.apply_round_stock_sizes_from_own_weight). Every pairing of the figures its
+# own sheet prints is tried: a diameter in this range (below 1.5 mm is a tolerance or a sheet
+# count, not a bar a shop forms), a length at least this many diameters long and no longer than
+# the longest bar bought. Exactly one pairing must weigh the stated weight within the tolerance;
+# the reasoning for ±5% is beside the rule.
+ROUND_STOCK_FROM_OWN_WEIGHT = {
+    "diameter_mm": (1.5, 25.0),
+    "min_length_to_diameter": 10.0,
+    "max_length_mm": 6000.0,
+    "weight_tolerance": 0.05,
+}
 
 WIRE_GAUGE_TABLE = {
     2.0:  40550.0,
@@ -5406,14 +5654,28 @@ PARTS_TABLE_COLUMN_WORDS = ("ITEM", "DWG", "NO", "NO.", "DESCRIPTION", "QTY", "Q
 LIVE_ENQUIRY_ROOT = os.getenv(
     "SDI_LIVE_ENQUIRY_ROOT",
     r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\Live Enquiry")
-# The workbook itself. No default: where the estimators keep it is theirs to say, and a guess
-# that reads last month's copy would run the wrong jobs with every appearance of working.
-LIVE_ENQUIRY_WORKBOOK = os.getenv("SDI_LIVE_ENQUIRY_WORKBOOK", "")
-LIVE_ENQUIRY_SHEET = os.getenv("SDI_LIVE_ENQUIRY_SHEET", "Sheet1")
+# The workbook itself: the AI Live Enquiry sheet, in the Live Enquiry folder beside the
+# customer folders (JG, 31 Oct 2026, D-608b: K:\Estimating\Completed\AI Estimating\Live
+# Enquiry\AI-Live-Enquiry.xlsx). Built on LIVE_ENQUIRY_ROOT, so it is UNC like the root and is
+# reached by a scheduled task that has no K: drive. SDI_LIVE_ENQUIRY_WORKBOOK wins where set.
+LIVE_ENQUIRY_WORKBOOK = os.getenv("SDI_LIVE_ENQUIRY_WORKBOOK", "") or (
+    LIVE_ENQUIRY_ROOT.rstrip("\\/") + "\\AI-Live-Enquiry.xlsx")
+# WHICH SHEET (D-608a). SDI_LIVE_ENQUIRY_SHEET names it where set. Otherwise the first of these
+# the workbook has; otherwise its only sheet. A workbook with several sheets and none of these
+# names is refused, never read at its first tab: the AI Live Enquiry workbook's first tab is
+# "Archived", and reading it would run last month's jobs.
+LIVE_ENQUIRY_SHEET = os.getenv("SDI_LIVE_ENQUIRY_SHEET", "")
+LIVE_ENQUIRY_SHEET_NAMES = ("Live", "Sheet1")
 # Header words -> the field each column carries. Matched on the header text, so a column moved
 # or inserted on the sheet is still found. A cell with no header is a note (the sheet's
 # unheaded column J: "WAIT FOR DRAWINGS", "Manual Estimate Complete 22/09/2026").
 LIVE_ENQUIRY_COLUMNS = (
+    # Before "ai_check", whose \bAI\b would otherwise take an "AI Completed" header (D-608).
+    ("ai_completed", r"\bAI\s*COMPLET"),
+    # The estimator's address (D-614): before "estimator", which would otherwise take an
+    # "Estimator Email" header, and before "customer"; a bare "Email" header counts too.
+    ("estimator_email", r"\bESTIMATOR\b.*\bE-?MAIL\b|\bE-?MAIL\b.*\bESTIMATOR\b"
+                        r"|^E-?MAIL(\s+ADDRESS)?$"),
     ("customer", r"\bCUSTOMER\b"),
     ("drawing", r"\bDRAWING\b"),
     ("description", r"\bJOB\b.*\bDESC"),
@@ -5426,6 +5688,17 @@ LIVE_ENQUIRY_COLUMNS = (
 )
 # The AI CHECK answers that ask for a run. Anything else, blank included, is not asked.
 LIVE_ENQUIRY_ASKED = ("YES", "Y")
+# THE AI LIVE ENQUIRY SHEET'S OWN RULE (D-608, D-608a), for a sheet with an AICompleted
+# column: a row runs when AI CHECK is YES, the QTY column states quantities (as the page's
+# units box takes them: 1,5,10) and AICompleted is blank or says one of these. Compared with
+# spaces, hyphens and case removed, so "Re-Run", "re run" and "RERUN" are one answer. YES, or
+# anything else, is not a request to run.
+LIVE_ENQUIRY_RUN_WHEN_COMPLETED = ("", "NO", "N", "RERUN")
+# The answer that runs a row again although this pack at these quantities was estimated.
+LIVE_ENQUIRY_RERUN = ("RERUN",)
+# WHAT A FINISHED RUN WRITES INTO AICompleted (D-608a), so the row is not run again until a
+# person resets it. Written only when the workbook is not open in Excel.
+LIVE_ENQUIRY_COMPLETED_MARK = "YES"
 # A Drawing No. that is not one drawing: the row needs a pack made up by a person.
 LIVE_ENQUIRY_NOT_A_DRAWING = ("N/A", "NA", "VARIOUS", "TBC", "TBA", "NONE", "-", "?")
 # A note on the row that stops it, whatever else the row says. The person wrote it; the
@@ -5449,11 +5722,28 @@ LIVE_ENQUIRY_POLL_MINUTES = int(os.getenv("SDI_LIVE_ENQUIRY_POLL_MINUTES", "15")
 # How long one estimate may take before the runner stops waiting on it. The run is not
 # abandoned — the portal keeps it — the runner just stops queueing behind it this cycle.
 LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES = int(os.getenv("SDI_LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES", "240"))
+# HOW MANY SELF-RUNNING JOBS ARE QUEUED AT ONCE (JG, 10 Nov 2026: "test out running a second job
+# automatically"). 1 queues a job and waits for it, as before. 2 keeps two queued, so a second
+# Grid Runner (install-runner-slot.ps1 -Slot 2, SDI_MAX_CONCURRENT_RUNS=2 on the service) takes
+# the second while the first runs; each finished job makes room for the next ready row.
+SELF_RUNNING_AT_ONCE = max(1, int(os.getenv("SDI_SELF_RUNNING_AT_ONCE", "1") or 1))
 # A failed run is tried this many times in all, then waits for `retry` from a person.
 LIVE_ENQUIRY_MAX_ATTEMPTS = int(os.getenv("SDI_LIVE_ENQUIRY_MAX_ATTEMPTS", "1"))
 # Who the portal e-mails a finished estimate to. Empty: filed, sent to nobody — every book is
 # checked before an estimator sees it.
 LIVE_ENQUIRY_EMAIL_TO = os.getenv("SDI_LIVE_ENQUIRY_EMAIL_TO", "")
+# THE ESTIMATOR NAMED ON THE ROW HEARS TOO (D-614). JG, 1 Nov 2026: the e-mail goes to the page's
+# saved list ("just me now, but I can add anyone") and "we ultimately will drive off the live
+# enquiry s/sheet in addition that has an estimator e-mail on there in one of the columns". When
+# switched on, each row's own estimator address, from an "Estimator Email" column or an address
+# written in the Estimator column, is added to that row's e-mail beside the saved list. Off until
+# JG says: SDI_LIVE_ENQUIRY_EMAIL_ESTIMATOR=1 in .env. Only addresses at these domains are used:
+# the estimate is internal costing, and a typed customer address on the sheet must not receive it.
+LIVE_ENQUIRY_EMAIL_ESTIMATOR = os.getenv(
+    "SDI_LIVE_ENQUIRY_EMAIL_ESTIMATOR", "").strip().lower() in ("1", "yes", "true", "on")
+LIVE_ENQUIRY_EMAIL_DOMAINS = tuple(
+    d.strip().lower().lstrip("@") for d in
+    os.getenv("SDI_LIVE_ENQUIRY_EMAIL_DOMAINS", "wearesdi.com").split(",") if d.strip())
 LIVE_ENQUIRY_LEDGER = os.getenv("SDI_LIVE_ENQUIRY_LEDGER",
                                 str(BASE_DIR / "output" / "live_enquiry" / "ledger.json"))
 # The design area, through the endpoint James will provide. Unset: the share is the only
@@ -5462,6 +5752,17 @@ DESIGN_AREA_ENDPOINT = os.getenv("SDI_DESIGN_AREA_ENDPOINT", "")
 # AI Estimate Self-Running (D-588): a row whose drawings were searched for in Production and
 # not found is searched again after this many hours, not on every read of the sheet.
 LIVE_ENQUIRY_COLLECT_RETRY_HOURS = float(os.getenv("SDI_LIVE_ENQUIRY_COLLECT_RETRY_HOURS", "6"))
+# OFF UNTIL ASKED FOR (D-608). JG, 31 Oct 2026: the drawings will come from an endpoint; until
+# it is ready they are looked for under the Live Enquiry root only. Copying from Production
+# into that share is the earlier provisional search, and runs only when this is set to 1.
+LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION = os.getenv(
+    "SDI_LIVE_ENQUIRY_COLLECT_FROM_PRODUCTION", "0").strip().lower() in {"1", "true", "yes"}
+# THE DRAWING EXTRACT, FOR A ROW WITH NO PACK (D-702, SCRUM-185). Off until switched on: when
+# on, Self-Running asks the portal's Document Manager route for a row's pack, waits for it
+# across cycles, and stages it in the Live Enquiry folder the runner reads. A failed extract
+# is retried after LIVE_ENQUIRY_COLLECT_RETRY_HOURS, like a pack not found in Production.
+LIVE_ENQUIRY_EXTRACT_FROM_DM = os.getenv(
+    "SDI_LIVE_ENQUIRY_EXTRACT_FROM_DM", "0").strip().lower() in {"1", "true", "yes"}
 
 # The longest run of letters a title block's drawing number carries: GA, SA05, 01M, ASSY. A
 # code-shaped token with a longer run is words joined across spaces — the M&S border's

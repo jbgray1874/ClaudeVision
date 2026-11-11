@@ -37,7 +37,47 @@ _RE_SECTION = re.compile(r"(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d
 
 
 def _clean_pn(s: Any) -> str:
-    return str(s or "").strip().upper()
+    """ONE PART, ONE KEY, HOWEVER A READER SPELT IT (D-749).
+
+    This was str.strip().upper(), so the read's "UPC0358141M4" (the part's own sheet, its PDF
+    text without spaces) never met the priced "UPC0358141 M4" (the parts list). 0358141's read
+    had the upright as 30 x 30 x 2 at 1,383 mm, the end caps as 3 mm plate and the rub strips
+    as 3 mm brushed stainless; not one of those facts reached a priced part, and the sheet
+    priced 1,400 mm of 30 x 15 tube for all four members and a plastic strip. Every join in
+    this module goes through this key, so they all read one identity:
+    part_identity.normalize_part_code, the reader that knows the drawing's spellings."""
+    raw = str(s or "").strip().upper()
+    try:
+        from part_identity import normalize_part_code
+        return normalize_part_code(raw) or raw
+    except Exception:                                                # noqa: BLE001
+        return re.sub(r"\s+", "", raw)
+
+
+# The facts a read gives a part that the price depends on. A read part carrying any of them
+# that reaches no priced part is evidence lost, and is said (D-749).
+_PRICED_FACTS = ("tube_section", "cut_length_mm", "cut_lengths_mm", "material", "thickness_mm",
+                 "weight_g", "overall_size_mm", "finish")
+
+
+def _index_job_parts(rows: Any) -> Dict[str, Dict[str, Any]]:
+    """The read's parts by identity. The read can name one part under two spellings, from its
+    parts list and from its own sheet; the two rows are combined, each field from whichever
+    row has it, never one row silently replacing the other."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for p in (rows or []):
+        if not isinstance(p, dict) or not p.get("part_number"):
+            continue
+        k = _clean_pn(p.get("part_number"))
+        if k not in out:
+            out[k] = p
+            continue
+        merged = dict(out[k])
+        for f, v in p.items():
+            if merged.get(f) in (None, "", [], {}) and v not in (None, "", [], {}):
+                merged[f] = v
+        out[k] = merged
+    return out
 
 
 # The one reason bought_in_reason gives that is not evidence of a purchase: it is what a
@@ -210,6 +250,16 @@ def overlay_drawing_facts(job: Dict[str, Any], facts: Dict[str, Any]) -> Dict[st
                     f"{k}: LLM='{lv}' vs deterministic='{dv}' — used deterministic (printed)")
             p[k] = dv
             p.setdefault("_deterministic", []).append(k)
+        # THE PART'S OWN SHEET SAYS "SEE ASSEMBLY" (D-657): its finish is its assembly's. A
+        # finish the extract gave it of its own gives way to the printed pointer, and says so.
+        if d.get("finish_pointer"):
+            lv = p.get("finish")
+            if lv not in _EMPTY and "SEE " not in str(lv).upper():
+                p.setdefault("_merge_flags", []).append(
+                    f"finish: LLM='{lv}' vs its own sheet's FINISH: SEE ASSEMBLY DRAWING — "
+                    f"used the printed pointer")
+            p["finish"] = "SEE ASSEMBLY DRAWING"
+            p.setdefault("_deterministic", []).append("finish")
     # Spec: COMBINE the weld line (each source has half), fill the rest from the deterministic block.
     sb = facts.get("spec_block") or {}
     spec = job.setdefault("spec", {})
@@ -223,6 +273,27 @@ def overlay_drawing_facts(job: Dict[str, Any], facts: Dict[str, Any]) -> Dict[st
             spec[k] = sb[k]
     job["_overlay"] = "drawing_facts merged (deterministic fills LLM nulls; weld combined)"
     return job
+
+
+# Single-blank work that a sheet can call out on the assembly of its pieces without naming the
+# piece: edging on a box. Kept on the assembly while no piece carries it (D-669).
+_KEPT_ON_ITS_ASSEMBLY = frozenset({"edge_banding", "edgebanding"})
+
+
+def _a_piece_carries(part: Dict[str, Any], op: str, parts: List[Dict[str, Any]]) -> bool:
+    """Does any piece of this assembly already carry `op` — its listed children, or the parts
+    whose code is this one's followed by a hyphen?"""
+    pn = _clean_pn(part.get("part_number"))
+    kids = {_clean_pn(k) for k in (part.get("assembly_children") or []) if k}
+    for other in parts:
+        if not isinstance(other, dict) or other is part:
+            continue
+        opn = _clean_pn(other.get("part_number"))
+        if not opn or not (opn in kids or (pn and opn.startswith(pn + "-"))):
+            continue
+        if op in (other.get("textual_operations") or []):
+            return True
+    return False
 
 
 def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> Dict[str, int]:
@@ -262,15 +333,41 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
     except Exception:                                                # noqa: BLE001
         pass
 
-    by_pn = {_clean_pn(p.get("part_number")): p for p in (job.get("parts") or []) if isinstance(p, dict)}
+    by_pn = _index_job_parts(job.get("parts"))
     assembly_pns = {_clean_pn(a.get("part_number")) for a in (job.get("assemblies") or []) if isinstance(a, dict)}
     qty_rollup = _rollup_quantities(job)
+    _priced_keys = {_clean_pn(p.get("part_number")) for p in parts if isinstance(p, dict)}
+    _used: set = set()
 
     for part in parts:
         if not isinstance(part, dict):
             continue
         pn = _clean_pn(part.get("part_number"))
         jp = by_pn.get(pn)
+        if jp is not None:
+            _used.add(pn)
+        # ONE DIGIT APART, CORROBORATED AND SAID (D-749): a read part no priced part claims,
+        # whose number differs from this one's by a digit in the drawing number, whose
+        # description agrees, and whose spelling the pack's other parts carry. Its facts fill
+        # this part's gaps; the join is written on the part to be confirmed.
+        try:
+            from part_identity import corroborated_near_code, near_code_note
+            _unclaimed = {k: (v or {}).get("description") for k, v in by_pn.items()
+                          if k not in _priced_keys and k not in _used}
+            _near = corroborated_near_code(pn, part.get("description"), _unclaimed,
+                                           list(_priced_keys))
+        except Exception:                                            # noqa: BLE001
+            _near = None
+        if _near:
+            _used.add(_near)
+            near_jp = by_pn[_near]
+            jp = dict(jp or {})
+            for f, v in near_jp.items():
+                if jp.get(f) in (None, "", [], {}) and v not in (None, "", [], {}):
+                    jp[f] = v
+            part.setdefault("review_flags", []).append(
+                near_code_note(part.get("part_number"), near_jp.get("part_number"),
+                               part.get("description")))
 
         # Sub-assembly: flag it (it is a weld/build step, not a fabricated flat part).
         if pn in assembly_pns:
@@ -351,6 +448,15 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         # neither the material nor the finish from the general note.
         _general_applies = _general_note_applies(part, jp, pn, assembly_pns)
         mat = jp.get("material")
+        # THE PART'S OWN WORDS FOR ITS STOCK ARE KEPT (D-657). A material read off the part's own
+        # title block ("1/2\" SQUARE STEEL TUBE", "10mm SQUARE STEEL BAR") was folded to a
+        # material code below and its words dropped, so nothing downstream could see that the
+        # part is a tube or a bar, and it was nested as sheet. Kept as the material its own sheet
+        # states, where nothing already holds that.
+        if (mat and "material" in (jp.get("_deterministic") or [])
+                and not str(part.get("material_stated") or "").strip()):
+            part["material_stated"] = str(mat).strip()
+            part.setdefault("material_stated_source", "own_sheet_title_block")
         if not mat and _job_material and _general_applies:
             mat = _job_material
             if not str(part.get("normalized_material") or "").strip():
@@ -444,8 +550,63 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         # section so the length reader can see them.
         _pieces = [v for v in (_num(x) for x in (jp.get("cut_lengths_mm") or [])
                                if not isinstance(x, (dict, list))) if v and v > 0]
+        # N EQUAL PIECES ON A ROW OF N ARE THE ROW'S N PARTS (D-751). 0358141's upright M4 is
+        # listed 2 off and the read gave it cut_lengths_mm [1383, 1383]: one piece for each of
+        # the two parts. Kept as two pieces of one part, the length reader summed them to
+        # 2,766 mm and the quantity doubled it again, so four lengths were bought for two.
+        # A row that is an assembly keeps its pieces: they are its members, not its copies.
+        # TWO EQUAL CUTS ALONE DO NOT SAY WHICH (8 Nov review). A frame drawn as one part, 2 off,
+        # each of two equal tubes, reads exactly the same. So the pieces are taken as copies
+        # only where nothing says the part is made of them: it is no assembly in the read's
+        # tree, no route in the read joins this part on its own (a part welded from its pieces
+        # is a weldment), and a weight the read states for the part, where there is one, is
+        # one piece's weight, not all of them. Where the evidence points the other way, or the
+        # weight cannot be weighed against a piece, the pieces stay a cut list and both
+        # readings are said with the length each would charge.
+        _row_q = _num(jp.get("row_qty"))
+        if (len(_pieces) > 1 and _row_q and abs(_row_q - len(_pieces)) < 1e-6
+                and max(_pieces) - min(_pieces) <= 1.0):
+            _why_not = _pieces_are_its_own(pn, jp, a, b, t, _pieces, assembly_pns, job)
+            if not _why_not:
+                part.setdefault("review_flags", []).append(
+                    f"the read lists {len(_pieces)} pieces of {_pieces[0]:g} mm on a row of "
+                    f"{int(_row_q)} off — taken as one {_pieces[0]:g} mm piece for each of the "
+                    f"{int(_row_q)}, not {len(_pieces)} pieces in every one: the read gives it "
+                    f"no members, no joint of its own and no weight that says otherwise; "
+                    f"confirm on the drawing")
+                _pieces = [_pieces[0]]
+                if not (cut and cut > 0):
+                    cut = _pieces[0]
+            else:
+                part.setdefault("review_flags", []).append(
+                    f"the read lists {len(_pieces)} pieces of {_pieces[0]:g} mm on a row of "
+                    f"{int(_row_q)} off — kept as {len(_pieces)} pieces in every one "
+                    f"({sum(_pieces):g} mm a part) because {_why_not}; if each part is one "
+                    f"piece it is {_pieces[0]:g} mm a part. Confirm on the drawing")
         if _pieces and not (cut and cut > 0):
             cut = max(_pieces)
+        # THE PART'S OWN READ OUTRANKS A PROFILE OFF A LIST IT IS ONLY LISTED ON (D-751).
+        # 0358141's M6 "O A RAIL END" had no sheet bound to it; "RAIL" in its name let the rail's
+        # "15x30x2mm TOP TUBE" from the parts list it shares become its stock. The read of
+        # this part says 3 mm and names no section: a plate is not a 2 mm wall tube, so the
+        # list's profile is withdrawn and the part is costed as what its own read says.
+        _ss_list = part.get("section_stock") if isinstance(part.get("section_stock"), dict) else None
+        if (_ss_list and _ss_list.get("read_from") == "parts_list_page" and not _dxf_backed
+                and not a and not _pieces and not (cut and cut > 0)
+                and _fam not in ("tube", "wire")):
+            _plate_t = _num(jp.get("thickness_mm"))
+            _wall_t = _num(_ss_list.get("t"))
+            if _plate_t and _plate_t > 0 and (_wall_t is None or abs(_plate_t - _wall_t) > 0.05):
+                part.pop("section_stock", None)
+                part.setdefault("review_flags", []).append(
+                    f"section {_ss_list.get('a')}x{_ss_list.get('b')}x{_ss_list.get('t')} read "
+                    f"from page {_ss_list.get('read_from_page')}, a parts list this part is only "
+                    f"listed on, was WITHDRAWN — this part's own read says {_plate_t:g} mm and "
+                    f"names no section, so the profile is another row's on that list")
+                if not _num(part.get("normalized_thickness_mm")):
+                    part["normalized_thickness_mm"] = _plate_t
+                    part["thickness_source"] = _src(jp, "thickness_mm")
+                _flagged = True
         if a and b and t and cut and cut > 0 and not _dxf_backed:  # DXF geometry wins; LLM drives no-DXF
             # THROUGH THE ARBITER, FIELD BY FIELD (D-383). This used to replace section_stock
             # wholesale, so whichever pass ran last won: a cut list read deterministically off
@@ -481,7 +642,51 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
                 "enriched from whole-document LLM extract (transcribed from drawing — verify)")
 
     out["operations"] += apply_routes_to_parts(parts, job)
+    # EVIDENCE THAT REACHED NO PRICED PART IS SAID, NEVER DROPPED (D-749). On 0358141 every
+    # detail sheet's facts sat on a read part no priced part matched, and nothing said so: the
+    # sheet was priced on fallbacks while the run reported the extract as applied.
+    out["unmatched"] = [
+        {"part_number": jp.get("part_number"), "description": jp.get("description"),
+         "facts": {f: jp.get(f) for f in _PRICED_FACTS if jp.get(f) not in (None, "", [], {})}}
+        for k, jp in by_pn.items()
+        if k not in _priced_keys and k not in _used and k not in assembly_pns
+        and not jp.get("is_bought_in")
+        and any(jp.get(f) not in (None, "", [], {}) for f in _PRICED_FACTS)]
     return out
+
+
+_JOINING_OPS = ("welding", "tig_welding", "mig_welding", "spot_welding", "resistance_welding",
+                "brazing", "soldering")
+
+
+def _pieces_are_its_own(pn: str, jp: Mapping[str, Any], a: Any, b: Any, t: Any,
+                        pieces: List[float], assembly_pns: set, job: Mapping[str, Any]) -> str:
+    """Why N equal pieces on a row of N are the part's own cut list, not one piece for each
+    copy, or "" where nothing says so (D-752). The reason is said on the part."""
+    if pn in assembly_pns:
+        return "the read gives this row members of its own"
+    for route in (job.get("routes") or []):
+        if not isinstance(route, Mapping):
+            continue
+        op = str(route.get("operation") or "").strip().lower().replace(" ", "_")
+        names = {_clean_pn(p) for p in (route.get("part_numbers") or []) if p}
+        if op in _JOINING_OPS and names == {pn}:
+            return f"the read joins this part on its own ({op})"
+    wt = _num(jp.get("weight_g"))
+    if wt and wt > 0:
+        try:
+            from section_profile import section_kg_per_m
+            kgm = section_kg_per_m(a, b, t)
+        except Exception:                                                # noqa: BLE001
+            kgm = None
+        if not kgm:
+            return "the read states a weight for the part that could not be weighed against a piece"
+        one = kgm * pieces[0]                    # kg/m x mm = g
+        every = kgm * sum(pieces)
+        if abs(wt - every) < abs(wt - one):
+            return (f"the weight the read states for the part, {wt:g} g, is all "
+                    f"{len(pieces)} pieces' ({every:,.0f} g), not one piece's ({one:,.0f} g)")
+    return ""
 
 
 def _tube_operations() -> set:
@@ -622,11 +827,23 @@ def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> i
             # its own at 3 mm from this read. The same refusal as the bought-in one above.
             if op in _LEAF_ONLY_OPS and (part.get("is_assembly_parent")
                                          or part.get("assembly_children")):
-                part.setdefault("review_flags", []).append(
-                    f"operation '{op}' was read from the drawing pack but NOT applied to "
-                    f"{part.get('part_number') or 'this line'}: it is an assembly, and its "
-                    f"pieces carry their own {op.replace('_', ' ')}")
-                continue
+                # EDGING CALLED OUT ON A BOX STAYS ON THE BOX WHERE NO PIECE CARRIES IT (D-669).
+                # 12203-65-01J's sheet calls "1mm EDGING" on the box its five panel flats were
+                # split from. Refused here, the edging went nowhere: no panel is told which of
+                # its edges are banded, and none carried it. Kept on the box, it is costed once
+                # and its length is asked.
+                if op in _KEPT_ON_ITS_ASSEMBLY and not _a_piece_carries(part, op, parts):
+                    part.setdefault("review_flags", []).append(
+                        f"operation '{op}' read from the drawing pack is kept on "
+                        f"{part.get('part_number') or 'this line'}, the assembly of its pieces: "
+                        f"no piece carries it, and its sheet does not say which piece's edges "
+                        f"are banded. Confirm the banded edges and their metres")
+                else:
+                    part.setdefault("review_flags", []).append(
+                        f"operation '{op}' was read from the drawing pack but NOT applied to "
+                        f"{part.get('part_number') or 'this line'}: it is an assembly, and its "
+                        f"pieces carry their own {op.replace('_', ' ')}")
+                    continue
             # THE NAME IS NOT THE DECISION.
             #
             # This used to `continue` whenever the operation name was already on the part,

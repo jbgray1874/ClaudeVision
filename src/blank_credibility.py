@@ -101,6 +101,11 @@ MEASURING_CUT_PATH_SOURCES = frozenset({
     # above every drawing read. Omitting it would have refused the measured blank on
     # every mirrored part in the system.
     "mirror_of_measured",
+    # A flat blank or cut length the Document Manager read from a sheet-metal cut list is the
+    # figure SolidWorks itself computed and SAVED — the same cut list the COM analyser reads,
+    # unrefreshed. Measured by SolidWorks, ranked below the worker and the DXF in
+    # source_precedence (SCRUM-184).
+    "solidworks_docmgr",
 })
 
 # Where a page-summed total lives. Named so it can be refused by name rather than by

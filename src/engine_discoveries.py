@@ -171,6 +171,9 @@ _OURS = {
     # A record whose read ID names another response or a line this one does not hold
     # (D-598): the engine audited a record against a read it was not minted from — ours.
     "read_id_stale",
+    # A part the whole-pack read described, with a fact that changes its stock, size or
+    # material, that reached no priced part (D-749): the engine was given it and lost it.
+    "read_facts_reached_no_priced_part",
     # A page whose words the engine had and no reading received in full, or a page read only
     # from a coarse or unread image (D-597): a perfect engine reads every page it is given.
     "page_text_not_read",
@@ -191,6 +194,10 @@ _ENVIRONMENT = {
     # The read could not be held to a calculated sheet because none was read back (D-596): on
     # a machine with no Excel that is the only honest answer, for the same reason as above.
     "read_charge_unverified",
+    # The models were read by the Document Manager backup because no SolidWorks seat could
+    # run here (SCRUM-184): saved values only, a formed part's blank left to the worker. The
+    # engine did the honest thing with the machine it was given; the fix is a seat, not code.
+    "native_extract_from_docmgr",
 }
 
 _NOT_OURS = _NOT_OURS | _ENVIRONMENT

@@ -564,8 +564,17 @@ _FILENAME_MATERIAL_CODES: Dict[str, str] = {
 
 
 
+_FACED_MDF_RE = re.compile(
+    r"MFMDF|\bMF[\s_-]*MDF\b|MELAMINE[\s_]*FACED[\s_]*MDF|PRE[\s_-]*LAM(?:INATED?)?[\s_]*MDF")
+
+
 def _parse_material_from_stem(stem: str) -> Optional[str]:
     """Extract material code from stem tokens (e.g. _MS_, _AL_)."""
+    # MELAMINE-FACED MDF IS NOT CHIPBOARD (D-727). 12677-01-03J's flat is "9mm Black MFMDF" and
+    # this read it as MFC, so the panel was priced as faced chipboard; the substrate named is
+    # kept. The faced chipboard spellings, and the facing words with no substrate, stay MFC.
+    if _FACED_MDF_RE.search(stem.upper()):
+        return "MFMDF"
     if re.search(r"MFMDF|MELAMINE\s*FACED|PRE\s*LAM(?:INATE)?|PRELAM|\bMFC\b", stem.upper()):
         return "MFC"
     for t in re.split(r'[_\s]+', stem.upper()):
@@ -589,12 +598,15 @@ def _parse_thickness_from_stem(stem: str) -> Optional[float]:
 
 
 def _parse_revision_from_stem(stem: str) -> Optional[str]:
-    """Extract revision letter from stem (e.g. _revL_)."""
-    for t in re.split(r'[_\s]+', stem):
-        m = re.match(r'^rev([A-Z])$', t, re.IGNORECASE)
-        if m:
-            return m.group(1).upper()
-    return None
+    """Extract revision letter from stem (e.g. _revL_, _REV_A, -REV-B).
+
+    THE LETTER MAY STAND APART FROM THE WORD. 12693-01's flats are named
+    `12693-01-03M_1.5mm_MS_REV_A`: split on underscores, "REV" and "A" are two tokens and
+    the old one-token match read no revision at all. The letter must be the whole of what
+    follows, so REVIEW is not revision I.
+    """
+    m = re.search(r'(?:^|[_\s.-])rev[_\s-]*([A-Z])(?=$|[_\s.-])', stem or "", re.IGNORECASE)
+    return m.group(1).upper() if m else None
 
 
 def _parse_filename(path: Path) -> Dict[str, Any]:
@@ -726,7 +738,14 @@ def _parse_filename(path: Path) -> Dict[str, Any]:
             revision = m.group(1).upper()
             continue
 
-    if re.search(r"MFMDF|MELAMINE\s*FACED|PRE\s*LAM(?:INATE)?|PRELAM|\bMFC\b", stem.upper()):
+    if revision is None:
+        # "REV" AND ITS LETTER AS TWO TOKENS (12693-01-03M_1.5mm_MS_REV_A): the one-token
+        # match above needs revA, so the stem's own revision was dropped.
+        revision = _parse_revision_from_stem(stem)
+
+    if _FACED_MDF_RE.search(stem.upper()):
+        material = "MFMDF"
+    elif re.search(r"MFMDF|MELAMINE\s*FACED|PRE\s*LAM(?:INATE)?|PRELAM|\bMFC\b", stem.upper()):
         material = "MFC"
     return {
         "part_number":    part_number,
@@ -1378,6 +1397,40 @@ def _exact_perimeter_and_area(
         except Exception:
             _disc_r = 0.0
 
+    # A CIRCLE ROUND EVERY STRAIGHT EDGE IS THE OUTLINE (D-734). 12002-02-M01, the BASE
+    # PLATE, is a 300 mm disc with a 15.2 mm square cut out of its middle and a 5 mm hole:
+    # the lines were read as the outline and the circle as a hole, so the plate nested as a
+    # 15.2 x 15.2 square at GBP 0.03 while its 1,019 mm cut path (the circle's 942 plus the
+    # square and the hole) could never fit inside it. Where the largest cut circle contains
+    # every line and arc, it is the outline, and they are a cut-out inside it.
+    _encl_inner_mm2 = 0.0
+    if _pts_x and _disc_r == 0 and (cut_circs or []):
+        try:
+            _big = max(cut_circs, key=lambda e: float(getattr(e.dxf, "radius", 0.0) or 0.0))
+            _R = float(getattr(_big.dxf, "radius", 0.0) or 0.0) * scale
+            _cx, _cy = _big.dxf.center.x * scale, _big.dxf.center.y * scale
+            _span = max(max(_pts_x) - min(_pts_x), max(_pts_y) - min(_pts_y))
+            if (2.0 * _R >= _DISC_MIN_DIAMETER_MM and 2.0 * _R > 1.5 * _span
+                    and all(math.hypot(x - _cx, y - _cy) <= _R * 1.001
+                            for x, y in zip(_pts_x, _pts_y))):
+                _ix0, _ix1 = min(_pts_x), max(_pts_x)
+                _iy0, _iy1 = min(_pts_y), max(_pts_y)
+                _inner_bbox = max((_ix1 - _ix0) * (_iy1 - _iy0), 1e-9)
+                _encl_inner_mm2, _m, _f = _shapely_net_area_mm2(
+                    cut_lines, cut_arcs, [], scale, _inner_bbox)
+                if _m != "shapely_polygonize":
+                    _encl_inner_mm2 = _inner_bbox
+                _disc_r = _R
+                _disc_holes_mm2 = float(_encl_inner_mm2) + sum(
+                    math.pi * (float(getattr(e.dxf, "radius", 0.0) or 0.0) * scale) ** 2
+                    for e in cut_circs if e is not _big
+                    and float(getattr(e.dxf, "radius", 0.0) or 0.0) * scale < _R)
+                perimeter += 2.0 * math.pi * _R
+                _pts_x = [_cx - _R, _cx + _R]
+                _pts_y = [_cy - _R, _cy + _R]
+        except Exception:
+            _encl_inner_mm2 = 0.0
+
     xs, ys = _pts_x, _pts_y
     if not xs:
         return {"perimeter_mm": round(perimeter, 3), "area_mm2": 0.0,
@@ -1474,6 +1527,35 @@ def _min_area_rect(xs: List[float], ys: List[float]) -> Optional[Tuple[float, fl
     return best
 
 
+def _distinct_fold_axes(axes: List[Tuple[int, float, float]],
+                        tol_mm: float = 0.5) -> List[Dict[str, float]]:
+    """One entry per fold: lines of one direction whose offsets agree within tol_mm are one
+    axis, however many pieces the exporter drew it in. Directions within 1° are one
+    direction; 179° and 1° are both near-horizontal and meet across 0°.
+    """
+    by_dir: Dict[int, List[Tuple[float, float]]] = {}
+    for d, off, ln in axes:
+        key = next((k for k in by_dir if min(abs(k - d), 180 - abs(k - d)) <= 1), d)
+        if key != d and min(abs(key - d), 180 - abs(key - d)) <= 1 and abs(key - d) > 90:
+            off = -off   # the same line measured from the other side of 0°
+        by_dir.setdefault(key, []).append((off, ln))
+    out: List[Dict[str, float]] = []
+    for d in sorted(by_dir):
+        run: List[Tuple[float, float]] = []
+        for off, ln in sorted(by_dir[d]):
+            if run and off - run[-1][0] > tol_mm:
+                out.append({"angle_deg": float(d),
+                            "offset_mm": round(sum(o for o, _ in run) / len(run), 1),
+                            "length_mm": round(sum(l for _, l in run), 1)})
+                run = []
+            run.append((off, ln))
+        if run:
+            out.append({"angle_deg": float(d),
+                        "offset_mm": round(sum(o for o, _ in run) / len(run), 1),
+                        "length_mm": round(sum(l for _, l in run), 1)})
+    return out
+
+
 def _extract_bend_data(
     msp: Any,
     scale: float,
@@ -1485,11 +1567,20 @@ def _extract_bend_data(
     bend_lines = _get_layer_entities(msp, BEND_LAYERS, {"LINE"})
     if not bend_lines:
         return {"bend_count": 0, "bend_positions_mm": [], "flange_lengths_mm": [],
-                "bend_line_widths_mm": [], "symmetric_flanges": False}
+                "bend_line_widths_mm": [], "symmetric_flanges": False,
+                "bend_axes": [], "bend_positions_x_mm": []}
 
     h_bends: List[float] = []   # horizontal fold axes (angle ~0°)
     v_bends: List[float] = []   # vertical fold lines  (angle ~90°)
     widths:  List[float] = []
+    # EVERY FOLD AXIS, WHATEVER WAY IT RUNS. The count below was the distinct HORIZONTAL axes
+    # only: a vertical bend line was collected and then never counted. 12693-01-03M is a tray
+    # with a down-stand and a return on all four sides, eight bend lines, and it read four;
+    # a flat whose only bend runs up the sheet read none, and a measured zero on a declared
+    # bend layer is what lets the merge strip the fold the drawing shows. An axis is its
+    # direction and its offset across that direction, so a line the exporter broke around a
+    # cut-out is still one fold, as it always was.
+    axes: List[Tuple[int, float, float]] = []   # (direction °, offset mm, length mm)
 
     for e in bend_lines:
         s  = e.dxf.start
@@ -1501,6 +1592,11 @@ def _extract_bend_data(
 
         if length < 0.5:
             continue
+        _dir = int(round(math.degrees(math.atan2(dy, dx)) % 180.0)) % 180
+        _t = math.radians(_dir)
+        _mx = (s.x + en.x) * scale / 2.0
+        _my = (s.y + en.y) * scale / 2.0
+        axes.append((_dir, -_mx * math.sin(_t) + _my * math.cos(_t), length))
         if angle < 5 or angle > 175:
             # Horizontal fold axis
             y_mm = round((s.y * scale + en.y * scale) / 2, 3)
@@ -1530,8 +1626,11 @@ def _extract_bend_data(
         abs(flange_lengths[0] - flange_lengths[-1]) < 1.0
     )
 
+    distinct_axes = _distinct_fold_axes(axes)
     return {
-        "bend_count":        len(bend_ys),
+        "bend_count":        len(distinct_axes),
+        "bend_axes":         distinct_axes,
+        "bend_positions_x_mm": sorted(set(round(x, 1) for x in v_bends)),
         "bend_positions_mm": bend_ys,
         "flange_lengths_mm": flange_lengths,
         "bend_line_widths_mm": unique_widths,
@@ -1948,6 +2047,8 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
         "flange_lengths_mm":    bend.get("flange_lengths_mm", []),
         "bend_line_widths_mm":  bend.get("bend_line_widths_mm", []),
         "symmetric_flanges":    bend.get("symmetric_flanges", False),
+        "bend_axes":            bend.get("bend_axes", []),
+        "bend_positions_x_mm":  bend.get("bend_positions_x_mm", []),
 
         # Features
         "corner_notch_count":   notches.get("corner_notch_count", 0),

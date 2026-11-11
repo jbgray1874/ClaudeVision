@@ -21,7 +21,7 @@ Public API:
     extract_full_job(pdf_path, model=..., )  -> dict   (structured job; {} on failure)
 
 Standalone:
-    python llm_full_extract.py <pdf> [--model grok-4.3] [--context-only]
+    python llm_full_extract.py <pdf> [--model <grok model>] [--context-only]
 """
 from __future__ import annotations
 
@@ -38,7 +38,9 @@ try:
 except Exception:  # pragma: no cover
     pdfplumber = None
 
-DEFAULT_MODEL = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
+import xai_models  # noqa: E402  — the Grok models, named once in config (D-612)
+
+DEFAULT_MODEL = xai_models.vision_model()
 SOURCE_NAME = "llm_full_extract"
 
 # THE WORDS WE ASK FOR MUST BE WORDS WE CAN COST.
@@ -569,20 +571,98 @@ def _call_llm(user_content: str, model: str,
     """One TEXT chat call (xAI OpenAI-compatible). `user_content` is the COMPLETE user message —
     prompt and payload both — because a caller whose prompt gets something else stapled in
     front of it is not in control of what it asked."""
+    global LAST_ANSWERED_BY
+    LAST_ANSWERED_BY = model
     api_key = os.environ.get("XAI_API_KEY")
     if not api_key:
+        if _claude_available():
+            return _ask_claude(system, user_content, "no XAI_API_KEY is set")
         raise RuntimeError("XAI_API_KEY not set (C:\\ClaudeVision\\.env or $env:XAI_API_KEY).")
     from openai import OpenAI  # xAI is OpenAI-compatible
     client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_content},
-        ],
-        temperature=0,
-    )
+    def _once():
+        return client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0,
+        )
+    # BUSY IS WAITED FOR (10 Nov 2026): a capacity 429, a rate limit, a timeout or a server error
+    # is tried again after a wait, each wait said; any other error is said once and raised.
+    try:
+        resp = xai_models.call_with_retry(
+            _once, model, what=("the drawing read" if system == SYSTEM_TRANSCRIBE
+                                else "a targeted question"))
+    except Exception as exc:                                         # noqa: BLE001
+        # CLAUDE WHEN XAI STAYS BUSY (10 Nov 2026): the same question, asked of Claude, and said.
+        if xai_models.busy_kind(exc) and _claude_available():
+            return _ask_claude(system, user_content,
+                               f"xAI stayed busy ({xai_models.busy_kind(exc)})")
+        xai_models.note_exception(exc, model)                        # said once, then raised
+        raise
     return resp.choices[0].message.content
+
+
+# WHO ANSWERED THE LAST CALL: the xAI model, or "claude:<model>" when Claude stood in. The read
+# carries it (`_answered_by`), so a book never presents Claude's reading as Grok's.
+LAST_ANSWERED_BY = ""
+
+
+_FALLBACKS = {"claude": "claude_fallback", "openai": "openai_fallback"}
+
+
+def _fallback_order() -> List[str]:
+    raw = os.getenv("SDI_LLM_FALLBACK_ORDER") or "claude,openai"
+    return [x.strip().lower() for x in raw.split(",") if x.strip().lower() in _FALLBACKS]
+
+
+def _fallbacks_ready() -> List[Any]:
+    try:
+        import claude_fallback                                       # noqa: PLC0415
+        import openai_fallback                                       # noqa: PLC0415
+    except Exception:                                                # noqa: BLE001
+        return []
+    mods = {"claude": claude_fallback, "openai": openai_fallback}
+    out = []
+    for name in _fallback_order():
+        try:
+            mod = mods[name]
+            if mod.available():
+                out.append((name, mod))
+        except Exception:                                            # noqa: BLE001
+            continue
+    return out
+
+
+def _claude_available() -> bool:
+    """Is any fallback reader ready (Claude or OpenAI, by its key)? Kept under its first name."""
+    return bool(_fallbacks_ready())
+
+
+def _ask_claude(system: str, user_content: str, why: str) -> Optional[str]:
+    """Ask the fallbacks in order (SDI_LLM_FALLBACK_ORDER, default claude,openai); the first that
+    answers is the read, and it is said who answered. Each failure is said and the next is tried;
+    when every one fails the last error is raised, as a busy xAI was before."""
+    global LAST_ANSWERED_BY
+    last: Optional[BaseException] = None
+    for name, mod in _fallbacks_ready():
+        print(f"   [llm-fallback] {why}: asking {name} ({mod.model()}) the same question instead",
+              flush=True)
+        try:
+            text = mod.ask(system, user_content)
+        except Exception as exc:                                     # noqa: BLE001
+            print(f"   [llm-fallback] {name} did not answer ({type(exc).__name__}: "
+                  f"{str(exc)[:160]})", flush=True)
+            last = exc
+            continue
+        LAST_ANSWERED_BY = f"{name}:{mod.model()}"
+        print(f"   [llm-fallback] {name} answered ({len(text or '')} characters)", flush=True)
+        return text
+    if last is not None:
+        raise last
+    raise RuntimeError("no fallback reader is ready")
 
 
 def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[str, Any]:
@@ -715,6 +795,7 @@ def _transcribe(ctx: str, model: str = DEFAULT_MODEL) -> Dict[str, Any]:
         result["error"] = "LLM response was not parseable JSON"
         result["raw"] = (raw or "")[:2000]
         return result
+    obj["_answered_by"] = LAST_ANSWERED_BY or model
     _cache_write(_key, {**obj, "_raw_full": raw or ""})
     obj["_raw_full_words"] = raw or ""
     return obj
@@ -851,6 +932,9 @@ def project_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "tube_section": sec or row.get("tube_section"),
         "cut_length_mm": row.get("cut_length_mm"),
         "cut_lengths_mm": row.get("cut_lengths_mm") or None,
+        # The row's own count, kept beside its pieces (D-751): two equal pieces on a row of
+        # two are that row's two parts, one piece each, not one part cut twice.
+        "row_qty": row.get("qty"),
         "weight_g": row.get("weight_g"),
         "finish": row.get("finish") or None,
         "colour": row.get("colour") or None,
@@ -1124,15 +1208,26 @@ def merge_inference(job: Dict[str, Any], inference: Dict[str, Any]) -> Dict[str,
     if not isinstance(parts, list):
         parts = []
         job["parts"] = parts
+    # ONE IDENTITY (D-749): the inference names a part as the sheet prints it, the transcription
+    # as the parts list does; "UPC0358141M4" and "UPC0358141 M4" are one part, not a part and
+    # an addition.
+    def _key(v: Any) -> str:
+        raw = str(v or "").strip().upper()
+        try:
+            from part_identity import normalize_part_code
+            return normalize_part_code(raw) or raw
+        except Exception:                                            # noqa: BLE001
+            return raw.replace(" ", "")
+
     by_pn = {}
     for p in parts:
         if isinstance(p, dict) and p.get("part_number"):
-            by_pn[str(p["part_number"]).strip().upper()] = p
+            by_pn.setdefault(_key(p["part_number"]), p)
 
     for row in (inference.get("parts") or []):
         if not isinstance(row, dict) or not row.get("part_number"):
             continue
-        pn = str(row["part_number"]).strip().upper()
+        pn = _key(row["part_number"])
         target = by_pn.get(pn)
         if target is None:
             # A part the transcription never listed at all. Added whole, and every field on it
@@ -1162,7 +1257,7 @@ def merge_inference(job: Dict[str, Any], inference: Dict[str, Any]) -> Dict[str,
         job["routes"] = routes
     # An operation the transcription already read for the same part is not repeated: it is
     # already there at the higher rank, and adding it again would only make it look inferred.
-    seen = {(str(r.get("operation") or "").strip().lower(), str(p).strip().upper())
+    seen = {(str(r.get("operation") or "").strip().lower(), _key(p))
             for r in routes if isinstance(r, dict)
             for p in (r.get("part_numbers") or [])}
     for r in (inference.get("routes") or []):
@@ -1170,14 +1265,14 @@ def merge_inference(job: Dict[str, Any], inference: Dict[str, Any]) -> Dict[str,
             continue
         op = str(r.get("operation") or "").strip().lower()
         pns = [str(p).strip().upper() for p in (r.get("part_numbers") or []) if p]
-        keep = [p for p in pns if (op, p) not in seen]
+        keep = [p for p in pns if (op, _key(p)) not in seen]
         if pns and not keep:
             continue
         r["part_numbers"] = keep or pns
         r["inferred"] = True
         routes.append(r)
         for p in keep:
-            seen.add((op, p))
+            seen.add((op, _key(p)))
         counts["routes"] += 1
     return counts
 

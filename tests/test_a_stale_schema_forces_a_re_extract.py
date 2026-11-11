@@ -49,12 +49,13 @@ def test_an_old_unversioned_extract_forces_a_re_extract():
 
 
 def test_a_current_extract_is_reused_when_the_models_did_not_change():
-    """A v3 extract with models no newer than it is reused — the version gate only forces a
-    re-run when the extract is BEHIND, never on every run."""
+    """A current extract with models no newer than it is reused — the version gate only
+    forces a re-run when the extract is BEHIND, never on every run."""
     d = tempfile.mkdtemp()
+    v = sw._MIN_EXTRACT_SCHEMA_VERSION
     cur = _write(d, "_sw_native_extract.json",
-                 {"schema": "sw_native_extract.v3", "schema_version": 3,
-                  "_manifest": {"schema_version": 3}, "records": []})
+                 {"schema": f"sw_native_extract.v{v}", "schema_version": v,
+                  "_manifest": {"schema_version": v}, "records": []})
     assert sw._extract_schema_version(cur) == sw._MIN_EXTRACT_SCHEMA_VERSION
     # No model files in the temp dir, so nothing is newer than the extract -> reuse.
     assert sw._should_run(cur, d) is False

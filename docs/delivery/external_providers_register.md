@@ -109,7 +109,7 @@ tools has any entry in this section.**
 | | |
 |---|---|
 | **Used for** | Reading the drawing's own parts list; whole-job extraction; market price estimates for un-catalogued bought-in parts |
-| **Model** | `grok-4.3` (the code also references `grok-4.5` and an older model) |
+| **Model** | `grok-4.7` for text and the drawing reads, `grok-imagine-image-2.0` for the quote's picture, from 1 Nov 2026 (D-612; previously `grok-4.3`). Named once in `src/config.py`; `.env` can override per machine |
 | **What is sent** | **Full drawing pages rendered as images**, at 300 dpi, encoded and posted to the provider — plus extracted text: part numbers, materials, finishes, thicknesses, BOM tables, drawing notes, quantities, job numbers and customer names |
 | **Credential** | An API key held in configuration |
 | **Character** | Self-service API, online terms accepted at sign-up. No negotiated agreement, no order form, no SOW *[to confirm]* |

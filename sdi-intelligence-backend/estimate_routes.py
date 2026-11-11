@@ -51,6 +51,7 @@ import re
 import subprocess
 import sys
 import threading
+import urllib.parse
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -58,7 +59,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 
@@ -75,6 +76,8 @@ except ImportError:                    # loaded by path, without this folder on 
 config = the_service_config(config)   # this service's, even where the engine's holds the name
 import docmgr
 import estimate_email
+import estimate_history
+import estimate_walkthrough
 import quote_release
 import self_running_switch
 import staging
@@ -96,7 +99,9 @@ _OVERRIDE_CLI = str(_REPO_ROOT / "src" / "client_quote_regen.py")
 _PARITY_CLI = str(_REPO_ROOT / "src" / "parity_run.py")
 _PRINT_CLI = str(_REPO_ROOT / "src" / "drawings_print.py")
 _MATERIAL_CLI = str(_REPO_ROOT / "src" / "material_confirmation.py")
+_QA_CLI = str(_REPO_ROOT / "src" / "estimate_qa.py")
 _PRODUCT_CLI = str(_REPO_ROOT / "src" / "product_identity.py")
+_EXTRACT_CLI = str(_REPO_ROOT / "src" / "bom_and_route_extract.py")
 _MAX_OVERRIDE_UPLOAD_BYTES = int(os.getenv("SDI_MAX_OVERRIDE_UPLOAD_MB", "20")) * 1024 * 1024
 
 # Where finished estimates are filed. A DRIVE LETTER IS NOT A LOCATION: K: is the
@@ -106,6 +111,21 @@ _MAX_OVERRIDE_UPLOAD_BYTES = int(os.getenv("SDI_MAX_OVERRIDE_UPLOAD_MB", "20")) 
 OUTPUT_ROOT = Path(os.getenv(
     "SDI_ESTIMATE_OUTPUT_ROOT",
     r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets"))
+
+# A SECOND COPY WHERE THE ESTIMATORS FILE THEIR WORK (D-617). JG, 1 Nov 2026: "when we save down
+# the estimates ... I now need a save down to K:\Estimating\Completed\Live Enquiries\completed AI
+# briefs\$ClientArea\ followed by the job pack number, if we do multiple runs for the same job
+# pack we create a new sub dir below this with a timestamp and some other identifier like a
+# version number so that we have a record of them all." The runner copies every finished run's
+# files to <this>\<client area>\<job pack>\<queued time> v<N> (<units> off). It is also the
+# folder the phone's question box reads filed estimates from, so every run becomes askable
+# there. UNC like OUTPUT_ROOT; the same setting the portal's approved areas read.
+# SDI_FILE_TO_COMPLETED_BRIEFS=0 switches the copy off on one machine.
+COMPLETED_BRIEFS_ROOT = Path(os.getenv(
+    "SDI_COMPLETED_AI_BRIEFS_ROOT",
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Live Enquiries\completed AI briefs"))
+FILE_TO_COMPLETED_BRIEFS = os.getenv(
+    "SDI_FILE_TO_COMPLETED_BRIEFS", "1").strip().lower() not in ("0", "false", "no", "off")
 
 _MAX_LOG_LINES = 4000
 
@@ -265,6 +285,7 @@ class Run:
     # questions about the same files, and the runner has to be told which was asked.
     pdf_path: str = ""
     manual_workbook: str = ""               # parity partner, if one was attached to this run
+    compare_with_manual: bool = False       # D-621: find the manual sheet when it finishes
     batch_id: str = ""                      # which enquiry this drawing came in with
     # THE SECOND OPINION, KEPT BESIDE THE FIRST AND NEVER MIXED INTO IT. An LLM read of the
     # drawing arrives in seconds; the engine's estimate takes tens of minutes and runs one
@@ -274,6 +295,10 @@ class Run:
     llm_price_gbp: Optional[float] = None
     llm: Dict[str, Any] = field(default_factory=dict)
     engine_price_gbp: Optional[float] = None
+    # THE PRICE AT EVERY QUANTITY THE RUN PRICED (D-610): [{"quantity": 5, "unit_gbp": ...}].
+    quantity_prices: List[Dict[str, Any]] = field(default_factory=list)
+    # THE WALKTHROUGH PAGE'S TOKEN (D-610), when the run filed a walkthrough.
+    walkthrough: str = ""
     # WHETHER A RUNNER SHOULD EVER PICK THIS UP. Nothing sets this False any more: an
     # LLM-only enquiry used to end at the fast text read — no runner, no workbook — and
     # since 22 Sep 2026 it queues a runner job like every other method, because "populate
@@ -292,6 +317,17 @@ class Run:
     # right for an estimate and wrong for a measurement of the model. Nothing is deleted: the
     # engine is told to bypass them, so no other job loses its settled answer.
     fresh_read: bool = False
+    # THE DRAWING READER ON ITS OWN (D-753, SCRUM-194): main.py --deterministic-only. No
+    # language model reads the drawings and no cached answer is replayed; a test of the
+    # deterministic reader, never an estimate to quote.
+    deterministic_only: bool = False
+    # THE READER MODE (run modes): "targeted" (main.py --targeted), "solidworks"
+    # (--solidworks-only), "docmgr" (--docmgr-only); "" for a full estimate. One per run, chosen
+    # on the page, never from the runner machine's .env.
+    reader_mode: str = ""
+    # A PRE-RUN FOR ESTIMATING (job_type "bom_routes", main.py --bom-routes-only): the pack read
+    # and the routes compiled, BOMs and Routes written, no workbook and nothing priced shown.
+    bom_routes_only: bool = False
     # THE INSTRUCTION WAS GIVEN AND NOT CARRIED OUT. Set when the engine's own command line
     # comes back on the log without a flag this run asked for -- either of them; see
     # _check_the_engine_was_told below. It forces the outcome to a failure whatever the runner
@@ -318,6 +354,10 @@ class Run:
     # already been given up on. The runner cannot be interrupted from here, so it is TOLD, on
     # the heartbeat it already sends, and it does the killing at its end.
     cancel_requested: bool = False
+    # A PERSON STOPPED IT (JG, 10 Nov 2026), from the estimating page or Grid Control, as against
+    # a run that failed. Self-Running reads it and holds the job on its sheet instead of
+    # queueing it again as "attempt 2": a stop means stop until somebody marks it Re-Run.
+    stopped_by_hand: bool = False
     # WHO GETS THIS ONE, decided when the job was queued and not when it finished. A person
     # saw the box, and what they left in it is what happens; empty means nobody, so an engine
     # test does not land in an estimator's inbox at two in the morning.
@@ -331,6 +371,37 @@ class Run:
     # network card), so a runner restarted mid-job comes back under the same id; only the
     # process tells the two apart. Empty for a runner too old to say.
     claimed_by_process: str = ""
+    # THE SCOPE AS SUBMITTED (D-604): customer, drawing, quantity, method, how long the brief
+    # was and which documents were declared reference. Handed to the engine through the
+    # runner, so the book can show whether what arrived is what was sent. The HPP 01:12 run
+    # of 31 Oct went out as Samsung / TG_Standalone with no brief and no reference, and
+    # nothing between the page and the book could say what had been meant.
+    submitted_scope: Dict[str, Any] = field(default_factory=dict)
+    # WHAT KIND OF JOB (D-640). "" is an estimate. "sw_extract" / "xai_extract" read the pack
+    # with ONE reader and file that reader's organised output; no workbook is built. Handed
+    # only to a runner that says on its claim it can run one (RUNNER_CAPABILITIES there).
+    job_type: str = ""
+    # WHEN THE ENGINE LAST SAID ANYTHING (D-737), so the wall monitor can tell a long run from
+    # a stalled one. Set on every progress post that carries lines; 0 until the first.
+    last_line_at: float = 0.0
+    # THE DESKTOP'S SOLIDWORKS, AS THIS RUN SAID IT (D-738): when it took the turn (0 when it
+    # holds none) and when it began waiting for it (0 when not waiting). Read off the engine's
+    # own lines as they arrive, so the wall can say who has the licence, since when, and how
+    # long each waiting run has waited of its 30 minutes.
+    sw_turn_at: float = 0.0
+    sw_wait_since: float = 0.0
+    # AND HOW LONG IT WAITED IN ALL (D-739), so a finished run's time can be read net of its
+    # SolidWorks waits: an ETA that adds today's wait to a history that already holds waits
+    # counts the delay twice.
+    sw_waited_s: float = 0.0
+    # WHAT STILL NEEDS A PERSON (D-739): the engine's REVIEW_TALLY line, kept as said.
+    review: Dict[str, Any] = field(default_factory=dict)
+    # THE FINISH WINDOW PREDICTED WHEN IT STARTED (D-739): {lo_s, mid_s, hi_s, basis}, the
+    # run's own duration net of waits as history predicted it, so the error can be measured.
+    predicted: Dict[str, Any] = field(default_factory=dict)
+    # WHAT READ THE MODELS, FROM THE WHOLE CONSOLE (D-745), worked out when the run finishes and
+    # saved with it: a restart keeps only the end of the console, where the model read is not.
+    evidence_kept: Dict[str, Any] = field(default_factory=dict)
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
 
@@ -351,9 +422,15 @@ class Run:
             "pdf_path": self.pdf_path, "batch_id": self.batch_id,
             "llm_price_gbp": self.llm_price_gbp, "llm": self.llm,
             "engine_price_gbp": self.engine_price_gbp,
+            "quantity_prices": list(self.quantity_prices),
+            "walkthrough_url": (estimate_walkthrough.url_for(self.walkthrough)
+                                if self.walkthrough else ""),
             "log": self.log, "deliverables": self.deliverables,
             "email_to": list(self.email_to), "email_result": dict(self.email_result),
             "requested_by": self.requested_by,
+            "submitted_scope": dict(self.submitted_scope),
+            "job_type": self.job_type,
+            "stopped_by_hand": self.stopped_by_hand,
             "queued_at": self.queued_at, "started_at": self.started_at,
             "finished_at": self.finished_at,
             "seconds": round((self.finished_at or time.time()) - ref, 1),
@@ -381,6 +458,16 @@ class Runner:
     # one on 8071 and a hand-started one on 8072); while it costs a job for one, the others
     # hear from it through /runner/heartbeat and say so, instead of "No runner connected".
     busy_elsewhere: bool = False
+    # WHAT IT CAN RUN BESIDES AN ESTIMATE (D-640), as it said on its last claim.
+    capabilities: List[str] = field(default_factory=list)
+    # WHAT ITS MACHINE IS USING (D-743): the newest sample it sent, and the last fifteen
+    # minutes of CPU and memory for the wall's trace. Measured by the runner, never guessed.
+    compute: Dict[str, Any] = field(default_factory=dict)
+    compute_history: List[List[float]] = field(default_factory=list)
+    # ITS LAST COMPUTE CHECK (JG, 10 Nov 2026): slot, when, what was measured, and whether it
+    # left room for a run. Sent by a slot 2 or more on every claim, and on a check-in while
+    # the check holds it back, so Grid Control can show that it checked.
+    gate: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def online(self) -> bool:
@@ -410,7 +497,8 @@ class Runner:
                 # that actually named themselves.
                 "process_count": len(live) or None,
                 "conflict": len(self.live_processes(RUNNER_CONFLICT_SECONDS)) > 1,
-                "busy_elsewhere": bool(self.busy_elsewhere and self.online)}
+                "busy_elsewhere": bool(self.busy_elsewhere and self.online),
+                "gate": dict(self.gate)}
 
 
 _RUNS: Dict[str, Run] = {}
@@ -428,6 +516,65 @@ def work_in_hand() -> List[Dict[str, Any]]:
         return [{"run_id": r.run_id, "client": r.client,
                  "drawing_number": r.drawing_number, "status": r.status}
                 for r in _RUNS.values() if r.status in ("queued", "running")]
+
+
+# ── RESTART-SAFE HISTORY (D-618) ─────────────────────────────────────────────────────────
+# Every run is written to disk at each change of state and read back when the service starts,
+# so a deployment no longer forgets queued, running and finished jobs. See estimate_history.
+_PROGRESS_SAVE_SECONDS = 10.0
+_last_progress_save: Dict[str, float] = {}
+
+
+def _note_evidence(run: "Run") -> None:
+    """A finished estimate's evidence, read once from its whole console (D-745). Read again
+    only when the console has grown since, and never from a console a restart trimmed."""
+    if run.status not in ("done", "error") or run.job_type or not run.log:
+        return
+    if (run.evidence_kept or {}).get("lines") == len(run.log):
+        return
+    if run.evidence_kept and "earlier line(s) are in the run's .log file" in str(run.log[0]):
+        return
+    import estimate_wall
+    found = estimate_wall.evidence_from_log(run.log, ended=True, sw_wait_since=run.sw_wait_since)
+    run.evidence_kept = {**found, "lines": len(run.log)}
+
+
+def _keep(run: "Run") -> None:
+    """Save one run's state. A save that fails is said on the run's log, never raised."""
+    try:
+        _note_evidence(run)
+    except Exception as exc:                                         # noqa: BLE001
+        print(f"[history] the evidence of {run.run_id} was not noted: {exc}", flush=True)
+    why = estimate_history.save(run)
+    if why:
+        run.line(f"(The run's history could not be saved: {why}. It is safe until the service "
+                 f"restarts.)")
+
+
+def _restore_history() -> int:
+    now = time.time()
+    try:
+        restored = estimate_history.load(Run, now=now)
+    except Exception as exc:                                        # noqa: BLE001
+        print(f"[history] runs could not be restored: {type(exc).__name__}: {exc}", flush=True)
+        return 0
+    for run in restored.values():
+        note = estimate_history.restored_note(run, now)
+        if note:
+            run.line(note)
+        if run.email_result.get("sending"):
+            run.email_result = {"sent": False, "reason": (
+                "the service restarted while this e-mail was being sent, so it is not sent "
+                "again; check the inbox before sending it by hand")}
+            run.line("E-mail: " + run.email_result["reason"] + ".")
+    _RUNS.update(restored)
+    if restored:
+        print(f"[history] restored {len(restored)} run(s) from {estimate_history.store_dir()}",
+              flush=True)
+    return len(restored)
+
+
+_restore_history()
 
 
 def _expire_dead_claims() -> None:
@@ -449,6 +596,7 @@ def _expire_dead_claims() -> None:
             r = _RUNNERS.get(run.runner)
             if r is not None and r.run_id == run.run_id:
                 r.run_id = ""
+            _keep(run)
 
 
 def _release_runs_orphaned_by_a_restart(runner_id: str, process: str) -> None:
@@ -480,6 +628,45 @@ def _release_runs_orphaned_by_a_restart(runner_id: str, process: str) -> None:
             r = _RUNNERS.get(runner_id)
             if r is not None and r.run_id == run.run_id:
                 r.run_id = ""
+            _keep(run)
+
+
+def _host_of(runner_id: str) -> str:
+    """The machine name in a runner id ("DESKTOP-GFAAP80-90faa0001-s2" -> "DESKTOP-GFAAP80"),
+    for a runner this service has only heard from mid-job, which does not say its name."""
+    m = re.match(r"^(.+?)-[0-9a-fA-F]{8,}(?:-s\d+)?$", str(runner_id or ""))
+    return m.group(1) if m else ""
+
+
+def _release_runs_its_runner_has_left(runner_id: str, now: float) -> None:
+    """Fail a run of this service that its runner is plainly not working on.
+
+    A GHOST HELD RUN 1 ON 8072 (JG, 10 Nov 2026). The runner finished or dropped 11896-08-01-GA
+    while 8072 was restarting, so its report never landed; 8072 restored the run "running" with
+    its claim, and the same runner went on to work a job for 8071. A runner says it is busy
+    for ANOTHER service only through /runner/heartbeat, so a heartbeat from the runner a run
+    here is claimed by means nothing is working on that run. Held to runs that have also had
+    no progress for two minutes, so a beat crossing a fresh claim on the wire frees nothing."""
+    for run in _RUNS.values():
+        if run.status != "running" or run.runner != runner_id:
+            continue
+        last = max(float(run.lease_until or 0) - LEASE_SECONDS, float(run.started_at or 0),
+                   float(run.last_line_at or 0))
+        if now - last < 120:
+            continue
+        run.status = "error"
+        run.error = (f"Its Grid Runner ({runner_id}) is working on another service's job, so "
+                     f"nothing is working on this one; its finish report was probably lost "
+                     f"while this service restarted. If the engine finished, its book is in "
+                     f"the engine's output\\estimates folder on that machine; otherwise run "
+                     f"the job again.")
+        run.line(run.error)
+        run.finished_at = now
+        run.lease_until = 0.0
+        r = _RUNNERS.get(runner_id)
+        if r is not None and r.run_id == run.run_id:
+            r.run_id = ""
+        _keep(run)
 
 
 def _online_runners() -> List[Runner]:
@@ -516,6 +703,75 @@ def _busy_runner() -> Optional[Run]:
         if run.status == "running":
             return run
     return None
+
+
+# ── MORE THAN ONE RUN AT ONCE, WHERE IT IS SAFE (D-703, SCRUM-183 phase 1) ───────────
+#
+# _busy_runner() refused every claim while ANY run was running, so a second runner on another
+# machine sat idle beside a queue of work. The rule it protects is real but narrower: one
+# desktop drives one SolidWorks and one estimate. So a claim is refused when this runner, or
+# another runner on the same desktop, already has a run, or when the number running has reached
+# SDI_MAX_CONCURRENT_RUNS. That setting defaults to 1, which is exactly the old behaviour.
+def _max_concurrent_runs() -> int:
+    try:
+        return max(1, int(str(os.getenv("SDI_MAX_CONCURRENT_RUNS", "1")).strip() or "1"))
+    except ValueError:
+        return 1
+
+
+def _claim_refused_because(runner_id: str, hostname: str,
+                           capabilities: Optional[List[str]] = None) -> str:
+    """Why this runner may not take another run now, or "" when it may.
+
+    SEVERAL RUNS ON ONE DESKTOP (SCRUM-183 phase 2, D-731). Runners that declare
+    "desktop_token" run an engine that takes the desktop's one SolidWorks in turn: a run whose
+    model read finds it in use waits for it, and every run reads its models the same way it
+    would alone. So the one-run-per-desktop rule stands only between runners that do not both
+    declare it."""
+    running = [r for r in _RUNS.values() if r.status == "running"]
+    if not running:
+        return ""
+    if len(running) >= _max_concurrent_runs():
+        return "another run is in progress"
+    host = str(hostname or "").strip().upper()
+    _mine_shares = "desktop_token" in set(capabilities or [])
+    for r in running:
+        if str(r.runner or "") == str(runner_id or ""):
+            return "this runner already has a run in progress"
+        other = _RUNNERS.get(str(r.runner or ""))
+        if host and other is not None and str(other.hostname or "").strip().upper() == host:
+            if _mine_shares and "desktop_token" in set(other.capabilities or []):
+                continue
+            return (f"another run is in progress on {hostname}: one desktop drives one "
+                    f"SolidWorks and one estimate")
+    return ""
+
+
+# A PACK THAT NEEDS A MODEL READER is not handed to a runner that says it cannot read models
+# (capability "no_models"): it would be priced from PDF and DXF alone and differ from the same
+# job on a runner with SolidWorks. Runners that say nothing are treated as able, as before.
+_MODEL_SUFFIXES = (".sldprt", ".sldasm")
+_EXTRACT_NAME = "_sw_native_extract.json"
+_MODEL_POINTER = "_sdi_model_sources.json"
+
+
+def _needs_model_reader(job_folder: Any) -> bool:
+    try:
+        folder = Path(str(job_folder or ""))
+        if not str(job_folder or "").strip() or not folder.is_dir():
+            return False
+        newest_model = 0.0
+        for path in list(folder.glob("*")) + list(folder.glob("*/*")):
+            if path.is_file() and path.suffix.lower() in _MODEL_SUFFIXES:
+                newest_model = max(newest_model, path.stat().st_mtime)
+        if not newest_model and not (folder / _MODEL_POINTER).is_file():
+            return False
+        extract = folder / _EXTRACT_NAME
+        if extract.is_file() and newest_model and extract.stat().st_mtime >= newest_model:
+            return False
+        return True
+    except OSError:
+        return False
 
 
 def _active_run_for(client: str, drawing: str) -> Optional[Run]:
@@ -585,6 +841,10 @@ class EstimateRequest(BaseModel):
     # the only way the comparison gets made at the moment somebody is actually looking at
     # the job, rather than never.
     manual_workbook: Optional[str] = None
+    # OR COMPARE WITH THE MANUAL ESTIMATE WHEN THIS FINISHES (D-621): the runner finds it by job
+    # number under Manual Estimates, and compares only when the choice is clear; otherwise the
+    # run's log says so and the parity card offers the candidates.
+    compare_with_manual: bool = False
     # THE SAME THREE WORDS THE BATCH ENDPOINT ALREADY VALIDATES. "both" and "engine" are the
     # normal run and behave identically here -- this endpoint has always produced a full
     # estimate and still does. "llm" is the new one: read the pack with the vision model
@@ -594,14 +854,17 @@ class EstimateRequest(BaseModel):
     # no branching. That is why it belongs here rather than on the batch endpoint, which has
     # to keep treating every file as a separate enquiry.
     method: str = "both"
+    # A PRE-RUN: BOMs and Routes only, stopped before the workbook (run modes). Any method.
+    bom_routes_only: bool = False
     # ASK THE MODEL AGAIN, rather than replaying what it said about this pack last time.
     # Only meaningful alongside an LLM read; harmless and ignored on an ordinary estimate,
     # which has three other readers and does not want its one reproducible source moving.
     fresh_read: bool = False
     # THE ENQUIRY BRIEF (D-360). Free text typed for an LLM-only run — "600 x 600 x 1200mm
     # bump bin with lid, 1800mm back panel, plywood with print, 350 off" — filed into the job
-    # folder as ENQUIRY_BRIEF.txt and read by the concept read as stated facts. Ignored on
-    # any other method: a drawing pack's drawings are its facts.
+    # folder as ENQUIRY_BRIEF.txt and read by the concept read as stated facts. Filed on every
+    # method (D-598y): an estimate whose drawings no reader can read falls back to that read,
+    # and a measured pack's drawings stay its facts, the brief set aside on the book.
     enquiry_brief: Optional[str] = None
     concept_document: bool = False
     # REFERENCE / STANDARDS DOCUMENTS (D-474). File names among the submitted files that the
@@ -672,6 +935,27 @@ class SendRequest(BaseModel):
     files: List[str] = []
 
 
+# ── RUN MODES: ONE PER RUN, CHOSEN ON THE PAGE ────────────────────────────────────────
+# "both"/"engine" a full estimate; "llm" the vision read alone; "deterministic" the drawing reader
+# alone (D-753); "targeted" the drawing reader first and the model asked only about the gaps
+# (SCRUM-194 requirement 3); "solidworks" and "docmgr" the pack's models read by one reader.
+READER_MODE_FLAG = {"targeted": "--targeted", "solidworks": "--solidworks-only",
+                    "docmgr": "--docmgr-only"}
+READER_MODE_SAYS = {
+    "targeted": "TARGETED: the drawing reader runs first; the whole-pack model read, the vision "
+                "BOM reader, the page vision pass and the DXF interpretation are OFF, and the model "
+                "is asked one question per gap on that part's own pages. Every ask is on the record.",
+    "solidworks": "SOLIDWORKS-ONLY: the pack's models are read by the SolidWorks analyser alone; no "
+                  "language model reads the drawings. A measurement of what the models give, not "
+                  "an estimate to quote.",
+    "docmgr": "DOCUMENT-MANAGER-ONLY: the pack's models are read by the SolidWorks Document Manager "
+              "alone; no language model reads the drawings and the COM analyser is not driven. A "
+              "measurement, not an estimate to quote.",
+}
+RUN_METHODS = {"both", "llm", "engine", "deterministic"} | set(READER_MODE_FLAG)
+BATCH_METHODS = {"both", "llm", "engine", "deterministic", "targeted"}
+
+
 class BatchRequest(BaseModel):
     """A hundred drawings that are a hundred enquiries, not one pack."""
     client: str
@@ -693,11 +977,93 @@ class ClaimRequest(BaseModel):
     # know rather than inventing a confident answer about a machine it cannot see.
     process: str = ""
     build: str = ""
+    # THE JOB TYPES IT CAN RUN BESIDES AN ESTIMATE (D-640); empty for a runner that predates
+    # them, which is then never handed one.
+    capabilities: List[str] = []
+    # WHAT ITS MACHINE IS USING (D-743); absent from a runner that predates it.
+    compute: Optional[Dict[str, Any]] = None
+    # ITS LAST COMPUTE CHECK (slot 2 or more); absent from a runner that predates it.
+    gate: Optional[Dict[str, Any]] = None
+
+
+def _note_gate(runner: "Runner", gate: Any, now: float) -> None:
+    if not isinstance(gate, dict) or not gate:
+        return
+    try:
+        runner.gate = {"slot": int(gate.get("slot") or 1), "ok": bool(gate.get("ok")),
+                       "measured": str(gate.get("measured") or "")[:300],
+                       "at": float(gate.get("at") or now), "received_at": now}
+    except (TypeError, ValueError):
+        return
 
 
 class ProgressRequest(BaseModel):
     runner_id: str
     lines: List[str] = []
+    compute: Optional[Dict[str, Any]] = None
+
+
+# ── WHAT EACH MACHINE IS USING (D-743) ───────────────────────────────────────────────────
+# JG, 7 Nov 2026: "a graphical representation of the compute resources available on the
+# laptop ... what compute resource each job is taking and it updates dynamically and the
+# remaining compute is also available. we can then add the server downstairs and the new
+# machine." The runner measures; the service keeps only numbers it recognises, rounded, so a
+# runner can never fill the wall with anything but figures.
+_COMPUTE_NUMBERS = ("at", "cpu_pct", "threads", "cores", "mem_total_gb", "mem_used_gb",
+                    "mem_free_gb", "disk_free_gb", "disk_total_gb")
+# FIFTEEN MINUTES OF READINGS, BY TIME (D-746). It was 180 points of whatever arrived at least
+# 4 s apart: a reading re-sent by the next post counted again, so the "15 MIN" line could span
+# 12 minutes or 45. Now one point per new reading (its own "at"), and only the last 900 s.
+_COMPUTE_WINDOW_S = 900.0
+_COMPUTE_HISTORY = 500          # a cap only: 900 s at the runner's shortest 2 s sample is 450
+
+
+def _num_or_none(v: Any) -> Optional[float]:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    f = float(v)
+    return round(f, 2) if f == f and abs(f) < 1e12 else None
+
+
+def _clean_compute(sample: Any) -> Dict[str, Any]:
+    if not isinstance(sample, dict):
+        return {}
+    out: Dict[str, Any] = {k: _num_or_none(sample.get(k)) for k in _COMPUTE_NUMBERS}
+    out = {k: v for k, v in out.items() if v is not None}
+    for k in ("host", "by", "disk", "error"):
+        if sample.get(k) is not None:
+            out[k] = str(sample[k])[:120]
+
+    def uses(block: Any, limit: int) -> Dict[str, Dict[str, float]]:
+        kept: Dict[str, Dict[str, float]] = {}
+        for name, use in list((block or {}).items())[:limit] if isinstance(block, dict) else []:
+            if isinstance(use, dict):
+                kept[str(name)[:64]] = {k: v for k, v in (
+                    (k, _num_or_none(use.get(k))) for k in ("cpu_pct", "mem_gb", "count", "procs"))
+                    if v is not None}
+        return kept
+    out["apps"] = uses(sample.get("apps"), 8)
+    out["jobs"] = uses(sample.get("jobs"), 8)
+    return out
+
+
+def _note_compute(runner: "Runner", sample: Any, now: float) -> None:
+    clean = _clean_compute(sample)
+    if not clean:
+        return
+    before = (runner.compute or {}).get("at")
+    clean["received_at"] = now
+    runner.compute = clean
+    hist = runner.compute_history
+    at = clean.get("at")
+    new = (at != before) if at is not None else (not hist or now - hist[-1][0] >= 4.0)
+    if new:
+        total, used = clean.get("mem_total_gb"), clean.get("mem_used_gb")
+        hist.append([round(now, 1), clean.get("cpu_pct"),
+                     round(100.0 * used / total, 1) if total and used is not None else None])
+    while hist and now - hist[0][0] > _COMPUTE_WINDOW_S:
+        hist.pop(0)
+    del hist[:-_COMPUTE_HISTORY]
 
 
 class CompleteRequest(BaseModel):
@@ -710,6 +1076,8 @@ class CompleteRequest(BaseModel):
     # runner because the runner is the machine that has the summary JSON; this service has
     # never read an estimate and is not about to start.
     unit_cost_gbp: Optional[float] = None
+    # AND AT EVERY QUANTITY ASKED FOR (D-610).
+    quantity_prices: List[Dict[str, Any]] = []
 
 
 # ══ THE RUNNER'S ENDPOINTS ═══════════════════════════════════════════════════
@@ -772,10 +1140,663 @@ def runners(request: Request = None, x_sdi_key: Optional[str] = Header(default=N
         _own = int(request.url.port) if request is not None and request.url.port else None
     except Exception:                                                # noqa: BLE001
         _own = None
+    import sys as _sys_c
     return {"other_local_services": _other_local_services(_own),
+            # THIS SERVICE'S BUILD, so the page can say when the other one differs.
+            "service_commit": str(getattr(_sys_c.modules.get("app"), "SDI_COMMIT", "") or ""),
             "runners": listed, "online": len(online), "queued": queued,
             "busy": sum(1 for r in online if r.get("running")),
+            # HOW MANY THE SERVICE MAY RUN AT ONCE (D-732), so the page can say a second or
+            # third window is off, not merely empty.
+            "max_runs": _max_concurrent_runs(),
             "conflicts": [r["runner_id"] for r in online if r.get("conflict")]}
+
+
+# ── THE WALL MONITOR (D-737) ─────────────────────────────────────────────────────────────
+# JG, 7 Nov 2026: a full-screen page for the wall, live runs with red / amber / green, the
+# fleet of machines, and KPIs on run times and activity. One read of everything the service
+# holds, worked out by estimate_wall (pure, tested); the page only draws it.
+
+# ── NEW DRAWING PACKS ON THE DESIGN SHARE (design sweep) ─────────────────────────────────
+# src/design_sweep.py runs hourly on the estimating machine (which holds the share rights) and
+# posts its report here; the control panel shows the candidates and lets them be dismissed.
+def _design_sweep_file() -> Path:
+    return estimate_email.state_dir() / "design_sweep.json"
+
+
+def design_sweep_for_wall() -> Dict[str, Any]:
+    """The last sweep's report, dismissed candidates removed, with its age."""
+    try:
+        data = json.loads(_design_sweep_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"state": "never", "candidates": [],
+                "why": "no sweep has reported: start the design sweep on the estimating machine "
+                       "(tools/start/install-design-sweep-task.ps1)"}
+    rep = dict(data.get("report") or {})
+    gone = set(data.get("dismissed") or [])
+    # THE FILE LISTS STAY HERE (JG, 10 Nov 2026): Grid Control refreshes every 4 s, so each
+    # candidate carries only how many files were listed; "files" asks for one list.
+    rep["candidates"] = [{**{k: v for k, v in c.items() if k != "listing"},
+                          "listed": len(((c.get("listing") or {}).get("files")) or [])}
+                         for c in (rep.get("candidates") or []) if c.get("folder") not in gone]
+    rep["dismissed"] = len(gone)
+    rep["received_at"] = data.get("received_at")
+    try:
+        age = time.time() - float(data.get("received_ts") or 0)
+        rep["age_s"] = int(age)
+        every = float(rep.get("every_minutes") or 60) * 60
+        rep["state"] = "late" if age > 2.5 * every else "ok"
+    except (TypeError, ValueError):
+        rep["state"] = "ok"
+    return rep
+
+
+@router.get("/design-sweep/files")
+def design_sweep_files(folder: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """The files the last sweep listed in one candidate pack, for Grid Control's file view."""
+    _check_key(x_sdi_key)
+    try:
+        data = json.loads(_design_sweep_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise HTTPException(404, "No sweep has reported yet.")
+    for c in (data.get("report") or {}).get("candidates") or []:
+        if c.get("folder") == folder:
+            return {"folder": folder, "client": c.get("client"), "name": c.get("name"),
+                    **(c.get("listing") or {"files": [], "more": 0})}
+    raise HTTPException(404, "That folder is not a candidate in the last sweep.")
+
+
+@router.post("/design-sweep/report")
+def design_sweep_report(report: Dict[str, Any], x_sdi_key: Optional[str] = Header(default=None)):
+    """The sweep's report, kept as sent; the dismissals made on the panel are kept beside it."""
+    _check_key(x_sdi_key)
+    f = _design_sweep_file()
+    try:
+        old = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        old = {}
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"report": report or {}, "dismissed": list(old.get("dismissed") or []),
+                             "received_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                             "received_ts": time.time()}, indent=1), encoding="utf-8")
+    return {"ok": True, "candidates": len((report or {}).get("candidates") or [])}
+
+
+@router.get("/design-sweep")
+def design_sweep_get(x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    return design_sweep_for_wall()
+
+
+class DesignSweepDismiss(BaseModel):
+    folder: str
+
+
+@router.post("/design-sweep/dismiss")
+def design_sweep_dismiss(req: DesignSweepDismiss, x_sdi_key: Optional[str] = Header(default=None)):
+    """Taken off the candidate list: discussed, not a job, or already in hand."""
+    _check_key(x_sdi_key)
+    f = _design_sweep_file()
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise HTTPException(404, "No sweep has reported yet.")
+    gone = list(data.get("dismissed") or [])
+    if req.folder not in gone:
+        gone.append(req.folder)
+    data["dismissed"] = gone[-5000:]
+    f.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    return design_sweep_for_wall()
+
+
+# ── PARITY: ONE COMPARISON IN DETAIL, AND RE-ESTIMATE THEN COMPARE (control panel) ─────
+@router.get("/parity/detail")
+def parity_detail(folder: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """One filed comparison's own index (parity_index.json): its headline, the quantity note,
+    how the two sheets were matched, every cost / selling / commercial line AI against manual,
+    the differences, and links to the files filed with it. Only folders under the parity root."""
+    _check_key(x_sdi_key)
+    root = Path(_parity_env()["SDI_PARITY_ROOT"]).resolve()
+    try:
+        target = Path(folder).resolve()
+        target.relative_to(root)
+    except (ValueError, OSError):
+        raise HTTPException(403, "That folder is not a comparison under the parity root.")
+    idx = target / "parity_index.json"
+    try:
+        data = json.loads(idx.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise HTTPException(404, f"No parity_index.json in {target.name}.")
+    data.setdefault("folder", str(target))
+    return _report_links(data)
+
+
+class ParityRerunRequest(BaseModel):
+    jobs: List[str]
+    client: str = ""
+    method: str = "both"
+
+
+@router.post("/parity/rerun")
+def parity_rerun(req: ParityRerunRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """RE-ESTIMATE, THEN COMPARE. For each job: its newest AI run in AISheets gives the pack,
+    the client, the drawing and the quantities; the pack's drawings are copied out of the staged
+    folder (staging clears that folder, so it is never its own source), and a fresh estimate is
+    queued on the current build with compare-with-manual on. Each comparison is filed by the
+    runner when its estimate finishes and lands in the parity list like any other."""
+    _caller = _check_key(x_sdi_key)
+    jobs = [j.strip() for j in (req.jobs or []) if str(j or "").strip()][:50]
+    if not jobs:
+        raise HTTPException(400, "Name at least one job number.")
+    method = str(req.method or "both").strip().lower()
+    if method not in RUN_METHODS:
+        raise HTTPException(400, f"Unknown method {req.method!r}.")
+    out: List[Dict[str, Any]] = []
+    for job in jobs:
+        try:
+            # The same finder as Parity by job number, run as the engine's own CLI.
+            runs = _parity_job(["find", job[:80]] + (["--client", req.client[:80]] if req.client else []),
+                               timeout=120).get("ai") or []
+        except HTTPException as exc:
+            out.append({"job": job, "queued": False, "why": f"AISheets could not be read: {exc.detail}"})
+            continue
+        if not runs:
+            out.append({"job": job, "queued": False,
+                        "why": "no AI estimate of this job is filed, so there is no pack to re-run from"})
+            continue
+        last = runs[0]
+        try:
+            rec = json.loads(Path(last.get("record") or last["summary"]).read_text(encoding="utf-8"))
+        except (OSError, ValueError, KeyError):
+            rec = {}
+        staged = [Path(str(x)) for x in (rec.get("staged_inputs") or []) if str(x or "").strip()]
+        staged = [x for x in staged if x.is_file()]
+        if not staged:
+            out.append({"job": job, "queued": False,
+                        "why": "its last run's record names no drawing that is still there"})
+            continue
+        import shutil
+        # HELD UNDER THE STAGING SHARE: start() reads only folders inside SDI_FILE_ROOTS, which
+        # the staging root is in; this service's own state folder is not.
+        hold = _held_dir("parity_rerun") / f"{re.sub(r'[^0-9A-Za-z-]', '', job)[:40]}_{uuid.uuid4().hex[:6]}"
+        hold.mkdir(parents=True, exist_ok=True)
+        files = []
+        for f in staged:
+            dest = hold / f.name
+            shutil.copy2(f, dest)
+            files.append(str(dest))
+        breaks = sorted({int(r.get("quantity")) for r in ((rec.get("quantity_sweep") or {}).get("rows") or [])
+                         if isinstance(r, dict) and str(r.get("quantity") or "").isdigit()})
+        units = int(last.get("units") or (breaks[0] if breaks else 1))
+        ereq = EstimateRequest(client=last["client"], drawing_number=last["drawing"], units=units,
+                               quantity_breaks=[q for q in breaks if q != units],
+                               files=files, method=method, compare_with_manual=True,
+                               enquiry_brief=str(rec.get("enquiry_brief") or ""))
+        try:
+            started = start(ereq, x_sdi_key=x_sdi_key)
+        except HTTPException as exc:
+            out.append({"job": job, "queued": False, "why": str(exc.detail)})
+            continue
+        out.append({"job": job, "queued": True, "run_id": (started or {}).get("run_id"),
+                    "client": last["client"], "drawing": last["drawing"], "units": units,
+                    "breaks": breaks, "from_run": last.get("run_folder")})
+    return {"requested_by": _caller, "results": out,
+            "queued": sum(1 for r in out if r.get("queued")),
+            "note": "each comparison is filed when its estimate finishes; it appears under Parity runs"}
+
+
+# ── TTI PRICER (JG, 9 Nov 2026) ──────────────────────────────────────────────────────────
+# src/tti_pricer.py prices each row of a TTI tracker sheet: the drawings found under the design
+# and prototype areas get a full estimate, a row with none gets an LLM estimate from its notes and
+# thumbnails, and each unit cost is written to the sheet's AICost column. Started here, in the
+# background, against this service; its status file is read back by the page.
+_TTI_TASKS: Dict[str, Dict[str, Any]] = {}
+
+
+class TTIRequest(BaseModel):
+    sheet: str
+    rows: str = ""
+    method: str = "both"
+    dry_run: bool = True
+    sheet_name: str = ""
+
+
+def _tti_status_file(tid: str) -> Path:
+    return estimate_email.state_dir() / "tti" / f"{tid}.json"
+
+
+class PackFindRequest(BaseModel):
+    drawing: str
+    client: str = ""
+    store: bool = False
+
+
+@router.post("/pack/find")
+def pack_find(req: PackFindRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """THE DRAWING PACK FOR A DRAWING NUMBER (SCRUM-199/203), through the one shared resolver the
+    tracker pricer and Self-Running use: candidates from the design share's drawing index, the GA
+    proved by its own text, the members, revisions and status, and why. store=True also keeps it
+    in Live Enquiry\\<client>\\<drawing> (re-used if unchanged, a new version if changed) and
+    returns the kept copies, which is what the run is then given. Run as the engine's own CLI, so
+    this service never imports the engine."""
+    _check_key(x_sdi_key)
+    _engine_ready()
+    drawing = str(req.drawing or "").strip()
+    client = str(req.client or "").strip()
+    if not re.fullmatch(r"[\w .\-]{3,80}", drawing):
+        raise HTTPException(400, "Type the drawing number, e.g. 11896-01-00-GA.")
+    if client and not re.fullmatch(r"[\w .&'\-]{1,80}", client):
+        raise HTTPException(400, "That client name has characters a folder cannot hold.")
+    args = [_ENGINE_PYTHON, str(_REPO_ROOT / "src" / "pack_resolver.py"), "--drawing", drawing,
+            "--client", client, "--json"] + (["--store"] if req.store else [])
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=900, cwd=str(_REPO_ROOT))
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Finding the pack took longer than 15 minutes; is the drawing index built?")
+    try:
+        data = json.loads(proc.stdout or "{}")
+    except ValueError:
+        data = {}
+    if proc.returncode not in (0, 2) or not data:
+        raise HTTPException(502, "The pack resolver did not answer: " + (proc.stderr or proc.stdout or "")[-600:])
+    if data.get("stored_files"):
+        data["usable_files"] = [f for f in data["stored_files"] if _within_a_root(f)]
+        if len(data["usable_files"]) < len(data["stored_files"]):
+            data["usable_note"] = ("The pack was kept outside the shares this service may read; add its "
+                                   "folder to SDI_FILE_ROOTS.")
+    return data
+
+
+def _held_dir(kind: str) -> Path:
+    """Inputs this service gathers for a run it starts itself (a parity re-estimate, a TTI row):
+    under the staging share, so start() may read them, and never in a client/job folder that
+    staging clears. `_held` is never a client name."""
+    root = staging.staging_root()
+    if not str(root):
+        raise HTTPException(503, "No staging folder is configured (SDI_STAGING_ROOT), so there is "
+                                 "nowhere this service may read the gathered drawings from.")
+    return root / "_held" / kind
+
+
+@router.post("/tti/run")
+def tti_run(req: TTIRequest, request: Request, x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    _engine_ready()
+    sheet = Path(str(req.sheet or "").strip().strip('"'))
+    if sheet.suffix.lower() not in (".xlsx", ".xlsm") or not sheet.is_file():
+        raise HTTPException(400, f"No workbook at {sheet} that this service can read. Check the path, "
+                                 f"and that the file is saved as .xlsx.")
+    if req.method not in ("both", "targeted", "deterministic", "llm"):
+        raise HTTPException(400, f"Unknown method {req.method!r}.")
+    if req.rows and not re.fullmatch(r"\d+(-\d+)?", req.rows.strip()):
+        raise HTTPException(400, "Rows are a sheet row or a range, e.g. 5-12.")
+    tid = uuid.uuid4().hex[:8]
+    status = _tti_status_file(tid)
+    status.parent.mkdir(parents=True, exist_ok=True)
+    status.write_text(json.dumps({"state": "starting", "rows": []}), encoding="utf-8")
+    server = str(request.base_url).rstrip("/")
+    args = [_ENGINE_PYTHON, str(_REPO_ROOT / "src" / "tti_pricer.py"), "--sheet", str(sheet),
+            "--method", req.method, "--server", server, "--status-file", str(status)]
+    if req.rows:
+        args += ["--rows", req.rows.strip()]
+    if req.sheet_name:
+        args += ["--sheet-name", req.sheet_name]
+    if req.dry_run:
+        args.append("--dry-run")
+    env = dict(os.environ)
+    if x_sdi_key:
+        env["SDI_API_KEY"] = x_sdi_key
+    # The drawings and thumbnails each row is priced from are copied where start() may read them.
+    if not env.get("SDI_TTI_INPUTS", "").strip():
+        env["SDI_TTI_INPUTS"] = str(_held_dir("tti"))
+    log = status.with_suffix(".log")
+    with open(log, "w", encoding="utf-8") as fh:
+        subprocess.Popen(args, stdout=fh, stderr=subprocess.STDOUT, env=env, cwd=str(_REPO_ROOT))
+    _TTI_TASKS[tid] = {"sheet": str(sheet), "dry_run": req.dry_run, "started_at": time.time()}
+    return {"task_id": tid, "status_url": f"/api/estimate/tti/{tid}", "dry_run": req.dry_run}
+
+
+@router.get("/tti/{tid}")
+def tti_status(tid: str, x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    if not re.fullmatch(r"[0-9a-f]{8}", tid or ""):
+        raise HTTPException(400, "Bad task id.")
+    f = _tti_status_file(tid)
+    try:
+        body = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise HTTPException(404, "No such TTI task.")
+    try:
+        body["log_tail"] = f.with_suffix(".log").read_text(encoding="utf-8", errors="replace")[-3000:]
+    except OSError:
+        body["log_tail"] = ""
+    return body
+
+@router.get("/wall")
+def wall(local: bool = False, x_sdi_key: Optional[str] = Header(default=None)):
+    """Grid Control's picture. local=1 is this service alone: what another service on the
+    grid asks for, so the two never ask each other back."""
+    _check_key(x_sdi_key)
+    import sys as _sys
+    import estimate_wall
+    with _LOCK:
+        _expire_dead_claims()
+        runs = []
+        for r in _RUNS.values():
+            d = r.as_json()
+            d["last_line_at"] = r.last_line_at
+            d["sw_turn_at"] = r.sw_turn_at
+            d["sw_wait_since"] = r.sw_wait_since
+            d["sw_waited_s"] = r.sw_waited_s
+            d["review"] = dict(r.review or {})
+            d["predicted"] = dict(r.predicted or {})
+            if r.status != "running":
+                d["log"] = []
+            runs.append(d)
+        runners_now = [r.as_json() for r in _RUNNERS.values()]
+        for rn, obj in zip(runners_now, _RUNNERS.values()):
+            rn["capabilities"] = list(obj.capabilities or [])
+            rn["compute"] = dict(obj.compute or {})
+            rn["compute_history"] = [list(x) for x in obj.compute_history]
+    commit = str(getattr(_sys.modules.get("app"), "SDI_COMMIT", "") or "")
+    snap = estimate_wall.snapshot(runs, runners_now, max_runs=_max_concurrent_runs(),
+                                  service_commit=commit, tail_lines=80)
+    # WHICH MACHINE THIS IS (D-750). Each service keeps its own queue, and the phone reaches
+    # the published service while a run is going on the laptop's: the phone's panel showed
+    # "0 of 0 online" and an empty slot, which read as a page that would not refresh.
+    import platform as _platform
+    snap["service_host"] = _platform.node()
+    tasks = parity_tasks_for_wall()
+    snap["parity_tasks"] = tasks
+    snap["parity"] = parity_for_wall(force=_parity_moved(tasks))
+    snap["design_sweep"] = design_sweep_for_wall()
+    # THE VOICE THE PAGES WILL USE (D-744), so falling back to the device's voice is seen.
+    voice = speech_status()
+    snap["speech"] = voice
+    if not voice.get("speech_tts") and voice.get("speech_reason"):
+        snap["alerts"] = list(snap.get("alerts") or []) + [
+            "Voice: the pages are using the device's own voice: " + voice["speech_reason"]]
+    # THE WHOLE GRID (JG, 10 Nov 2026): the other services' jobs, queue and Grid Runners.
+    import grid_peers
+    snap["grid_service_id"] = grid_peers.SERVICE_ID
+    if not local:
+        try:
+            grid_peers.merge(snap)
+        except Exception as exc:                                    # noqa: BLE001
+            snap["grid"] = [{"service": "", "label": "grid", "ok": False,
+                             "error": f"{type(exc).__name__}: {exc}", "live": [],
+                             "queue": [], "fleet": []}]
+    return snap
+
+
+class GridStopRequest(BaseModel):
+    service: str
+    run_id: str
+
+
+@router.post("/grid/stop")
+def grid_stop(req: GridStopRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Stop a job that is on ANOTHER service of the grid, from this one's Grid Control. The
+    same stop as that service's own page; only a service on SDI_GRID_PEERS is asked."""
+    _check_key(x_sdi_key)
+    import grid_peers
+    try:
+        return grid_peers.stop_on(req.service, req.run_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:                                        # noqa: BLE001
+        raise HTTPException(502, f"{req.service} did not take the stop: "
+                                 f"{type(exc).__name__}: {exc}")
+
+
+# ── HISTORY ON THE WALL (D-744) ──────────────────────────────────────────────────────────
+# JG, 7 Nov 2026: "the control panel should have the entire stats / history of runs and parity
+# runs, etc. and we can build vizuals around that and details." Two records: this service's
+# own runs (thirty days, with how each ended, its times, machine, evidence and open items),
+# worked out when asked; and every estimate ever filed in AISheets (src/run_history.py), read
+# from the share in the background at most every SDI_WALL_HISTORY_SECONDS (ten minutes), each
+# summary once, through a cache beside the service's state.
+_RUN_HISTORY_CLI = str(_REPO_ROOT / "src" / "run_history.py")
+_HISTORY_VIEW: Dict[str, Any] = {"at": 0.0, "days": 0, "body": None}
+_HISTORY_VIEW_LOCK = threading.Lock()
+_HISTORY_VIEW_SECONDS = 20.0
+_FILED: Dict[str, Any] = {"at": 0.0, "tried": 0.0, "body": None, "busy": False, "error": ""}
+_FILED_LOCK = threading.Lock()
+
+
+def _filed_every() -> float:
+    try:
+        return max(60.0, float(os.getenv("SDI_WALL_HISTORY_SECONDS", "600") or 600))
+    except ValueError:
+        return 600.0
+
+
+def _filed_read() -> None:
+    body, error = None, ""
+    try:
+        _engine_ready()
+        cache = estimate_email.state_dir() / "run_history_cache.json"
+        proc = subprocess.run([_ENGINE_PYTHON, _RUN_HISTORY_CLI, "--json", "--cache", str(cache)],
+                              capture_output=True, text=True, timeout=600, env=_parity_env(),
+                              cwd=str(_REPO_ROOT))
+        line = next((ln for ln in reversed((proc.stdout or "").splitlines())
+                     if ln.strip().startswith("{")), "")
+        got = json.loads(line) if line else {}
+        if got.get("error") or proc.returncode != 0:
+            error = str(got.get("error") or (proc.stderr or "the history read failed").strip()
+                        .splitlines()[-1:] or "the history read failed")[:300]
+        else:
+            body = got
+            for r in body.get("recent") or []:
+                r["book_url"] = _file_link(r.get("workbook"))
+    except HTTPException as exc:
+        error = str(exc.detail)
+    except Exception as exc:                                         # noqa: BLE001
+        error = f"{type(exc).__name__}: {exc}"
+    with _FILED_LOCK:
+        if body is not None:
+            _FILED.update(at=time.time(), body=body)
+        _FILED.update(busy=False, error=error, tried=time.time())
+
+
+def filed_for_wall(force: bool = False) -> Dict[str, Any]:
+    now = time.time()
+    with _FILED_LOCK:
+        last = max(_FILED["at"], _FILED["tried"])
+        if not _FILED["busy"] and (force or now - last >= _filed_every()):
+            _FILED["busy"] = True
+            threading.Thread(target=_filed_read, daemon=True, name="wall-history").start()
+        body, at, busy, error = _FILED["body"], _FILED["at"], _FILED["busy"], _FILED["error"]
+    out = dict(body or {})
+    out.update(state="ready" if body else "reading" if busy else "unavailable",
+               read_at=at or None, age_s=round(now - at) if at else None, refreshing=busy,
+               read_error=error, every_s=_filed_every())
+    return out
+
+
+@router.get("/wall/history")
+def wall_history(days: int = 30, refresh: bool = False,
+                 x_sdi_key: Optional[str] = Header(default=None)):
+    """The control panel's history: this service's runs, every filed estimate, and when each
+    was read."""
+    _check_key(x_sdi_key)
+    import estimate_wall
+    days = max(1, min(int(days or 30), 90))
+    # ONE READING AT A TIME, KEPT FOR A FEW SECONDS (D-745): every open control panel asks each
+    # minute, and the answer is the same for all of them; a second page waits for the first
+    # reading rather than making its own beside it.
+    with _HISTORY_VIEW_LOCK:
+        held = _HISTORY_VIEW
+        if (not refresh and held["body"] is not None and held["days"] == days
+                and time.time() - held["at"] < _HISTORY_VIEW_SECONDS):
+            service = held["body"]
+        else:
+            with _LOCK:
+                runs = []
+                for r in _RUNS.values():
+                    d = r.as_json()
+                    d["review"] = dict(r.review or {})
+                    d["sw_waited_s"] = r.sw_waited_s
+                    d["sw_wait_since"] = r.sw_wait_since
+                    d["evidence_kept"] = dict(r.evidence_kept or {})
+                    runs.append(d)
+            service = estimate_wall.history_view(runs, days=days)
+            _HISTORY_VIEW.update(at=time.time(), days=days, body=service)
+    return {"service": service, "filed": filed_for_wall(force=refresh),
+            "kept_days": float(os.getenv("SDI_RUN_HISTORY_DAYS", "30") or 30)}
+
+
+# THE WALL'S PARITY VIEW (D-741) is read from the parity share in the background, at most once
+# every SDI_WALL_PARITY_SECONDS (five minutes), so the wall's four-second poll never waits on
+# the share. The wall is told when it was read, and why it could not be when it could not.
+_PARITY_WALL: Dict[str, Any] = {"at": 0.0, "tried": 0.0, "body": None, "busy": False,
+                                "error": ""}
+_PARITY_WALL_LOCK = threading.Lock()
+
+
+def _parity_wall_every() -> float:
+    try:
+        return max(30.0, float(os.getenv("SDI_WALL_PARITY_SECONDS", "300") or 300))
+    except ValueError:
+        return 300.0
+
+
+def _parity_wall_read() -> None:
+    body, error = None, ""
+    try:
+        body = _parity_job(["wall"], timeout=180)
+        for row in body.get("recent") or []:
+            links = _report_links(row)
+            row["report_url"], row["listen_url"] = links["report_url"], links["listen_url"]
+        for period in body.get("periods") or []:
+            period["summary_url"] = _summary_link(period)
+    except HTTPException as exc:
+        body, error = None, str(exc.detail)
+    except Exception as exc:                                         # noqa: BLE001
+        body, error = None, f"{type(exc).__name__}: {exc}"
+    with _PARITY_WALL_LOCK:
+        if body is not None:
+            _PARITY_WALL.update(at=time.time(), body=body)
+        _PARITY_WALL.update(busy=False, error=error, tried=time.time())
+
+
+def parity_for_wall(force: bool = False) -> Dict[str, Any]:
+    """The last parity view read, starting a fresh read in the background when it is due."""
+    now = time.time()
+    with _PARITY_WALL_LOCK:
+        last = max(_PARITY_WALL["at"], _PARITY_WALL["tried"])
+        if not _PARITY_WALL["busy"] and (force or now - last >= _parity_wall_every()):
+            _PARITY_WALL["busy"] = True
+            threading.Thread(target=_parity_wall_read, daemon=True, name="wall-parity").start()
+        body, at = _PARITY_WALL["body"], _PARITY_WALL["at"]
+        busy, error = _PARITY_WALL["busy"], _PARITY_WALL["error"]
+    out = dict(body or {})
+    out.update(state="ready" if body else "reading" if busy else "unavailable",
+               read_at=at or None, age_s=round(now - at) if at else None,
+               refreshing=busy, read_error=error, every_s=_parity_wall_every())
+    return out
+
+
+# PARITY RUNNING, ON THE WALL (D-742). JG, 7 Nov 2026: "I want to run one off jobs, compare a
+# whole set of jobs v manual etc. and see the output in the main screen". Every comparison the
+# service started in the last twelve hours, from the wall, the estimating page or the phone, is
+# read from its own status file: what it is, how far it has got, each drawing's outcome as it
+# lands, and its summary when it ends. One that has written nothing for half an hour is said
+# to have stalled rather than shown as running for ever.
+_PARITY_TASK_HOURS = 12.0
+_PARITY_TASK_STALL_S = 1800.0
+
+
+def _signed(idx: Dict[str, Any]) -> Optional[float]:
+    h, q = idx.get("headline") or {}, idx.get("quantity") or {}
+    ai = q.get("ai_unit_at_manual_qty") if q.get("ai_unit_at_manual_qty") is not None \
+        else h.get("ai_unit_cost_gbp")
+    manual = h.get("manual_unit_cost_gbp")
+    if not isinstance(ai, (int, float)) or not isinstance(manual, (int, float)) or not manual:
+        return None
+    return round((ai - manual) / abs(manual) * 100.0, 2)
+
+
+def _parity_task(tid: str, path: Path, now: float) -> Dict[str, Any]:
+    try:
+        body = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        body = {}
+    meta = _PARITY_TASKS.get(tid, {})
+    try:
+        updated = path.stat().st_mtime
+    except OSError:
+        updated = now
+    finished = bool(body.get("finished"))
+    state = str(body.get("state") or ("done" if finished else "running"))
+    if finished and state in ("running", "starting"):
+        state = "done"
+    if not finished and now - updated > _PARITY_TASK_STALL_S:
+        state = "stalled"
+    kind = meta.get("kind") or body.get("kind") or ("job" if ("job" in body or "result" in body)
+                                                   else "period")
+    label = meta.get("label") or body.get("job") or (
+        f"{body['start']} to {body['end']}" if body.get("start") else "a comparison")
+    rows = list(body.get("rows") or []) + list(body.get("rows_a") or []) + list(body.get("rows_b") or [])
+    out: Dict[str, Any] = {
+        "task_id": tid, "kind": kind, "label": label, "state": state, "finished": finished,
+        "done": body.get("done"), "of": body.get("of"), "step": str(body.get("step") or ""),
+        "started_at": meta.get("started_at") or body.get("started_at"), "updated_at": updated,
+        "error": str(body.get("error") or "")[:400], "preview": bool(body.get("preview")),
+        "rows": [{"drawing": r.get("drawing"), "client": r.get("client"),
+                  "outcome": r.get("outcome"), "pct": r.get("pct"),
+                  "report_url": (_file_link(Path(r["folder"]) / r["report"])
+                                 if r.get("folder") and r.get("report") else None)}
+                 for r in rows[-8:]],
+        "rows_total": len(rows),
+        "stats": body.get("stats") or body.get("stats_b"),
+        "summary_url": (_summary_link(body) if body.get("summary_html")
+                        or body.get("summary_portal_html") else None)}
+    if isinstance(body.get("result"), dict):
+        idx = body["result"]
+        links = _report_links(idx)
+        h, q = idx.get("headline") or {}, idx.get("quantity") or {}
+        out["result"] = {"drawing": idx.get("drawing"), "client": idx.get("client"),
+                         "outcome": idx.get("outcome"), "signed_pct": _signed(idx),
+                         "ai_unit": q.get("ai_unit_at_manual_qty") or h.get("ai_unit_cost_gbp"),
+                         "manual_unit": h.get("manual_unit_cost_gbp"),
+                         "quantity_note": q.get("note", "") if not q.get("comparable", True) else "",
+                         "report_url": links["report_url"], "listen_url": links["listen_url"]}
+    if state == "choose":
+        out["candidates"] = len(body.get("candidates") or [])
+    return out
+
+
+def parity_tasks_for_wall(limit: int = 8) -> List[Dict[str, Any]]:
+    """The comparisons started in the last twelve hours, running ones first, newest first."""
+    now = time.time()
+    folder = _parity_status_file("x").parent
+    try:
+        files = [(p.stat().st_mtime, p) for p in folder.glob("*.json")]
+    except OSError:
+        return []
+    recent = sorted(((m, p) for m, p in files if now - m <= _PARITY_TASK_HOURS * 3600),
+                    reverse=True)[:limit]
+    tasks = [_parity_task(p.stem, p, now) for _, p in recent if _PARITY_TASK_ID.match(p.stem)]
+    tasks.sort(key=lambda t: (t["state"] not in ("running", "starting"), -t["updated_at"]))
+    return tasks
+
+
+def _parity_moved(tasks: List[Dict[str, Any]], every: float = 60.0) -> bool:
+    """A comparison has filed something since the parity view was last read, and the last read
+    was a minute or more ago: read it again, so the tiles and charts follow the run."""
+    with _PARITY_WALL_LOCK:
+        last_read = _PARITY_WALL["at"]
+        last_try = max(_PARITY_WALL["at"], _PARITY_WALL["tried"])
+    return any(t["updated_at"] > last_read and (t["finished"] or t.get("done"))
+               and not t.get("preview") for t in tasks) and time.time() - last_try >= every
+
+
+@router.get("/wall/parity")
+def wall_parity(refresh: bool = False, x_sdi_key: Optional[str] = Header(default=None)):
+    """The wall's parity view alone; refresh=1 reads the share again now."""
+    _check_key(x_sdi_key)
+    return parity_for_wall(force=refresh)
 
 
 @router.post("/runner/heartbeat")
@@ -789,6 +1810,7 @@ def heartbeat(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)
     now = time.time()
     with _LOCK:
         _release_runs_orphaned_by_a_restart(req.runner_id, req.process)
+        _release_runs_its_runner_has_left(req.runner_id, now)
         runner = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
         runner.hostname = req.hostname or runner.hostname
         runner.last_seen = now
@@ -796,7 +1818,10 @@ def heartbeat(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)
             runner.processes[req.process] = now
         if req.build:
             runner.build = req.build
-        runner.busy_elsewhere = True
+        # A SLOT HELD BACK BY ITS COMPUTE CHECK is checking in, not busy for another service.
+        runner.busy_elsewhere = not (req.gate and not req.gate.get("ok"))
+        _note_compute(runner, req.compute, now)
+        _note_gate(runner, req.gate, now)
     return {"ok": True}
 
 
@@ -815,25 +1840,66 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
             runner.processes[req.process] = now
         if req.build:
             runner.build = req.build
+        runner.capabilities = list(req.capabilities or [])
         runner.busy_elsewhere = False
+        _note_compute(runner, req.compute, now)
+        _note_gate(runner, req.gate, now)
 
-        if _busy_runner() is not None:
-            return {"run": None, "reason": "another run is in progress"}
+        _refused = _claim_refused_because(req.runner_id, req.hostname, req.capabilities)
+        if _refused:
+            return {"run": None, "reason": _refused}
 
+        _can = set(req.capabilities or [])
+        _no_models = "no_models" in _can
+        # AN EXTRACT-ONLY RUNNER NEVER TAKES AN ESTIMATE (10 Nov 2026): it has no Excel, and an
+        # estimate is written and recalculated in Excel. It takes the pack extracts it names.
+        _extract_only = "extract_only" in _can
         queued = sorted((r for r in _RUNS.values()
-                         if r.status == "queued" and r.wants_engine),
+                         if r.status == "queued" and r.wants_engine
+                         and not (_extract_only and not r.job_type)
+                         and (not r.job_type or r.job_type in _can)
+                         and not (_no_models and _needs_model_reader(r.job_folder))),
                         key=lambda r: r.queued_at)
         if not queued:
+            _estimates = [r for r in _RUNS.values() if r.status == "queued" and r.wants_engine
+                          and not r.job_type]
+            if _extract_only and _estimates:
+                return {"run": None, "reason": (
+                    f"{len(_estimates)} estimate(s) queued; this runner takes pack extracts "
+                    f"only (no Excel here), so a runner with Excel takes them")}
+            _for_models = [r for r in _RUNS.values() if r.status == "queued" and r.wants_engine
+                           and _no_models and _needs_model_reader(r.job_folder)]
+            if _for_models:
+                return {"run": None, "reason": (
+                    f"{len(_for_models)} queued job(s) need a model reader (SolidWorks or "
+                    f"the Document Manager) and this runner has neither")}
+            _waiting = [r for r in _RUNS.values() if r.status == "queued" and r.job_type
+                        and r.job_type not in _can]
+            if _waiting:
+                return {"run": None, "reason": (
+                    f"{len(_waiting)} pack extract(s) queued need a runner restarted on the "
+                    f"current build (this runner does not run {_waiting[0].job_type})")}
             return {"run": None, "reason": "nothing queued"}
 
         run = queued[0]
         run.status = "running"
         run.runner = req.runner_id
         run.started_at = now
+        # THE FINISH WINDOW, AS HISTORY PREDICTS IT AT THE START (D-739), kept so the wall can
+        # measure how good its ETAs are against the runs that finish.
+        if not run.job_type:
+            try:
+                import estimate_wall as _ew
+                run.predicted = _ew.predict_window(
+                    [{**r.as_json(), "sw_waited_s": r.sw_waited_s} for r in _RUNS.values()
+                     if r.run_id != run.run_id], now) or {}
+            except Exception:                                        # noqa: BLE001
+                run.predicted = {}
         run.lease_until = now + LEASE_SECONDS
         run.claimed_by_process = req.process or ""
         runner.run_id = run.run_id
         run.line(f"Claimed by runner {req.hostname or req.runner_id}")
+        _keep(run)
 
     return {"run": {
         "run_id": run.run_id, "client": run.client, "units": run.units,
@@ -857,6 +1923,21 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         "quantity_breaks": [int(q) for q in (run.quantity_breaks or [])],
         "llm_only": bool(run.llm_only),
         "fresh_read": bool(run.fresh_read),
+        "deterministic_only": bool(getattr(run, "deterministic_only", False)),
+        "reader_mode": str(getattr(run, "reader_mode", "") or ""),
+        "bom_routes_only": bool(getattr(run, "bom_routes_only", False)),
+        "job_type": run.job_type,
+        # WHAT WAS SUBMITTED (D-604), for the engine to compare with what it receives.
+        "submitted_scope": dict(run.submitted_scope),
+        # THE SECOND COPY (D-617): where, and the run's own time, so its folder there carries
+        # the same stamp as its folder in AISheets. Empty: no second copy on this machine.
+        "archive_root": str(COMPLETED_BRIEFS_ROOT) if FILE_TO_COMPLETED_BRIEFS else "",
+        "archive_stamp": time.strftime("%Y-%m-%d %H-%M-%S", time.localtime(run.queued_at)),
+        # AND THE PARITY FOLDER (D-619), when a manual estimate came with the run or is to be
+        # found when it finishes (D-621): the runner files the comparison there, searchable
+        # beside the ones run by job number.
+        "parity_root": str(PARITY_ROOT) if (run.manual_workbook or run.compare_with_manual) else "",
+        "compare_with_manual": bool(run.compare_with_manual),
     }}
 
 
@@ -894,9 +1975,40 @@ def _file_enquiry_brief(run: "Run", job: Any, brief: Optional[str]) -> str:
         run.line("No enquiry brief with this run — the model reads the pack alone.")
         return "none"
     except OSError as exc:
-        run.line(f"WARNING — the enquiry brief could not be filed ({exc}); this run reads the "
-                 f"render alone.")
+        # The route refuses the run on "failed" (D-607a), so this line is the reason it gives.
+        run.line(f"The enquiry brief could not be "
+                 f"{'saved' if text else 'cleared of the one an earlier run left'} ({exc}).")
         return "failed"
+
+def brief_fingerprint(text: Any) -> str:
+    """The brief's content as a short hash, whitespace collapsed (D-604a). Identical to
+    run_provenance.brief_fingerprint in the engine; a test holds the two together."""
+    import hashlib
+    norm = " ".join(str(text or "").split())
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16] if norm else ""
+
+
+def submitted_scope(run: "Run", method: str, brief: Optional[str], brief_status: str,
+                    reference_documents: List[str]) -> Dict[str, Any]:
+    """What this run was asked to price, as the page sent it (D-604), the brief by its
+    content's fingerprint as well as its length (D-604a)."""
+    _text = str(brief or "").strip()[:_BRIEF_MAX_CHARS]
+    return {"client": run.client, "drawing_number": run.drawing_number,
+            "units": int(run.units), "method": str(method or ""),
+            "brief_chars": len(_text), "brief_sha256": brief_fingerprint(_text),
+            "brief_status": str(brief_status or ""),
+            "reference_documents": [str(n) for n in (reference_documents or [])]}
+
+
+def scope_sentence(scope: Dict[str, Any]) -> str:
+    """One line a person reads: who, which drawing, how many, which method, brief, references."""
+    refs = ", ".join(scope.get("reference_documents") or []) or "none declared"
+    brief = (f"brief {scope.get('brief_chars')} chars ({scope.get('brief_status')})"
+             if scope.get("brief_chars") else "no brief")
+    return (f"customer {scope.get('client') or '—'} · drawing {scope.get('drawing_number') or '—'}"
+            f" · {scope.get('units')} off · method {scope.get('method') or '—'} · {brief}"
+            f" · reference documents: {refs}")
+
 
 def _check_the_engine_was_told(run: "Run", text: str) -> None:
     """THE RUNNER IS A LONG-LIVED PROCESS AND `git pull` DOES NOT RELOAD IT.
@@ -970,7 +2082,12 @@ def _check_the_engine_was_told(run: "Run", text: str) -> None:
                    "the module it loaded at start, and git pull does not reload it.")
 
     wanted = [f for f, asked in (("--llm-only", run.llm_only),
-                                 ("--fresh-read", run.fresh_read)) if asked]
+                                 ("--fresh-read", run.fresh_read),
+                                 ("--deterministic-only",
+                                  getattr(run, "deterministic_only", False)),
+                                 (READER_MODE_FLAG.get(getattr(run, "reader_mode", "") or "", ""),
+                                  bool(getattr(run, "reader_mode", ""))),
+                                 ("--bom-routes-only", getattr(run, "bom_routes_only", False))) if asked]
     if not wanted or run.instruction_refused:
         return
     missing = [f for f in wanted if f not in line]
@@ -987,6 +2104,15 @@ def _check_the_engine_was_told(run: "Run", text: str) -> None:
         "--fresh-read": "the LLM caches were used, so the model was never asked — the run "
                         "replays the answer held for this pack and would be reported as a "
                         "fresh reading of it",
+        "--targeted": "the whole-pack model reads ran, so the run cannot show what the targeted "
+                      "gap fill alone supplies",
+        "--solidworks-only": "the run was not limited to the SolidWorks reader",
+        "--docmgr-only": "the run was not limited to the Document Manager reader",
+        "--bom-routes-only": "the run went on to build and price a workbook instead of stopping "
+                             "at the BOMs and Routes",
+        "--deterministic-only": "the language-model readers ran or their cached answers were "
+                                "applied, so the run could not show what the drawing reader "
+                                "supplies on its own (SCRUM-194)",
     }
     run.refusal_reason = ("This run asked for " + " and ".join(missing) + " and the engine was "
                           "NOT told to do it. Stopped rather than filed.")
@@ -998,6 +2124,35 @@ def _check_the_engine_was_told(run: "Run", text: str) -> None:
     run.line("The usual cause is a runner process started before that flag existed: it holds "
              "the module it loaded at start, and git pull does not reload it. Restart the "
              "runner on that machine and run this again.")
+
+
+_SW_TAKEN = re.compile(r"SolidWorks turn taken|SolidWorks is free after", re.I)
+_SW_GIVEN = re.compile(r"SolidWorks turn given back|SWITCHING TO THE DOCUMENT MANAGER", re.I)
+_SW_WAITING = re.compile(r"Waiting for the desktop's SolidWorks|Still waiting for the desktop's "
+                         r"SolidWorks", re.I)
+
+
+def _note_solidworks_turn(run: "Run", text: str, now: float) -> None:
+    """Keep the run's SolidWorks state, and its open-item tally, from its own words (D-738,
+    D-739). A wait that ends, by the turn coming or by the Document Manager switch, is added
+    to the run's total wait."""
+    if text.lstrip().startswith("REVIEW_TALLY="):
+        try:
+            tally = json.loads(text.split("=", 1)[1])
+            if isinstance(tally, dict):
+                run.review = tally
+        except ValueError:
+            pass
+        return
+    ended = _SW_TAKEN.search(text) or _SW_GIVEN.search(text)
+    if ended and run.sw_wait_since:
+        run.sw_waited_s = round(run.sw_waited_s + max(0.0, now - run.sw_wait_since), 1)
+    if _SW_TAKEN.search(text):
+        run.sw_turn_at, run.sw_wait_since = now, 0.0
+    elif _SW_GIVEN.search(text):
+        run.sw_turn_at, run.sw_wait_since = 0.0, 0.0
+    elif _SW_WAITING.search(text) and not run.sw_wait_since:
+        run.sw_wait_since = now
 
 
 @router.post("/runner/{run_id}/progress")
@@ -1017,10 +2172,26 @@ def progress(run_id: str, req: ProgressRequest,
         for text in req.lines:
             run.line(text)
             _check_the_engine_was_told(run, text)
+            _note_solidworks_turn(run, text, now)
+        if req.lines:
+            run.last_line_at = now
         run.lease_until = now + LEASE_SECONDS
-        r = _RUNNERS.get(req.runner_id)
-        if r is not None:
-            r.last_seen = now
+        # A RUNNER MID-JOB IS A CONNECTED RUNNER (D-618). After a restart of this service the
+        # runner is not in the registry until it next asks for work, and it does not ask while
+        # it works, so the page said "No estimating runner is connected" and refused new jobs
+        # beside a runner that was plainly busy. Its heartbeat puts it back.
+        r = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
+        r.last_seen = now
+        r.run_id = run.run_id
+        # ITS MACHINE BY NAME (JG, 10 Nov 2026): after a restart of this service a runner mid-job
+        # is heard only here, which does not carry its name, so Grid Control listed it by its
+        # raw id, not as the Laptop, and showed the Laptop as a second, planned runner.
+        if not r.hostname:
+            r.hostname = _host_of(req.runner_id)
+        _note_compute(r, req.compute, now)
+        if now - _last_progress_save.get(run_id, 0.0) >= _PROGRESS_SAVE_SECONDS:
+            _last_progress_save[run_id] = now
+            _keep(run)
         _cancel = run.cancel_requested
     # THE ANSWER TO A HEARTBEAT IS WHERE A CANCELLATION FITS. The runner is a separate
     # process on another machine and cannot be reached; it can only be told something the
@@ -1041,9 +2212,17 @@ def complete(run_id: str, req: CompleteRequest,
             raise HTTPException(404, "No such run.")
         if run.runner != req.runner_id:
             raise HTTPException(409, "That run is claimed by a different runner.")
+        # A FINISH ALREADY RECORDED IS NOT RECORDED TWICE (D-618). The runner reports again
+        # when an answer is lost on the way back; the second report re-made the walkthrough and
+        # sent the e-mail a second time.
+        if (req.status == "done" and run.status == "done" and run.finished_at
+                and run.deliverables):
+            return {"ok": True, "already_recorded": True}
         for text in req.lines:
             run.line(text)
             _check_the_engine_was_told(run, text)
+            if text.lstrip().startswith("REVIEW_TALLY="):
+                _note_solidworks_turn(run, text, time.time())
         run.status = "done" if req.status == "done" else "error"
         run.error = req.error
         # A RUN THAT PRODUCED THE WRONG KIND OF WORKBOOK DID NOT SUCCEED, whatever the runner
@@ -1062,17 +2241,55 @@ def complete(run_id: str, req: CompleteRequest,
                 run.engine_price_gbp = round(float(req.unit_cost_gbp), 2)
             except (TypeError, ValueError):
                 pass
+        run.quantity_prices = []
+        for _qp in req.quantity_prices or []:
+            try:
+                run.quantity_prices.append({"quantity": int(_qp.get("quantity")),
+                                            "unit_gbp": round(float(_qp.get("unit_gbp")), 2)})
+            except (AttributeError, TypeError, ValueError):
+                continue
         run.deliverables = list(req.deliverables)
         run.finished_at = now
         run.lease_until = 0.0
+        # THE WALKTHROUGH PAGE, ON DISK (D-610): the e-mail links to a record that outlives a
+        # restart of this service, never to the run id held in memory.
+        if run.status == "done":
+            try:
+                run.walkthrough = estimate_walkthrough.make(run.as_json(),
+                                                            run.deliverables) or ""
+            except OSError as _wexc:
+                run.line(f"The walkthrough page could not be recorded ({_wexc}).")
         r = _RUNNERS.get(req.runner_id)
         if r is not None:
             r.last_seen, r.run_id = now, ""
-        _send_to = list(run.email_to)
+        # AT MOST ONCE (D-618): marked as being sent, on disk, before the send starts; a run
+        # whose e-mail was already tried is never sent it again, after a restart or otherwise.
+        _send_to = [] if run.email_result else list(run.email_to)
+        if _send_to:
+            run.email_result = {"sending": True, "at": now}
         _snapshot = run.as_json()
         _quote = run.email_quote
         _provisional = run.status != "done" or _looks_provisional(run)
         _deliverables = list(run.deliverables)
+        _archived = [m.group(1).strip() for m in
+                     (_ARCHIVED_TO.search(str(line)) for line in run.log) if m]
+        _keep(run)
+
+    # THE ASK AND LISTEN BUTTONS IN THE FILED NOTE (D-709), outside the lock like the e-mail:
+    # writing to the share can take seconds. The engine wrote the covering note before this
+    # service made the walkthrough page, so the filed copies, in AISheets and in the completed
+    # AI briefs area, gain the same two buttons the e-mail carries.
+    if _snapshot.get("walkthrough_url"):
+        _note_files = _filed_note_copies(_deliverables, _archived)
+        _stamped = estimate_walkthrough.stamp_note_files(_note_files,
+                                                         _snapshot["walkthrough_url"])
+        if _stamped:
+            with _LOCK:
+                _live = _RUNS.get(run_id)
+                if _live is not None:
+                    _live.line(f"Ask and Listen buttons written into {len(_stamped)} filed "
+                               f"covering note(s).")
+                    _keep(_live)
 
     # OUTSIDE THE LOCK. Talking to a mail server takes seconds and can hang; holding the
     # registry lock while it does would stall every other run, the page's polling and the
@@ -1090,7 +2307,30 @@ def complete(run_id: str, req: CompleteRequest,
                     + (f" — {', '.join(_result.get('attached') or []) or 'no attachments'}"
                        if _result.get("sent") else
                        f" — NOT SENT: {_result.get('reason')}"))
+                _keep(_live)
     return {"ok": True}
+
+
+# The runner's own line naming the completed AI briefs folder it copied the files to (D-617).
+_ARCHIVED_TO = re.compile(r"\[archive\] \d+ of \d+ file\(s\) also filed to (.+)$")
+
+
+def _filed_note_copies(deliverables: List[Dict[str, Any]], archived: List[str]) -> List[str]:
+    """Every filed copy of the run's covering note this service may write: the deliverable
+    itself and its copy in each completed AI briefs folder the runner named, inside the shares
+    this service serves (D-709)."""
+    out: List[str] = []
+    for d in deliverables or []:
+        if not isinstance(d, dict) or not d.get("path"):
+            continue
+        path = str(d["path"])
+        name = str(d.get("name") or Path(path).name)
+        if not name.lower().endswith(("_covering_email.html", "_covering_note.html")):
+            continue
+        for cand in [path] + [str(Path(f) / name) for f in archived or []]:
+            if cand not in out and _within_a_root(cand) is not None:
+                out.append(cand)
+    return out
 
 
 def _looks_provisional(run: "Run") -> bool:
@@ -1117,6 +2357,8 @@ def _email_finished_run(snapshot: Dict[str, Any], deliverables: List[Dict[str, s
         paths, held = estimate_email.choose_attachments(
             deliverables, provisional=provisional, include_quote=include_quote)
         note = estimate_email.compose(snapshot, deliverables, provisional=provisional)
+        if snapshot.get("walkthrough_url"):
+            note = estimate_walkthrough.email_button(note, snapshot["walkthrough_url"])
         result = estimate_email.send(recipients, note["subject"], note["html"],
                                      note["text"], paths)
         if held:
@@ -1297,18 +2539,72 @@ class SelfRunningSwitch(BaseModel):
     by: str = ""
 
 
+# ONE SWITCH, KEPT IN ONE PLACE (D-651). The phone reaches SDI-App01 and the laptop's page
+# reaches the laptop, and each service kept its own switch, so the two screens could say
+# different things (3 Nov 2026: "The states of the web portal and the phone need to be in
+# sync"). A service told SDI_SELF_RUNNING_HOME (the laptop's .env: http://10.0.0.5:8071)
+# keeps no switch of its own: every self-running read, press and watcher beat is passed to
+# that service and its answer returned, so every screen shows the same switch by
+# construction. Unreachable is said plainly, never answered from a local copy, because a
+# local copy is a second switch. A request already passed on is served where it lands, so
+# a mistaken setting on SDI-App01 itself cannot loop.
+_SR_FORWARDED = "X-SDI-Self-Running-Forwarded"
+
+
+def _self_running_home(request: Request) -> str:
+    if request.headers.get(_SR_FORWARDED):
+        return ""
+    return os.getenv("SDI_SELF_RUNNING_HOME", "").strip().rstrip("/")
+
+
+def _self_running_at_home(home: str, method: str, tail: str = "",
+                          body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    import urllib.error
+    import urllib.request
+    data = json.dumps(body or {}).encode("utf-8") if method == "POST" else None
+    req = urllib.request.Request(
+        f"{home}/api/estimate/self-running{tail}", data=data, method=method,
+        headers={"Content-Type": "application/json", "X-SDI-Key": config.API_KEY or "",
+                 _SR_FORWARDED: "1"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            out = json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            said = json.loads(exc.read().decode("utf-8") or "{}").get("detail") or ""
+        except Exception:                                             # noqa: BLE001
+            said = ""
+        raise HTTPException(502, f"The self-running switch is kept on {home}, which refused "
+                                 f"this ({exc.code}{': ' + str(said) if said else ''}).")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        reason = getattr(exc, "reason", exc)
+        raise HTTPException(503, f"The self-running switch is kept on {home} (SDI-App01), and "
+                                 f"this machine cannot reach it ({reason}). Connect to the "
+                                 f"office network or the VPN and try again.")
+    if isinstance(out, dict):
+        out["home"] = home
+    return out
+
+
 @router.get("/self-running")
-def self_running_view(x_sdi_key: Optional[str] = Header(default=None)):
+def self_running_view(request: Request, x_sdi_key: Optional[str] = Header(default=None)):
     """The switch and the watcher as last heard from — what the page shows."""
     _check_key(x_sdi_key)
+    home = _self_running_home(request)
+    if home:
+        return _self_running_at_home(home, "GET")
     return self_running_switch.view()
 
 
 @router.post("/self-running/start")
-def self_running_start(req: SelfRunningSwitch, x_sdi_key: Optional[str] = Header(default=None)):
+def self_running_start(req: SelfRunningSwitch, request: Request,
+                       x_sdi_key: Optional[str] = Header(default=None)):
     """Switch self-running on, and ask the watcher to read the sheet at once. Switching on
     with no watcher connected is allowed — it starts as soon as one reports — and says so."""
     who = _check_key(x_sdi_key)
+    home = _self_running_home(request)
+    if home:
+        return _self_running_at_home(home, "POST", "/start", {"by": req.by or who})
     out = self_running_switch.switch(True, by=req.by or who)
     if not out["watcher"].get("connected"):
         out["note"] = ("Switched on, but no self-running watcher is connected: nothing will run "
@@ -1318,18 +2614,45 @@ def self_running_start(req: SelfRunningSwitch, x_sdi_key: Optional[str] = Header
 
 
 @router.post("/self-running/stop")
-def self_running_stop(req: SelfRunningSwitch, x_sdi_key: Optional[str] = Header(default=None)):
+def self_running_stop(req: SelfRunningSwitch, request: Request,
+                      x_sdi_key: Optional[str] = Header(default=None)):
     """Switch self-running off. The job in progress finishes on the portal; nothing more is
     queued."""
     who = _check_key(x_sdi_key)
+    home = _self_running_home(request)
+    if home:
+        return _self_running_at_home(home, "POST", "/stop", {"by": req.by or who})
     return self_running_switch.switch(False, by=req.by or who)
 
 
+class SelfRunningRerun(BaseModel):
+    drawing: str
+    customer: str = ""
+    by: str = ""
+
+
+@router.post("/self-running/rerun")
+def self_running_rerun(req: SelfRunningRerun, request: Request,
+                       x_sdi_key: Optional[str] = Header(default=None)):
+    """Run one Self-Running job again: the watcher takes it on its next beat."""
+    _check_key(x_sdi_key)
+    home = _self_running_home(request)
+    if home:
+        return _self_running_at_home(home, "POST", "/rerun", req.dict())
+    try:
+        return self_running_switch.rerun(req.drawing, req.customer, by=req.by)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @router.post("/self-running/heartbeat")
-def self_running_heartbeat(report: Dict[str, Any],
+def self_running_heartbeat(report: Dict[str, Any], request: Request,
                            x_sdi_key: Optional[str] = Header(default=None)):
     """The watcher's beat. Answers {enabled, run_now}; keeps what it reported."""
     _check_key(x_sdi_key)
+    home = _self_running_home(request)
+    if home:
+        return _self_running_at_home(home, "POST", "/heartbeat", report or {})
     return self_running_switch.heartbeat(report or {})
 
 
@@ -1775,15 +3098,29 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     # doing that and then refusing the run over a typo in one word leaves the estimator's
     # job folder rewritten for nothing.
     method = str(req.method or "both").strip().lower()
-    if method not in {"both", "llm", "engine"}:
-        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
-                                 f"engine.")
+    # "deterministic" (D-753): the full engine with no language model reading the drawings and
+    # no cached answer replayed — the SCRUM-194 reader test. Queued like "engine".
+    if method not in RUN_METHODS:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use "
+                                 f"{', '.join(sorted(RUN_METHODS))}.")
+    # A MODE THAT NEEDS A READER NO CONNECTED RUNNER HAS IS REFUSED BEFORE STAGING.
+    with _LOCK:
+        _caps = [set(r.capabilities or []) for r in _online_runners()]
+    if method == "docmgr" and _caps and not any("dm_extract" in c for c in _caps):
+        raise HTTPException(503, "No connected runner holds the Document Manager licence key, so a "
+                                 "Document-Manager-only run cannot read the models. Add "
+                                 "SDI_SW_DOCMGR_KEY to the runner machine's .env and restart the runner.")
+    if req.bom_routes_only and _caps and not any("bom_routes" in c for c in _caps):
+        raise HTTPException(503, "The connected runner cannot run a BOMs & routes pre-run yet: restart "
+                                 "it on the current build (.\\tools\\start\\restart-runner.ps1).")
     if req.concept_document and method != "llm":
         raise HTTPException(400, "Client-document costing requires the LLM read method.")
     _ref_docs = [Path(str(f)).name for f in (req.reference_documents or [])
                  if str(f or "").strip()]
-    if _ref_docs and method != "llm":
-        raise HTTPException(400, "Reference/standards documents ride on the LLM read method.")
+    # A DECLARED REFERENCE DOCUMENT RIDES EVERY METHOD (D-599a, SCRUM-107). The engine holds a
+    # declared file out of every reader on any run (D-474) and gives its words to the vision
+    # read; refused here, an estimate of the HPP pack had to drop the screen maker's guide or
+    # read it as part of the product.
     if req.construction and method != "llm":
         raise HTTPException(400, "A member schedule rides on the LLM read method only.")
     if _ref_docs and req.files:
@@ -2055,11 +3392,18 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                   units=int(req.units), quantity_breaks=list(_breaks),
                   job_folder=str(job), output_path=str(out),
                   manual_workbook=manual_wb, queued_at=queued_at,
+                  compare_with_manual=bool(req.compare_with_manual) and not manual_wb,
                   llm_only=(method == "llm"),
-                  fresh_read=bool(req.fresh_read),
+                  fresh_read=bool(req.fresh_read) and method not in ("deterministic", "solidworks", "docmgr"),
+                  deterministic_only=(method == "deterministic"),
+                  reader_mode=method if method in READER_MODE_FLAG else "",
+                  bom_routes_only=bool(req.bom_routes_only),
+                  job_type="bom_routes" if req.bom_routes_only else "",
                   email_to=_email_to, email_quote=bool(req.email_quote),
                   requested_by=_caller)
-        _RUNS[run.run_id] = run
+        # NOT QUEUED YET (D-607). A run in _RUNS can be claimed, and a runner polling between
+        # here and the brief below would take a job whose brief was not yet filed and whose
+        # scope was not yet recorded. It is queued once both are done.
 
     run.line(f"{drawing} · {client} · {run.units} off")
     if _caller:
@@ -2082,8 +3426,38 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  "the DXF flat patterns and the SolidWorks extract are all OFF. This is a "
                  "MEASUREMENT of the model, not an estimate, and its total must not be "
                  "quoted or compared with a normal run's.")
-    _brief_status = (_file_enquiry_brief(run, job, req.enquiry_brief)
-                     if run.llm_only else "not_an_llm_read")
+    if getattr(run, "reader_mode", ""):
+        run.line(READER_MODE_SAYS[run.reader_mode])
+    if getattr(run, "bom_routes_only", False):
+        run.line("PRE-RUN: the pack is read and the routes compiled as an estimate would, then "
+                 "the run stops before the workbook. You get the BOMs and Routes (xlsx and page) "
+                 "and the record; nothing priced is shown.")
+    if getattr(run, "deterministic_only", False):
+        run.line("DETERMINISTIC-ONLY: no language model reads the drawings and no cached "
+                 "answer from one is reused (whole-pack read, vision BOM reader, page vision, "
+                 "DXF interpretation, note scan and concept read all OFF). This TESTS the "
+                 "drawing reader; it is not an estimate to quote.")
+    # EVERY RUN FILES ITS OWN BRIEF, OR CLEARS A STALE ONE (D-598y). An estimate of a drawing
+    # no reader can read falls back to the vision read (D-598g), and that read takes the brief;
+    # filed only on LLM runs, a customer's change could never reach it. On a measured pack the
+    # engine sets the brief aside and the book says so.
+    _brief_status = _file_enquiry_brief(run, job, req.enquiry_brief)
+    # A BRIEF THAT COULD NOT BE SAVED IS NOT QUEUED (D-607a). Queued, the run would read the
+    # pack without the customer's words, or with a stale brief nobody typed for it. The run is
+    # not in the queue yet, so refusing here leaves nothing a runner can claim.
+    if _brief_status == "failed":
+        raise HTTPException(500, (run.log[-1] if run.log else "The enquiry brief could not be "
+                                  "saved.") + " The run was NOT queued. Check the job folder "
+                                 "can be written, then run again.")
+    # THE SCOPE AS SUBMITTED, kept on the run and said on its log (D-604).
+    run.submitted_scope = submitted_scope(run, method, req.enquiry_brief, _brief_status,
+                                          _ref_docs)
+    run.line("SCOPE AS SUBMITTED — " + scope_sentence(run.submitted_scope))
+    # QUEUED NOW, with its brief filed and its scope recorded, so no runner can claim it
+    # without them (D-607).
+    with _LOCK:
+        _RUNS[run.run_id] = run
+        _keep(run)
     # WHICH CONSTRUCTION THIS RUN PRICES, said where the estimator is looking (D-535): a
     # schedule on file changes what the run is, and a run that silently priced last week's
     # schedule — or silently asked the model again — is the failure this panel exists to end.
@@ -2263,6 +3637,147 @@ async def start_llm_estimate(
                  "quotation, and the workbook says so."),
     })
     return out
+
+
+# ══ THE WALKTHROUGH PAGE (D-610) ═════════════════════════════════════════════
+# Behind the e-mail's button: /estimating/walkthrough/<token> is the page; these are its data,
+# its files and its question box. Keyed by the record on disk, so a link survives a restart.
+
+def _walkthrough_or_404(token: str) -> Dict[str, Any]:
+    rec = estimate_walkthrough.load(token)
+    if rec is None:
+        raise HTTPException(404, "This walkthrough is not known here. It was recorded by the "
+                                 "service that ran the estimate; open the link on the SDI "
+                                 "network, from the e-mail it came in.")
+    return rec
+
+
+def _relayed(request: Optional[Request], path: str,
+             body: Optional[Dict[str, Any]] = None) -> Optional[Tuple[bytes, str, str]]:
+    """A walkthrough this service does not hold, from another service on the grid; never a
+    request that was itself relayed here."""
+    import grid_peers
+    if request is not None and request.headers.get(grid_peers.RELAY_HEADER):
+        return None
+    if estimate_walkthrough.load_token_ok(path):
+        return grid_peers.relay(path, body)
+    return None
+
+
+@router.get("/walkthrough/{token}")
+def walkthrough_view(token: str, request: Request = None,
+                     x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    if estimate_walkthrough.load(token) is None:
+        got = _relayed(request, f"/api/estimate/walkthrough/{token}")
+        if got is not None:
+            return Response(content=got[0], media_type=got[1] or "application/json")
+    return estimate_walkthrough.public_view(_walkthrough_or_404(token))
+
+
+def _walkthrough_file_relayed(request: Optional[Request], token: str,
+                              name: str) -> Optional[Response]:
+    """One of a walkthrough's files from the service that holds it, when this one does not.
+    THE SAME RELEASE GATE AS A LOCAL FILE (D-645): a quotation is checked here as well as there,
+    from its own declaration, and one not released goes inline, sandboxed and marked
+    portal, never as a download."""
+    if estimate_walkthrough.load(token) is not None:
+        return None
+    got = _relayed(request, f"/api/estimate/walkthrough/{token}/file/{urllib.parse.quote(name)}")
+    if got is None:
+        return None
+    content, media, disposition = got
+    if quote_release.looks_like_a_quote(Path(name)):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            held = Path(tmp) / Path(name).name
+            held.write_bytes(content)
+            released = quote_release.may_go_to_a_customer(held)
+        if not released:
+            return Response(content=content, media_type=media,
+                            headers={"Content-Disposition": f'inline; filename="{Path(name).name}"',
+                                     "X-SDI-Quote-Release": "portal",
+                                     "Content-Security-Policy":
+                                         "sandbox allow-downloads allow-popups"})
+    return Response(content=content, media_type=media,
+                    headers={"Content-Disposition": disposition} if disposition else {})
+
+
+@router.get("/walkthrough/{token}/file/{name}")
+def walkthrough_file(token: str, name: str, request: Request = None,
+                     x_sdi_key: Optional[str] = Header(default=None)):
+    """One of the run's own files, by name, as listed in its record; nothing else."""
+    _check_key(x_sdi_key)
+    relayed = _walkthrough_file_relayed(request, token, name)
+    if relayed is not None:
+        return relayed
+    path = estimate_walkthrough.file_for(_walkthrough_or_404(token), name)
+    if path is None:
+        raise HTTPException(404, f"{name!r} is not one of this estimate's files, or it has "
+                                 f"been moved.")
+    media, _ = mimetypes.guess_type(path.name)
+    # THE PORTAL CLIENT ESTIMATE, EVERY TIME (D-645). A quotation not yet released for a
+    # customer is served to read, as /api/file serves it: in the browser, sandboxed, marked as
+    # the portal working copy, never as a download to forward. Released ones are files.
+    if quote_release.looks_like_a_quote(path) and not quote_release.may_go_to_a_customer(path):
+        return FileResponse(str(path), media_type=media or "application/octet-stream",
+                            filename=path.name, content_disposition_type="inline",
+                            headers={"X-SDI-Quote-Release": "portal",
+                                     "Content-Security-Policy":
+                                         "sandbox allow-downloads allow-popups"})
+    return FileResponse(str(path), media_type=media or "application/octet-stream",
+                        filename=path.name)
+
+
+class AskRequest(BaseModel):
+    question: str = ""
+
+
+@router.post("/walkthrough/{token}/ask")
+def walkthrough_ask(token: str, req: AskRequest, request: Request = None,
+                    x_sdi_key: Optional[str] = Header(default=None)):
+    """A question about the estimate, answered from its own record by the engine
+    (src/estimate_qa.py), in its own interpreter like the other engine calls here."""
+    _check_key(x_sdi_key)
+    if estimate_walkthrough.load(token) is None:
+        got = _relayed(request, f"/api/estimate/walkthrough/{token}/ask",
+                       {"question": req.question})
+        if got is not None:
+            try:
+                return json.loads(got[0].decode("utf-8"))
+            except ValueError:
+                pass
+    rec = _walkthrough_or_404(token)
+    question = str(req.question or "").strip()[:1000]
+    if not question:
+        raise HTTPException(400, "Type a question about the estimate first.")
+    if not Path(_ENGINE_PYTHON).exists():
+        return {"status": "unavailable",
+                "answer": "Questions are answered on the machine that runs estimates, and "
+                          "this one has no engine. Open the link on the estimating laptop."}
+    # THE SHARED QUESTION SERVICE (D-616): the run's own files go, and the engine answers from
+    # the single *_record.json among them, or says "record unavailable"; the run is named back.
+    payload = {"question": question, "records": estimate_walkthrough.records_json(rec),
+               "run_id": rec.get("run_id") or "",
+               "commentary": estimate_walkthrough.commentary(rec),
+               "quantity_prices": rec.get("quantity_prices") or [],
+               "drawing_number": rec.get("drawing_number"), "client": rec.get("client")}
+    try:
+        proc = subprocess.run([_ENGINE_PYTHON, _QA_CLI], input=json.dumps(payload),
+                              capture_output=True, text=True, encoding="utf-8", timeout=150)
+    except subprocess.TimeoutExpired:
+        return {"status": "unavailable", "answer": "The answer took too long. Ask again, or "
+                                                   "more narrowly."}
+    for line in reversed((proc.stdout or "").strip().splitlines()):
+        try:
+            got = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(got, dict) and "answer" in got:
+            return got
+    return {"status": "unavailable",
+            "answer": "No answer came back: " + ((proc.stderr or "").strip()[-300:]
+                                                 or "the engine said nothing")}
 
 
 @router.get("/{run_id}/summary")
@@ -2610,6 +4125,13 @@ async def estimate_parity(
     bundle_json = result.get("bundle_json")
     bundle_csv = result.get("bundle_csv")
     bundle_html = result.get("bundle_html")
+    # D-623: bundle_html is the line-by-line report when it could be made; the money-cell page
+    # and the detail record travel beside it.
+    legacy_html = result.get("legacy_html")
+    detail_json = result.get("detail_json")
+
+    def url(p):
+        return f"/api/file?path={_urlquote(p)}" if p else None
     return {
         "parity": True,
         "job_stem": result.get("job_stem"),
@@ -2618,11 +4140,500 @@ async def estimate_parity(
         "bundle_json": bundle_json,
         "bundle_csv": bundle_csv,
         "bundle_html": bundle_html,
-        "bundle_json_url": (f"/api/file?path={_urlquote(bundle_json)}" if bundle_json else None),
-        "bundle_csv_url": (f"/api/file?path={_urlquote(bundle_csv)}" if bundle_csv else None),
-        "bundle_html_url": (f"/api/file?path={_urlquote(bundle_html)}" if bundle_html else None),
+        "bundle_json_url": url(bundle_json),
+        "bundle_csv_url": url(bundle_csv),
+        "bundle_html_url": url(bundle_html),
+        "legacy_html_url": url(legacy_html) if legacy_html and legacy_html != bundle_html else None,
+        "detail_json_url": url(detail_json),
+        # The spoken comparison (D-627), where the engine's machine has a voice.
+        "walkthrough_url": url(result.get("walkthrough_wav")),
         "headline": result.get("headline") or {},
     }
+
+
+# ── Speech for the question boxes (D-622) ────────────────────────────────────
+# Whether the AM CRM's Azure speech is configured, so the estimating pages know whether to
+# record for the service (iPhones, browsers with no recognition) and speak in its voice. Only
+# the three speech facts: nothing else about the CRM's settings reaches these pages.
+@router.get("/speech")
+def speech_status():
+    """Whether this service can give the pages the neural voice, and WHY NOT when it cannot
+    (D-744). JG, 7 Nov 2026: "the voice has regressed back to the old one again". Every page
+    falls back to the device's own voice when this says no, silently, so a service started a
+    different way that lost the speech settings sounded like a regression in the pages. It
+    names the missing settings; it never shows a value."""
+    reason, missing = "", []
+    try:
+        import voicecrm_speech
+        st = voicecrm_speech.status()
+        missing = [n for n, v in (("SDI_SPEECH_KEY", voicecrm_speech.KEY),
+                                  ("SDI_SPEECH_REGION", voicecrm_speech.REGION)) if not v]
+        if missing:
+            reason = (f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} not set "
+                      f"for this service, so the pages use the device's own voice")
+        elif not st.get("speech_tts"):
+            reason = "SDI_SPEECH_TTS is off for this service"
+    except Exception as exc:                                         # noqa: BLE001
+        st = {}
+        reason = f"the speech module could not load here: {type(exc).__name__}: {exc}"[:240]
+    return {"speech_ready": bool(st.get("speech_ready")),
+            "speech_stt": str(st.get("speech_stt") or "off"),
+            "speech_tts": bool(st.get("speech_tts")),
+            "speech_voice": str(st.get("speech_voice") or ""),
+            "speech_reason": reason, "speech_missing": missing}
+
+
+class SpeakRequest(BaseModel):
+    text: str = ""
+
+
+@router.post("/speak")
+def speech_speak(req: SpeakRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """The neural voice for the estimating pages, behind the estimating pages' own gate (D-673).
+
+    JG, 4 Nov 2026: "the phone is pretty good but the app is very robotic". The pages asked
+    the AM CRM's /api/voicecrm/speak, which needs a signed-in CRM user. The e-mail walkthrough
+    page and the desk page on the estimating laptop have none, so the request was refused and
+    the device's own voice read the answer; a phone signed in through the portal heard Azure.
+    The same voice, the same text limit, the same configuration (voicecrm_speech)."""
+    _check_key(x_sdi_key)
+    import voicecrm_speech
+    audio, err = voicecrm_speech.synthesize(str(req.text or ""))
+    if err:
+        return JSONResponse(status_code=503, content=err)
+    return Response(content=audio, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
+
+
+# ── Parity by job number (D-619, D-621) ──────────────────────────────────────
+#
+# JG, 1 Nov 2026: "a new parity option where we can compare one job - can choose / find from
+# file system or name for the tool to search by job number ... we take the most obvious s/sheet
+# candidate and we run a parity against it from our AI estimate with html outputs. the s/sheets
+# that are used are stored at K:\Estimating\Completed\AI Estimating\parity and below this for
+# every run we save down the two s/sheets compared and the parity reports that are available to
+# be searched through in the web page and app ... also, can run a search and comparison between
+# all manual and AI estimates ran across two time periods."
+#
+# The finding, filing and searching live in src/parity_job.py, run in the engine's Python like
+# the parity route above: one place for the rules, the same answer from the command line, the
+# desk page and the phone. These routes check the key and the paths, run it, and add links.
+#
+# THE REVIEW (D-621): a single comparison now runs in the background too, with an id the page
+# polls, so a slow share never invites a second press; the same comparison asked for again
+# while one is running returns the first one's id. An ambiguous manual sheet comes back as a
+# choice, never a guess.
+_PARITY_JOB_CLI = str(_REPO_ROOT / "src" / "parity_job.py")
+PARITY_ROOT = Path(os.getenv(
+    "SDI_PARITY_ROOT",
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\parity"))
+MANUAL_ESTIMATES_ROOT = Path(os.getenv(
+    "SDI_MANUAL_ESTIMATES_ROOT",
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Manual Estimates"))
+_PARITY_TASK_ID = re.compile(r"^[a-f0-9]{8,12}$")
+_PARITY_RUNNING: Dict[str, str] = {}          # what was asked -> the task already doing it
+_PARITY_LOCK = threading.Lock()
+# What each background comparison is, for the wall (D-742): its name and when it began. The
+# status file holds the progress; this holds what the status file does not say.
+_PARITY_TASKS: Dict[str, Dict[str, Any]] = {}
+
+
+def _parity_env() -> Dict[str, str]:
+    env = dict(os.environ)
+    env.setdefault("SDI_PARITY_ROOT", str(PARITY_ROOT))
+    env.setdefault("SDI_MANUAL_ESTIMATES_ROOT", str(MANUAL_ESTIMATES_ROOT))
+    env.setdefault("SDI_ESTIMATE_OUTPUT_ROOT", str(OUTPUT_ROOT))
+    return env
+
+
+def _engine_ready() -> None:
+    if not Path(_ENGINE_PYTHON).exists():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Engine python not found at {_ENGINE_PYTHON} — set SDI_ENGINE_PYTHON")
+
+
+def _parity_job(args: List[str], timeout: int = 300) -> Dict[str, Any]:
+    """Run parity_job.py with --json and return its answer. Exit 2 is a reason a person can act
+    on (no manual estimate found, a bad date), a 400 in its own words; exit 3 is a choice to
+    make, a 409 carrying the candidates."""
+    _engine_ready()
+    try:
+        proc = subprocess.run([_ENGINE_PYTHON, _PARITY_JOB_CLI, *args, "--json"],
+                              capture_output=True, text=True, timeout=timeout, env=_parity_env(),
+                              cwd=str(_REPO_ROOT))
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="The parity search timed out on the share")
+    line = next((ln for ln in reversed((proc.stdout or "").splitlines())
+                 if ln.strip().startswith("{")), "")
+    try:
+        body = json.loads(line) if line else {}
+    except ValueError:
+        body = {}
+    if proc.returncode == 3:
+        raise HTTPException(status_code=409, detail=body)
+    if proc.returncode == 2:
+        raise HTTPException(status_code=400, detail=str(body.get("error") or "parity refused"))
+    if proc.returncode != 0:
+        msg = (proc.stderr or proc.stdout or "parity failed").strip().splitlines()
+        raise HTTPException(status_code=500, detail=(msg[-1] if msg else "parity failed")[:400])
+    return body
+
+
+def _parity_background(args: List[str], key: str = "", label: str = "",
+                       kind: str = "") -> Dict[str, Any]:
+    """Start parity_job.py in the background with a status file; the id to poll. The same
+    request while one is still running gets the running one's id."""
+    _engine_ready()
+    with _PARITY_LOCK:
+        running = _PARITY_RUNNING.get(key) if key else None
+        if running:
+            try:
+                state = json.loads(_parity_status_file(running).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                state = {}
+            if not state.get("finished"):
+                return {"started": False, "already_running": True, "task_id": running,
+                        "status_url": f"/api/estimate/parity/task/{running}"}
+        tid = uuid.uuid4().hex[:8]
+        status = _parity_status_file(tid)
+        status.parent.mkdir(parents=True, exist_ok=True)
+        status.write_text(json.dumps({"state": "starting", "done": 0, "of": None,
+                                      "started_at": time.time()}), encoding="utf-8")
+        subprocess.Popen([_ENGINE_PYTHON, _PARITY_JOB_CLI, *args, "--json",
+                          "--status-file", str(status)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_parity_env(),
+                         cwd=str(_REPO_ROOT))
+        if key:
+            _PARITY_RUNNING[key] = tid
+        _PARITY_TASKS[tid] = {"label": label or " ".join(args[:2]), "kind": kind or args[0],
+                              "started_at": time.time()}
+    return {"started": True, "task_id": tid, "status_url": f"/api/estimate/parity/task/{tid}"}
+
+
+def _file_link(path: Any) -> Optional[str]:
+    return f"/api/file?path={urllib.parse.quote(str(path))}" if path else None
+
+
+class ParityAskRequest(BaseModel):
+    folder: str
+    question: str = ""
+
+
+@router.post("/parity/ask")
+def parity_ask(req: ParityAskRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """A question about one FILED comparison (D-628), answered by the shared question service
+    from that exact saved record: the line-by-line detail, with the spoken summary as its
+    commentary. It reads the filed copies and changes nothing; from outside the office the
+    parity prefix already holds this to the named estimators."""
+    _check_key(x_sdi_key)
+    question = str(req.question or "").strip()[:1000]
+    if not question:
+        raise HTTPException(400, "Type a question about the comparison first.")
+    folder = Path(str(req.folder or "").strip())
+    try:
+        inside = folder.resolve()
+        root = PARITY_ROOT.resolve()
+        ok = inside == root or root in inside.parents
+    except OSError:
+        ok = False
+    if not ok:
+        raise HTTPException(400, "That folder is not a filed comparison under the parity area.")
+    if not (folder / "parity_index.json").is_file():
+        raise HTTPException(404, "No filed comparison was found in that folder.")
+    detail = sorted(folder.glob("*.parity_detail.json"))
+    if not detail:
+        raise HTTPException(409, "This comparison predates the line-by-line report. Press "
+                                 "Compare and file again — the filed copies are reused and "
+                                 "it takes seconds — then ask.")
+    if not Path(_ENGINE_PYTHON).exists():
+        return {"status": "unavailable",
+                "answer": "Questions are answered on the machine that runs estimates, and "
+                          "this one has no engine."}
+    commentary = ""
+    spoken = sorted(folder.glob("*_parity_walkthrough.txt"))
+    if spoken:
+        try:
+            commentary = spoken[0].read_text(encoding="utf-8")[:4000]
+        except OSError:
+            commentary = ""
+    payload = {"question": question, "comparison_path": str(detail[0]),
+               "comparison_id": folder.name,
+               "sources": [p.name for p in detail] + [p.name for p in spoken],
+               "commentary": commentary}
+    try:
+        proc = subprocess.run([_ENGINE_PYTHON, _QA_CLI], input=json.dumps(payload),
+                              capture_output=True, text=True, encoding="utf-8", timeout=150)
+    except subprocess.TimeoutExpired:
+        return {"status": "unavailable", "answer": "The answer took too long. Ask again, or "
+                                                   "more narrowly."}
+    for line in reversed((proc.stdout or "").strip().splitlines()):
+        try:
+            got = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(got, dict) and "answer" in got:
+            return got
+    return {"status": "unavailable",
+            "answer": "No answer came back: " + ((proc.stderr or "").strip()[-300:]
+                                                 or "the engine said nothing")}
+
+
+def _report_links(idx: Dict[str, Any]) -> Dict[str, Any]:
+    """One filed comparison with links to its report and the filed copies of both sheets."""
+    folder = Path(str(idx.get("folder") or ""))
+
+    def at(name: Any) -> Optional[str]:
+        return _file_link(folder.joinpath(*str(name).split("/"))) if name and str(folder) else None
+    return {**idx,
+            "report_url": at(idx.get("report_html")),
+            "listen_url": at(idx.get("walkthrough_wav")),
+            "spoken_words_url": at(idx.get("walkthrough_txt")),
+            "legacy_report_url": at(idx.get("legacy_html")),
+            "detail_json_url": at(idx.get("detail_json")),
+            "bundle_json_url": at(idx.get("bundle_json")),
+            "bundle_csv_url": at(idx.get("bundle_csv")),
+            "manual_url": at((idx.get("manual") or {}).get("copied_as")),
+            "ai_url": at((idx.get("ai") or {}).get("copied_as"))}
+
+
+def _summary_link(body: Dict[str, Any]) -> Optional[str]:
+    """A period summary through the portal: the copy whose links go through /api/file."""
+    return _file_link(body.get("summary_portal_html") or body.get("summary_html"))
+
+
+def _parity_path(path: Optional[str], label: str) -> Optional[str]:
+    if not path or not path.strip():
+        return None
+    resolved = _within_a_root(path.strip())
+    if resolved is None:
+        raise HTTPException(status_code=403,
+                            detail=f"That {label} is outside the shares this service may read.")
+    return str(resolved)
+
+
+def _day_arg(value: Optional[str]) -> Optional[str]:
+    """A date, or a date with a time (D-625): a period can be a day, or hours within one, so
+    two runs of the same drawing on the same day can be compared against each other's era."""
+    v = (value or "").strip()[:19]
+    if v and not re.fullmatch(r"\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?", v):
+        raise HTTPException(status_code=400,
+                            detail=f"'{v}' is not a date as YYYY-MM-DD, or a date and time as "
+                                   f"YYYY-MM-DD HH:MM.")
+    return v or None
+
+
+@router.get("/parity/find")
+def parity_find(job: str, client: str = "", x_sdi_key: Optional[str] = Header(default=None)):
+    """What a comparison of this job would use: every manual workbook for the job number,
+    likeliest first with why, whether the choice is clear or must be made, and every AI run."""
+    _check_key(x_sdi_key)
+    args = ["find", job.strip()[:80]] + (["--client", client.strip()[:80]] if client.strip() else [])
+    body = _parity_job(args, timeout=120)
+    for c in body.get("manual") or []:
+        c["url"] = _file_link(c.get("path"))
+    for r in body.get("ai") or []:
+        r["url"] = _file_link(r.get("workbook"))
+    return body
+
+
+class ParityJobRequest(BaseModel):
+    job: str
+    client: Optional[str] = None
+    manual_path: Optional[str] = None       # chosen by hand; otherwise only a clear choice
+    ai_path: Optional[str] = None           # chosen by hand; otherwise the newest run
+    read_via_excel: bool = False
+
+
+@router.post("/parity/job")
+def parity_job_run(req: ParityJobRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Compare one job in the background and file both sheets and the report under the parity
+    folder; poll the returned status_url."""
+    who = _check_key(x_sdi_key)
+    manual = _parity_path(req.manual_path, "manual estimate")
+    ai = _parity_path(req.ai_path, "AI estimate")
+    job = req.job.strip()[:80]
+    args = ["job", job, "--made-by", f"portal{' ' + who if who else ''}"]
+    if (req.client or "").strip():
+        args += ["--client", req.client.strip()[:80]]
+    if manual:
+        args += ["--manual", manual]
+    if ai:
+        args += ["--ai", ai]
+    if req.read_via_excel:
+        args.append("--read-via-excel")
+    return _parity_background(args, key="job|" + "|".join([job.lower(), manual or "", ai or ""]),
+                              label=job, kind="job")
+
+
+def _parity_status_file(tid: str) -> Path:
+    return estimate_email.state_dir() / "parity_periods" / f"{tid}.json"
+
+
+@router.get("/parity/task/{tid}")
+def parity_task_status(tid: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """How far a background comparison has got: its step or progress, then its result, the
+    choice to make, or why it failed."""
+    _check_key(x_sdi_key)
+    if not _PARITY_TASK_ID.match(tid):
+        raise HTTPException(status_code=404, detail="No such parity comparison")
+    try:
+        body = json.loads(_parity_status_file(tid).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="No such parity comparison")
+    except (OSError, ValueError):
+        return {"state": "running", "note": "progress is being written; ask again in a moment"}
+    if isinstance(body.get("result"), dict):
+        body["result"] = _report_links(body["result"])
+    if body.get("summary_html") or body.get("summary_portal_html"):
+        body["summary_url"] = _summary_link(body)
+    for key in ("rows", "rows_a", "rows_b"):
+        for row in body.get(key) or []:
+            if row.get("folder") and row.get("report"):
+                row["report_url"] = _file_link(Path(row["folder"]) / row["report"])
+    for c in body.get("candidates") or []:
+        c["url"] = _file_link(c.get("path"))
+    return body
+
+
+# The period routes of D-619 answer to their first name as well.
+@router.get("/parity/period/{tid}")
+def parity_period_status(tid: str, x_sdi_key: Optional[str] = Header(default=None)):
+    return parity_task_status(tid, x_sdi_key)
+
+
+@router.get("/parity/reports")
+def parity_reports(q: str = "", start: Optional[str] = None, end: Optional[str] = None,
+                   outcome: str = "", x_sdi_key: Optional[str] = Header(default=None)):
+    """Filed comparisons, newest first, by job, drawing or client, date and outcome; and the
+    period comparisons already run."""
+    _check_key(x_sdi_key)
+    args = ["search"] + ([q.strip()[:80]] if q.strip() else [])
+    if _day_arg(start):
+        args += ["--from", _day_arg(start)]
+    if _day_arg(end):
+        args += ["--to", _day_arg(end)]
+    if outcome.strip():
+        args += ["--outcome", outcome.strip()[:30]]
+    reports = [_report_links(i) for i in _parity_job(args, timeout=120).get("reports") or []]
+    periods = _parity_job(["history"], timeout=60).get("periods") or []
+    for p in periods:
+        p["summary_url"] = _summary_link(p)
+    return {"reports": reports, "periods": periods, "parity_root": str(PARITY_ROOT)}
+
+
+class ParityPeriodRequest(BaseModel):
+    start: str
+    end: str
+    client: str = ""
+    job: str = ""
+    preview: bool = False
+    read_via_excel: bool = False
+
+
+def _filters(client: str, job: str) -> List[str]:
+    out = []
+    if client.strip():
+        out += ["--client", client.strip()[:80]]
+    if job.strip():
+        out += ["--job", job.strip()[:80]]
+    return out
+
+
+@router.post("/parity/period")
+def parity_period(req: ParityPeriodRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Every drawing estimated within one period against its manual estimate. A preview
+    answers at once; a real run starts in the background and returns an id to poll."""
+    _check_key(x_sdi_key)
+    args = ["period", "--from", _day_arg(req.start) or "", "--to", _day_arg(req.end) or ""] \
+        + _filters(req.client, req.job)
+    if req.read_via_excel:
+        args.append("--read-via-excel")
+    if req.preview:
+        return _parity_job(args + ["--preview"])
+    started = _parity_background(args, key="period|" + "|".join(args),
+                                 label=f"{req.start} to {req.end}"
+                                 + (f" · {req.client.strip()}" if req.client.strip() else ""),
+                                 kind="period")
+    started["period_id"] = started["task_id"]
+    return started
+
+
+class ParityTwoPeriodsRequest(BaseModel):
+    a_start: str
+    a_end: str
+    b_start: str
+    b_end: str
+    client: str = ""
+    job: str = ""
+    preview: bool = False
+    read_via_excel: bool = False
+
+
+@router.post("/parity/periods")
+def parity_two_periods(req: ParityTwoPeriodsRequest,
+                       x_sdi_key: Optional[str] = Header(default=None)):
+    """Period A against Period B (D-621): the comparable pairs in each and how the variance
+    moved, with missing partners, ambiguous matches and quantity mismatches listed apart."""
+    _check_key(x_sdi_key)
+    args = ["periods", "--a-from", _day_arg(req.a_start) or "", "--a-to", _day_arg(req.a_end) or "",
+            "--b-from", _day_arg(req.b_start) or "", "--b-to", _day_arg(req.b_end) or ""] \
+        + _filters(req.client, req.job)
+    if req.read_via_excel:
+        args.append("--read-via-excel")
+    if req.preview:
+        return _parity_job(args + ["--preview"], timeout=600)
+    return _parity_background(args, key="periods|" + "|".join(args),
+                              label=f"A {req.a_start} to {req.a_end} against B {req.b_start} to {req.b_end}",
+                              kind="two periods")
+
+
+class ParityJobsRequest(BaseModel):
+    jobs: List[str] = []          # job or drawing numbers
+    text: str = ""                # or pasted: one per line, or separated by commas
+    client: str = ""
+    preview: bool = False
+    read_via_excel: bool = False
+
+
+_JOB_TOKEN = re.compile(r"^\d{3,}[A-Za-z0-9._\-]{0,77}$")
+
+
+@router.post("/parity/jobs")
+def parity_jobs(req: ParityJobsRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """A set of jobs against their manual estimates (D-742), named by job or drawing number:
+    a bare job number takes every drawing estimated under it. A preview answers at once with
+    what would be compared and what could not be; a real run starts in the background."""
+    _check_key(x_sdi_key)
+    words = [w for w in re.split(r"[,;\s]+", " ".join(list(req.jobs) + [req.text or ""])) if w]
+    jobs, seen, rejected = [], set(), []
+    for w in words:
+        w = w.strip().strip(".")
+        if not _JOB_TOKEN.match(w):
+            rejected.append(w)
+        elif w.lower() not in seen:
+            seen.add(w.lower())
+            jobs.append(w)
+    if not jobs:
+        raise HTTPException(status_code=400, detail=(
+            "Name at least one job or drawing number, such as 12002-02-GA."
+            + (f" These are not job numbers: {', '.join(rejected[:8])}." if rejected else "")))
+    if len(jobs) > 200:
+        raise HTTPException(status_code=400, detail=f"{len(jobs)} jobs is more than one set "
+                                                    f"takes (200). Split it, or compare a period.")
+    args = ["jobs", *jobs] + _filters(req.client, "")
+    if req.read_via_excel:
+        args.append("--read-via-excel")
+    if req.preview:
+        body = _parity_job(args + ["--preview"], timeout=600)
+        body["not_job_numbers"] = rejected + list(body.get("not_job_numbers") or [])
+        return body
+    named = jobs[0] + (f" … {jobs[-1]}" if len(jobs) > 1 else "")
+    started = _parity_background(args, key="jobs|" + "|".join(sorted(seen)) + "|" + req.client.lower(),
+                                 label=f"{len(jobs)} job{'s' if len(jobs) != 1 else ''}: {named}"
+                                 + (f" · {req.client.strip()}" if req.client.strip() else ""),
+                                 kind="jobs")
+    started["not_job_numbers"] = rejected
+    return started
 
 
 # ── Print the drawings behind an estimate ────────────────────────────────────
@@ -2901,16 +4912,16 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
     # doing that and then refusing the run over a typo in one word leaves the estimator's
     # job folder rewritten for nothing.
     method = str(req.method or "both").strip().lower()
-    if method not in {"both", "llm", "engine"}:
-        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
-                                 f"engine.")
+    if method not in BATCH_METHODS:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use "
+                                 f"{', '.join(sorted(BATCH_METHODS))}.")
     if not req.files:
         raise HTTPException(400, "Add the drawings to estimate.")
 
     method = str(req.method or "both").strip().lower()
-    if method not in {"both", "llm", "engine"}:
-        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
-                                 f"engine.")
+    if method not in BATCH_METHODS:
+        raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use "
+                                 f"{', '.join(sorted(BATCH_METHODS))}.")
     root = Path(req.output_root) if req.output_root else OUTPUT_ROOT
     batch_id = uuid.uuid4().hex[:12]
     queued_at = time.time()
@@ -2962,8 +4973,14 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
                       units=int(req.units), job_folder=str(Path(raw).parent),
                       output_path=str(out), queued_at=queued_at,
                       pdf_path=str(path), batch_id=batch_id,
-                      llm_only=(method == "llm"))
+                      llm_only=(method == "llm"),
+                      deterministic_only=(method == "deterministic"),
+                      reader_mode=method if method in READER_MODE_FLAG else "")
+            # ITS SCOPE AS SUBMITTED, like a single run's (D-607): a batch run takes no brief
+            # and no reference document, and its book compares what arrived with that.
+            run.submitted_scope = submitted_scope(run, method, None, "none", [])
             _RUNS[run.run_id] = run
+            _keep(run)
             accepted.append(run)
             queued_at += 0.001          # keeps the queue order stable and the sort total
 
@@ -3107,6 +5124,7 @@ def batch_abandon(batch_id: str, x_sdi_key: Optional[str] = Header(default=None)
             # learned to end the engine; this is the same act, ninety-nine times over, and
             # it had no reason to mean less.
             run.cancel_requested = True
+            run.stopped_by_hand = True
             run.status = "error"
             run.error = ("Released with the rest of this enquiry. "
                          + ("It had not started." if was == "queued" else
@@ -3118,6 +5136,7 @@ def batch_abandon(batch_id: str, x_sdi_key: Optional[str] = Header(default=None)
             r = _RUNNERS.get(run.runner)
             if r is not None and r.run_id == run.run_id:
                 r.run_id = ""
+            _keep(run)
             released += 1
     return {"ok": True, "released": released}
 
@@ -3151,6 +5170,7 @@ def abandon(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
         # which is also true of a run this runner genuinely lost, and only this says a person
         # asked for it to stop.
         run.cancel_requested = True
+        run.stopped_by_hand = True
         run.status = "error"
         run.error = ("Released by hand from the page. The queue is free; if the runner was "
                      "in fact still working, its result will be refused when it reports.")
@@ -3160,6 +5180,7 @@ def abandon(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
         r = _RUNNERS.get(run.runner)
         if r is not None and r.run_id == run.run_id:
             r.run_id = ""
+        _keep(run)
     return {"ok": True, "was": was, "run_id": run_id}
 
 
@@ -3204,21 +5225,9 @@ def email_run(run_id: str, req: SendRequest,
             400, f"These are not files this run produced: {', '.join(_foreign)}")
 
     if chosen:
-        # ── AN EXPLICIT CHOICE IS A DECISION. IT IS NOT A PERMISSION. ───────────────
-        #
-        # This read "An explicit choice is a decision, quote included" and sent the list
-        # untouched, so a tick-box on the page put an unreleased quotation in front of a
-        # customer past the only gate there was. The gate it went past is a keyword scan of
-        # the run's console that returns True unconditionally, so nothing has leaked — but
-        # the moment that became honest there would have been no check left at all.
-        #
-        # What a person may choose is WHICH of this run's files to send. Whether the
-        # quotation may go to a customer is not theirs to tick: it needs the commercial
-        # inputs completed and a named estimator's authorisation, and those are recorded on
-        # the estimate, not in a request. The file says which it is and this asks it.
-        paths = [f for f in chosen if quote_release.may_go_to_a_customer(f)]
-        held = [{"path": f, "why": quote_release.why_held(f)}
-                for f in chosen if f not in paths]
+        # THE ESTIMATOR'S CHOICE IS SENT AS CHOSEN, QUOTE INCLUDED (D-646). JG, 3 Nov 2026:
+        # "estimating still control this process".
+        paths, held = list(chosen), []
     else:
         paths, held = estimate_email.choose_attachments(
             _deliverables, provisional=_provisional, include_quote=False)
@@ -3292,8 +5301,8 @@ def deliverable(run_id: str, name: str, x_sdi_key: Optional[str] = Header(defaul
 
 @router.get("")
 def recent(x_sdi_key: Optional[str] = Header(default=None), limit: int = 25):
-    """Every run this service has queued, newest first. In memory only — a
-    restart forgets them, and the estimates themselves are on the share."""
+    """Every run this service has queued, newest first: kept on disk since D-618, so a
+    restart no longer forgets them (estimate_history)."""
     _check_key(x_sdi_key)
     with _LOCK:
         _expire_dead_claims()
@@ -3463,11 +5472,122 @@ def ask_saved_run(req: SavedRunQuestion, x_sdi_key: Optional[str] = Header(defau
 # extract, and this says so and names the button that produces it, rather than silently
 # returning empty sheets that read as "this pack contains nothing".
 
+# ── PACK EXTRACT (D-640): ONE READER ON A PACK, ORGANISED; NO ESTIMATE ──────────────────
+#
+# JG, 2 Nov 2026: a SolidWorks drawing-pack extract and an xAI extract, each its own button,
+# on files chosen exactly as "Add drawing files…" chooses them. The drawings are staged as an
+# estimate's are (same checks, same folder), queued as a runner job of their own type, and the
+# runner runs src/pack_extract.py instead of main.py: the SolidWorks analyser needs the seat on
+# the runner's machine, and the xAI read needs the engine's key. The organised workbook and
+# the JSON come back as the run's deliverables.
+_PACK_EXTRACT_JOB = {"sw": "sw_extract", "xai": "xai_extract", "dm": "dm_extract"}
+_PACK_EXTRACT_LABEL = {"sw": "SolidWorks pack extract", "xai": "xAI extract",
+                       "dm": "SolidWorks Document Manager extract"}
+# THE THIRD BUTTON (D-737, JG 7 Nov 2026): the Document Manager's read of the same models, in
+# the SolidWorks extract's tables, so the two can be compared pack by pack (SCRUM-184). It needs
+# no SolidWorks seat, only the licence key on the runner, which says so with "dm_extract".
+
+
+class PackExtractRequest(BaseModel):
+    kind: str                                   # "sw" | "xai" | "dm"
+    client: str
+    drawing_number: str
+    job_folder: str = ""
+    files: List[str] = []
+
+
+@router.post("/pack-extract")
+def start_pack_extract(req: PackExtractRequest,
+                       x_sdi_key: Optional[str] = Header(default=None)):
+    _caller = _check_key(x_sdi_key)
+    kind = str(req.kind or "").strip().lower()
+    if kind not in _PACK_EXTRACT_JOB:
+        raise HTTPException(400, f"Unknown extract {req.kind!r}: use 'sw', 'xai' or 'dm'.")
+    job_type, label = _PACK_EXTRACT_JOB[kind], _PACK_EXTRACT_LABEL[kind]
+    client = safe_segment(req.client)
+    drawing = safe_segment(req.drawing_number)
+    if not client or not drawing:
+        raise HTTPException(400, "A client and a drawing number are both required — they "
+                                 "name the folder the extract is filed in.")
+    _sources: List[str] = []
+    if req.job_folder and str(req.job_folder).strip():
+        _sources.append(str(req.job_folder).strip())
+    _sources += [str(f).strip() for f in (req.files or []) if str(f).strip()]
+    if not _sources:
+        raise HTTPException(400, "Add a job folder, or the drawings to read.")
+    for _src in _sources:
+        if _within_a_root(_src) is None:
+            raise HTTPException(
+                403, f"That drawing is outside the shares this service may read: {_src}")
+    if kind in ("sw", "dm") and not any(
+            Path(x).suffix.lower() in (".sldprt", ".sldasm", ".slddrw")
+            for x in _sources if Path(x).suffix):
+        if not req.job_folder:
+            raise HTTPException(400, f"The {label} reads models: add the pack's "
+                                     ".SLDPRT / .SLDASM / .SLDDRW files, or its folder.")
+    if kind == "xai" and not req.job_folder and not any(
+            Path(x).suffix.lower() == ".pdf" for x in _sources):
+        raise HTTPException(400, "The xAI extract reads PDF drawings: add the pack's PDFs, "
+                                 "or its folder.")
+    with _LOCK:
+        _expire_dead_claims()
+        dup = _active_run_for(client, drawing)
+        able = [r for r in _online_runners() if job_type in (r.capabilities or [])]
+        online = _online_runners()
+    if dup is not None:
+        raise HTTPException(
+            409, f"{drawing} for {client} is already {dup.status}. Staging again now would "
+                 f"replace the drawings that run is reading. Wait for it to finish, or "
+                 f"release it: POST /api/estimate/{dup.run_id}/abandon")
+    if not online:
+        raise HTTPException(503, "No estimating runner is connected. Start the runner on the "
+                                 "machine with SOLIDWORKS, then try again.")
+    if not able and kind == "dm":
+        raise HTTPException(503, "No connected runner holds the Document Manager licence key. "
+                                 "Add SDI_SW_DOCMGR_KEY to the runner machine's .env, then "
+                                 "restart the runner (.\\tools\\start\\restart-runner.ps1).")
+    if not able:
+        raise HTTPException(503, f"The connected runner cannot run a {label} yet: restart it "
+                                 f"on the current build (.\\tools\\start\\restart-runner.ps1).")
+    try:
+        staged = staging.stage(_sources, client=client, drawing=drawing)
+    except staging.StagingInUse as exc:
+        raise HTTPException(409, str(exc))
+    except staging.StagingError as exc:
+        raise HTTPException(400, str(exc))
+    except OSError as exc:
+        raise HTTPException(
+            502, f"The drawings could not be staged to {staging.staging_root()} "
+                 f"({type(exc).__name__}: {exc}). Check the share is reachable and writable.")
+    job = _within_a_root(staged["folder"])
+    if job is None:
+        raise HTTPException(
+            403, f"The staging folder {staged['folder']} is outside the shares this service "
+                 f"may read. Add SDI_STAGING_ROOT to SDI_FILE_ROOTS.")
+    queued_at = time.time()
+    out = OUTPUT_ROOT / client / drawing / (
+        time.strftime("%Y-%m-%d %H-%M-%S", time.localtime(queued_at)) + f" ({label})")
+    run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing, units=1,
+              job_folder=str(job), output_path=str(out), queued_at=queued_at,
+              requested_by=_caller, job_type=job_type)
+    run.line(f"{label.upper()} — {drawing} · {client}. One reader, no estimate: nothing is "
+             f"priced and no workbook template is used.")
+    run.line(f"Staged    {staged['copied_count']} file(s) into {job}")
+    with _LOCK:
+        _RUNS[run.run_id] = run
+        _keep(run)
+    return {"run_id": run.run_id, "output_path": str(out), "job_type": job_type,
+            "label": label}
+
+
 class ExtractRequest(BaseModel):
-    """`kind` is which of the three buttons was pressed. The rest mirrors an estimate request
-    so the page can send what it already has, and nothing here is required except the files or
-    folder that identify the job."""
+    """`kind` is which of the three buttons was pressed. `run_folder`, or `run_id` for a run
+    this service queued, is the run the estimator CHOSE: an extract is taken from one named
+    run's saved record, never from whichever run happens to be newest (SCRUM-132). The rest
+    mirrors an estimate request so the page can send what it already has."""
     kind: str = "both"
+    run_folder: Optional[str] = None
+    run_id: Optional[str] = None
     job_folder: Optional[str] = None
     files: List[str] = []
     output_root: Optional[str] = None
@@ -3490,6 +5610,57 @@ def _extract_job_label(req: "ExtractRequest") -> str:
     return (req.drawing_number or "").strip() or "job"
 
 
+def _readable_run_folder(raw: str) -> Optional[Path]:
+    """A run folder this service may read: inside the share it files to, or an allowed root."""
+    t = os.path.normcase(os.path.normpath(str(raw)))
+    for root in [str(OUTPUT_ROOT)] + list(getattr(config, "FILE_ROOTS", []) or []):
+        r = os.path.normcase(os.path.normpath(str(root)))
+        if t == r or t.startswith(r + os.sep):
+            return Path(os.path.normpath(str(raw)))
+    return None
+
+
+def _run_records(folder: Path) -> List[Path]:
+    """The run records filed in one run folder: JSON the engine wrote about a job, not the
+    timing file or a copied answers file. The runner files flat, so they sit at the top."""
+    found = []
+    for p in sorted(folder.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:                                                # noqa: BLE001
+            continue
+        if isinstance(data, dict) and ("estimate_summary" in data
+                                       or "manufacturing_writeup" in data):
+            found.append(p)
+    return found
+
+
+@router.get("/extract/runs")
+def estimate_extract_runs(client: Optional[str] = None, drawing_number: Optional[str] = None,
+                          job: Optional[str] = None,
+                          x_sdi_key: Optional[str] = Header(default=None)):
+    """The saved runs of one drawing, for the estimator to choose from. Newest first, but the
+    choice is theirs: the extract never takes one of these on its own."""
+    _check_key(x_sdi_key)
+    drawing = safe_segment(drawing_number or job or "")
+    if not drawing:
+        raise HTTPException(400, "Give the drawing number to list its saved runs.")
+    root = Path(str(OUTPUT_ROOT))
+    bases = ([root / safe_segment(client) / drawing] if client
+             else sorted(p / drawing for p in root.glob("*") if (p / drawing).is_dir()))
+    runs = []
+    for base in bases:
+        if not base.is_dir():
+            continue
+        for folder in sorted((d for d in base.iterdir() if d.is_dir()), reverse=True):
+            records = _run_records(folder)
+            if records:
+                runs.append({"run_folder": str(folder), "name": folder.name,
+                             "client": base.parent.name,
+                             "records": [p.name for p in records]})
+    return {"drawing": drawing, "runs": runs[:40]}
+
+
 @router.post("/extract")
 def estimate_extract(req: ExtractRequest,
                      x_sdi_key: Optional[str] = Header(default=None)):
@@ -3497,66 +5668,125 @@ def estimate_extract(req: ExtractRequest,
     kind = str(req.kind or "both").strip().lower()
     if kind not in ("boms", "routes", "both"):
         raise HTTPException(400, f"kind must be boms, routes or both — not {req.kind!r}")
-    if not (req.files or req.job_folder):
-        raise HTTPException(400, "No drawings were given. Add the pack in the Drawings panel "
-                                 "first — the extract is taken from that job's saved record.")
 
-    label = _extract_job_label(req)
-    lines: List[str] = [f"Job read as {label}."]
+    # THE RUN THE ESTIMATOR CHOSE, AND ONLY THAT RUN (SCRUM-132). This read
+    # `config.OUTPUT_ROOT`, a name the service's configuration never defined, so every press
+    # was a server error; and it looked for `json/<label>.json` under the share, where the
+    # runner files nothing. Taking "the newest matching folder" instead would quietly extract
+    # from the wrong evidence the day a second run lands, so nothing is chosen for them.
+    raw = (req.run_folder or "").strip()
+    if not raw and req.run_id:
+        with _LOCK:
+            run = _RUNS.get(str(req.run_id))
+        if run is None:
+            raise HTTPException(404, f"Run {req.run_id} is not known to this service — it "
+                                     f"forgets runs when it restarts. Choose the run's "
+                                     f"folder instead.")
+        raw = run.output_path
+    if not raw:
+        raise HTTPException(400, "Choose the run to extract from. The extract is rebuilt from "
+                                 "one run's saved record; it reads no drawings and never "
+                                 "picks a run for you.")
+    folder = _readable_run_folder(raw)
+    if folder is None:
+        raise HTTPException(403, f"{raw} is outside the folders this service may read.")
+    if not folder.is_dir():
+        raise HTTPException(404, f"No run folder at {folder}.")
 
-    # THE RECORD OF THAT JOB'S LAST RUN. Searched under the roots this service is already
-    # allowed to read, so this cannot become a way to open any file on the box.
-    record: Optional[dict] = None
-    found_at = ""
-    candidates: List[Path] = []
-    for root in (config.OUTPUT_ROOT, getattr(config, "ENGINE_ROOT", None)):
-        if not root:
-            continue
-        base = Path(str(root))
-        for rel in (Path("json") / f"{label}.json", Path("output") / "json" / f"{label}.json",
-                    Path(f"{label}.json")):
-            candidates.append(base / rel)
-    for path in candidates:
-        try:
-            if path.is_file():
-                record = json.loads(path.read_text(encoding="utf-8"))
-                found_at = str(path)
-                break
-        except Exception as err:                                         # noqa: BLE001
-            lines.append(f"{path} could not be read: {type(err).__name__}: {err}")
-    if record is None:
-        # NAMED, NOT EMPTY SHEETS. Returning blank tables here would read as "this pack
-        # contains nothing", which is the one answer this feature must never give by accident.
+    records = _run_records(folder)
+    label = safe_segment(req.drawing_number or "") or _extract_job_label(req)
+    if len(records) > 1:
+        named = [p for p in records if p.stem.lower() == label.lower()]
+        if len(named) != 1:
+            raise HTTPException(409, f"{folder.name} holds {len(records)} run records ("
+                                     + ", ".join(p.name for p in records)
+                                     + ") and none is named for this drawing alone. Nothing "
+                                       "was guessed.")
+        records = named
+    if not records:
+        # NAMED, NOT EMPTY SHEETS. Blank tables would read as "this pack contains nothing",
+        # which is the one answer this feature must never give by accident.
         raise HTTPException(
-            404,
-            f"No saved record found for {label}, so there is nothing to extract yet. The BOMs "
-            f"and the routes are produced by a run: press SDI (UK) Intelligence Estimator "
-            f"once for this pack and the extracts are written with it — then this button "
-            f"rebuilds them instantly, as often as you like.")
-    lines.append(f"Read from {found_at}.")
-
-    out_dir = Path(str(req.output_root or config.OUTPUT_ROOT)) / "estimates"
+            404, f"{folder.name} holds no saved run record, so there is nothing to extract. "
+                 f"A run that stopped before its record was written has none.")
+    record_path = records[0]
     try:
-        sys.path.insert(0, str(Path(getattr(config, "ENGINE_ROOT", ".")) / "src"))
-        import bom_and_route_extract as _bre
-        result = _bre.write_both(record, out_dir, job=label, want=kind)
+        record = json.loads(record_path.read_text(encoding="utf-8"))
     except Exception as err:                                             # noqa: BLE001
-        raise HTTPException(500, f"The extract could not be built: "
+        raise HTTPException(422, f"{record_path.name} could not be read: "
                                  f"{type(err).__name__}: {err}")
+    job = str(record.get("job_output_stem") or record_path.stem)
+    built = record.get("build_stamp") or {}
+    lines: List[str] = [
+        f"Run {folder.name}, record {record_path.name}.",
+        f"Record written {record.get('processed_at') or 'at a time it does not state'}.",
+        ("Build " + str(built.get("line") or built.get("commit"))) if built
+        else "Build: not recorded in this record.",
+        "Reads no drawings and prices nothing: every figure is the saved run's."]
 
-    # WHAT THE RECORD CAN AND CANNOT SUPPORT, said here rather than left to be inferred from
-    # an empty sheet. A record that never reached the workbook stage has no route rows, and
-    # that is a fact about the record — not about the pack.
+    # THE RUN'S OWN FILES FIRST. Every run writes its BOMs and routes beside its record, with
+    # the full engine, at the time; the runner files them flat in the run folder under the names
+    # the record lists. Those are this run's evidence exactly, and serving them needs nothing on
+    # this server but the share.
+    own: Dict[str, Path] = {}
+    for k in ("xlsx", "html"):
+        listed = str(((record.get("saved_output_paths") or {}).get(f"boms_and_routes_{k}")) or "")
+        name = re.split(r"[\\/]", listed)[-1] if listed else ""
+        if name and (folder / name).is_file():
+            own[k] = folder / name
+    if len(own) == 2:
+        result: Dict[str, Any] = {"xlsx": str(own["xlsx"]), "html": str(own["html"]),
+                                  "boms": None, "routes": None}
+        lines.append("These are the files the run itself wrote, from this record.")
+        if kind != "both":
+            lines.append(f"The {'BOMs' if kind == 'boms' else 'routes'} are the "
+                         f"{'BOMs' if kind == 'boms' else 'Routes'} sheet of that workbook.")
+    else:
+        # REBUILT OUT OF PROCESS, in the engine's own Python, like the override and parity
+        # helpers. The extract reaches into engine modules that load the engine's `config`;
+        # inside this service that name is the service's own, so loading them here would either
+        # quietly degrade the file or bind the wrong settings. Derived files never go into the
+        # run folder: they are written beside it, under the same client and drawing.
+        root = Path(str(OUTPUT_ROOT))
+        try:
+            out_dir = root / "_extracts" / folder.relative_to(root)
+        except ValueError:
+            out_dir = folder.parent / f"{folder.name} extracts"
+        if not Path(_ENGINE_PYTHON).exists():
+            raise HTTPException(503, f"{folder.name} has no extract files of its own, and "
+                                     f"rebuilding them needs the engine's Python, which is not "
+                                     f"at {_ENGINE_PYTHON} on this machine. Set "
+                                     f"SDI_ENGINE_PYTHON, or rebuild on the estimating laptop.")
+        cmd = [_ENGINE_PYTHON, _EXTRACT_CLI, "--record", str(record_path), "--out", str(out_dir),
+               "--job", job, "--want", kind]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180,
+                                  cwd=str(_REPO_ROOT))
+        except subprocess.TimeoutExpired:
+            raise HTTPException(504, "The extract took longer than three minutes and was stopped.")
+        try:
+            result = json.loads((proc.stdout or "").strip().splitlines()[-1])
+        except Exception:                                                # noqa: BLE001
+            result = {}
+        if proc.returncode != 0 or result.get("error") or not (result.get("xlsx")
+                                                                or result.get("html")):
+            why = result.get("error") or (proc.stderr or proc.stdout or "").strip()[-400:]
+            raise HTTPException(500, f"The extract could not be built: {why}")
+        lines.append("Rebuilt from this record by the engine; the run wrote no extract files.")
+
+    # WHAT THE RECORD CAN AND CANNOT SUPPORT, said here rather than left to an empty sheet.
     if kind in ("routes", "both") and not result.get("routes"):
-        lines.append(
-            "This record carries NO route decisions. That is a "
-            "fact about the record, not about the pack"
-            " — a run whose workbook stage did not complete has none. See money_provenance "
-            "on the estimate, which says why.")
+        lines.append("This record carries NO route decisions. That is a "
+                     "fact about the record, not about the pack"
+                     " — a run whose workbook stage did not complete has none. See "
+                     "money_provenance on the record, which says why.")
     if kind in ("boms", "both") and not result.get("boms"):
         lines.append("This record carries NO BOM rows.")
-    lines.append("Prices nothing: no figure in either file is a cost.")
-    return {"ok": True, "kind": kind, "job": label, "record": found_at,
+    files = [f for f in (result.get("xlsx"), result.get("html")) if f]
+    return {"ok": True, "kind": kind, "job": job, "run_folder": str(folder),
+            "record": str(record_path), "processed_at": record.get("processed_at"),
             "xlsx": result.get("xlsx"), "html": result.get("html"),
-            "boms": result.get("boms"), "routes": result.get("routes"),
-            "lines": lines}
+            "downloads": [{"name": Path(f).name,
+                           "url": "/api/file?path=" + urllib.parse.quote(str(f))}
+                          for f in files],
+            "boms": result.get("boms"), "routes": result.get("routes"), "lines": lines}

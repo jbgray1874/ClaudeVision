@@ -71,26 +71,40 @@ def normalize_text(text: str) -> str:
 # the header nothing was struck: every assembly and bought-in line took "STEEL REV" as its
 # material (a material no rate exists for) and the finish carried the row's date. A row whose
 # number column says ALL or "-" is still a row; it supersedes nothing.
+#
+# AND A THIRD HOUSE STYLE: "REVISIONS / ZONE REV. CN REASON DATE APPROVED ON APPROVED BY"
+# (D-690). 12693-01's sheets print it, with rows such as "A // INITIAL DESIGN 30/09/2026
+# 27/10/2026 EXT": a change number of "//", and two dates before the initials. Neither the
+# header nor the row was recognised, so nothing was struck, and every field ran on into the
+# table: the insert's material read "MRMDF REVISIONS", its finish "/ ZONE REV. CN REASON",
+# and every steel part's finish "SEE WELDMENT ZONE REV. CN REASON".
+_ZONE_HEADER = (r"ZONE\s+REV\.?\s+CN\s+REASON(?:\s+DATE)?(?:\s+APPROVED\s+ON)?"
+                r"(?:\s+APPROVED\s+BY)?")
 _REVISION_TABLE_CONTEXT = re.compile(
-    r"REVISION\s+TABLE|REV\s+D[RW]G\s*NO|D[RW]G\s*NO\s+DESCRIPTION\s+DATE", re.IGNORECASE)
+    r"REVISION\s+TABLE|REV\s+D[RW]G\s*NO|D[RW]G\s*NO\s+DESCRIPTION\s+DATE|" + _ZONE_HEADER,
+    re.IGNORECASE)
 _REVISION_TABLE_HEADER = re.compile(
     r"REVISION\s+TABLE|REV\s+D[RW]G\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?"
-    r"|D[RW]G\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?", re.IGNORECASE)
+    r"|D[RW]G\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?|" + _ZONE_HEADER, re.IGNORECASE)
+# The table's own title on that style, struck only where its header is on the page.
+_ZONE_TABLE_TITLE = re.compile(r"\bREVISIONS\b", re.IGNORECASE)
+_ZONE_CONTEXT = re.compile(_ZONE_HEADER, re.IGNORECASE)
 # What a struck header or row leaves behind: a word every labelled-field reader stops at
 # (TITLE_BLOCK_STOP_LABELS), so a field the table was interleaved with ends where the table
 # began instead of running on into the description of a prior issue. Not a word any reader
 # takes as a value, a code or a revision letter.
 REVISION_TABLE_STOP = "ENDOFREVISIONTABLE"
-_NO_NUMBER = {"ALL", "-"}
+_NO_NUMBER = {"ALL", "-", "//"}
 
 
 def _revision_row_re() -> "re.Pattern":
     # rev letter · the drawing number of that issue (or ALL / -) · what changed · date · initials
     from config import PART_NUMBER_PATTERN as _PN
+    # A second date may follow the first (the "APPROVED ON" column) before the initials.
     return re.compile(
-        r"\b([A-Z]\d?)\s+(" + _PN + r"|ALL\b|-(?=\s))\s+"
+        r"\b([A-Z]\d?)\s+(" + _PN + r"|ALL\b|-(?=\s)|//(?=\s))\s+"
         r"((?:(?!\d{1,2}/\d{1,2}/\d{2,4}).){0,90}?)\s*"
-        r"(\d{1,2}/\d{1,2}/\d{2,4})\s+([A-Z]{1,3})\b")
+        r"(\d{1,2}/\d{1,2}/\d{2,4})(?:\s+\d{1,2}/\d{1,2}/\d{2,4})?\s+([A-Z]{1,3})\b")
 
 
 def parse_revision_table(text: str) -> Dict[str, Any]:
@@ -120,8 +134,12 @@ def strip_revision_table(text: str) -> str:
     t = normalize_text(text or "")
     if not _REVISION_TABLE_CONTEXT.search(t):
         return t
+    _zone = bool(_ZONE_CONTEXT.search(t))
     t = _revision_row_re().sub(f" {REVISION_TABLE_STOP} ", t)
-    return " ".join(_REVISION_TABLE_HEADER.sub(f" {REVISION_TABLE_STOP} ", t).split())
+    t = _REVISION_TABLE_HEADER.sub(f" {REVISION_TABLE_STOP} ", t)
+    if _zone:
+        t = _ZONE_TABLE_TITLE.sub(f" {REVISION_TABLE_STOP} ", t)
+    return " ".join(t.split())
 
 
 # ── THE SPECIFICATION LEGEND IS NOT WORK — ONE READER FOR EVERY DOOR ─────────────────────
@@ -143,6 +161,9 @@ _LEGEND_DEFAULT_STOPS = [
     r"FINISH\s*:", r"SCALE\b", r"MAX LOADING"]
 _LEGEND_DEFAULT_SENTENCES = [
     r"\bALL\s+WELDS?\b[^.;\n•]{0,60}?\bUNLESS\s+(?:OTHERWISE\s+)?(?:STATED|SPECIFIED|NOTED|SHOWN|INDICATED)\b",
+    # The same legend with its spaces lost, and its bare heading (D-757; see config).
+    r"ALLWELDS?[A-Z0-9]{0,40}?UNLESS(?:OTHERWISE)?(?:STATED|SPECIFIED|NOTED|SHOWN|INDICATED)",
+    r"WELD(?:ING)?\s*SPECIFICATIONS?",
     r"\bRESISTANCE\s+WELDING\s+WIRE\s+TO\s+WIRE\b[^•\n]{0,80}"]
 _LEGEND_RES: Dict[str, Any] = {}
 
@@ -159,6 +180,21 @@ def _legend_res():
         _LEGEND_RES["start"] = re.compile("|".join(heads), re.IGNORECASE)
         _LEGEND_RES["stop"] = re.compile("|".join(stops), re.IGNORECASE)
         _LEGEND_RES["sentences"] = [re.compile(x, re.IGNORECASE) for x in sents]
+        # EVERY LEGEND SENTENCE, ALSO WITH ITS SPACES LOST (D-760). 0358141's PDF text strips
+        # the border's spaces, and each legend line then slipped past its spaced pattern one at
+        # a time: "ALLWELDSTOBEMIGUNLESSSTATED" (D-757), then "RESISTANCEWELDINGWIRETOWIRE
+        # THESETDOWNSHOULD..." on every detail sheet, which put a weld on all seven members.
+        # The joined form of each configured sentence is derived here, so a line added to the
+        # legend later is covered without a second pattern.
+        _joined = []
+        for x in sents:
+            j = re.sub(r"\\s[+*]", "", x).replace("\\b", "")
+            if j != x:
+                try:
+                    _joined.append(re.compile(j, re.IGNORECASE))
+                except re.error:
+                    pass
+        _LEGEND_RES["sentences"] += _joined
     return _LEGEND_RES
 
 
@@ -1377,7 +1413,11 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
     # the text every field below reads — a prior issue's number is not a part, and a
     # revision row's words are not a finish, a colour or a description.
     revision_table = parse_revision_table(text or "")
-    raw_text = strip_revision_table(text or "") if revision_table["rows"] else (text or "")
+    # A HEADER WITH NO ROW READ IS STILL A TABLE (D-690): its words are struck all the same,
+    # so a field cannot run on into it while its rows are in a style not yet read.
+    raw_text = (strip_revision_table(text or "")
+                if revision_table["rows"] or _REVISION_TABLE_HEADER.search(text or "")
+                else (text or ""))
     normalized_text = normalize_text(raw_text)
     part_number_values = _extract_part_number_candidates(normalized_text)
     # Material is read PRIMARY from the labelled "MATERIAL:" field (authoritative, the
@@ -2061,8 +2101,8 @@ _OPERATION_CUE_WORDS: Dict[str, tuple] = {
     "welding": ("WELD", "TIG", "MIG"),
     "dress_welds": ("DRESS",),
     "wet_spray": ("WET SPRAY", "SPRAY PAINT", "LACQUER", "PAINT"),
-    "tapping": ("TAPPED", "TAP ", "M TAP"),
-    "countersinking": ("COUNTERSINK", "CSK", "C'SINK"),
+    "tapping": ("TAPPED", "TAP ", "M TAP", "X0.5", "X 0.5", "X0.7", "X 0.7", "X0.8", "X 0.8", "X1.0", "X 1.0", "X1.25", "X 1.25", "X1.5", "X 1.5", "X1.75", "X 1.75", "X2.0", "X 2.0"),
+    "countersinking": ("COUNTERSINK", "CSK", "C'SINK", "X 90", "X90", "X 82", "X82", "X 100", "X100", "X 120", "X120"),
     "deburring": ("DEBURR", "SHARP CORNER", "SHARP EDGE", "REMOVE ANY SHARP"),
     "diamond_polish": ("DIAMOND POLISH", "MATT POLISH", "MIRROR POLISH", "FLAME POLISH",
                        "EDGE POLISH", "POLISH"),
@@ -2145,9 +2185,12 @@ def build_textual_manufacturing_summary(
     process_notes = extract_process_notes(notes_source)
     page_material = " ".join(title_block.get("materials", []))
     finishes = list(title_block.get("surface_finishes") or [])
+    # AN ANGLE IS NOT A FOLD, AT PAGE LEVEL AS AT PART LEVEL (D-511, closed off by D-762).
+    # The text rule stopped taking a bare angle for a fold; this flag still did, and 0358141's
+    # flat 3 mm rub strips, whose only angle is the countersink's "6.3 X 90.00°", were routed
+    # through folding on a one-fold allowance. A fold needs fold values or a counted fold.
     has_fold_geometry = bool(
         feature_cues.get("fold_values_mm")
-        or feature_cues.get("angles_deg")
         or feature_cues.get("fold_count_textual")
     )
     # THE STANDING SPECIFICATION IS NOT A ROUTE CUE, AT PAGE LEVEL AS AT PART LEVEL (D-438).

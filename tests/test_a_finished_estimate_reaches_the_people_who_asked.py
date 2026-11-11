@@ -79,18 +79,15 @@ def _quote_file(tmp_path, released, name="12349_quote.html"):
     return str(p)
 
 
-def test_the_customer_quote_is_withheld_while_the_estimate_is_provisional(tmp_path):
-    """It is the one deliverable written to be read by a customer, and on a provisional
-    estimate it looks exactly like a quotation for a figure nobody has stood behind."""
+def test_the_customer_quote_goes_with_a_provisional_estimate(tmp_path):
+    """D-646. JG, 3 Nov 2026: "the QUOTES must be prepared. estimating still control this
+    process" — the quote is attached every time; the estimators decide what goes on."""
     quote = _quote_file(tmp_path, released=True)
     files = [{"path": "out/12349_20260902.xlsx"}, {"path": "out/12349_report.html"},
              {"path": "out/12349_explained.md"}, {"path": quote}]
     keep, held = estimate_email.choose_attachments(files, provisional=True,
                                                    include_quote=False)
-    assert quote not in keep
-    assert len(keep) == 3
-    assert held[0]["why"].startswith("the customer quote is not sent")
-
+    assert quote in keep and len(keep) == 4 and held == []
 
 def test_the_quote_goes_when_it_is_asked_for(tmp_path):
     quote = _quote_file(tmp_path, released=True)
@@ -99,16 +96,12 @@ def test_the_quote_goes_when_it_is_asked_for(tmp_path):
     assert keep == [quote] and not held
 
 
-def test_an_unreleased_quote_is_held_however_it_was_asked_for(tmp_path):
-    """RELEASE IS NOT A PREFERENCE. `include_quote` says what somebody wants sent; whether
-    this document may go to a customer was decided on the estimate, by a person who completed
-    the commercial inputs and authorised it, and a tick-box is neither of those."""
+def test_the_portal_quote_is_attached_too(tmp_path):
+    """D-646: the portal working copy is the quote the estimators work from; it goes."""
     quote = _quote_file(tmp_path, released=False, name="12349_quote_PORTAL.html")
     keep, held = estimate_email.choose_attachments([{"path": quote}], provisional=False,
-                                                   include_quote=True)
-    assert keep == []
-    assert "commercial inputs" in held[0]["why"]
-
+                                                   include_quote=False)
+    assert keep == [quote] and held == []
 
 def test_a_file_this_service_cannot_reach_is_named_rather_than_lost(tmp_path):
     """The runner exists BECAUSE this service may not see the estimating share. A send that
@@ -133,6 +126,18 @@ def test_a_file_too_large_to_attach_is_named_too(tmp_path, monkeypatch):
 
 
 # ── when it sends, and when it does not ──────────────────────────────────────
+
+def test_the_walkthrough_is_attached_as_audio_so_a_phone_offers_to_play_it(tmp_path):
+    wav = tmp_path / "12677_walkthrough.wav"
+    wav.write_bytes(b"RIFF0000WAVEfmt ")
+    words = tmp_path / "12677_walkthrough.txt"
+    words.write_text("The unit cost is four hundred pounds.", encoding="utf-8")
+    files, skipped = estimate_email.readable_attachments([str(wav), str(words)])
+    assert not skipped
+    kinds = {f["name"]: (f["maintype"], f["subtype"]) for f in files}
+    assert kinds["12677_walkthrough.wav"] == ("audio", "wav")
+    assert kinds["12677_walkthrough.txt"] == ("text", "plain")
+
 
 def test_an_empty_box_sends_to_nobody():
     """So an engine test does not land in an estimator's inbox at two in the morning."""
@@ -181,10 +186,10 @@ def test_the_subject_says_SDI_Intelligence_and_never_AI():
     note = estimate_email.compose(
         {"drawing_number": "12349-02", "client": "fanatics", "units": 7,
          "engine_price_gbp": 320.91}, [], provisional=True)
-    assert note["subject"].startswith("SDI Intelligence estimate, PROVISIONAL.")
+    assert note["subject"].startswith("SDI Intelligence estimate.")
+    assert "PROVISIONAL" not in note["subject"], "D-646: no disclaimers"
     assert "£320.91/unit at 7 off" in note["subject"]
     assert "AI" not in note["subject"]
-
 
 def test_the_note_points_at_the_explanation_rather_than_repeating_it():
     """This service has never read an estimate. Restating the detail here would be a second
@@ -194,8 +199,8 @@ def test_the_note_points_at_the_explanation_rather_than_repeating_it():
         [{"path": "out/a.xlsx", "what": "the estimate"}], provisional=True)
     assert "AI Explanation" in note["html"] and "section 14" in note["html"]
     assert "a.xlsx" in note["html"] and "a.xlsx" in note["text"]
-    assert "working pack, not a quote" in note["html"]
-
+    assert "working pack, not a quote" not in note["html"], "D-646: no disclaimers"
+    assert "The quote is attached." in note["html"]
 
 def test_a_client_name_with_an_ampersand_cannot_break_the_page():
     note = estimate_email.compose(
@@ -299,32 +304,18 @@ def test_an_explicit_choice_of_files_sends_a_released_quote(tmp_path):
     assert sent["paths"] == [quote]
 
 
-def test_an_explicit_choice_cannot_release_an_unreleased_quote(tmp_path):
-    """THE HOLE THE AUDIT WAS FOR.
-
-    This route read "An explicit choice is a decision, quote included" and sent the list
-    untouched, so a tick-box put an unreleased quotation in front of a customer past the only
-    gate there was — and that gate is a keyword scan of the run's console which returns True
-    unconditionally, so there was nothing behind it.
-
-    A choice is about WHICH files. Whether the quotation may leave the building is recorded on
-    the estimate by the person who authorised it.
-    """
+def test_an_explicit_choice_is_sent_as_chosen_quote_included(tmp_path):
+    """D-646: which of a run's files go, the quotation included, is the estimator's choice."""
     quote = _quote_file(tmp_path, released=False, name="12349_quote_PORTAL.html")
     book = str(tmp_path / "12349.xlsx")
     Path(book).write_text("x", encoding="utf-8")
     sent = _send_choosing([quote, book], [quote, book])
-    assert sent["paths"] == [book], "an unreleased quotation was sent on a tick-box"
+    assert sent["paths"] == [quote, book]
 
-
-def test_a_selection_of_nothing_sendable_says_so_rather_than_mailing_nothing(tmp_path):
-    """Silently sending an empty mail is how somebody believes a quote went out."""
+def test_a_quote_chosen_on_its_own_is_sent(tmp_path):
     quote = _quote_file(tmp_path, released=False, name="12349_quote_PORTAL.html")
-    with pytest.raises(HTTPException) as caught:
-        _send_choosing([quote], [quote])
-    assert caught.value.status_code == 409
-    assert "commercial inputs" in str(caught.value.detail)
-
+    sent = _send_choosing([quote], [quote])
+    assert sent["paths"] == [quote]
 
 def test_with_no_choice_it_follows_the_same_rule_as_the_automatic_send():
     _finished_run()
@@ -340,8 +331,8 @@ def test_with_no_choice_it_follows_the_same_rule_as_the_automatic_send():
         estimate_routes.email_run("r1", estimate_routes.SendRequest(recipients="a@b.co"), None)
     finally:
         estimate_email.send = original
-    assert "out/12349_quote.html" not in sent["paths"], "the quote stays opt-in"
-    assert len(sent["paths"]) == 2
+    assert "out/12349_quote.html" in sent["paths"], "D-646: the quote goes every time"
+    assert len(sent["paths"]) == 3
 
 
 def test_a_failed_send_is_reported_to_the_page_not_swallowed():

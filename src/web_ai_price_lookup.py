@@ -292,6 +292,21 @@ def _offline() -> bool:
 # the concept read is a different client and is not touched.
 _XAI_CAPACITY_SEEN = 0
 _XAI_CAPACITY_TRIPPED = False
+_XAI_NO_EFFORT: set = set()          # models that refused reasoning_effort this run (D-612)
+
+
+def _xai_text_model(web_cfg: Optional[Dict[str, Any]] = None) -> str:
+    """THE model a text call asks, and so the one its stored answer is filed under (D-612).
+    The price store was keyed on XAI_MODEL with a grok-4.3 default while the call used
+    config's xai_model, so a change of model kept serving the old model's prices."""
+    if web_cfg is None:
+        try:
+            import config as _config
+            web_cfg = (getattr(_config, "PRICE_SOURCE_CONFIG", None) or {}).get("web", {}) or {}
+        except Exception:                                                # noqa: BLE001
+            web_cfg = {}
+    import xai_models as _xm
+    return str((web_cfg or {}).get("xai_model") or _xm.text_model()).strip()
 
 
 def _call_xai_llm(
@@ -329,78 +344,94 @@ def _call_xai_llm(
     if not api_key:
         logger.warning("XAI_API_KEY not set — xAI LLM fallback unavailable")
         return None
-    model = str(_web_cfg.get("xai_model") or "grok-4.3").strip()
+    model = _xai_text_model(_web_cfg)
     effort = (reasoning_effort if reasoning_effort is not None
               else str(_web_cfg.get("xai_reasoning_effort") or "low")).strip().lower()
     req_body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        # grok-4.3 is a reasoning model: it counts reasoning tokens against the
-        # completion budget and uses max_completion_tokens (not max_tokens). Give
-        # headroom so reasoning doesn't consume the budget before the JSON answer.
+        # Grok's reasoning models count reasoning tokens against the completion budget and
+        # use max_completion_tokens (not max_tokens). Give headroom so reasoning doesn't
+        # consume the budget before the JSON answer.
         "max_completion_tokens": int(max_completion_tokens) if max_completion_tokens else 4000,
         "temperature": float(temperature) if temperature is not None else 0.1,
     }
     if seed is not None:
         req_body["seed"] = int(seed)
-    if effort in ("none", "low", "medium", "high"):
+    if effort in ("none", "low", "medium", "high") and model not in _XAI_NO_EFFORT:
         req_body["reasoning_effort"] = effort
-    payload = json.dumps(req_body).encode("utf-8")
 
-    req = urllib.request.Request(
-        "https://api.x.ai/v1/chat/completions",
-        data=payload,
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read().decode("utf-8")
-        body = json.loads(raw)
-        choices = body.get("choices") or []
-        if not choices:
-            logger.warning("xAI returned no choices (model=%s): %s", model, raw[:300])
-            return None
-        text = ((choices[0].get("message") or {}).get("content") or "").strip()
-        if not text:
-            fr = choices[0].get("finish_reason")
-            logger.warning(
-                "xAI returned empty content (model=%s, finish_reason=%s) — reasoning "
-                "likely consumed the token budget; raise max_completion_tokens or "
-                "lower xai_reasoning_effort.", model, fr,
-            )
-            return None
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
+    for _attempt in (1, 2):
+        payload = json.dumps(req_body).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.x.ai/v1/chat/completions",
+            data=payload,
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+            method="POST",
+        )
         try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            logger.warning("xAI reply was not valid JSON (model=%s): %s", model, text[:300])
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read().decode("utf-8")
+            body = json.loads(raw)
+            choices = body.get("choices") or []
+            if not choices:
+                logger.warning("xAI returned no choices (model=%s): %s", model, raw[:300])
+                return None
+            text = ((choices[0].get("message") or {}).get("content") or "").strip()
+            if not text:
+                fr = choices[0].get("finish_reason")
+                logger.warning(
+                    "xAI returned empty content (model=%s, finish_reason=%s) — reasoning "
+                    "likely consumed the token budget; raise max_completion_tokens or "
+                    "lower xai_reasoning_effort.", model, fr,
+                )
+                return None
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                logger.warning("xAI reply was not valid JSON (model=%s): %s", model, text[:300])
+                return None
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8", "replace")[:500]
+            except Exception:
+                pass
+            # A MODEL THAT TAKES NO REASONING SETTING (D-612). Not every Grok model accepts
+            # reasoning_effort; one that refuses it would otherwise refuse every call. Asked
+            # once more without it, and not sent again to that model for the rest of the run.
+            if (exc.code == 400 and "reasoning_effort" in req_body
+                    and "reasoning" in detail.lower()):
+                _XAI_NO_EFFORT.add(model)
+                req_body.pop("reasoning_effort", None)
+                print(f"   [xai] {model} does not take a reasoning setting; asking without it "
+                      f"for the rest of this run.", flush=True)
+                continue
+            logger.warning("xAI HTTP %s for model=%s — %s", exc.code, model, detail or exc.reason)
+            try:
+                import xai_models as _xm
+                _xm.note_refusal(model, exc.code, detail or str(exc.reason))
+            except Exception:                                            # noqa: BLE001
+                pass
+            if exc.code == 429 and ("resource-exhausted" in detail
+                                    or "capacity" in detail.lower()):
+                _XAI_CAPACITY_SEEN += 1
+                if _XAI_CAPACITY_SEEN >= 2 and not _XAI_CAPACITY_TRIPPED:
+                    _XAI_CAPACITY_TRIPPED = True
+                    print("   [pricing] xAI refused on CAPACITY (HTTP 429, resource-exhausted) "
+                          "twice — model price lookups are off for the rest of this run. Lines "
+                          "that needed one are left for the estimator, not priced at nothing.",
+                          flush=True)
             return None
-    except urllib.error.HTTPError as exc:
-        detail = ""
-        try:
-            detail = exc.read().decode("utf-8", "replace")[:500]
-        except Exception:
-            pass
-        logger.warning("xAI HTTP %s for model=%s — %s", exc.code, model, detail or exc.reason)
-        if exc.code == 429 and ("resource-exhausted" in detail
-                                or "capacity" in detail.lower()):
-            _XAI_CAPACITY_SEEN += 1
-            if _XAI_CAPACITY_SEEN >= 2 and not _XAI_CAPACITY_TRIPPED:
-                _XAI_CAPACITY_TRIPPED = True
-                print("   [pricing] xAI refused on CAPACITY (HTTP 429, resource-exhausted) "
-                      "twice — model price lookups are off for the rest of this run. Lines "
-                      "that needed one are left for the estimator, not priced at nothing.",
-                      flush=True)
-        return None
-    except urllib.error.URLError as exc:
-        logger.warning("xAI could not reach api.x.ai: %s", getattr(exc, "reason", exc))
-        return None
-    except Exception as exc:
-        logger.warning("xAI price lookup failed (unexpected): %r", exc)
-        return None
+        except urllib.error.URLError as exc:
+            logger.warning("xAI could not reach api.x.ai: %s", getattr(exc, "reason", exc))
+            return None
+        except Exception as exc:
+            logger.warning("xAI price lookup failed (unexpected): %r", exc)
+            return None
+    return None
 
 
 def _llm_market_estimate(spec: Dict[str, Any], provider: str = "auto",
@@ -418,7 +449,7 @@ def _llm_market_estimate(spec: Dict[str, Any], provider: str = "auto",
     """
     import generated_price_cache as _gpc
 
-    _model = os.environ.get("XAI_MODEL", "grok-4.3") if provider != "anthropic" else "anthropic"
+    _model = _xai_text_model() if provider != "anthropic" else "anthropic"
     _t0 = time.time()
     _res = _gpc.cached_estimate(
         spec, provider, _model,
@@ -915,6 +946,37 @@ def market_sheet_rate_indication(material: Any, thickness_mm: Any,
     if per_sheet <= 0:
         return None
     area_m2 = (sheet_l * sheet_w) / 1_000_000.0
+    # THE BUYING UNIT TRAVELS WITH THE FIGURE (SCRUM-182). 12678-01-GA: an answer of
+    # £7.50 about a blank-sized piece was stamped gbp_per_sheet here, the workbook wrote
+    # it into the Cost per sheet column, and the template divided a per-PIECE price by
+    # 24 parts a sheet — six laminated shelves for £1.95. The same discipline
+    # cut_piece_pricing.unit_of_sale applies to length-bought stock applies to sheet
+    # goods: the answer's own unit and its own words say what was priced, and a figure
+    # that is not a sheet never becomes one. A per-m2 answer is converted, because the
+    # sheet it is for is stated; a per-kg or per-metre answer, or one whose words name a
+    # piece, a blank or a cut-to-size panel, is refused, and the line goes out unpriced
+    # and asked rather than divided by the nest.
+    _unit = " ".join(str(result.get("unit") or "").upper().replace("_", " ").split())
+    _said = " ".join(" ".join(str(result.get(k) or "") for k in
+                              ("item_priced", "price_basis")).upper().split())
+    _piece_words = ("PER PIECE", "PER PART", "PER BLANK", "PER PANEL", "PER ITEM",
+                    "CUT TO SIZE", "CUT PIECE", "CUT-TO-SIZE", "OFFCUT", "ONE PIECE",
+                    "A PIECE", "EACH PIECE", "SINGLE PIECE")
+    _not_a_sheet = ""
+    if _unit in ("PER KG", "KG", "PER KILO", "PER KILOGRAM"):
+        _not_a_sheet = f"the answer's own unit is '{_unit}'"
+    elif _unit in ("PER METRE", "PER M", "M", "MTR", "LM", "PER LINEAR METRE"):
+        _not_a_sheet = f"the answer's own unit is '{_unit}'"
+    elif any(w in _said for w in _piece_words) or ("BLANK" in _said
+                                                   and "SHEET" not in _said):
+        _not_a_sheet = f"the answer's own words price a piece ('{_said[:70]}')"
+    if _not_a_sheet:
+        print(f"   [sheet-rate] {name} {thickness:g}mm: £{per_sheet:,.2f} REFUSED as a "
+              f"sheet price — {_not_a_sheet}; a per-piece figure must never be divided "
+              f"by the nest (SCRUM-182)", flush=True)
+        return None
+    if _unit in ("PER M2", "M2", "SQM", "PER SQM", "PER SQ M", "PER SQUARE METRE") and area_m2:
+        per_sheet = per_sheet * area_m2      # the answer priced the square metre, as asked-for sheet
     return {
         "gbp_per_sheet": round(per_sheet, 2),
         "gbp_per_m2": round(per_sheet / area_m2, 2) if area_m2 else None,
@@ -922,6 +984,8 @@ def market_sheet_rate_indication(material: Any, thickness_mm: Any,
         "thickness_mm": thickness,
         "confidence": result.get("confidence"),
         "source": result.get("source_type") or "web_ai_fallback",
+        "unit_said": _unit or "each",
+        "item_priced": str(result.get("item_priced") or ""),
     }
 
 

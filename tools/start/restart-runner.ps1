@@ -45,6 +45,9 @@
 param(
     [string] $Root     = "",
     [string] $TaskName = "SDI Estimating Runner",
+    # WHICH RUNNER ON THIS DESKTOP (D-731). Slot 1 is the machine's own runner; slot N is the
+    # runner install-runner-slot.ps1 made, whose id ends "-sN". Pass -Root and -TaskName too.
+    [int]    $Slot = 1,
     # Pull first. Off by default because this script's job is to restart, and a
     # pull that fails - a dirty tree, a conflict - must not read as a failed
     # restart. With -Pull it is done FIRST and a failure stops everything, so a
@@ -387,7 +390,22 @@ if ($git) {
 if (-not $Service) {
     if ($env:SDI_SERVICE_URL) { $Service = $env:SDI_SERVICE_URL }
     elseif ($env:SDI_PORT)    { $Service = "http://localhost:$($env:SDI_PORT)" }
-    else                      { $Service = "http://localhost:8071" }
+    else {
+        # THE FIRST SERVICE THAT ANSWERS, NOT 8071 BY ASSUMPTION (D-607a). With the stray 8071
+        # stopped on 31 Oct this asked a port with nothing on it for 90 seconds and failed,
+        # while the runner served 8072. Any HTTP reply is an answer, a 401 included.
+        $Service = "http://localhost:8071"
+        foreach ($candidate in @("http://localhost:8071", "http://localhost:8072")) {
+            $answered = $false
+            try {
+                Invoke-WebRequest "$candidate/api/health" -UseBasicParsing -TimeoutSec 4 | Out-Null
+                $answered = $true
+            } catch {
+                if ($_.Exception.Response) { $answered = $true }
+            }
+            if ($answered) { $Service = $candidate; break }
+        }
+    }
 }
 $Service = ($Service -split ",")[0].TrimEnd("/")
 $headSha = if ($git) { "$sha".Trim() } else { "" }
@@ -401,14 +419,15 @@ Write-Host "  asking $Service which runner it sees..."
 while ($asked -lt 90) {
     try {
         $resp = Invoke-RestMethod -Uri "$Service/api/estimate/runners" -Headers $hdr -TimeoutSec 10
-        $mine = @($resp.runners | Where-Object { $_.online -and "$($_.hostname)" -ieq $me }) | Select-Object -First 1
+        $mine = @($resp.runners | Where-Object { $_.online -and "$($_.hostname)" -ieq $me -and $(
+                    if ($Slot -gt 1) { "$($_.runner_id)" -like "*-s$Slot" }
+                    else { "$($_.runner_id)" -notmatch "-s\d+$" }) }) | Select-Object -First 1
         # WAIT FOR THE WHOLE PASS, NOT THE FIRST SIGN OF LIFE. The service keeps counting a
         # process for its conflict window (20 s) after the last time it asked for work, so the
         # runner this script just ended is still "live" for a few seconds. On 24 Sep 2026 the
         # check read process_count 2 / conflict true at 15:20 against one healthy runner.
         if ($mine -and $headSha -and "$($mine.build)".StartsWith($headSha) `
-                -and $mine.process_count -eq 1 -and -not $mine.conflict `
-                -and [int]$resp.online -eq 1) { break }
+                -and $mine.process_count -eq 1 -and -not $mine.conflict) { break }
     } catch {
         $resp = $null
     }
@@ -421,9 +440,11 @@ if (-not $resp) {
     exit 10
 }
 $fails = @()
+# AN UNKNOWN HEAD IS NOT A PASS (D-607a): the build check below compares with it, and with
+# nothing to compare the runner's build would go unchecked.
+if (-not $headSha)                                { $fails += "this checkout's HEAD is unknown, so the runner's build cannot be checked" }
 if (-not $mine)                                   { $fails += "the service sees no online runner from $me" }
 else {
-    if ([int]$resp.online -ne 1)                  { $fails += "online is $($resp.online), not 1" }
     if ($mine.process_count -ne 1)                { $fails += "process_count is $(if ($null -eq $mine.process_count) { 'unknown' } else { $mine.process_count }), not 1" }
     if ($mine.conflict)                           { $fails += "conflict is true - two processes are claiming work" }
     if ($headSha -and -not "$($mine.build)".StartsWith($headSha)) { $fails += "build is '$($mine.build)', HEAD is $headSha" }
@@ -435,7 +456,14 @@ if ($fails.Count -gt 0) {
     foreach ($f in $fails) { Write-Host "    - $f" -ForegroundColor Red }
     exit 9
 }
-Write-Host "  PASS - $Service sees one runner on $me, one process, no conflict, build $($mine.build)" -ForegroundColor Green
+Write-Host "  PASS - $Service sees runner $($mine.runner_id) on $me, one process, no conflict, build $($mine.build)" -ForegroundColor Green
+# EVERY OTHER RUNNER ON THIS DESKTOP, said (D-731): a slot left on another build would price
+# a job on old code while this one passes.
+$others = @($resp.runners | Where-Object { $_.online -and "$($_.hostname)" -ieq $me -and "$($_.runner_id)" -ne "$($mine.runner_id)" })
+foreach ($o in $others) {
+    $onHead = $headSha -and "$($o.build)".StartsWith($headSha)
+    Write-Host ("  also on {0}: {1}, build {2}{3}" -f $me, $o.runner_id, $o.build, $(if ($onHead) { "" } else { "  <- NOT on HEAD: run install-runner-slot.ps1 for it" })) -ForegroundColor $(if ($onHead) { "Green" } else { "Yellow" })
+}
 Write-Host ""
 Write-Host "  Check the next job's first lines say that same commit, with no '+local" -ForegroundColor Cyan
 Write-Host "  edits', before you read a single number." -ForegroundColor Cyan

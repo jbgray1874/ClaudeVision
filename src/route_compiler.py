@@ -435,8 +435,14 @@ def at_least_once_per_instance(stated: Any, target_id: Any, quantities: Mapping[
     answered per frame — and the compiler took that as the event's count, so the weld was
     charged once beside a dressing charged twice. A stated count below the target's canonical
     multiplicity is raised to it; a count at or above it stands (the model may already have
-    counted every instance). Returns (count, raised)."""
-    if str(scope or "") != "assembly" or stated is None:
+    counted every instance). Returns (count, raised).
+
+    A PART'S OWN OPERATION IS ONCE PER INSTANCE OF THE PART TOO (D-655). 12684-02-M01, the arm
+    bracket inside each of 33 hook assemblies: Grok stated folding at 1 ("Printed qty of M01 is
+    1 on the hook assembly BOM ... that multiplier is not applied here"), its laser and deburr
+    were charged at 33, and the Fold row bent one bracket. The same floor applies at part
+    scope: the tree's multiplied count is the least number of times a part is made."""
+    if str(scope or "") not in ("assembly", "part") or stated is None:
         return stated, False
     try:
         _stated = float(stated)
@@ -1714,6 +1720,49 @@ def build_part_graph(
             aliases[_k] = _target
         print(f"   [graph] {_v} is {_target} with its version mark — one drawing, "
               f"one node", flush=True)
+    # "NNN SA" IS NNN, WHICHEVER READER SPELLED IT (D-736). D-734 made the model's
+    # "12002-02-101 SA" the drawing's record 12002-02-101, but only in the model's stamp: the
+    # vision read names the same sub-assembly "12002-02-101 SA" (STAND BASE) with its own
+    # members, and the parts list on its sheet groups its rows under that name. The graph held
+    # both, each under the GA and each owning M01 and M02, so the 12:47 book costed every
+    # member twice (M01-M04 at 2, M05 at 4) and booked a second assembly event on each. A
+    # code that is a job record's drawing number plus a sub-assembly word is that record —
+    # joined only where the record exists, so it never invents an identity.
+    try:
+        from source_connectors.solidworks import model_assembly_stem as _sa_stem
+    except Exception:                                                # noqa: BLE001
+        _sa_stem = None
+    if _sa_stem is not None:
+        _sa_pool: Set[str] = (set(raw_original) | set(extracted) | _hierarchy_codes
+                              | _bom_listed)
+        for _p in (parts or ()):
+            if not isinstance(_p, Mapping):
+                continue
+            _sa_pool.update(clean_part_number(_p.get(_k)) for _k in (
+                "bom_parent", "owning_assembly", "parent_assembly") if _p.get(_k))
+            _sa_pool.update(clean_part_number(_e.get("parent")) for _e in (
+                _p.get("bom_parents") or []) if isinstance(_e, Mapping) and _e.get("parent"))
+            _sa_pool.update(clean_part_number(_c) for _c in (
+                list(_p.get("assembly_children") or [])) if str(_c or "").strip())
+        for _r in (bom_rows or ()):
+            if isinstance(_r, Mapping):
+                _sa_pool.update(clean_part_number(_r.get(_k)) for _k in (
+                    "bom_parent", "parent", "parent_code") if _r.get(_k))
+        _sa_pool.update(clean_part_number(_d) for _d in (known_assemblies or ()) if _d)
+        _sa_pool.update(clean_part_number(_d) for _d in (page_owner or {}).values() if _d)
+        _sa_pool.discard("")
+        for _ident in sorted(_sa_pool):
+            _canon = aliases.get(_ident, _ident)
+            _stem = clean_part_number(_sa_stem(_canon) or "")
+            if not _stem:
+                continue
+            _target = aliases.get(_stem, _stem)
+            if _target == _canon or _target not in raw_original:
+                continue
+            for _k in [k for k, t in aliases.items() if t == _canon] + [_canon]:
+                aliases[_k] = _target
+            print(f"   [graph] {_canon} is {_target} with a sub-assembly word — one "
+                  f"drawing, one node", flush=True)
     # A VAGUE CODE IS THE RECORD THE SHARED RULE MADE OF IT. The drawing prints "FIXING" for
     # an uncoded stud; file_scan mints the record from the row's words through
     # part_identity.synthesise_bought_in_code ("M4x12mm THREADED PEM STUD" -> BI-PEMSTUD),
@@ -2710,6 +2759,51 @@ def build_part_graph(
             _rooted = [c for c in _candidates if c in top_ids]
             if len(_rooted) == 1:
                 _candidates = _rooted
+        # A SHEET NAMED BY NUMBER AND TITLE THAT GROUPS ANOTHER ROOT'S PARTS IS NOT THE PRODUCT
+        # (JG, 10 Nov 2026, 6364-01). The run was asked for "6364-01". The model's "6364-01 Base
+        # Asm" names it by the number-and-title rule (D-398); the GA, 6364-01-000, does not, so
+        # the base was costed as the product and the GA, with the bin, legs, rails, panel,
+        # castors and every fixing, was set aside as "detail": £195 for a voting unit. The base
+        # assembly's only part is on the GA's own list. So where the one candidate was matched by
+        # its title (not by its number alone), and another root numbered under the declared
+        # number already reaches every part that candidate holds, the candidate is a grouping of
+        # that root's parts, and that root is the product. Said on the record; nothing guessed:
+        # the containing root must reach ALL of the candidate's parts.
+        _grouped_by = ""
+        if len(_candidates) == 1:
+            from product_identity import is_under_the_numbering, _key as _pi_key2
+            _c0 = _candidates[0]
+            if _pi_key2(_c0) != _pi_key2(_declared):
+                def _below(n: str) -> Set[str]:
+                    out: Set[str] = set()
+                    stack = list((children.get(n) or {}).keys())
+                    while stack:
+                        x = stack.pop()
+                        if x not in out:
+                            out.add(x)
+                            stack.extend((children.get(x) or {}).keys())
+                    return out
+                _held = _below(_c0)
+                if _held:
+                    _holders = [t for t in top_ids if t and t != _c0
+                                and is_under_the_numbering(_declared, t)
+                                and _held <= _below(t)]
+                    if len(_holders) == 1:
+                        _grouped_by = _holders[0]
+                        _product_issues.append({
+                            "code": "product_is_the_root_that_holds_its_parts",
+                            "declared": _declared,
+                            "product": _grouped_by,
+                            "set_aside_as_product": _c0,
+                            "detail": (f"{_c0!r} names {_declared!r} by its title, but every part "
+                                       f"it holds ({', '.join(sorted(_held)[:6])}) is also on "
+                                       f"{_grouped_by}, the drawing numbered under "
+                                       f"{_declared!r}. {_c0} is a grouping of {_grouped_by}'s "
+                                       f"parts, so {_grouped_by} is the product."),
+                        })
+                        print(f"   [graph] {_c0!r} groups parts of {_grouped_by}; the product is "
+                              f"{_grouped_by} (declared {_declared!r})", flush=True)
+                        _candidates = [_grouped_by]
         # THE JOB NUMBER ON ITS OWN NAMES THE JOB'S TOP ASSEMBLY. 12173 Card Spinner, 29 Sep
         # 2026: "it is 02 but we need to be able to run against the top level 12173", and "it
         # needs to accept a job number without needing a version number and work out from
@@ -3111,6 +3205,39 @@ def build_part_graph(
         _own_src = str(source_of(record, "quantity") or "")
         if _own_src:
             qty_own_source[child_id] = _own_src
+        # ── A PER-PARENT COUNT MAP NAMES THIS PARENT'S OWN FIGURE (SCRUM-105) ─────────
+        #
+        # 12678-01-06M: two ribs in each of two bracket designs. A shared child's single
+        # `quantity` cannot stand for every parent, so the multi-parent branch below kept
+        # the BOM edge of 1 under each — and the sheet charged 8 of a part the model
+        # counts 16 of, with the two-roads check reduced to a note. A reader that
+        # genuinely counts PER PARENT (the SolidWorks connector's arbitrated split) now
+        # writes the map `quantity_by_parent`, and this walk reads the figure for the
+        # parent it is standing on — BEFORE the agreement shortcut, because a split
+        # record's own scalar can equal the edge while this parent's figure does not.
+        # Rank still decides: a map from a reader the edge outranks changes nothing.
+        _split = record.get("quantity_by_parent")
+        if isinstance(_split, Mapping) and _split:
+            _split_src = str(record.get("quantity_by_parent_source") or "")
+            if rank(_split_src) > _edge_substitution_rank:
+                _want = clean_part_number(str(parent_id))
+                for _k, _v in _split.items():
+                    if clean_part_number(str(_k)) != _want:
+                        continue
+                    _pp_q = number(_v, None)
+                    if _pp_q and _pp_q > 0:
+                        qty_own[child_id] = _pp_q
+                        qty_own_source[child_id] = _split_src
+                        if abs(_pp_q - edge_qty) > 1e-9:
+                            qty_notes.setdefault(child_id, (
+                                f"one {parent_id} takes {_pp_q:g} of this part, counted "
+                                f"per parent by {_display_source(_split_src)}; the BOM "
+                                f"edge said {edge_qty:g} and does not outrank that count"))
+                            print(f"   [graph] {child_id} qty-per-{parent_id} {_pp_q:g} "
+                                  f"from {_display_source(_split_src)}'s per-parent map "
+                                  f"KEPT (BOM edge said {edge_qty:g})", flush=True)
+                        return _pp_q
+                    break
         if _own is None or abs(_own - edge_qty) < 1e-9:
             return edge_qty
         _label = _display_source(_own_src) if _own_src else "an unnamed reader"
@@ -4678,6 +4805,27 @@ def _ancestor_distances(identity: str, parents: Mapping[str, Set[str]]) -> Dict[
     return distances
 
 
+_INSERT_WORD_NOISE = {"STEEL", "MILD", "STAINLESS", "ZINC", "PLATED", "SCREW", "WASHER", "THREAD",
+                      "THREADED", "INSERT", "FITTING", "BLACK", "BRIGHT", "METRIC"}
+
+
+def _insert_words(inserted: Iterable[str], graph: Mapping[str, Any]) -> Set[str]:
+    """The words that name an inserted item in prose (D-738): its code without the BI- prefix,
+    and the distinctive words of its description ("M6 HANKBUSH" gives HANKBUSH), never a word
+    any fixing shares (SCREW, INSERT)."""
+    out: Set[str] = set()
+    for pn in inserted or ():
+        code = str(pn or "").upper()
+        out.add(code)
+        if code.startswith("BI-") and len(code) > 6 and code[3:] not in _INSERT_WORD_NOISE:
+            out.add(code[3:])
+        rec = _graph_record(graph, str(pn))
+        for w in re.findall(r"[A-Z][A-Z\-]{4,}", str(rec.get("description") or "").upper()):
+            if w not in _INSERT_WORD_NOISE:
+                out.add(w)
+    return {w for w in out if len(w) >= 5}
+
+
 def _weldment_has_its_own_joints(part: Mapping[str, Any], part_number: str,
                                  graph: Mapping[str, Any]) -> bool:
     """A participant of a parent's welding event that is itself welded from pieces of its own
@@ -5122,6 +5270,58 @@ def _record_stock_form(record: Any) -> str:
     ).strip().lower()
 
 
+# The operations that cut a length of stock to size (D-653): a part one of these is required on
+# is already cut, and a sheet-profiling decision beside it is the same cut again.
+_CUT_TO_LENGTH_OPERATIONS = frozenset({"saw", "tube_cut", "tube_cutting"})
+
+
+def _has_a_measured_flat(record: Any) -> bool:
+    """A flat a DXF or the model measured: a profiled plate, which is lasered whatever its
+    material cell calls it (D-653)."""
+    if not isinstance(record, Mapping):
+        return False
+    source = str(record.get("geometry_source") or "").lower()
+    return bool(record.get("dxf_augmented") or record.get("flat_pattern_detected")
+                or record.get("native_flat_pattern") or record.get("dxf_measured_outline")
+                or "dxf" in source or source == "solidworks_flat_pattern")
+
+
+def _cut_from_stock_evidence(record: Any) -> str:
+    """The stock a part record's OWN evidence says it is cut from — tube, bar or rod — in the
+    words a decision's reason can carry, or "" where it says nothing (D-653).
+
+    Read, in turn: the stock form the costing or a reader stamped, a bar its own sheet's
+    schedule named, a section on the record, the read's material family, and the part's own
+    printed material words (section_profile, the reader the estimator and the blank readers
+    ask)."""
+    if not isinstance(record, Mapping):
+        return ""
+    _mi = record.get("manufacturing_interpretation")
+    for form in (_record_stock_form(record),
+                 str((_mi or {}).get("stock_form") or "").strip().lower()
+                 if isinstance(_mi, Mapping) else ""):
+        if form == "tube":
+            return "tube or section stock (its stock form)"
+        if form in ("wire", "bar"):
+            return "round bar (its stock form)"
+    if record.get("_bar_recognised") or record.get("bar_schedule"):
+        return "round bar (its own sheet's bar schedule)"
+    if isinstance(record.get("section_stock"), Mapping) and record.get("section_stock"):
+        return "the section on its record"
+    family = str(record.get("material_family") or "").strip().lower()
+    if family in ("tube", "wire"):
+        return f"{family} stock (the read's material family)"
+    try:
+        from section_profile import stock_in_own_material_words, section_description
+        own = stock_in_own_material_words(record)
+    except Exception:                                                # noqa: BLE001
+        own = None
+    if own:
+        words = section_description(own) or str(own.get("form") or "section").replace("_", " ")
+        return f"{words}, as its own printed material says ('{own.get('source_text')}')"
+    return ""
+
+
 def weldment_finish_for_gate(record: Mapping[str, Any], target_id: str,
                              graph: Mapping[str, Any]) -> str:
     """The finish to test a part against in the powder/plate gate — a weldment parent inherits
@@ -5163,6 +5363,118 @@ def weldment_finish_for_gate(record: Mapping[str, Any], target_id: str,
     return own
 
 
+def _record_for_model_assembly_name(item: str, raw: Mapping[str, Any]) -> str:
+    """`item`, or the job record its model-assembly name stands for: "12002-02-101 SA" is
+    12002-02-101 where the job has that record and none of the longer name (D-734).
+
+    ONE PART, ONE TARGET, WHATEVER ITS SPELLING (D-752). 0358141's read keyed its route to
+    "UPC0358141M4" as the detail sheet prints it; the record is "UPC0358141 M4" as the parts
+    list prints it. The route's spelling was a target of its own, so M4's drilling was charged
+    twice (rows 170 and 171) and M1's saw, tap and drill sat on a line no record carried. A
+    route participant no record carries resolves to the one record that differs from it only
+    in spacing, by the graph's own join rule (spelling_key)."""
+    if raw.get(item):
+        return item
+    _key = spelling_key(item)
+    _same = [k for k in raw if spelling_key(k) == _key] if _key else []
+    if len(_same) == 1:
+        return _same[0]
+    try:
+        from source_connectors.solidworks import model_assembly_stem as _stem
+    except Exception:                                                # noqa: BLE001
+        return item
+    stem = _stem(item)
+    return stem if stem and raw.get(stem) else item
+
+
+# ── A WELD THE ASSEMBLY'S OWN SHEET REFERENCES IS THE ASSEMBLY'S, CHARGED ONCE (D-759) ─────
+#
+# JG, 9 Nov 2026, on D-757 (the weld legend never welds a part by itself): "if a weld is
+# referenced, I'd say we need to add welding." The reviewer, the same day: a general weld-
+# process note "specifies how an established weld is made; it does not establish a weld on
+# every member", and genuine frame joints are kept, charged once. Both hold when the weld an
+# assembly's own sheet references is charged at that assembly: a metal assembly built from at
+# least two metal parts, whose own sheet states a weld process, and on which nothing has
+# claimed, ruled out or charged a weld, takes one welding event, priced as an inference with
+# its reason and its members named; no member is charged for it. Where the drawing, the
+# model, the read or a person already says how the assembly is joined, that stands.
+_METAL_WORDS = ("STEEL", "STAINLESS", "ALUMIN", "ZINTEC", "GALV", "MILD")
+
+
+def _is_metal_record(rec: Any) -> bool:
+    if not isinstance(rec, Mapping):
+        return False
+    fam = str(rec.get("material_family") or "").strip().lower()
+    if fam in {"metal", "tube", "sheet_metal", "wire", "bar", "section", "steel"}:
+        return True
+    text = " ".join(str(m) for m in (rec.get("materials") or []) if m) + " " + str(
+        rec.get("material_text_as_printed") or "")
+    return any(w in text.upper() for w in _METAL_WORDS)
+
+
+def _referenced_weld_process(rec: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The weld process the record's own sheet states, from its notes or its stated process."""
+    stated = rec.get("weld_process_stated")
+    if isinstance(stated, Mapping) and stated.get("process"):
+        return dict(stated)
+    notes = " ".join(str(n) for f in ("process_notes", "notes", "general_notes")
+                     for n in (rec.get(f) or []) if n)
+    if not notes.strip():
+        return None
+    try:
+        from extractor_patterns import weld_process_stated
+        read = weld_process_stated(notes)
+    except Exception:                                                # noqa: BLE001
+        read = None
+    return dict(read) if isinstance(read, Mapping) and read.get("process") else None
+
+
+def _referenced_weld_claims(graph: Mapping[str, Any], kinds: Mapping[str, str],
+                            claims_by_event: Mapping[str, List["OperationClaim"]],
+                            add_claim: Any, issues: List[Dict[str, Any]]) -> List[str]:
+    children = graph.get("children") or {}
+    records = graph.get("records") or {}
+    raw = graph.get("raw") or {}
+    joined: Set[str] = set()
+    for _claims in claims_by_event.values():
+        for _c in _claims:
+            if "weld" in str(_c.operation) or "braz" in str(_c.operation):
+                joined.add(_c.target_id)
+                joined.update(_c.participants or [])
+    added: List[str] = []
+    for pn, kind in sorted(kinds.items()):
+        if kind != "assembly" or pn in joined:
+            continue
+        rec = records.get(pn) or raw.get(pn) or {}
+        if not isinstance(rec, Mapping):
+            continue
+        if "welding" in {clean_operation(o) for o in (rec.get("operations_ruled_out") or [])}:
+            continue
+        process = _referenced_weld_process(rec)
+        if not process:
+            continue
+        metal = sorted(k for k in (children.get(pn) or ())
+                       if _is_metal_record(records.get(k) or raw.get(k)))
+        if len(metal) < 2:
+            continue
+        word = str(process.get("word") or process.get("process") or "")
+        add_claim(stable_id("decision", {"origin": "referenced_weld", "operation": "welding",
+                                         "scope": "assembly", "target_id": pn}),
+                  make_claim("welding", REQUIRED, "inference", subject_id=pn, target_id=pn,
+                             scope="assembly", participants=metal,
+                             reason=(f"inferred: {pn}'s own sheet references welding (its weld "
+                                     f"specification states {word}) and it is built from "
+                                     f"{len(metal)} metal parts, so its joints are taken as "
+                                     f"welded: charged once on {pn}, never on each member. "
+                                     f"Confirm the joints and the process"),
+                             evidence=f"weld specification: {word}",
+                             evidence_where=f"{pn}'s own sheet"))
+        issues.append({"code": "referenced_weld_charged_at_assembly", "part": pn,
+                       "members": metal, "process": process.get("process")})
+        added.append(pn)
+    return added
+
+
 def compile_job_route(
     parts: Sequence[Mapping[str, Any]],
     llm_extract: Optional[Mapping[str, Any]] = None,
@@ -5186,6 +5498,9 @@ def compile_job_route(
     claims_by_event: Dict[str, List[OperationClaim]] = {}
     explicit_memberships: Dict[Tuple[str, str], Set[str]] = {}
     explicit_assembly_events: Dict[str, List[Tuple[str, str]]] = {}
+    # Events from a read route that named several things and was split, one per target
+    # (D-736): each target is a member of the work that route describes, never its owner.
+    _split_route_events: Set[str] = set()
     issues: List[Dict[str, Any]] = list(graph.get("issues") or [])
     # ONE SCOPE FOR MATERIAL AND LABOUR (D-505). The graph sets a line aside when the declared
     # product does not reach it, and its RECORD leaves the costed population — but a stated
@@ -5208,6 +5523,12 @@ def compile_job_route(
             for item in (route.get("part_numbers") or [])
             if clean_part_number(item)
         ]
+        # A SUB-ASSEMBLY NAMED AS ITS MODEL FILE IS THE DRAWING'S RECORD (D-734). 12002-02's
+        # read keyed its weld callout to "12002-02-101 SA", the model file's name; the job's
+        # record is 12002-02-101. Resolved, so the stated work lands on the record and is not
+        # dropped as a part the graph does not carry.
+        participants = list(dict.fromkeys(
+            _record_for_model_assembly_name(item, raw) for item in participants))
         _dropped = [item for item in participants if item in _outside]
         if _dropped:
             participants = [item for item in participants if item not in _outside]
@@ -5316,6 +5637,7 @@ def compile_job_route(
             })
 
         targets: List[Tuple[str, str, List[str]]] = []
+        _rehomed = False
         if declared_scope == "part":
             targets = [("part", participant, [participant])
                        for participant in participants]
@@ -5352,12 +5674,42 @@ def compile_job_route(
                 for participant in participants:
                     if participant not in covered:
                         targets.append(("part", participant, [participant]))
-                issues.append({
-                    "code": "mixed_scope_route_split",
-                    "route_id": base_route_id,
-                    "operation": operation,
-                    "targets": [item[1] for item in targets],
-                })
+                # AN ASSEMBLY LINE THAT NAMES THINGS SIDE BY SIDE IS THEIR JOINING, AT THE
+                # ASSEMBLY THAT HOLDS THEM (D-685). The split above is right for a coat: a
+                # weldment and a loose bracket are two objects in the booth. It is wrong for
+                # the assemble itself. 12693-01-GA's extract read "BOLTED TOGETHER FROM
+                # UNDERSIDE" on the GA as one assembly line naming the frame 101 and the
+                # worktop 102; split, it became "build 101 from its members" and "build 102
+                # from its members", so the frame (a weldment, which its weld builds) took an
+                # Assemble/pack row on a GA note. Its inferred line for fitting the MDF insert
+                # into the worktop named 104, 04J and the wood inserts; split, it charged an
+                # assemble on the weldment 104 and a Packing Joinery row on the insert, while
+                # 102's own assembly already fitted both. A line naming one assembly is that
+                # assembly's build, and keeps the substitution above; a line naming several
+                # things is one event where they meet, which the hierarchy names.
+                _meet = (_lowest_common_assembly(participants, graph["parents"], kinds)
+                         if operation == "assembly" and len(targets) > 1 else "")
+                if _meet:
+                    issues.append({
+                        "code": "assembly_route_homed_where_its_parts_meet",
+                        "route_id": base_route_id,
+                        "operation": operation,
+                        "split_would_have_been": [item[1] for item in targets],
+                        "target": _meet,
+                    })
+                    targets = [("assembly", _meet,
+                                [p for p in participants if p != _meet] or [_meet])]
+                    # The line's stated quantity counted the things it named, not the place
+                    # they meet: "qty 2" for a frame and a worktop is one bolting-together per
+                    # table. The meeting assembly happens once per instance of itself.
+                    _rehomed = True
+                else:
+                    issues.append({
+                        "code": "mixed_scope_route_split",
+                        "route_id": base_route_id,
+                        "operation": operation,
+                        "targets": [item[1] for item in targets],
+                    })
             else:
                 target = _lowest_common_assembly(
                     participants, graph["parents"], kinds)
@@ -5393,6 +5745,8 @@ def compile_job_route(
                 "scope": scope,
                 "target_id": target_id,
             })
+            if len(targets) > 1:
+                _split_route_events.add(event_id)
             # AT LEAST ONCE PER INSTANCE OF THE TARGET (D-558): a stated per-product count
             # below the target's multiplicity is the model counting one frame of two.
             _floored_qty, _floored = at_least_once_per_instance(
@@ -5422,7 +5776,8 @@ def compile_job_route(
                 # each part the product contains.
                 qty_per_unit=(
                     _floored_qty
-                    if (route.get("qty_per_unit") is not None and len(targets) == 1)
+                    if (route.get("qty_per_unit") is not None and len(targets) == 1
+                        and not _rehomed)
                     else graph_quantities.get(target_id, 1.0)
                 ),
                 sequence=route.get("sequence"),
@@ -5430,7 +5785,8 @@ def compile_job_route(
                 reason=_route_reason,
                 route_id=route_id,
             )
-            if _floored and route.get("qty_per_unit") is not None and len(targets) == 1:
+            if (_floored and route.get("qty_per_unit") is not None and len(targets) == 1
+                    and not _rehomed):
                 issues.append({
                     "code": "assembly_op_floored_to_target_count",
                     "route_id": route_id,
@@ -5457,6 +5813,29 @@ def compile_job_route(
         scopes = part.get("operation_scope") or {}
         operation_quantities = part.get("operation_qty_per_unit") or {}
         sequences = part.get("operation_sequence") or {}
+
+        # A LEAF'S OWN OPERATION IS PART-SCOPED (D-707). The read's route line "cnc_routing,
+        # scope assembly, 12693-03-04J and its five panels" stamped "assembly" on every panel
+        # it named, and each panel's own cut then became an assembly event on the panel itself:
+        # a charge with no board thickness, outside the shared set-up of panels cut from one
+        # board (D-671), so two 12 mm strip types took a full set-up each where the medium's,
+        # read part-scoped, shared one. Assembly scope means once per assembly; on a part with
+        # no children, charged on itself, it can only mean once per part.
+        def _own_scope(_op: str, _pn: str = part_number) -> str:
+            _sc = str(scopes.get(_op) or "part").strip().lower()
+            if _sc not in VALID_SCOPES:
+                return "part"
+            if (_sc == "assembly" and kinds.get(_pn) != "assembly"
+                    and not ((graph.get("children") or {}).get(_pn))):
+                _issue = {"code": "leaf_operation_scoped_as_assembly",
+                          "part_number": _pn, "operation": _op,
+                          "detail": (f"the read scoped {_pn}'s {_op} to an assembly; "
+                                     f"{_pn} has no parts of its own, so it is charged "
+                                     f"once per {_pn}, part-scoped")}
+                if _issue not in issues:
+                    issues.append(_issue)
+                return "part"
+            return _sc
 
         # A PERSON'S RULING REACHES THE ROUTE DIRECTLY (D-388). estimator_decisions.operations_off
         # is stamped on the record by file_scan and was honoured only by the estimator, which
@@ -5560,6 +5939,7 @@ def compile_job_route(
                 _op_evidence_where = ("the sheet's own note text, legend removed"
                                       if _op_evidence else "")
                 _demoted = False
+                _weld_basis: Optional[Dict[str, Any]] = None
                 if (field_name == "textual_operations"
                         and operation not in operation_sources and not _op_evidence):
                     # THE RECORD'S OWN STATED FINISH IS EVIDENCE TOO. A weldment whose title
@@ -5597,6 +5977,26 @@ def compile_job_route(
                         elif part.get("weld_stated_by_finish"):
                             _op_evidence = "the part's own finish field states the weld"
                             _op_evidence_where = "the part's own stated finish"
+                    # A WELD ON ONE PIECE SAYS WHICH JOINT IT IS (D-718). Where nothing recorded
+                    # why a single made part is welded, its own folds are asked: a section the
+                    # folds close has a closing seam, a part folded up on four sides has four
+                    # corner seams. That is the engine's manufacturing reason and the claim
+                    # carries it; the charge is never removed for want of a printed symbol.
+                    if (not _op_evidence and operation in ("welding", "dress_welds")
+                            and kinds.get(part_number) != "assembly"
+                            and not ((graph.get("children") or {}).get(part_number))):
+                        try:
+                            from weld_reasoning import weld_joint_basis as _wjb
+                            _weld_basis = _wjb(part)
+                        except Exception:                            # noqa: BLE001
+                            _weld_basis = None
+                        if _weld_basis and _weld_basis.get("kind") != "provisional":
+                            _op_evidence = str(_weld_basis.get("statement") or "")
+                            _op_evidence_where = "the part's own folded geometry"
+                            # Its own name, not "inference": the joint is read off this
+                            # part's folds, so it is the part's own evidence and the
+                            # evidenceless-leaf withhold (D-385) does not send it upstairs.
+                            source = "fold_geometry"
                     if not _op_evidence:
                         # "unrecorded", not "unknown": the same rank (0) and the same English
                         # ("an unrecorded source"), but the stranded-assembly status rule
@@ -5639,7 +6039,26 @@ def compile_job_route(
                 # — arrives with none, and the check sat before the lookup, so it was never
                 # asked; the lookup then folded the frame's own joints into the parent's
                 # event and neither frame was welded on the book.
-                if (event_ids and operation == "welding"
+                # ONLY A MEMBER OF ANOTHER ASSEMBLY'S WELD (D-736). 12002-02-GA 12:47: the
+                # read's weld on "12002-02-101 SA" lands on 101 (D-734), so 101 is that event's
+                # own TARGET — its weld is the event, not a weldment inside it — and this rule
+                # charged the same joints again as a part weld on 101: row 159, £39.27 over
+                # rows 152 and 169, and a second dress event beside each. An event is this
+                # record's own when it targets the record, every participant is the record or
+                # one of its own pieces, and its route named the record alone: a route naming
+                # the frame beside its cap (D-566's 401918 case) is split one event per part,
+                # each the parent's weld, and the frame's own joints still stand beside it.
+                def _own_piece(_x: str) -> bool:
+                    return _x == part_number or _is_descendant(
+                        _x, part_number, graph["parents"])
+                _owns_the_weld = any(
+                    _e not in _split_route_events
+                    and (claims_by_event.get(_e) or [None])[0] is not None
+                    and claims_by_event[_e][0].target_id == part_number
+                    and all(_own_piece(_x) for _x in (
+                        claims_by_event[_e][0].participants or [part_number]))
+                    for _e in event_ids)
+                if (event_ids and operation == "welding" and not _owns_the_weld
                         and _weldment_has_its_own_joints(part, part_number, graph)):
                     _own_event = stable_id("decision", {
                         "origin": "compatibility", "operation": operation,
@@ -5694,9 +6113,7 @@ def compile_job_route(
                                 ).add(dress_event_id)
                         event_ids.append(dress_event_id)
                 if not event_ids:
-                    scope = str(scopes.get(operation) or "part").strip().lower()
-                    if scope not in VALID_SCOPES:
-                        scope = "part"
+                    scope = _own_scope(operation)
                     compatibility_target = part_number
                     finish_text = str(
                         part.get("normalized_finish")
@@ -5723,7 +6140,7 @@ def compile_job_route(
                     target_id = (
                         template.target_id if template else compatibility_target
                     )
-                    scope = template.scope if template else scopes.get(operation, "part")
+                    scope = template.scope if template else _own_scope(operation)
                     route_id = template.route_id if template else ""
                     claim_status = REQUIRED
                     if template is None and operation == "assembly":
@@ -5788,7 +6205,13 @@ def compile_job_route(
                         ),
                         sequence=sequences.get(operation),
                         reason=(f"{field_name} on existing part record"
-                                + (" — no reader recorded a source or the drawing's words "
+                                + (f" — the engine infers {_weld_basis['joint']}: "
+                                   f"{_weld_basis['why']}; priced"
+                                   if _weld_basis and not _demoted else
+                                   f" — no reader recorded a source; {_weld_basis['why']}; "
+                                   f"priced as {_weld_basis['assumption']}"
+                                   if _weld_basis and _demoted else
+                                   " — no reader recorded a source or the drawing's words "
                                    "for it; priced, not promoted to a note" if _demoted
                                    else "")),
                         route_id=route_id,
@@ -5827,6 +6250,9 @@ def compile_job_route(
                     reason=reason,
                     route_id=template.route_id if template else "",
                 ))
+
+    # A weld the assembly's own sheet references is the assembly's, charged once (D-759).
+    _referenced_weld_claims(graph, kinds, claims_by_event, add_claim, issues)
 
     # Pressed fasteners are a route fact carried by the BOM, not a workbook-side guess.
     # One insertion event belongs to the lowest assembly containing the PEM/clinch items;
@@ -6302,6 +6728,64 @@ def compile_job_route(
                             f"until then."),
             })
 
+    # (c) A MEMBER THAT DEFERS ITS FINISH TO A COATED ASSEMBLY IS COATED THERE, ONCE (D-654).
+    # 12684-02-GA, 3 Nov 2026: three P.Coat rows, GBP 358.93 at 1 off. The frame 102SA is a
+    # weldment, so its coat stands as a booth stage; its baseplate, outer frame and framework
+    # all print SEE ASSEMBLY DRAWING and were coated again on a row of their own, inside the
+    # frame that was already being coated. The hook assembly's coat lists its bracket among the
+    # parts it covers, and the bracket was coated a second time beside it. "See assembly" means
+    # the member takes the assembly's coat: where its nearest coated ancestor keeps its own
+    # coat (after the dedup above has stood down any assembly its members fully carry), the
+    # member's separate coat is the same work counted twice and is ruled out with the reason.
+    # A member whose own sheet states its own finish keeps its coat; a RAW member never had one.
+    _pw_kept = {}
+    for _eid, _ecs in claims_by_event.items():
+        _kd = arbitrate_event(_eid, _ecs)
+        if (_kd.operation == "powder_coating" and _kd.status == REQUIRED
+                and kinds.get(_kd.target_id) == "assembly"):
+            _pw_kept[_kd.target_id] = _kd
+    _pw_once: Dict[str, str] = {}
+    for _eid, _ecs in list(claims_by_event.items()):
+        _md = arbitrate_event(_eid, _ecs)
+        if not (_md.operation == "powder_coating" and _md.status == REQUIRED):
+            continue
+        _mpn = str(_md.target_id or "")
+        _mft = _leaf_finish_text(_mpn)
+        if not any(h in _mft for h in _PW_POINTER_HINTS) or re.search(r"\bRAW\b", _mft):
+            continue
+        _ups = sorted(((dist, a) for a, dist in
+                       _ancestor_distances(_mpn, graph["parents"]).items()
+                       if a != _mpn and a in _pw_kept), key=lambda x: (x[0], x[1]))
+        if not _ups:
+            continue
+        _owner = _ups[0][1]
+        _od = _pw_kept[_owner]
+        _welded = _pw_assembly_stage(_owner, str(_od.scope or ""))
+        _names_it = _mpn in (_od.participants or [])
+        add_claim(_eid, make_claim(
+            "powder_coating", NOT_APPLICABLE, "bom_tree",
+            subject_id=_mpn, target_id=_mpn, scope=_md.scope,
+            participants=list(_md.participants or []),
+            sequence=_md.sequence, confidence=1.0,
+            evidence=_mft[:160],
+            reason=(f"coated once, as part of {_owner}: this part's own sheet defers its "
+                    f"finish to the assembly, and {_owner} keeps its own coat "
+                    + ("as a welded stage the whole weldment goes through" if _welded
+                       else "naming this part among the parts it covers" if _names_it
+                       else "as the nearest assembly above it that is coated")
+                    + ". A second coat here would put the same metal through the booth "
+                      "twice; if it really is coated before assembly as well as after, "
+                      "put this row back."),
+            route_id=_md.route_id or "",
+        ))
+        _pw_once[_mpn] = _owner
+    if _pw_once:
+        for _iss in list(issues):
+            if (isinstance(_iss, dict) and _iss.get("code") == "powder_scope_mixed_members"
+                    and _iss.get("coated_members")
+                    and all(m in _pw_once for m in _iss["coated_members"])):
+                issues.remove(_iss)
+
     # Hierarchy is a source claim too. It records why leaf work is inapplicable to a parent
     # instead of deleting evidence from whichever record happens to be in hand.
     for event_id, event_claims in list(claims_by_event.items()):
@@ -6389,6 +6873,56 @@ def compile_job_route(
     # Tube stock is cut by the tube process. A page-level Laser word on a CHS/RHS record is
     # not a second profile-cutting event. Keep the positive claim in the audit trail and let
     # the deterministic stock-form claim rule it not applicable.
+    #
+    # A PART ITS OWN ROUTE ALREADY CUTS TO LENGTH IS NOT CUT AGAIN ON THE SHEET LASER (D-653).
+    # 12684-02-M06, 1/2" square tube, carried a tube_cut and a laser_cutting; the laser was
+    # remapped to the Tube department for a tube, so the book held two identical Tube rows.
+    # 12684-02-M07, 10 mm square bar, carried a Saw row and a Laser (Metal) row. Neither
+    # record had a profile the test below reads, nor TUBE in its name. Where the part is cut
+    # from tube, bar or rod stock on the evidence of its own record (its stock form, the
+    # read's family, its section, or its own printed material words) and a saw or tube cut is
+    # required on it, the sheet-laser decision is the same cut a second time.
+    # A cut some reading has already ruled out does not count as the cut.
+    _cut_to_length: Set[str] = {
+        _c.target_id for _cl in claims_by_event.values()
+        if _cl and clean_operation(_cl[0].operation) in _CUT_TO_LENGTH_OPERATIONS
+        and not any(_x.status in NEGATIVE_STATUSES for _x in _cl)
+        for _c in _cl
+        if _c.status == REQUIRED and str(_c.scope or "part") == "part"}
+    # ONE LENGTH IS CUT ONCE, BY ONE PROCESS (D-730). 12677-01-01M, 6 Nov 2026 10:38 book: its
+    # own record sawed the 12 tube pieces (12 cuts at the saw's per-cut allowance) and the
+    # extract inferred a tube cut from the same cut list, so the frame carried a Saw row and
+    # a Tube row for one set of cuts. Where two different cut-to-length operations are both
+    # required on one part, the better-evidenced one stands (the saw on a tie, since it is
+    # timed cut by cut) and the other is ruled not applicable, its reading kept as evidence.
+    _length_cuts: Dict[str, List[str]] = {}
+    for _eid, _cl in claims_by_event.items():
+        if not _cl or clean_operation(_cl[0].operation) not in _CUT_TO_LENGTH_OPERATIONS:
+            continue
+        if any(_x.status in NEGATIVE_STATUSES for _x in _cl):
+            continue
+        if any(_c.status == REQUIRED and str(_c.scope or "part") == "part" for _c in _cl):
+            _length_cuts.setdefault(_cl[0].target_id, []).append(_eid)
+    for _tid, _eids in _length_cuts.items():
+        if len({clean_operation(claims_by_event[e][0].operation) for e in _eids}) < 2:
+            continue
+        _keep = max(_eids, key=lambda e: (
+            max((_c.source_rank or 0) for _c in claims_by_event[e]),
+            clean_operation(claims_by_event[e][0].operation) == "saw"))
+        _kept_op = clean_operation(claims_by_event[_keep][0].operation).replace("_", " ")
+        for _e in _eids:
+            if _e == _keep:
+                continue
+            _t = claims_by_event[_e][0]
+            add_claim(_e, make_claim(
+                _t.operation, NOT_APPLICABLE, "drawing_deterministic",
+                subject_id=_t.target_id, target_id=_t.target_id, scope="part",
+                participants=[_t.target_id], sequence=_t.sequence,
+                reason=(f"{_tid} is already cut to length by its {_kept_op}; a "
+                        f"{_t.operation.replace('_', ' ')} would cut the same pieces a second "
+                        f"time"),
+                route_id=_t.route_id))
+
     for event_id, event_claims in list(claims_by_event.items()):
         template = event_claims[0]
         raw_part = raw.get(template.target_id) or {}
@@ -6411,11 +6945,21 @@ def compile_job_route(
         if not is_tube and profile in {"FLAT", "ROUND", "ANGLE", "CHANNEL", "OVAL"} \
                 and not _flat:
             is_tube = True
+        _cut_from = ""
+        if (not is_tube and template.scope == "part"
+                and template.operation in TUBE_INAPPLICABLE_OPERATIONS
+                and template.target_id in _cut_to_length):
+            _merged = graph["records"].get(template.target_id) or {}
+            if not (_has_a_measured_flat(raw_part) or _has_a_measured_flat(_merged)):
+                _cut_from = (_cut_from_stock_evidence(raw_part)
+                             or _cut_from_stock_evidence(_merged))
+                is_tube = bool(_cut_from)
         if (
             is_tube
             and template.scope == "part"
             and template.operation in TUBE_INAPPLICABLE_OPERATIONS
         ):
+            _form_words = str(section.get("form") or "").replace("_", " ").strip()
             add_claim(event_id, make_claim(
                 template.operation, NOT_APPLICABLE, "drawing_deterministic",
                 subject_id=template.target_id,
@@ -6423,10 +6967,14 @@ def compile_job_route(
                 scope="part",
                 participants=[template.target_id],
                 sequence=template.sequence,
-                reason=("section stock is cut by the tube process, not sheet profiling"
+                reason=(f"cut to length from {_cut_from}, and its route already cuts it "
+                        f"there — a sheet {template.operation.replace('_', ' ')} decision would "
+                        f"cut the same length a second time" if _cut_from else
+                        "section stock is cut by the tube process, not sheet profiling"
                         if profile in {"CHS", "RHS", "SHS", "TUBE", ""} else
-                        f"{'an' if profile[:1] in 'AEIOU' else 'a'} {profile.lower()} section is cut from a stock length, not "
-                        f"profiled from sheet"),
+                        f"{'an' if (_form_words or profile)[:1].upper() in 'AEIOU' else 'a'} "
+                        f"{_form_words or profile.lower() + ' section'} is cut from a stock "
+                        f"length, not profiled from sheet"),
                 route_id=template.route_id,
             ))
 
@@ -6619,6 +7167,8 @@ def compile_job_route(
             "note": (f"{_key[0]} on {_key[1]} was described by more than one reading; they "
                      f"are one joint, charged once, with every reading kept as evidence"),
         })
+    # And the assemble of one assembly, read twice at one visit, is one event too (D-685).
+    _one_assembly_event_per_visit(claims_by_event, issues)
 
     decisions = [
         arbitrate_event(event_id, claims)
@@ -6687,9 +7237,75 @@ def compile_job_route(
     # assembly's joint (D-387); a coat stated on an assembly holding nothing to coat is carried
     # on its members' own lines (D-387). Both leave the ruled-out decision and its reason.
     _member_finish_weld_is_the_assemblys(decisions, graph, issues)
+    # A member of a weldment is finished with the weldment: an unsourced coat its weldment's
+    # own finish contradicts is not the member's to charge (D-686). Before the coat pass, so
+    # that pass sees the member as coated with its assembly, not on a line of its own.
+    _member_coat_is_its_weldments(decisions, graph, issues)
     _withhold_coats_with_nothing_to_coat(decisions, graph, issues)
     # A bond, a coat or a routing is charged at one level of the tree (D-446).
     _withhold_duplicate_level_ops(decisions, graph, issues)
+    # One pass through the booth per coated object (D-656); spot welds by the symbols (D-656).
+    _one_coat_event_per_target(decisions, issues)
+    _spot_welds_by_their_symbols(decisions, graph, issues)
+    # A bought-in item is fitted by the assembly it goes into, once (D-661).
+    _bought_in_fitted_by_its_assembly(decisions, graph, issues)
+    # AN INFERRED ASSEMBLE THAT NAMES ONLY WHAT THE INSERTION FITS, ON AN ASSEMBLY ITS OWN WELD
+    # BUILDS, IS THE INSERTION READ AGAIN (D-685). 12693-01-101 is a weldment: its weld joins the
+    # tube frame and the plates, and its hardware insertion presses the four M8 hank bushes.
+    # The engine's own inference added "the GA has 4 glides that need a thread in the frame ...
+    # booked once for the frame" as an assemble naming the bushes and nothing else, and the
+    # sheet charged an Assemble/pack row beside the insertion's row for the same four bushes.
+    # The 11350 rule (a generic assemble does not repeat the joining we already named) cannot
+    # see it: the frame's other members are joined by its weld, which that rule deliberately
+    # does not count (SPECIFIC_JOINING_OPERATIONS). This one asks the narrower question: every
+    # part the assemble names is already fitted by the insertion on the same target, the target
+    # is welded (so the hierarchy gives it no assemble of its own) and does not ship, and
+    # nothing stronger than the engine's inference raised the line. A stated line stays.
+    # After the gates, so a weld the family gate rules off (a timber assembly) builds nothing.
+    try:
+        from source_precedence import rank as _src_rank
+        _inferred_rank = _src_rank("inference") or 0
+    except Exception:                                                # noqa: BLE001
+        _src_rank, _inferred_rank = None, 0
+    _welded_now = {
+        str(_d.target_id) for _d in decisions
+        if _d.status == REQUIRED and _d.operation in (_JOINING_OPS - {"dress_welds"})}
+    _inserted_on: Dict[str, Set[str]] = {}
+    for _s in decisions:
+        if _s.status == REQUIRED and _s.operation in SPECIFIC_JOINING_OPERATIONS:
+            _inserted_on.setdefault(str(_s.target_id), set()).update(
+                str(p) for p in (_s.participants or []) if p)
+    for _d in decisions:
+        if (_src_rank is None or _d.status != REQUIRED or _d.operation != "assembly"
+                or _d.target_id in _roots_that_ship(graph)
+                or str(_d.target_id) not in _welded_now
+                or (_src_rank(str(_d.source or "")) or 0) > _inferred_rank):
+            continue
+        _named = {str(p) for p in (_d.participants or []) if p and p != _d.target_id}
+        _ins = _inserted_on.get(str(_d.target_id)) or set()
+        # OR IT NAMES THE PART THE INSERT GOES INTO, AND SAYS SO (D-738). 12002-02-101, 7 Nov
+        # 2026 13:19 book: the read's assemble names M01, the base plate, and its own words are
+        # "M6 HANKBUSH ... Booked once per base as a fit"; the insertion row fits the same bush,
+        # so the bench row charged the fitting a second time (rows 153 and 161). A member of
+        # the welded target counts as fitted when the assemble's words name an inserted item.
+        _hosts = _named - _ins
+        if _hosts and _hosts <= set((graph.get("children") or {}).get(str(_d.target_id)) or {}):
+            _said = " ".join(str(x or "") for x in (_d.reason, _d.evidence)).upper()
+            if any(_w in _said for _w in _insert_words(_ins, graph)):
+                _hosts = set()
+        if not _named or _hosts:
+            continue
+        _d.status = NOT_APPLICABLE
+        _d.reason = ((f"{_d.reason}; " if _d.reason else "")
+                     + f"not charged: {', '.join(sorted(_named))} "
+                       f"{'is' if len(_named) == 1 else 'are'} fitted by the hardware insertion "
+                       f"on {_d.target_id}, and {_d.target_id} is built by its own weld, so this "
+                       f"assemble names no work the insertion and the weld do not already "
+                       f"charge — put it back only if it is a separate stage")
+        _d.field_provenance["status"] = "insertion_covers_this_assemble"
+        issues.append({"code": "assemble_is_the_insertion_read_again",
+                       "assembly": _d.target_id, "parts": sorted(_named),
+                       "ruled_out": _d.decision_id})
     # NOT GATED, BECAUSE IT MOVES NO MONEY. The family gate above changes what a job charges and
     # so enters only where its evidence is; this one only ever adds a question to the record, and
     # a job that is double-charging a joint deserves the question whichever lane it came down.
@@ -6757,6 +7373,122 @@ _HOLE_MAKING_OPS = frozenset({
 _JOINING_OPS = frozenset({
     "welding", "dress_welds", "spot_welding", "spotweld", "resistance_welding", "brazing",
 })
+
+# What takes an assembly OFF the bench between two readings of its assemble: its own weld, a
+# coat, a plate, a polish, or the trip to the plater the shop packs for. Fitted up, welded and
+# then assembled; assembled, plated and then assembled again: each is two visits to the bench.
+# Dressing is not here; it follows the weld it dresses, at the weld bay.
+_TAKES_IT_OFF_THE_BENCH = frozenset({
+    "powder_coating", "wet_spray", "plating", "anodising", "diamond_polish",
+    "diamond_polishing", "plater_pack", "plater_final_pack",
+}) | (_JOINING_OPS - {"dress_welds"})
+
+
+# OPERATIONS THAT HAPPEN ONCE TO AN ASSEMBLY AT ONE VISIT, HOWEVER MANY READERS NAME THEM
+# (D-685 for the assemble; D-729 for the gluing). 12677-01-101SA, 6 Nov 2026 10:38 book: the
+# vision extract read the glue (participants 02J, 03J, gel tape) and the engine inferred it
+# from the same note; each reading was an event and the sheet charged two identical Glue rows,
+# GBP 13.53 each, for one bond of two panels.
+_ONE_EVENT_PER_ASSEMBLY_VISIT = frozenset({"assembly", "glue", "gluing", "bonding"})
+
+
+def _one_assembly_event_per_visit(claims_by_event: Dict[str, List[OperationClaim]],
+                                  issues: Optional[List[Dict[str, Any]]] = None
+                                  ) -> List[Dict[str, Any]]:
+    """Two readings of one assembly's assemble are one event, unless the assembly leaves the
+    bench between them (D-685).
+
+    12693-01-GA, 4 Nov 2026 17:16 book: 12693-01-101 carried two Assemble/pack (Metal) rows,
+    each 75/hr with a 15-minute set-up and each "general assembly and pack — NOT a plating
+    pack stage": one route line, "times decided = 2", two sheet rows. Every reading of an
+    assemble became an event of its own, so two readings of one assemble were two charges.
+    (The extract's reading there was the GA's note, split onto the frame; the route split now
+    homes it on the GA, where it meets the engine's own reading of the GA's assemble, and the
+    same rule makes those one.) D-397 already says this about a joint ("one joint on one
+    assembly is one event, however many readings describe it"); the assemble is the same kind
+    of fact. The readings' claims are pooled, so the strongest stands and the others stay on
+    the decision as evidence, and the participants are the union of what each reading named.
+
+    TWO VISITS STAY TWO. Each reading's place in the route is its sequence (a reading with
+    none is placed where the shop puts an assemble). Two readings at one place are one visit.
+    Two at different places are two visits when the assembly is taken off the bench between
+    them (_TAKES_IT_OFF_THE_BENCH, decided on the same target), or when it is taken off and the
+    route does not say where, since then nothing here can show they are one visit. Different
+    operations are never pooled: plater_pack and plater_final_pack keep their own rows.
+
+    Only REQUIRED readings at assembly scope are pooled, and a pool whose arbitration would
+    not stay required is left as it was. Returns the pools, and records each as an issue."""
+    decided = {eid: arbitrate_event(eid, cl) for eid, cl in claims_by_event.items() if cl}
+    order = {eid: n for n, eid in enumerate(claims_by_event)}
+
+    def _place(d: OperationDecision) -> Optional[float]:
+        _s = number(d.sequence)
+        if _s is None:
+            _s = number(DEFAULT_OPERATION_SEQUENCE.get(d.operation))
+        return _s
+
+    off_bench: Dict[str, List[Optional[float]]] = {}
+    readings: Dict[Tuple[str, str], List[Tuple[float, int, str]]] = {}
+    for eid, d in decided.items():
+        if d.status != REQUIRED:
+            continue
+        tid = str(d.target_id or "")
+        if d.operation in _TAKES_IT_OFF_THE_BENCH:
+            off_bench.setdefault(tid, []).append(_place(d))
+        elif (d.operation in _ONE_EVENT_PER_ASSEMBLY_VISIT and tid
+              and all(str(c.scope or "").lower() == "assembly"
+                      for c in claims_by_event[eid])):
+            _p = _place(d)
+            _default = number(DEFAULT_OPERATION_SEQUENCE.get(d.operation))
+            if _default is None:
+                _default = float(DEFAULT_OPERATION_SEQUENCE["assembly"])
+            readings.setdefault((tid, d.operation), []).append(
+                (_p if _p is not None else _default, order[eid], eid))
+
+    pools: List[Dict[str, Any]] = []
+    for (tid, op), rs in readings.items():
+        if len(rs) < 2:
+            continue
+        rs.sort()
+        stops = off_bench.get(tid) or []
+        visits: List[List[Tuple[float, int, str]]] = [[rs[0]]]
+        for prev, cur in zip(rs, rs[1:]):
+            apart = cur[0] != prev[0] and any(
+                s is None or prev[0] < s < cur[0] for s in stops)
+            if apart:
+                visits.append([cur])
+            else:
+                visits[-1].append(cur)
+        for visit in visits:
+            if len(visit) < 2:
+                continue
+            keep = min(visit, key=lambda r: r[1])[2]
+            others = [r[2] for r in sorted(visit, key=lambda r: r[1]) if r[2] != keep]
+            merged = list(claims_by_event[keep]) + [
+                c for e in others for c in claims_by_event[e]]
+            if arbitrate_event(keep, merged).status != REQUIRED:
+                continue
+            # The union on every claim, as D-397 does for a joint: a reading that named fewer
+            # of the parts is not disagreeing about which parts the event joins.
+            _all = sorted({str(p) for c in merged for p in (c.participants or []) if p})
+            for c in merged:
+                c.participants = list(_all)
+            claims_by_event[keep] = merged
+            for e in others:
+                del claims_by_event[e]
+            _what = "assemble" if op == "assembly" else op
+            pool = {
+                "code": "assembly_readings_pooled_on_target",
+                "operation": op, "assembly": tid,
+                "into": keep, "merged_events": others,
+                "note": (f"the {_what} of {tid} was described by {len(visit)} readings at one "
+                         f"visit to the bench; they are one event, charged once, with every "
+                         f"reading kept as evidence"),
+            }
+            pools.append(pool)
+            if issues is not None:
+                issues.append(pool)
+    return pools
 
 
 def _flag_possible_joint_double_charge(decisions: Sequence[Any],
@@ -6831,6 +7563,28 @@ def _flag_possible_joint_double_charge(decisions: Sequence[Any],
                         f"{_ws_say(_kc, _kp)} — each charge is its own drawn weld.")
                     _d.field_provenance.setdefault(
                         "review", "joining_on_assembly_and_member_both_drawn")
+                    continue
+                # A MEMBER THAT IS A WELDMENT IN ITS OWN RIGHT IS NOT ITS PARENT'S JOINT SEEN
+                # TWICE (D-685). 12693-01-01M, a tube frame whose own sheet draws four fillets and
+                # whose own parts table lists its ten tube lengths, is welded from its pieces and
+                # then welded into 101 with the plates. D-566 charged its own joints beside 101's
+                # for exactly that reason, and this flag then asked whether that line "charges it
+                # a second time", saying the weld-symbol reading did not settle it, beside a
+                # reading that had: the member's sheet draws the welds that make it. The two
+                # charges are two welds; the member's line is its own.
+                _kid_rec = _raw.get(str(_kid)) or {}
+                if (_arc_n is not None and _arc_n(_kc)
+                        and _d.operation in ("welding", "dress_welds")
+                        and isinstance(_kid_rec, Mapping)
+                        and _weldment_has_its_own_joints(_kid_rec, str(_kid), graph)):
+                    _d.reason = ((_d.reason + " ") if _d.reason else "") + (
+                        f"{_parent} is charged {_d.operation} too, for the joint that fixes "
+                        f"{_kid} to its siblings. This line is {_kid}'s own: {_kid} is made from "
+                        f"pieces of its own and its own sheet draws the welds that join them "
+                        f"({_ws_say(_kc, _kp)}), so the two charges are two welds, each charged "
+                        f"once.")
+                    _d.field_provenance.setdefault(
+                        "review", "joining_member_is_a_weldment_of_its_own")
                     continue
                 _read = (f"The weld-symbol reading does not settle it (for {_parent}, "
                          f"{_ws_say(_pc, _pp)}; for {_kid}, {_ws_say(_kc, _kp)}), so"
@@ -7217,6 +7971,129 @@ def _member_finish_weld_is_the_assemblys(decisions: Sequence[Any], graph: Mappin
     return moved
 
 
+# What makes an assembly a weldment: a required joint of its own. Dressing is not a joint.
+_WELDMENT_JOINS = frozenset({"welding", "spot_welding", "spotweld", "resistance_welding",
+                             "brazing"})
+# A claim with one of these sources is nobody's reading of this member.
+_NO_SOURCE_OF_ITS_OWN = frozenset({"", "unrecorded", "unknown"})
+
+
+def _coat_claim_is_the_members_own(source: Any, rec: Mapping[str, Any]) -> bool:
+    """Does this claim rest on something read about THIS member? An unrecorded one does not,
+    and neither does the document's coat the estimator stamps onto a member that states no
+    finish: it records drawing_deterministic and marks the record finish_inherited_from — the
+    GA's words, not the member's sheet."""
+    s = str(source or "").strip().lower()
+    if s in _NO_SOURCE_OF_ITS_OWN:
+        return False
+    if rec.get("finish_inherited_from") and s == "drawing_deterministic":
+        return False
+    return True
+
+
+def _the_weldment_finish_a_member_takes(target_id: str, graph: Mapping[str, Any],
+                                        welded: Set[str]) -> Tuple[str, str]:
+    """(the weldment, its own stated finish) this member is finished with, or ("", "").
+
+    Climbed through welded parents only: a member bolted into an assembly is not finished with
+    it. A weldment that states no finish, only RAW, or only WELDED is itself finished with the
+    weldment it is welded into, so the climb goes on through it. Two weldments that state
+    different families decide nothing."""
+    from finish_rules import finish_families, stated_finish
+    parents = graph.get("parents") or {}
+    found: Dict[str, str] = {}
+    stack: List[Tuple[str, frozenset]] = [(target_id, frozenset({target_id}))]
+    while stack:
+        pn, seen = stack.pop()
+        for par in sorted(parents.get(pn) or ()):
+            if par in seen or par not in welded:
+                continue
+            rec = _graph_record(graph, par)
+            fin = "" if rec.get("finish_inherited_from") else stated_finish(rec)
+            if finish_families(fin) - {"bare"}:
+                found[par] = fin
+            else:
+                stack.append((par, seen | {par}))
+    families = {frozenset(finish_families(f) - {"bare"}) for f in found.values()}
+    if len(families) != 1:
+        return "", ""
+    owner = sorted(found)[0]
+    return owner, found[owner]
+
+
+def _member_coat_is_its_weldments(decisions: Sequence[Any], graph: Mapping[str, Any],
+                                  issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """A member of a weldment is finished with the weldment (D-686).
+
+    12693-01, 4 Nov: the worktop weldment 104 states LIGHT AGED ZINC PLATED WITH WAXED. Its
+    wires 05M and 06M state REFER TO SUB ASSEMBLY, and each carried a required powder coat
+    whose only claim was "textual_operations on existing part record — no reader recorded a
+    source", minted by the wire route from the frame's and the GA's POWDER. They were charged
+    on the P.Coat row beside the powder-coated frame 101, and the plating line named only 03M
+    and 07M as plated.
+
+    The member's finish is the weldment's unless its own sheet states one. A finishing
+    decision is made not applicable here when: it is required on a member of a welded
+    assembly; every claim requiring it has no recorded source of its own
+    (_coat_claim_is_the_members_own); the member's own sheet states no finish (blank, a
+    pointer, or words nobody recognises); and the nearest welded ancestor that states a
+    finish states one that contradicts it (finish_rules.finished_with_its_weldment). A member
+    whose sheet states its own finish, a coat a reader quoted or a person confirmed, and a
+    part in no weldment are untouched. The ruled-out decision keeps the reason, and the
+    member stays in the weldment's finish — for a plate, on the plating line's members."""
+    kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "") for n in (graph.get("nodes") or [])}
+    parents = graph.get("parents") or {}
+    welded = {
+        str(d.target_id or "") for d in decisions
+        if d.status == REQUIRED and str(d.operation or "").lower() in _WELDMENT_JOINS
+        and kinds.get(str(d.target_id or "")) == "assembly"}
+    # A sheet that names the object a weldment says it is welded, whether or not a weld
+    # decision reached this graph.
+    for _pn, _kind in kinds.items():
+        if _kind == "assembly" and re.search(
+                r"\bWELD(?:MENT|ED)\b", str(_graph_record(graph, _pn).get("description") or ""),
+                re.I):
+            welded.add(str(_pn))
+    if not welded:
+        return []
+    try:
+        from finish_rules import (_OPERATION_FAMILY, finished_with_its_weldment,
+                                  own_or_mirror_finish)
+    except Exception:                                                # pragma: no cover
+        return []
+    moved: List[str] = []
+    for _d in list(decisions):
+        if _d.status != REQUIRED or str(_d.scope or "") != "part":
+            continue
+        _op = str(_d.operation or "").lower()
+        if _op not in _OPERATION_FAMILY:
+            continue
+        _tid = str(_d.target_id or "")
+        if not parents.get(_tid):
+            continue
+        _rec = _graph_record(graph, _tid)
+        if any(_coat_claim_is_the_members_own(s, _rec) for s in _claim_sources(_d)):
+            continue
+        # A finish the document filled in is the document's words, not this member's sheet.
+        _own = "" if _rec.get("finish_inherited_from") else own_or_mirror_finish(
+            _rec, lambda pn: _graph_record(graph, pn))
+        _owner, _owner_fin = _the_weldment_finish_a_member_takes(_tid, graph, welded)
+        if not _owner:
+            continue
+        _why = finished_with_its_weldment(_op, _own, _owner, _owner_fin, member=_tid)
+        if not _why:
+            continue
+        _d.status = NOT_APPLICABLE
+        _d.reason = (f"{_d.reason}; " if _d.reason else "") + _why
+        _d.field_provenance["status"] = "member_finished_with_its_weldment"
+        _d.field_provenance["finish_owner"] = _owner
+        moved.append(_tid)
+        if issues is not None:
+            issues.append({"code": "member_finished_with_its_weldment", "part": _tid,
+                           "operation": _op, "weldment": _owner, "finish": _owner_fin})
+    return moved
+
+
 _GATED_COAT_OPS = ("powder_coating", "wet_spray")
 
 
@@ -7437,6 +8314,145 @@ def _withhold_duplicate_level_ops(decisions: Sequence[Any], graph: Mapping[str, 
             issues.append({"code": "operation_charged_at_one_level", "operation": _op,
                            "part": _tid, "kept_on": kept})
     return withheld
+
+
+def _one_coat_event_per_target(decisions: Sequence[Any],
+                               issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """A coated object goes through the booth once per instance (D-656).
+
+    12684-02-101SA, the hook assembly, 3 Nov 2026: two readers each raised a powder event on
+    it, one per route, both at 33, and the sheet's P.Coat row added them to 66 pieces. JG: the
+    hooks are 33 pieces. Two required coats of the same kind on the same target are one booth
+    pass: the higher count stands (never the sum), the participants they name are joined, and
+    the other is ruled out with the reason. A second coat stated as a count on ONE decision
+    (two coats, a primer) is untouched."""
+    groups: Dict[Tuple[str, str], List[Any]] = {}
+    for d in decisions:
+        op = str(d.operation or "").lower()
+        if d.status == REQUIRED and op in _GATED_COAT_OPS and d.target_id:
+            groups.setdefault((str(d.target_id), op), []).append(d)
+    merged: List[str] = []
+    for (tid, op), ds in groups.items():
+        if len(ds) < 2:
+            continue
+        ds = sorted(ds, key=lambda x: (-(number(x.qty_per_unit, 0.0) or 0.0),
+                                       str(x.decision_id)))
+        keep = ds[0]
+        keep.participants = sorted({p for x in ds for p in (x.participants or [])})
+        for other in ds[1:]:
+            other.status = NOT_APPLICABLE
+            other.reason = ((f"{other.reason}; " if other.reason else "")
+                            + f"the same {op.replace('_', ' ')} of {tid} as {keep.decision_id} — "
+                              f"one pass through the booth per {tid}, counted once at "
+                              f"{number(keep.qty_per_unit, 1.0):g}, not added to it")
+            other.field_provenance["status"] = "one_coat_event_per_target"
+        merged.append(tid)
+        if issues is not None:
+            issues.append({"code": "one_coat_event_per_target", "operation": op, "part": tid,
+                           "kept": keep.decision_id,
+                           "ruled_out": [x.decision_id for x in ds[1:]]})
+    return merged
+
+
+def _spot_welds_by_their_symbols(decisions: Sequence[Any], graph: Mapping[str, Any],
+                                 issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """A spot weld is charged per weld its own sheet's symbols show (D-656).
+
+    12684-02-GA's sheet carries 33 ISO spot-weld symbols, one per hook, and weld_symbols.py
+    recorded spot_weld_count 33 — but the Spotweld row took the part's own count, 1. JG: the
+    Spotweld rate is welds per hour. So a required spot weld on a part whose symbols were
+    counted is charged at that count for each instance of the part, where that is more."""
+    quantities = graph.get("quantities") or {}
+    counted: List[str] = []
+    for d in decisions:
+        if d.status != REQUIRED or str(d.operation or "").lower() != "spot_welding":
+            continue
+        rec = _graph_record(graph, str(d.target_id or ""))
+        n = number(rec.get("spot_weld_count"), None) if rec else None
+        if not n or n <= 0:
+            continue
+        per_instance = number(quantities.get(d.target_id), 1.0) or 1.0
+        welds = float(n) * float(per_instance)
+        if welds <= (number(d.qty_per_unit, 0.0) or 0.0):
+            continue
+        was = d.qty_per_unit
+        d.qty_per_unit = welds
+        d.field_provenance["qty_per_unit"] = "spot_weld_symbols"
+        d.reason = ((f"{d.reason}; " if d.reason else "")
+                    + f"{n:g} spot weld(s) on its own sheet, each callout one weld, x "
+                      f"{per_instance:g} per unit = {welds:g} welds a unit (the Spotweld rate "
+                      f"is welds per hour); was {was if was is not None else 'unset'}")
+        counted.append(str(d.target_id))
+        if issues is not None:
+            issues.append({"code": "spot_welds_by_their_symbols", "part": d.target_id,
+                           "welds_per_unit": welds})
+    return counted
+
+
+_FITTING_OPS = ("assembly",)
+
+
+def _bought_in_fitted_by_its_assembly(decisions: Sequence[Any], graph: Mapping[str, Any],
+                                      issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """A bought-in item is fitted by the assembly it goes into, once (D-661).
+
+    12684-02-GA, every run on 3 Nov 2026: the four stick-on bumpers FIXING1270 were on the GA's
+    Assemble/pack row ("covers ... FIXING1270") and on an Assemble/pack row of their own, 4 off
+    with a 15 minute set-up, GBP 9.11 at 1 off at 18:11. A purchased item has no members to put
+    together; its fitting is work on the assembly that holds it. So a bought-in item's own
+    fitting, where nothing stronger than the engine's inference raised it, stands down when an
+    assembly above it charges assembly. One its sheet or the BOM states is left as it is."""
+    try:
+        from source_precedence import rank as _rank
+    except Exception:                                                # pragma: no cover
+        return []
+    kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "")
+             for n in (graph.get("nodes") or [])}
+    parents: Dict[str, List[str]] = {}
+    for _p, _kids in (graph.get("children") or {}).items():
+        for _k in (_kids or {}):
+            parents.setdefault(str(_k), []).append(str(_p))
+
+    def _ancestors(_pn: str) -> List[str]:
+        out: List[str] = []
+        todo = list(parents.get(_pn) or [])
+        while todo and len(out) < 32:
+            _a = todo.pop(0)
+            if _a not in out:
+                out.append(_a)
+                todo.extend(parents.get(_a) or [])
+        return out
+
+    inferred = _rank("inference") or 0
+    fitting = {}
+    for d in decisions:
+        op = str(d.operation or "").lower()
+        if d.status == REQUIRED and op in _FITTING_OPS and d.target_id:
+            fitting.setdefault((str(d.target_id), op), []).append(d)
+    stood_down: List[str] = []
+    for (tid, op), ds in fitting.items():
+        if kinds.get(tid) != "bought_in":
+            continue
+        owner = next((a for a in _ancestors(tid)
+                      if any(x.status == REQUIRED for x in fitting.get((a, op), []))), None)
+        if owner is None:
+            continue
+        for d in ds:
+            if (_rank(str(d.source or "")) or 0) > inferred:
+                continue
+            d.status = NOT_APPLICABLE
+            d.reason = ((f"{d.reason}; " if d.reason else "")
+                        + f"{tid} is bought in and fitted as part of {owner}'s "
+                          f"{op.replace('_', ' ')}, which already charges it; a purchased item "
+                          f"has nothing of its own to assemble — put this row back only if it "
+                          f"is a separate stage")
+            d.field_provenance["status"] = "bought_in_fitted_by_its_assembly"
+            stood_down.append(tid)
+            if issues is not None:
+                issues.append({"code": "bought_in_fitted_by_its_assembly", "part": tid,
+                               "operation": op, "fitted_by": owner,
+                               "ruled_out": d.decision_id})
+    return stood_down
 
 
 def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]],

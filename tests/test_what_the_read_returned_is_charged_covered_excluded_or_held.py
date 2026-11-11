@@ -22,8 +22,13 @@ sys.path.insert(0, str(ROOT / "src"))
 os.environ.setdefault("SDI_OFFLINE", "1")
 
 import concept_scan as cs  # noqa: E402
+import config  # noqa: E402
 import invariants  # noqa: E402
 import read_charge_contract as rcc  # noqa: E402
+
+# The weld row charges the card's own arc-weld rate, as a real book does: the book and the card
+# are read from the same template, so the figure moves when estimating issue new rates (D-704).
+WELD_RATE = config.HOURLY_RATES_GBP["welding"]
 
 STEM = "1234567"
 U, T, B, C, L = (f"{STEM}-CPT0{n}" for n in range(5))
@@ -91,7 +96,8 @@ def _book(*, hole_row=True, plate_gbp=0.0, plating=True, allowances=True, bought
             _lab(152, ["saw"], T, .1917, 6.11, "Saw"),
             _lab(153, ["deburring"], T, .2583, 8.05, "Manual labour (Metal)"),
             _lab(154, ["deburring"], B, .2667, 8.31, "Manual labour (Metal)", 2),
-            _lab(155, ["welding"], U, .6, 25.06, "Weld (CO2)", rate=41.77),
+            _lab(155, ["welding"], U, .6, round(.6 * WELD_RATE, 2), "Weld (CO2)",
+                 rate=WELD_RATE),
             _lab(156, ["dress_welds"], U, .5667, 16.25, "Dress Welds"),
             _lab(157, ["assembly", "handling"], U, .33, 9.42, "Assemble/pack (Metal)")]
     if hole_row:

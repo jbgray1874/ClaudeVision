@@ -860,6 +860,51 @@ def _page_lookup_key(page: Dict[str, Any], summary: Dict[str, Any]) -> Optional[
     return int(pnum) if pnum is not None else None
 
 
+_OA_FIGURE = re.compile(r"(?<![\d.])(\d{1,5}(?:\.\d+)?)\s*O\s*/?\s*A(?![A-Z])")
+
+
+def _own_sheet_overall_blank(part: Dict[str, Any], page_lookup: Dict[int, Dict[str, Any]]) -> bool:
+    """THE SIZE THE PART'S OWN SHEET CALLS OVERALL (SCRUM-194, D-764). A flat part's detail
+    sheet prints its extents as "<n> O/A" (the PDF text: "1168O A", "11O A"); exactly two such
+    figures on its own sheets are its length and width, the same figure twice included (a
+    30 x 30 cap). 0358141's five flat parts (1168 x 11, 80 x 11, 30 x 30, 60 x 19, 30 x 15)
+    had no blank at all: the text fallback reads nothing under 50 mm, by design, and the DXF
+    path had no file. The printed words are kept beside the figures. A section's single O/A is
+    its length (D-761), read where the section is; three or more O/A figures are a folded
+    part's extents, not a flat blank, and are left to the fold geometry. The sheet's own text
+    is read once (the merged page text repeats every token from its regions), so two figures
+    are two figures. Returns True when it set the blank."""
+    if _safe_float(part.get("blank_length_mm")) and _safe_float(part.get("blank_width_mm")):
+        return False
+    if (part.get("section_stock") or {}).get("a"):
+        return False
+    own_sheets = [p for p in (part.get("pages") or []) if isinstance(p, int)
+                  and p != part.get("bound_to_parts_list_page") and p in page_lookup]
+    hits: List[Tuple[float, str]] = []
+    for pno in own_sheets:
+        sheet = page_lookup[pno].get("page") if isinstance(page_lookup[pno].get("page"), dict) else {}
+        text = str(sheet.get("pdfplumber_text") or sheet.get("normalized_text") or "")
+        seen: set = set()
+        if not text.strip():
+            text = str(page_lookup[pno].get("text") or "")
+            for m in _OA_FIGURE.finditer(text.upper()):          # merged text: distinct only
+                key = (float(m.group(1)), m.group(0).strip())
+                if key not in seen:
+                    seen.add(key)
+                    hits.append(key)
+            continue
+        hits.extend((float(m.group(1)), m.group(0).strip()) for m in _OA_FIGURE.finditer(text.upper()))
+    if len(hits) != 2 or not all(v > 0 for v, _w in hits):
+        return False
+    hits.sort(key=lambda h: -h[0])
+    part["blank_length_mm"], part["blank_width_mm"] = hits[0][0], hits[1][0]
+    part["blank_length_mm_source"] = "detail_sheet_overall"
+    part["blank_width_mm_source"] = "detail_sheet_overall"
+    part["blank_printed"] = " x ".join(re.sub(r"\s*O\s*/?\s*A$", " O/A", w) for _v, w in hits)
+    part["blank_page"] = own_sheets[0] if len(own_sheets) == 1 else own_sheets
+    return True
+
+
 def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Post-build fixes after part_index and bought-in merge.
@@ -1094,8 +1139,17 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 _row_says_sheet = bool(_own_row) and not _row_says_section and bool(
                     re.search(r"\b\d+(?:\.\d+)?\s*MM\b", _own_row)) and not re.search(
                     r"\d\s*X\s*\d+(?:\.\d+)?\s*X\s*\d", _own_row)
+                # A PAGE THE PART IS ONLY LISTED ON IS NOT ITS OWN SHEET, WHATEVER ITS ROLE
+                # (D-755). 0358141's page 3 is the rail's own detail sheet and also prints the
+                # rail's parts list. The caps M5 to M7 are bound to it only because their own
+                # sheets were not bound (part_index says so: bound_to_parts_list_page). Read
+                # as each cap's single detail sheet, it gave them the rail's 15x30x2 tube and
+                # the rail's 1,400 mm as their length, and D-751's guard, which waits for a
+                # part with no detail sheet, never fired.
+                _list_page = part.get("bound_to_parts_list_page")
                 _detail_pages = [pn for pn in page_nums if pn in page_lookup
-                                 and str(page_lookup[pn].get("role") or "") == "detail"]
+                                 and str(page_lookup[pn].get("role") or "") == "detail"
+                                 and pn != _list_page]
                 _shared = len(page_nums) != 1 or len(_detail_pages) != 1
                 # THE PART'S OWN DETAIL SHEET SPEAKS FOR IT WITHOUT A ROW (D-584, fourth
                 # tranche). The top blank is bound to the rail sheet that lists it AND to its
@@ -1170,7 +1224,32 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                         f"section '{_path}' read from a shared page was NOT applied — this "
                         f"part's own detail sheet (page {_detail_pages[0]}) names no section, "
                         f"so the callout is another part's on the drawing that lists them both")
+                # A PARTS LIST SPEAKS FOR THE ROW THAT PRINTS THE PROFILE, NOT FOR EVERY ROW
+                # (D-751). 0358141's end caps M5 and M7 were bound to page 3, the rail's parts
+                # list, because their own detail sheets were not bound to them; that page prints
+                # the rail's
+                # "15x30x2mm MS TOP TUBE". Every guard above keys on the part's own sheet or a
+                # code in the callout, and this part had neither, so the rail's tube became two
+                # 3 mm plate caps' stock at 1,400 mm. With no sheet bound to it, nothing on its
+                # row and nothing in its name saying section, the callout is another row's.
+                # The list's page is often an assembly sheet, so its role says nothing about
+                # this part: only the record's own parent flag makes it an assembly here.
+                elif (part.get("bound_to_parts_list_page") and not _detail_pages
+                      and not _row_says_section and not _looks_like_section
+                      and not part.get("is_assembly_parent")):
+                    part.setdefault("review_flags", []).append(
+                        f"section '{_path}' read from page {part.get('bound_to_parts_list_page')} "
+                        f"was NOT applied — that page is a parts list this part is only listed "
+                        f"on, no detail sheet was bound to it, and neither its own row nor its "
+                        f"name says it is section stock, so the callout belongs to another row "
+                        f"on that list")
                 else:
+                    # Said on the section where it was read off a list the part is only
+                    # listed on (D-751): the part's own read can still say it is not tube.
+                    if (part.get("bound_to_parts_list_page") and not _detail_pages
+                            and not _row_says_section):
+                        _sec = dict(_sec, read_from="parts_list_page",
+                                    read_from_page=part.get("bound_to_parts_list_page"))
                     # THE CUT LENGTH IS THE SHEET'S FIGURE, NOT A NUMBER IN ITS PROSE (D-584):
                     # on a part's own detail page the largest leading figure printed along an
                     # axis is its length — 703 for the cross rail, 1395 for the upright —
@@ -1178,7 +1257,25 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                     # One detail sheet is enough, whatever else the part is bound to: the
                     # cross rail is listed on the support sheet and drawn on its own, and the
                     # text path across both read 120 and then 304 from the notes block.
+                    # THE LENGTH THE PART'S OWN SHEET CALLS OVERALL (D-761). 0358141's upright
+                    # M4 prints "1383 O/A" on its own sheet (the PDF text: "1383 O A"); the
+                    # text read took 111.85, a slot's position, and M4 was cut at 112 mm. A
+                    # single overall figure on the part's one detail sheet, at least twice the
+                    # section's side, is its length; the printed words are kept beside it.
+                    _oa_done = False
                     if len(_detail_pages) == 1:
+                        _oa_text = str(page_lookup[_detail_pages[0]].get("text") or "").upper()
+                        _oa = {float(v) for v in re.findall(
+                            r"(?<![\d.])(\d{2,5}(?:\.\d+)?)\s*O\s*/?\s*A(?![A-Z])", _oa_text)}
+                        _side_oa = max(float(_sec.get("a") or 0), float(_sec.get("b") or 0))
+                        if len(_oa) == 1 and next(iter(_oa)) >= _side_oa * 2 > 0:
+                            _len_oa = next(iter(_oa))
+                            if _sec.get("length_mm") is None or abs(float(_sec.get("length_mm")) - _len_oa) > 1.0:
+                                _sec = dict(_sec, length_mm=_len_oa, length_source="detail_sheet_overall",
+                                            length_from_text=_sec.get("length_mm"),
+                                            length_printed=f"{_len_oa:g} O/A")
+                            _oa_done = True
+                    if len(_detail_pages) == 1 and not _oa_done:
                         try:
                             from detail_page_geometry import read_sheet_figures as _figs
                             _fig = _figs(page_lookup[_detail_pages[0]].get("page") or {})
@@ -1532,6 +1629,25 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         # OPERATION CUES ARE READ WITH THE LEGEND REMOVED — see _strip_specification_legend.
         cue_text = _strip_specification_legend(combined_text)
         cue_upper = cue_text.upper()
+        # A JOINT IS NOT TAKEN FROM A SHEET THE PART IS ONLY LISTED ON (D-756, narrowed by
+        # D-757). 0358141's rub strips M2 and M3 had no sheet of their own bound, so part_index
+        # bound them to page 2, the frame M1's sheet with its parts list, and every note on it
+        # was read as theirs. A weld or a dress read there is the joint of the sheet's own part,
+        # charged once at that owner, never again on each member it lists. Everything else on
+        # that page still reaches the member as before: an assembly-level instruction (deburr,
+        # finish) applies to the parts it lists. An assembly keeps its own page's joints.
+        _cue_list_page = part.get("bound_to_parts_list_page")
+        _own_cue_pages = [pn for pn in page_nums if pn in page_lookup and pn != _cue_list_page]
+        _joint_cue_upper = cue_upper
+        if (_cue_list_page and not part.get("is_assembly_parent")
+                and len(_own_cue_pages) != len([pn for pn in page_nums if pn in page_lookup])):
+            _joint_cue_upper = _strip_specification_legend(
+                " ".join(page_lookup[pn]["text"] for pn in _own_cue_pages)).upper()
+
+        def _is_joint_op(_op: Any) -> bool:
+            return "weld" in str(_op).lower() or "braz" in str(_op).lower()
+
+        _joints_withheld: List[str] = []
         if geo_reliability == 0.0 and not current_ops and cue_text.strip():
             finishes = part.get("surface_finishes", [])
             try:
@@ -1548,6 +1664,16 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                     inferred = []
             except Exception:
                 inferred = []
+            if inferred and _joint_cue_upper is not cue_upper:
+                _own_joints = set()
+                if _joint_cue_upper.strip():
+                    try:
+                        _own_joints = {o for o in (_infer_ops_from_text(_joint_cue_upper) or [])
+                                       if _is_joint_op(o)}
+                    except Exception:                                # noqa: BLE001
+                        _own_joints = set()
+                _joints_withheld += [o for o in inferred if _is_joint_op(o) and o not in _own_joints]
+                inferred = [o for o in inferred if not _is_joint_op(o) or o in _own_joints]
             if inferred:
                 part["textual_operations"] = list(inferred)
                 # THE WORDS TRAVEL WITH THE OPERATION (D-586). An op inferred here reached
@@ -1587,6 +1713,9 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
 
             _weld_phrase = next(
                 (p for p in _ASSEMBLY_WELD_PHRASES if p in cue_upper), None)
+            if _weld_phrase and _weld_phrase not in _joint_cue_upper:
+                _joints_withheld += ["welding", "dress_welds"]
+                _weld_phrase = None
             if _weld_phrase:
                 for op in ("welding", "dress_welds"):
                     if op not in ops_set:
@@ -1612,6 +1741,12 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 # intentionally NOT calling _interpret_part here — assembly weld callouts
                 # are recorded for visibility but NOT re-costed. Re-running routing on the
                 # assembly over-estimates weld time (Drawing 1 went 4.9%→14.4% over).
+
+        if _joints_withheld:
+            part.setdefault("review_flags", []).append(
+                f"no weld or dressing taken from page {_cue_list_page}: it is a parts list this "
+                f"part is only listed on, so a joint read there belongs to that sheet's own part "
+                f"and is charged once, there. Bind this part's own sheet if it is welded")
 
         # Wire parts — replace sheet-metal ops with wire route (robomac / weld / spot)
         if _is_wire_part and not inherited_steel:
@@ -1651,7 +1786,24 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 _ops.add("deburring")
             if "CONTACT POINT" in doc_page_text_upper:
                 _ops.add("resistance_welding")
-            if "POWDER" in doc_page_text_upper or "P/C" in doc_page_text_upper:
+            # THE WIRE'S OWN SHEET IS QUOTED; THE PACK'S WORD IS NOT ITS OWN (D-686). This read
+            # "POWDER" anywhere in the pack, so 12693-01's wires 05M and 06M, whose own sheets
+            # say REFER TO SUB ASSEMBLY inside a zinc-plated worktop weldment, took the frame's
+            # POWDER COATED and the GA's MATTE BLACK as a coat of their own, and the route
+            # printed it as "an unrecorded source". Where the wire's own pages (legend removed)
+            # carry the words, the coat now carries them, so a member of a differently
+            # finished weldment keeps a coat its own sheet states. A coat read only off
+            # another sheet is still added, as before, for a loose wire in a coated pack; it
+            # stays unsourced, and the route compiler finishes a member of a weldment with
+            # that weldment (_member_coat_is_its_weldments).
+            _pc_own = re.search(r"POWDER[\s-]*COAT\w*|\bPOWDER\b|\bP/C\b", cue_upper)
+            if _pc_own:
+                _ops.add("powder_coating")
+                part.setdefault("operation_evidence", {}).setdefault(
+                    "powder_coating", _pc_own.group(0))
+                part.setdefault("operation_sources", {}).setdefault(
+                    "powder_coating", "drawing_notes")
+            elif "POWDER" in doc_page_text_upper or "P/C" in doc_page_text_upper:
                 _ops.add("powder_coating")
             _ops.add("handling")
             part["textual_operations"] = list(_ops)
@@ -1739,6 +1891,7 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 "LAMINATE",
             )
         )
+        _own_sheet_overall_blank(part, page_lookup)
         if _is_non_metal_mat and not inherited_steel:
             _raw_thick = part.get("thicknesses_mm") or []
             _valid_thick = [
@@ -1836,7 +1989,24 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 # "(C) 2026"). The cost of that is a genuine 1990–2099mm part refused HERE —
                 # correct, for a guess of last resort: a part that size has to come from a
                 # measurement, not from the largest number anybody printed on the page.
-                _page_text = " ".join(str(_get_page_text(p)) for p in _detail_pages)
+                # ITS OWN SHEET BEFORE ANY OTHER (D-721). Every detail page was read for every
+                # part, so the largest numbers on the pack sized each part alike: 11908-22's
+                # base and four sides all became 400 x 350, the 350 off one side's sheet.
+                # Where the part's own pages are known, only they size it.
+                _own_pages = {p for p in (part.get("pages") or []) if isinstance(p, int)}
+                _own_detail = [_p for _p in _detail_pages
+                               if _p.get("page_number") in _own_pages]
+                _page_text = " ".join(str(_get_page_text(p))
+                                      for p in (_own_detail or _detail_pages))
+                # A NUMBER THAT MEASURES SOMETHING ELSE IS NOT A SIZE (D-721). The border's
+                # finish notes print "400 GRIT FINAL POLISH" and "80 - 120 MICRON", and the
+                # address block prints a telephone number; 400 became the length of every
+                # panel on 11908-22. A figure followed by a non-length unit is dropped.
+                _page_text = re.sub(
+                    r"\b\d+(?:\.\d+)?\s*(?:-\s*\d+(?:\.\d+)?\s*)?(?:GRIT|MICRONS?|UM|KGS?|G|GSM|%|DEG(?:REES?)?)\b",
+                    " ", _page_text, flags=re.IGNORECASE)
+                _page_text = re.sub(r"\d+(?:\.\d+)?\s*°", " ", _page_text)
+                _page_text = re.sub(r"\b0\d{3,4}\s+\d{3}\s+\d{3,4}\b", " ", _page_text)
                 _page_text = re.sub(
                     r"\b\d{1,4}\s*[/.\-]\s*\d{1,2}\s*[/.\-]\s*\d{1,4}\b", " ", _page_text)
                 _page_text = re.sub(
@@ -2747,6 +2917,114 @@ def cut_list_member_records(bom_rows: Any, parts: List[Dict[str, Any]]) -> List[
     return out
 
 
+_PIECE_LABEL = re.compile(r"(?<![\d.])(\d{2,5}(?:\.\d+)?)\s*(?:MM)?\s*(?:TUBE|LONG|LG)\b")
+_PIECE_PROFILE = re.compile(
+    r"(?<![\d.])(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*MM\s*"
+    r"(?:M\s*/?\s*S|S\s*/\s*S|MILD\s*STEEL|STAINLESS\s*STE[EL]{2})?\s*(?P<role>[A-Z]+(?:\s*[A-Z&]+){0,2})?",
+    re.IGNORECASE)
+
+
+def sheet_piece_member_records(parts: List[Dict[str, Any]], summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """EACH PIECE OF A WELDMENT KEEPS ITS OWN SECTION (SCRUM-194; reviewer, 9 Nov 2026).
+
+    A weldment whose sheets label several tube lengths ("1394 TUBE" on one sheet, "1170 TUBE" on
+    the next) was given one section and the lengths' sum: 2564 mm of the first profile. Unlike
+    sections then priced as one stock item. Here each labelled length becomes a member record of
+    its weldment, "<weldment>-CL<n>", as a parts table's several-section cut list already does
+    (D-548): its profile is the one printed on the same sheet, excluding a profile the sheet
+    names for another listed part (its role word is that part's description, "UPRIGHTS" for an
+    UPRIGHT). A length whose own sheet prints no profile of its own keeps the weldment's profile
+    PROVISIONALLY, said so on the piece, and the profile stays an open gap to confirm. Each
+    piece is counted once: a count the sheet does not print is asked, never invented. The
+    weldment keeps its welding and the work its sheets state; its stock is on its pieces."""
+    pages = {p.get("page_number"): p for p in (summary.get("pages") or []) if isinstance(p, dict)}
+    listed_desc = {}
+    for q in parts:
+        d = re.sub(r"[^A-Z]", "", str(q.get("description") or "").upper())
+        if len(d) >= 4:
+            listed_desc[d] = str(q.get("part_number") or "")
+    existing = {str(q.get("part_number") or "").upper() for q in parts}
+    out: List[Dict[str, Any]] = []
+    for part in list(parts):
+        ss = part.get("section_stock") if isinstance(part.get("section_stock"), dict) else {}
+        pieces = [float(v) for v in (ss.get("cut_lengths_mm") or []) if _safe_float(v)]
+        if not (ss.get("a") and len(pieces) > 1 and ss.get("length_source") == "tube_callouts"):
+            continue
+        pn = str(part.get("part_number") or "").strip()
+        own = [pg for pg in (part.get("pages") or []) if isinstance(pg, int)
+               and pg != part.get("bound_to_parts_list_page") and pg in pages]
+        found: List[Dict[str, Any]] = []
+        for pg in own:
+            text = str(pages[pg].get("pdfplumber_text") or pages[pg].get("normalized_text") or "")
+            up = text.upper()
+            profiles = []
+            for m in _PIECE_PROFILE.finditer(up):
+                role = re.sub(r"[^A-Z]", "", m.group("role") or "")
+                # The role word may come after a view mark ("30X30X2MM AA M/S UPRIGHTS"): a
+                # listed part's description standing anywhere in the words after the profile
+                # makes it that part's profile.
+                other = next((code for d, code in listed_desc.items()
+                              if code.upper() != pn.upper() and role and d in role), None)
+                if other:
+                    continue                    # the profile of another listed part
+                dims = [float(m.group(i)) for i in (1, 2, 3)]
+                profiles.append({"dims": dims, "words": m.group(0).strip()})
+            uniq = {tuple(sorted(pf["dims"])): pf for pf in profiles}
+            for m in _PIECE_LABEL.finditer(up):
+                length = float(m.group(1))
+                if length not in pieces or any(f["length_mm"] == length for f in found):
+                    continue
+                prof = next(iter(uniq.values())) if len(uniq) == 1 else None
+                found.append({"length_mm": length, "page": pg, "words": m.group(0).strip(),
+                              "profile": prof})
+        if len(found) < 2:
+            continue
+        base = {k: ss.get(k) for k in ("a", "b", "t")}
+        for k, piece in enumerate(sorted(found, key=lambda f: (f["page"], -f["length_mm"])), start=1):
+            code = f"{pn}-CL{k}"
+            if code.upper() in existing:
+                continue
+            rec = _empty_part_record(code, description=f"{piece['length_mm']:g} TUBE of {pn}", quantity=None)
+            _apply_field(rec, "quantity", 1, "drawing_deterministic")
+            prof = piece["profile"]
+            if prof:
+                t, a, b = sorted(prof["dims"])
+                stock = {"a": a, "b": b, "t": t, "profile_source": "same_sheet", "profile_words": prof["words"]}
+            else:
+                stock = dict(base, profile_source="weldment_provisional", profile_provisional=True)
+            stock.update({"length_mm": piece["length_mm"], "cut_lengths_mm": [piece["length_mm"]],
+                          "length_source": "tube_callout", "length_printed": piece["words"],
+                          "length_page": piece["page"], "detection_path": "canonical_profile",
+                          "source": "drawing_deterministic",
+                          "profile_form": "SHS" if abs(float(stock["a"]) - float(stock["b"])) < 1e-6 else "RHS"})
+            rec.update({"section_stock": stock, "page_roles": ["section"], "pages": [piece["page"]],
+                        "source": "cut_list_member", "identity_source": "cut_list_member",
+                        "is_bought_in": False, "stock_form": "tube", "cut_list_member_of": pn,
+                        "bom_parent": pn, "textual_operations": ["saw"],
+                        "pieces_counted_once": True})
+            rec.setdefault("operation_sources", {})["saw"] = "drawing_deterministic"
+            for _k in ("materials", "normalized_material", "surface_finishes", "normalized_finish"):
+                if part.get(_k) and not rec.get(_k):
+                    rec[_k] = part.get(_k)
+            rec["review_flags"] = [
+                f"piece of {pn}: '{piece['words']}' on page {piece['page']}, cut and charged by its own length "
+                f"and section; counted once, as the sheet prints no count for it"]
+            if not prof:
+                rec["review_flags"].append(
+                    f"no profile printed against '{piece['words']}' on page {piece['page']}: priced provisionally "
+                    f"at the weldment's {base['a']:g}x{base['b']:g}x{base['t']:g}, to confirm (an open gap, "
+                    f"never a reading)")
+            out.append(rec)
+            existing.add(code.upper())
+        part["section_stock_on_members"] = [r["part_number"] for r in out if r.get("cut_list_member_of") == pn]
+        part["section_stock_as_read"] = dict(ss)
+        part.pop("section_stock", None)
+        part.setdefault("review_flags", []).append(
+            f"its {len(found)} labelled tube lengths are pieces of their own, each with the section printed on "
+            f"its sheet: {', '.join(part['section_stock_on_members'])}; the weldment's stock is on them")
+    return out
+
+
 def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
                                    ) -> List[Dict[str, Any]]:
     """A bought-in record for every table row no record already stands for.
@@ -3050,6 +3328,11 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
     parts = filtered
 
     parts = _suppress_pn_fragments(parts, summary)
+    # EACH PIECE OF A WELDMENT KEEPS ITS OWN SECTION (SCRUM-194): after the section reading and
+    # the filters, so the members are neither read as sections again nor filtered as fragments.
+    _sheet_pieces = sheet_piece_member_records(parts, summary)
+    if _sheet_pieces:
+        parts.extend(_sheet_pieces)
 
     observations: List[str] = []
     manual_review_items: List[Dict[str, Any]] = []

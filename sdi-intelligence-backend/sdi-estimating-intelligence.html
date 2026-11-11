@@ -5,14 +5,14 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SDI Estimating Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Spectral:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Spectral:wght@400;600&family=Outfit:wght@400;500;600;700;800&family=Fraunces:opsz,wght@9..144,300;9..144,400&display=swap" rel="stylesheet">
 <style>
   /* ── House tokens, taken from sdi-intelligence-portal.html ────────────── */
   :root{
-    --bg:#0d0d0f; --panel:#121214; --panel-2:#17171a; --line:#26262b;
-    --ink:#f0efec; --muted:#9b9ba3; --dim:#6a6a72;
-    --brand:#e8a33d; --ok:#4ec97f; --info:#6da8e8; --warn:#e8a33d; --bad:#ff6b6b;
-    --disp:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --bg:#0c0c0b; --panel:#141412; --panel-2:#1a1a17; --line:#2b2b26;
+    --ink:#f2f2ea; --muted:#b6b6a7; --dim:#8f8f84;
+    --brand:#F6D946; --brand-fill:#F6D946; --ok:#4ec97f; --info:#6da8e8; --warn:#e8a33d; --bad:#ff6b6b;
+    --disp:'Outfit','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
     --body:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
     --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;
     --serif:'Spectral','Source Serif 4',Georgia,serif;
@@ -32,9 +32,9 @@
 
      No prefers-color-scheme here either — opt-in only, same reasoning. */
   :root[data-theme="light"]{
-    --bg:#f4f4f2; --panel:#ffffff; --panel-2:#f7f7f5; --line:#d9d8d3;
+    --bg:#f4f4f0; --panel:#ffffff; --panel-2:#f7f7f5; --line:#d9d9cf;
     --ink:#17171a; --muted:#5b5b63; --dim:#83838c;
-    --brand:#a9701a; --ok:#1f7a45; --info:#2b6cb0; --warn:#a9701a; --bad:#c0342f;
+    --brand:#7a6300; --brand-fill:#F6D946; --ok:#1f7a45; --info:#2b6cb0; --warn:#9c5a00; --bad:#c0342f;
     --tint:#00000008; --scrim:rgba(0,0,0,.42);
   }
   :root{color-scheme:dark}
@@ -73,6 +73,13 @@
   .wrap{max-width:1460px;margin:0 auto;padding:28px 22px 80px}
 
   header{border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:26px;display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap}
+  /* THE CONTROL PANEL, ONE CLICK FROM THE TOP OF THE PAGE (D-740): every run, the SolidWorks
+     licence, the fleet and the KPIs, full screen. */
+  .cp-btn{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border-radius:9px;
+          background:var(--brand-fill);color:#191900;font-weight:700;font-size:13.5px;text-decoration:none;
+          white-space:nowrap;align-self:flex-end}
+  .cp-btn:hover{filter:brightness(1.08)}
+  .cp-btn .dot{width:8px;height:8px;border-radius:50%;background:#191900;opacity:.75}
   h1{font-family:var(--disp);font-size:clamp(24px,3.4vw,34px);font-weight:700;letter-spacing:-.02em;margin:0}
   h1 .mark{color:var(--brand)}
   .sub{color:var(--muted);font-size:14px;margin:4px 0 0}
@@ -116,7 +123,7 @@
   button:hover:not(:disabled){border-color:var(--dim)}
   button:disabled{opacity:.42;cursor:not-allowed}
   button:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
-  .btn-run{width:100%;background:var(--brand);color:#191900;border-color:var(--brand);padding:15px 18px;font-size:16px;font-weight:700;letter-spacing:-.01em;margin-top:18px}
+  .btn-run{width:100%;background:var(--brand-fill);color:#191900;border-color:var(--brand-fill);padding:15px 18px;font-size:16px;font-weight:700;letter-spacing:-.01em;margin-top:18px}
   .btn-run:hover:not(:disabled){filter:brightness(1.08)}
   .btn-run:disabled{background:var(--panel-2);color:var(--dim);border-color:var(--line);filter:none}
   /* THE EXTRACTS, LAID OUT RATHER THAN STACKED. .btn-run is width:100% — right for the one big
@@ -129,6 +136,9 @@
   .exgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px}
   .exgrid .btn-run{width:auto;margin-top:0;padding:11px 12px;font-size:13.5px;line-height:1.25}
   @media(max-width:640px){.exgrid{grid-template-columns:1fr}}
+  /* The three pack readers side by side, one row (D-737). */
+  .exgrid.ex3{grid-template-columns:repeat(3,1fr)}
+  @media(max-width:760px){.exgrid.ex3{grid-template-columns:1fr}}
   /* The second book, sitting under the first rather than beside it — same size, so it reads
      as the same kind of thing, but it never lights up because nothing is behind it. */
   .btn-soon{margin-top:0;cursor:not-allowed}
@@ -185,6 +195,14 @@
   .log{margin-top:12px;background:#0e0e11;border:1px solid var(--line);border-radius:7px;padding:12px 13px;font-family:var(--mono);font-size:11.5px;line-height:1.6;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word;color:var(--muted)}
   .log:empty{display:none}
   .log .w{color:var(--warn)} .log .e{color:var(--bad)} .log .g{color:var(--ok)}
+  /* several runs at once, one pane each (D-732) */
+  .runpanes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;margin-top:10px}
+  .runpane{border:1px solid var(--line);border-radius:7px;padding:9px 10px;min-width:0;background:var(--panel-2)}
+  .runpane-h{font-size:12px;font-weight:600;color:var(--ink);overflow-wrap:anywhere}
+  .runpane-m{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:2px;overflow-wrap:anywhere}
+  .runpane-free{color:var(--dim);font-size:11.5px;margin-top:4px;overflow-wrap:anywhere}
+  .runpane .log{margin-top:6px;max-height:120px;font-size:10.5px;padding:7px 8px}
+  .runpane .btn-stop{padding:7px 10px;font-size:12px;margin-top:6px}
   .out{list-style:none;padding:0;margin:12px 0 0;display:flex;flex-wrap:wrap;gap:8px}
   .out a{display:inline-block;font-family:var(--mono);font-size:11.5px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;color:var(--info);text-decoration:none;background:var(--panel-2)}
   .out a:hover{border-color:var(--info)}
@@ -206,6 +224,27 @@
   .listing li[aria-selected=true]{background:rgba(232,163,61,.09)}
   .dfoot{display:flex;gap:10px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--line)}
   .dfoot .left{margin-right:auto;color:var(--dim);font-size:12px;align-self:center}
+
+  /* ── we.are.sdi (D-754) ──────────────────────────────────────────────────────────
+     The look of wearesdi.com on the dark ground: the wordmark, SDI yellow for the brand
+     (warnings keep their amber, so the two never read as one), the geometric display face,
+     pill-shaped primary buttons and the halftone dot circle. Tokens only, so light mode
+     follows. */
+  .sdi-word{display:inline-block;height:1em;width:auto;vertical-align:-.12em;color:var(--sdi-word-ink,currentColor)}
+  .sdi-word .d{fill:var(--brand)}
+  .sdi-dots{position:absolute;pointer-events:none;border-radius:50%;opacity:.16;z-index:0;
+    background-image:radial-gradient(var(--brand) 1.1px, transparent 1.6px);background-size:9px 9px;
+    -webkit-mask-image:radial-gradient(circle at center,#000 58%,transparent 71%);
+            mask-image:radial-gradient(circle at center,#000 58%,transparent 71%)}
+  header{position:relative}
+  header > :not(.sdi-dots){position:relative;z-index:1}
+  header .sdi-dots{width:230px;height:230px;right:-40px;top:-120px}
+  h1{font-family:var(--disp)}
+  .eyebrow .sdi-word,.kicker .sdi-word{height:13px;margin-right:9px;color:var(--ink)}
+  .btn-run,.cp-btn{border-radius:999px}
+  /* TTI PRICER: one row per sheet row, read at a glance. */
+  .tbl{width:100%;border-collapse:collapse;font-size:13px}
+  .tbl th,.tbl td{text-align:left;padding:4px 6px;border-bottom:1px solid var(--line, rgba(127,127,127,.25));vertical-align:top}
 </style>
 </head>
 <body>
@@ -236,11 +275,13 @@
   .sdinav-toggle{
     display:flex; align-items:center; gap:9px; width:100%;
     padding:10px 16px; border:0; border-top:1px solid var(--line);
-    background:transparent; color:var(--muted); cursor:pointer;
+    /* The panel's own colour, not transparent: the bar is sticky over a menu that scrolls,
+       and see-through it laid "Collapse" over the last entry (seen 8 Nov 2026, D-754a). */
+    background:var(--panel); color:var(--muted); cursor:pointer;
     font-family:inherit; font-size:11.5px; letter-spacing:.04em; text-align:left;
     position:sticky; bottom:0; transition:.16s;
   }
-  .sdinav-toggle:hover{ color:var(--ink); background:#ffffff08; }
+  .sdinav-toggle:hover{ color:var(--ink); background:var(--panel-2,var(--panel)); }
   .sdinav-toggle:focus-visible{ outline:2px solid var(--brand); outline-offset:-2px; }
   body.nav-collapsed .sdinav-toggle{ justify-content:center; padding:10px 0; }
   .sdinav-toggle .chev{ width:14px; height:14px; flex:none; transition:transform .18s; }
@@ -253,13 +294,15 @@
   .sdinav{
     position:fixed; left:0; top:0; bottom:0; width:var(--sdinav-w); overflow-y:auto;
     background:var(--panel); border-right:1px solid var(--line);
-    z-index:900; padding-bottom:24px;
+    /* No bottom padding: a sticky bar sits inside the padding, so 24px of it left a strip
+       under "Collapse" where the menu scrolled into view (D-754a). */
+    z-index:900; padding-bottom:0;
   }
   .sdinav-brand{ display:flex; align-items:center; gap:10px; padding:18px 16px 16px;
     text-decoration:none; color:inherit; }
-  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand);
+  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand-fill,var(--brand));
     /* #000, as the portal's own .mark b uses, and NOT the near-black palette literal:
-       the mark sits on amber in both themes, so its ink is not theme-dependent, and a
+       the mark sits on SDI yellow in both themes (D-754), so its ink is not theme-dependent, and a
        palette literal here is one no [data-theme] rule can reach. The pages had been
        hand-corrected for that once already and re-running this file undid it. */
     color:#000; font-weight:900; font-size:17px; display:flex; align-items:center;
@@ -272,6 +315,10 @@
     letter-spacing:.02em; display:block; line-height:1.15; white-space:nowrap; }
   .sdinav-brand span{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.14em;
     color:var(--dim); display:block; }
+  /* we.are.sdi as the site writes it (D-754): lower case, the two dots in SDI yellow. */
+  .sdinav-brand .sdinav-word{ font-family:'Outfit',var(--disp,'Inter',sans-serif); font-size:12.5px;
+    letter-spacing:0; text-transform:none; color:var(--ink); margin-top:2px; }
+  .sdinav-word i{ font-style:normal; color:var(--brand); }
   .sdinav-grp{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.16em;
     text-transform:uppercase; color:var(--dim); padding:16px 16px 6px; }
   .sdinav a.sdinav-item{ display:block; padding:8px 16px; color:var(--muted);
@@ -289,8 +336,8 @@
 
 <nav class="sdinav" aria-label="SDI Intelligence">
   <a class="sdinav-brand" href="/">
-    <img class="sdinav-logo" src="/api/brand/logo" alt="we.are.sdi" onerror="this.onerror=null;this.src='data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ccircle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23e8a33d%22/%3E%3Ctext x=%2250%22 y=%2266%22 text-anchor=%22middle%22 font-family=%22Inter,Arial,sans-serif%22 font-weight=%22800%22 font-size=%2254%22 fill=%22%23000%22%3ES%3C/text%3E%3C/svg%3E'">
-    <span><b>SDI INTELLIGENCE</b><span>WE.ARE.SDI</span></span>
+    <img class="sdinav-logo" src="/api/brand/logo" alt="we.are.sdi" onerror="this.onerror=null;this.src='data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ccircle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%23F6D946%22/%3E%3Ctext x=%2250%22 y=%2266%22 text-anchor=%22middle%22 font-family=%22Inter,Arial,sans-serif%22 font-weight=%22800%22 font-size=%2254%22 fill=%22%23000%22%3ES%3C/text%3E%3C/svg%3E'">
+    <span><b>SDI INTELLIGENCE</b><span class="sdinav-word">we<i>.</i>are<i>.</i>sdi</span></span>
   </a>
   <div class="sdinav-body">
   <div class="sdinav-grp">Overview</div>
@@ -368,8 +415,9 @@
 <div class="wrap">
 
   <header>
+    <span class="sdi-dots" aria-hidden="true"></span>
     <div style="flex:1">
-      <p class="eyebrow">SDI Intelligence</p>
+      <p class="eyebrow"><svg class="sdi-word" viewBox="0 0 950 169" role="img" aria-label="we.are.sdi" fill="currentColor"><path d="M158.915 36.7773L135.389 114.85C133.118 122.35 130.447 133.08 129.137 138.467C127.991 133.14 125.689 122.658 123.777 115.372L103.183 36.7773H80.9663L59.639 115.365C57.7134 122.531 55.2616 133.193 54.0544 138.537C52.7665 133.175 50.1337 122.393 48.0313 114.866L25.7238 36.7773H2.41797L42.8867 164.183H64.817L86.1457 87.545C88.1938 80.2145 90.5008 70.1606 91.6815 64.8782C92.7926 70.1676 94.9785 80.2145 97.0252 87.5408L118.11 164.183H139.793L181.494 36.7773H158.915Z"/><path d="M198.247 89.3881C201.717 65.0993 215.393 51.2041 235.907 51.2041C257.026 51.2041 269.942 65.1035 271.475 89.3881H198.247ZM235.907 33.6262C200.848 33.6262 175.402 61.7925 175.402 100.602C175.402 140.036 200.782 167.576 237.122 167.576C266.097 167.576 286.107 151.905 292.022 124.58L292.29 123.331H271.037L270.838 124.105C266.638 140.412 254.981 149.03 237.122 149.03C214.607 149.03 199.568 132.667 197.679 106.238H294.716V105.207C294.716 61.0546 272.181 33.6262 235.907 33.6262Z"/><path d="M423.094 99.3426V116.845C423.094 129.476 413.093 149.514 386.253 149.514C374.763 149.514 361.066 146.034 361.066 129.453C361.066 111.983 374.55 109.012 395.107 106.475C405.222 105.353 416.174 102.542 423.094 99.3426ZM442.876 145.211V75.1457C442.876 48.0778 427.173 34.3525 396.207 34.3525C365.325 34.3525 345.882 50.5756 344.199 77.7479L344.132 78.8422H365.115L365.189 77.8927C366.611 59.6855 376.543 51.2036 396.449 51.2036C413.721 51.2036 422.85 58.4756 422.85 72.2358C422.85 84.7721 413.6 87.9131 394.162 89.8791C365.81 92.711 338.128 98.1354 338.128 129.937C338.128 152.214 355.493 166.609 382.369 166.609C399.062 166.609 412.196 160.665 422.446 148.455C422.81 156.828 424.039 161.374 426.552 163.882L426.853 164.184H447.488V161.874L447.029 161.569C445.354 160.452 442.876 154.482 442.876 145.211Z"/><path d="M544.015 89.3881C547.485 65.0993 561.162 51.2041 581.676 51.2041C602.794 51.2041 615.711 65.1035 617.244 89.3881H544.015ZM581.676 33.6262C546.616 33.6262 521.17 61.7925 521.17 100.602C521.17 140.036 546.551 167.576 582.89 167.576C611.865 167.576 631.875 151.905 637.79 124.58L638.059 123.331H616.805L616.606 124.105C612.407 140.412 600.749 149.03 582.89 149.03C560.375 149.03 545.337 132.667 543.447 106.238H640.484V105.207C640.484 61.0546 617.95 33.6262 581.676 33.6262Z"/><path d="M851.701 149.272C829.697 149.272 816.561 131.258 816.561 101.086C816.561 71.215 829.932 52.6584 851.46 52.6584C875.53 52.6584 890.484 71.215 890.484 101.086C890.484 143.012 866.185 149.272 851.701 149.272ZM889.27 52.9591C880.17 40.7959 866.17 33.8678 850.487 33.8678C816.91 33.8678 794.351 60.7839 794.351 100.843C794.351 141.529 816.576 167.82 850.973 167.82C867.235 167.82 879.136 162.367 889.27 150.196V164.182H910.994V0.13501H889.27V52.9591Z"/><path d="M927.143 164.182H948.867V36.7761H927.143V164.182Z"/><path d="M927.143 21.2634H948.867V0.135254H927.143V21.2634Z"/><path d="M743.393 88.1957C721.16 83.7055 710.475 80.996 710.475 68.5976C710.475 57.8517 719.302 51.688 734.692 51.688C752.847 51.688 761.398 58.5214 763.285 74.5371L763.393 75.4463H785.617L785.479 74.2949C782.352 48.0054 764.958 34.1101 735.178 34.1101C706.259 34.1101 688.993 47.3649 688.993 69.568C688.993 98.3525 713.23 103.337 736.664 108.156C761.031 113.28 768.617 116.918 768.617 129.693C768.617 142.319 758.639 149.272 740.518 149.272C719.615 149.272 708.61 141.227 705.884 123.957L705.746 123.087H683.493L683.602 124.216C686.301 152.334 706.342 167.819 740.032 167.819C771.687 167.819 790.585 153.204 790.585 128.724C790.585 97.7135 765.514 92.6566 743.393 88.1957Z"/><path d="M525.691 57.6969V37.1089L525.044 36.8513C522.561 35.86 520.488 35.3225 516.649 35.3225C502.335 35.3225 488.734 42.983 479.81 55.9426V36.7775H458.086V164.183H479.81V93.5711C479.81 69.2586 497.61 56.5371 515.193 56.5371C519.064 56.5371 520.872 56.7877 523.607 57.6969H525.691Z"/><path class="d" d="M304.438 145.847H322.879V164.158H304.438V145.847Z"/><path class="d" d="M650.643 145.691H669.084V164.002H650.643V145.691Z"/></svg>Intelligence</p>
       <h1>SDI Estimating <span class="mark">Intelligence</span></h1>
       <p class="sub">Drawings in, costed estimate out. Every run writes a complete deliverable set to the shared estimating folder.
         &nbsp;<a href="/guide" target="_blank" rel="noopener"
@@ -387,6 +435,9 @@
            style="color:var(--brand);text-decoration:none;border-bottom:1px solid currentColor">
            SDI Drawing Search Intelligence →</a></p>
     </div>
+    <a class="cp-btn" href="/estimating/wall" target="_blank" rel="noopener"
+       title="Grid Control: every run live, who has the SolidWorks licence and who is waiting, the fleet, finish windows and the KPIs. Full screen for a wall monitor.">
+      <span class="dot"></span>Grid Control ↗</a>
     <div class="viewctl">
       <button type="button" id="theme-btn" class="vc-btn" aria-pressed="false" title="Switch between light and dark">
         <svg class="ic-moon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -520,10 +571,10 @@
         <div class="field" style="flex:1">
           <label>Attachments</label>
           <label style="font-weight:400;display:block;margin-top:6px">
-            <input id="emailQuote" type="checkbox"> Include the customer quote
+            <input id="emailQuote" type="checkbox" checked disabled> Customer quote (always attached)
           </label>
-          <p class="hint" style="margin:4px 0 0">The workbook, the report and the explanation
-             always go. The quote is held back while an estimate is provisional.</p>
+          <p class="hint" style="margin:4px 0 0">The workbook, the report, the explanation and
+             the quote always go.</p>
           <button id="emailSave" class="btn-measure" type="button" style="margin-top:8px">
             Save as the default list</button>
         </div>
@@ -565,7 +616,12 @@
 
       <div class="dest" id="runnerBox" style="border-left-color:var(--dim);margin-bottom:14px">
         <span class="k">Estimating runner</span>
+        <!-- THE WALL MONITOR (D-737): every run, the fleet and the KPIs, full screen. -->
+        <a href="/estimating/wall" target="_blank" rel="noopener"
+           style="float:right;font-size:12px;color:var(--brand);text-decoration:none;margin-top:-18px"
+           title="Grid Control: live runs, the Grid Runners and the run-time KPIs, full screen, for a wall monitor. Any job can be stopped from it.">Grid Control ↗</a>
         <div class="p" id="runnerText"><span class="pending">Checking…</span></div>
+        <div class="runpanes" id="runPanes" hidden></div>
         <p class="note">Estimates are executed on a machine with SOLIDWORKS and Excel. This service
            queues the job; the runner does the work and files the result.</p>
         <!-- WHICH BUILD AM I LOOKING AT? An afternoon went on four failures that are
@@ -603,19 +659,51 @@
               font-style:normal">— optional</em></span>
         <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:6px">
           <button id="pickRunManual" type="button">Choose manual estimate…</button>
+          <button id="findRunManual" type="button" title="Looks under Manual Estimates by the drawing number above">Find by job number</button>
           <span class="p" id="runManualName"><span class="pending">None — no parity report</span></span>
           <button id="clearRunManual" type="button" hidden>Clear</button>
         </div>
+        <label style="display:flex;gap:9px;align-items:center;margin-top:8px;cursor:pointer;text-transform:none;font-family:var(--body);letter-spacing:normal;font-size:inherit">
+          <input id="compareWhenDone" type="checkbox"> <span class="note" style="margin:0">Or
+          compare with the manual estimate <b>when this estimate finishes</b>, found by job number.
+          It compares only when the choice is clear; otherwise the log says so and the parity
+          card below offers the sheets.</span></label>
         <p class="note">Attach the manual estimate for this job and a <strong>parity report</strong>
-           is produced with the estimate, comparing the two. It must sit on a share the runner can
-           read. Leave it empty and the run is unchanged.</p>
+           is produced with the estimate, comparing the two, and filed under
+           <code>AI Estimating\parity</code> with both sheets. <em>Find by job number</em> looks
+           under Manual Estimates for the client and drawing number above, and fills it in only
+           when the choice is clear. It must sit on a share the runner can read. Leave it empty
+           and the run is unchanged.</p>
+        <p class="note" id="runManualWhy" hidden></p>
       </div>
+
+      <!-- ONE READER MODE PER RUN (run modes). Chosen here, never from the runner machine's
+           .env, and said on the run log and the record. Every mode but "Full estimate" is a
+           measurement or a test and its total is not a quote. -->
+      <label class="note" style="display:block;margin:8px 0 4px"><b>Reader mode</b></label>
+      <select id="runMode" style="width:100%;margin-bottom:6px">
+        <option value="">Full estimate: every reader, then the model where they leave gaps</option>
+        <option value="targeted">Targeted: drawing reader first, the model asked only about the gaps</option>
+        <option value="deterministic">Drawing reader only: no AI read (test, not a quote)</option>
+        <option value="solidworks">SolidWorks only: the pack's models through SolidWorks (test, not a quote)</option>
+        <option value="docmgr">Document Manager only: the pack's models through the Document Manager (test, not a quote)</option>
+        <option value="llm">LLM read only: the vision model alone (measurement, not a quote)</option>
+      </select>
+      <p class="note" id="runModeNote" style="margin:0 0 8px">Every reader runs: the BOM reader,
+         DXF flat patterns and SolidWorks where the pack has them, and the model where they do not.</p>
 
       <!-- TWO ESTIMATING BOOKS, SO THE BUTTON HAS TO SAY WHICH ONE. Every rate behind this
            button is a UK rate: UDEF plain stock, UK labour, UK finishing. An estimate for
            work placed in China is a different set of numbers, and the two must not be told
            apart by remembering which one the unlabelled button was. -->
       <button class="btn-run" id="run" disabled>SDI (UK) Intelligence Estimator</button>
+      <!-- A PRE-RUN FOR ESTIMATING (run modes): the same read and route compile as an estimate,
+           in the reader mode chosen above, stopped before the workbook. -->
+      <button class="btn-run btn-measure" id="bPreRun" disabled
+              title="Reads the pack and compiles the routes, then stops: BOMs and Routes only, nothing priced">
+        BOMs &amp; routes pre-run: read and route only, nothing priced</button>
+      <p class="note" style="margin:-4px 0 10px">The BOMs and Routes (spreadsheet and page) for an
+         estimator to check before a full run, in the reader mode above. No workbook; nothing priced is shown.</p>
 
       <!-- LLM-ONLY: A MEASUREMENT, AND IT HAS TO LOOK LIKE ONE.
            UNDER THE PACK ESTIMATOR, WHICH IS THE BUTTON IT IS AN ALTERNATIVE TO. Same job,
@@ -676,14 +764,18 @@
            coated with print … 350 off." The render alone was read as a different product,
            and nothing may be typed into the code. So the brief is an input for THIS run,
            like the client: filed with the pack as ENQUIRY_BRIEF.txt and put to the model as
-           stated facts that outrank what the picture suggests. LLM-only runs only — on a
-           drawing pack the drawings are the facts. -->
+           stated facts that outrank what the picture suggests. On a measured drawing pack
+           the drawings are the facts. SENT WITH AN ESTIMATE TOO (D-598y): a drawing no reader
+           can read falls back to the vision read (D-598g), and the customer's changes reach it
+           only through this box. -->
       <label class="note" for="enquiryBrief" style="display:block;margin:0 0 4px">
-        <b>Enquiry brief</b> (optional, LLM read only) — what the customer or estimator has
+        <b>Enquiry brief</b> (optional) — what the customer or estimator has
         stated that the drawings or render cannot show: overall sizes, material, finish,
         construction, parts not visible. One option per run: for "plywood <i>or</i> steel",
         run it twice with each brief. Prices typed here are ignored — enter those on the
-        sheet.</label>
+        sheet. Read by the LLM read, and by an estimate whose drawings no reader can read
+        (a scan, or lettering printed as outlines); a measured drawing pack sets it aside
+        and the book says so.</label>
       <textarea id="enquiryBrief" rows="4" maxlength="4000"
         style="width:100%;box-sizing:border-box;margin:0 0 10px;font:inherit"
         placeholder="e.g. 600 x 600 x 1200mm bump bin with lid and 1800mm back panel. Plywood construction with print. 350 off."></textarea>
@@ -817,17 +909,23 @@
          A SWITCH, NOT A RUN. This card does not read the Drawings panel and starts nothing on
          this machine. It switches self-running on or off in the service; the watcher on the
          estimating machine (src/self_running.py) asks on every beat, reads the Live Enquiry
-         sheet, collects each waiting row's drawings from Production into the Live Enquiry
-         folder, and runs every ready job through this estimator, one after another. What it
+         sheet, finds each row's drawings under the Live Enquiry folder (customer, then the
+         folder carrying the drawing number; D-608), and runs every ready job through this
+         estimator, one after another. What it
          shows below is what that watcher last reported, and when — a watcher that has gone
          quiet is shown as not connected, never as idle. -->
     <section class="card" id="selfRunCard">
       <h2>AI Estimate Self-Running</h2>
-      <p class="sub" style="margin:0 0 12px">Works through the <b>Live Enquiry</b> sheet on its
-        own. Every row marked <b>AI CHECK = YES</b> that has not been estimated is taken in
-        turn: its drawings are collected from Production into the Live Enquiry folder when the
-        folder is empty, then it is run through this estimator, one job after another.
-        Finished books file to the usual place. <b>Nothing goes to a customer.</b></p>
+      <p class="sub" style="margin:0 0 12px">Works through the <b>AI Live Enquiry</b> sheet on
+        its own, from the top. A row runs when <b>AI CHECK = YES</b>, <b>QTY</b> states the
+        quantities (1,5,10) and <b>AICompleted</b> is blank, <b>NO</b>, <b>N</b> or
+        <b>Re-Run</b>. Its drawings are taken from the Live Enquiry folder: the folder named by
+        the Customer, then the folder whose name carries the Drawing No. It is run through this
+        estimator, one job after another, and when it finishes AICompleted is set to
+        <b>YES</b> (once the workbook is closed in Excel). Each finished estimate is e-mailed
+        to the saved <b>Email the finished estimate to</b> list with its files and a spoken
+        walkthrough; change the list with <b>Save as the default list</b>. Finished books file
+        to the usual place. <b>Nothing goes to a customer.</b></p>
       <button class="btn-run" id="selfRun" type="button"
               title="Switch self-running on: the watcher reads the Live Enquiry sheet at once and runs every unworked job in turn">
         AI Estimate Self-Running</button>
@@ -921,11 +1019,17 @@
              behaviour this button had before — because a machine without the API set up still
              needs a way to add a job folder. -->
         <button id="addFolder" title="Ask Document Manager to extract this project's drawing pack.">Extract DesignDrawingPack</button>
+        <!-- FIND THE PACK FROM THE DRAWING NUMBER (SCRUM-199/203): the design share's index, the GA
+             read for its number, revision and references, the family's drawings in every format.
+             Nothing is added until "Use this pack", unless "add as soon as found" is ticked. -->
+        <button id="findPack" class="btn-run btn-measure" title="Find this drawing number's pack on the design share">Find drawing pack</button>
         <button id="addFiles">Add drawing files…</button>
         <!-- THE SHARE, WHEN THE BUTTON ABOVE IS TALKING TO DOCUMENT MANAGER. Adding a whole job
              folder off the share is what that button used to do, and it is still wanted: not
              every job goes through DM, and DM is not always up. -->
         <button id="addShareFolder">Add job folder…</button>
+        <label class="note" style="display:inline-flex;gap:6px;align-items:center;margin:0">
+          <input type="checkbox" id="packAuto"> add the pack as soon as it is found</label>
         <!-- THE SECOND SOURCE. Files that came out of Document Manager via the DM extract
              tool. Both buttons feed the SAME list and merge by name, so a DM copy replaces the
              folder copy of the same drawing and leaves the rest alone. Removing one is the
@@ -955,15 +1059,24 @@
          these finish in a fraction of the time an estimate takes and can be run on a pack before
          anybody commits to costing it. -->
     <section class="card" id="extractCard">
-      <h2>Extracts — what is in the pack</h2>
-      <p class="sub" style="margin:0 0 12px">Reads the drawings listed in <b>Drawings</b> above
-        and writes a spreadsheet and a page to the same output folder. <b>Prices nothing.</b>
+      <h2>Extracts — from a saved run</h2>
+      <p class="sub" style="margin:0 0 12px">Rebuilt from the saved record of <b>one run you
+        choose</b>: it reads no drawings and runs nothing, so it shows what that run read, not
+        what the pack holds today. <b>Prices nothing.</b>
         Every column says where it came from and what it does mean.</p>
       <!-- .exgrid, and it has a rule behind it — see the stylesheet. The first version of this
            used a bare `row` class that this page does not define, which renders as nothing
            without erroring; caught by the page's own component test. The flex row that replaced
            it was no better in practice, because .btn-run is width:100% and each button took a
            whole line anyway. -->
+      <!-- THE RUN IS CHOSEN, NEVER ASSUMED (SCRUM-132). The service lists the drawing's saved
+           runs, newest first; the extract is taken from the one selected here and from nothing
+           else, so a second run landing in the folder cannot quietly change what it shows. -->
+      <div class="field">
+        <label for="exRun">Saved run</label>
+        <select id="exRun"><option value="">Press Find saved runs, then choose one</option></select>
+        <button type="button" id="exFind" class="btn-measure">Find saved runs</button>
+      </div>
       <div class="exgrid">
         <button class="btn-run" id="exBoms" disabled
                 title="Every parts-list row, with the page it was read from and the reader that read it.">
@@ -976,6 +1089,59 @@
           SDI Intel BOMs and Routes</button>
       </div>
       <div class="files" id="exOut" style="margin-top:10px"></div>
+    </section>
+
+    <!-- ══ PACK EXTRACT (D-640) ══════════════════════════════════════
+         ONE READER ON THE PACK, ORGANISED. JG, 2 Nov 2026: a SolidWorks drawing-pack extract
+         and an xAI extract, each a button, on the drawings chosen with "Add drawing files…" or
+         "Add job folder…" above. The files are staged exactly as an estimate stages them and
+         queued for the runner, which runs that one reader and files its output: nothing is
+         priced and no workbook template is used. -->
+    <section class="card" id="packExtractCard">
+      <h2>Pack extract — one reader, no estimate</h2>
+      <p class="sub" style="margin:0 0 12px">Reads the drawings in the <b>Drawings</b> list above
+        (the same files "Add drawing files…" and "Add job folder…" choose) with <b>one reader</b>
+        and files what it found, organised, under the client and drawing number. <b>Prices
+        nothing.</b></p>
+      <div class="exgrid ex3">
+        <button class="btn-run" id="pxSw"
+                title="The SolidWorks analyser on the pack's models: every part's material, gauge, flat blank, bends, cut length, mass and envelope; the assembly tree with per-parent counts; the product BOM; the drawings' BOM tables; and what could not be read. Workbook and JSON.">
+          SolidWorks pack extract</button>
+        <button class="btn-run" id="pxXai"
+                title="The whole-document xAI read on the pack's PDFs, exactly as returned (JSON), and laid out as tables (workbook).">
+          xAI extract</button>
+        <!-- THE THIRD READER (D-737, JG 7 Nov 2026): the Document Manager on the same models,
+             in the SolidWorks extract's own tables, so the two can be compared pack by pack. -->
+        <button class="btn-run" id="pxDm"
+                title="The SolidWorks Document Manager on the pack's models: what each file saved (custom properties, cut lists, BOMs, any saved mass or flat pattern), read without a SolidWorks seat, so it never waits for SolidWorks. It measures nothing: a field the file did not save stays blank and is named. Same tables as the SolidWorks extract, to compare the two. The runner needs SDI_SW_DOCMGR_KEY in its .env.">
+          SolidWorks Document Manager extract</button>
+      </div>
+      <div class="files" id="pxOut" style="margin-top:10px"></div>
+    </section>
+
+    <!-- ══ TTI PRICER (JG, 9 Nov 2026) ════════════════════════════════
+         One TTI job per row of a tracker sheet. Drawings found under the design and prototype
+         areas get a full estimate; a row with none gets an LLM estimate from its notes and
+         thumbnails. Each unit cost goes in the AICost column; the workings file as usual. -->
+    <section class="card" id="ttiCard">
+      <h2>TTI pricer</h2>
+      <p class="sub" style="margin:0 0 10px">Prices every row of a TTI tracker. The drawing number
+        (column <b>L</b>) is looked for under <b>\\sdi-dc01\CAD\Design\Customers April 08 Onwards\TTI</b> (W:), then
+        <b>\\sdi-dc01\CAD\Prototype\TTi</b>, preferring a <b>Technical</b> folder and the newest drawings. Found:
+        a full estimate. Not found: an LLM estimate from the notes (column <b>G</b>) and the thumbnails
+        (columns <b>I</b>, <b>J</b>), labelled so. The unit cost is written to column <b>P (AICost)</b>,
+        replacing any earlier figure; the detailed workings file to the usual folders, client TTI.
+        Run <b>Find drawings only</b> first: it changes nothing.</p>
+      <label class="note" style="display:block;margin:4px 0">Tracker workbook (full path)</label>
+      <input id="ttiSheet" style="width:100%" value="C:\Users\james.gray\Documents\Downloads\TRACKER - MILWAUKEE AMSTERDAM CONFERENCE 2027.xlsx">
+      <div style="display:flex;gap:8px;margin:8px 0;flex-wrap:wrap">
+        <input id="ttiRows" placeholder="rows, e.g. 5-12 (blank: all)" style="flex:1;min-width:160px">
+        <select id="ttiMethod"><option value="both">Full estimate</option><option value="targeted">Targeted</option><option value="deterministic">Drawing reader only (test)</option></select>
+      </div>
+      <button class="btn-run btn-measure" id="ttiFind" type="button">Find drawings only (changes nothing)</button>
+      <button class="btn-run" id="ttiGo" type="button">Price the sheet and fill AICost</button>
+      <p class="note" id="ttiStatus"></p>
+      <div id="ttiOut" class="sub" style="margin-top:8px;font-size:13px"></div>
     </section>
   </div>
 
@@ -1058,6 +1224,115 @@
         Run parity report — AI against manual</button>
       <p class="req" id="parityReq"></p>
       <ul class="out" id="parityOut"></ul>
+    </section>
+
+    <!-- ══ PARITY BY JOB NUMBER (D-619, D-621) ═══════════════════════
+         JG, 1 Nov 2026: compare one job "by job number ... we take the most obvious s/sheet
+         candidate", file both sheets and the reports under AI Estimating\parity, searchable,
+         and compare "all manual and AI estimates ran across two time periods". The review:
+         show both files and why before anything runs; ask when the match is not clear; compare
+         the filed copies; run in the background; Period A against Period B. The rules live in
+         src/parity_job.py, so the command line, this page and the phone agree. -->
+    <section class="card" id="pjCard">
+      <h2>Parity by job number — find, compare, file, search</h2>
+      <p class="hint">Type the job number. The manual estimate is looked for under
+         <code>Manual Estimates\&lt;year&gt;\&lt;client&gt;</code>, held to the AI run's client
+         and the full drawing number; the AI estimate is the newest run with its own summary.
+         A sheet is ticked for you only when the choice is clear; otherwise choose one. Both
+         files and the reason are shown before anything runs. The comparison reads copies filed
+         under <code>AI Estimating\parity\&lt;client&gt;\&lt;drawing&gt;\&lt;date time&gt;_&lt;id&gt;</code>,
+         fingerprinted, so the report always describes what is kept.</p>
+
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+        <input id="pjJob" type="text" autocomplete="off" placeholder="Job number, e.g. 12677-01-GA"
+               style="flex:1;min-width:180px">
+        <input id="pjClient" type="text" autocomplete="off" placeholder="Client (optional)"
+               style="flex:0 1 200px;min-width:140px">
+        <button id="pjFind" type="button">Find both estimates</button>
+      </div>
+      <div id="pjFound" hidden>
+        <p class="note" id="pjDecision"></p>
+        <div class="dest" style="border-left-color:var(--info)">
+          <span class="k">Manual estimate</span>
+          <div id="pjManualList"></div>
+          <button id="pjPickManual" type="button" style="margin-top:6px">Choose another from share…</button>
+        </div>
+        <div class="dest" style="border-left-color:var(--brand)">
+          <span class="k">AI estimate</span>
+          <div id="pjAiList"></div>
+        </div>
+        <label style="display:flex;gap:9px;align-items:center;margin-top:10px;cursor:pointer;text-transform:none;font-family:var(--body);letter-spacing:normal;font-size:inherit">
+          <input id="pjExcel" type="checkbox"> <span class="note" style="margin:0">Resolve the
+          manual sheet's formulas through Excel (only if its totals come back blank).</span></label>
+        <p class="note" id="pjChosen"></p>
+        <button class="btn-run" id="pjRun" type="button" style="margin-top:6px" disabled>
+          Compare and file</button>
+      </div>
+      <ul class="out" id="pjOut"></ul>
+      <!-- ASK ABOUT THIS COMPARISON (D-628). The shared question service, pinned to one FILED
+           comparison: it explains the saved results, changes neither estimate, invents no
+           price and authorises nothing. -->
+      <div id="pjAsk" hidden style="margin-top:12px">
+        <span class="k">Ask about this comparison</span>
+        <p class="note" id="pjAskWhich" style="margin:4px 0 6px"></p>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+          <input id="pjAskQ" type="text" autocomplete="off" style="flex:1;min-width:260px"
+                 placeholder="e.g. Which three differences account for most of the gap?">
+          <button id="pjAskGo" type="button">Ask</button>
+        </div>
+        <ul class="out" id="pjAskOut"></ul>
+      </div>
+
+      <h3 style="margin-top:18px">Search filed comparisons</h3>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+        <input id="pjQ" type="text" autocomplete="off" placeholder="Job, drawing or client"
+               style="flex:1;min-width:160px">
+        <label class="note" style="margin:0">From <input id="pjFrom" type="date"></label>
+        <label class="note" style="margin:0">To <input id="pjTo" type="date"></label>
+        <select id="pjOutcome">
+          <option value="">Any outcome</option><option value="match">Match</option>
+          <option value="warning">Warning</option><option value="fail">Fail</option>
+          <option value="quantities differ">Quantities differ</option>
+          <option value="review">Review</option><option value="not compared">Not compared</option>
+        </select>
+        <button id="pjSearch" type="button">Search</button>
+      </div>
+      <div id="pjResults" style="overflow-x:auto"></div>
+
+      <h3 style="margin-top:18px">Compare jobs within a period</h3>
+      <p class="note">Every drawing the engine estimated between the two dates, counted once
+         (its newest run there), against its manual estimate. Pairs with no manual estimate,
+         ambiguous ones and quantity mismatches are listed apart, not counted. A pair already
+         compared with the same manual sheet is reused. Preview first. The period can be any
+         two dates, one day included; the times are optional and narrow it within a day, so
+         two runs of the same drawing on the same day can be compared morning against
+         afternoon.</p>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+        <label class="note" style="margin:0">From <input id="pjPFrom" type="date"><input id="pjPFromT" type="time" aria-label="From time, optional"></label>
+        <label class="note" style="margin:0">To <input id="pjPTo" type="date"><input id="pjPToT" type="time" aria-label="To time, optional"></label>
+        <input id="pjPClient" type="text" placeholder="Client (optional)" style="width:160px">
+        <input id="pjPJob" type="text" placeholder="Job (optional)" style="width:130px">
+        <button id="pjPreview" type="button">Preview</button>
+        <button id="pjPeriod" type="button">Compare the period</button>
+      </div>
+      <div id="pjPeriodOut" style="overflow-x:auto"></div>
+
+      <h3 style="margin-top:18px">Compare two periods</h3>
+      <p class="note">Period A against Period B: the comparable pairs in each, how the median and
+         mean variance moved, the drawings estimated in both, and everything that could not be
+         compared, listed apart. Dates are the AI estimates' run dates; a manual sheet's date is
+         its file date, and the report says so.</p>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+        <span class="note" style="margin:0"><b>A</b></span>
+        <input id="pjAFrom" type="date" aria-label="Period A from"><input id="pjAFromT" type="time" aria-label="Period A from time, optional"><input id="pjATo" type="date" aria-label="Period A to"><input id="pjAToT" type="time" aria-label="Period A to time, optional">
+        <span class="note" style="margin:0"><b>B</b></span>
+        <input id="pjBFrom" type="date" aria-label="Period B from"><input id="pjBFromT" type="time" aria-label="Period B from time, optional"><input id="pjBTo" type="date" aria-label="Period B to"><input id="pjBToT" type="time" aria-label="Period B to time, optional">
+        <input id="pjTClient" type="text" placeholder="Client (optional)" style="width:160px">
+        <input id="pjTJob" type="text" placeholder="Job (optional)" style="width:130px">
+        <button id="pjTPreview" type="button">Preview</button>
+        <button id="pjTRun" type="button">Compare A with B</button>
+      </div>
+      <div id="pjTwoOut" style="overflow-x:auto"></div>
     </section>
 
     <!-- ══ ESTIMATOR OVERRIDE ═══════════════════════════════════════
@@ -1354,7 +1629,8 @@ emailSave && emailSave.addEventListener("click", async () => {
 
 loadRecipients();
 const runBtn=$("run"), stopBtn=$("stop"), destPath=$("destPath"), req=$("req");
-const runnerBox=$("runnerBox"), runnerText=$("runnerText"), buildLine=$("buildLine");
+const runnerBox=$("runnerBox"), runnerText=$("runnerText"), buildLine=$("buildLine"),
+      runPanes=$("runPanes");
 const fileList=$("fileList"), fileEmpty=$("fileEmpty");
 const dot=$("dot"), statusText=$("statusText"), log=$("log"), out=$("out");
 // BOUND EXPLICITLY, not leaned on. A browser exposes elements with an id as globals, so
@@ -2029,6 +2305,7 @@ function refresh(){
   destPath.innerHTML = show ? show : '<span class="pending">Enter a client and drawing number</span>';
 
   runBtn.disabled = running || missing.length > 0;
+  if($("bPreRun")) $("bPreRun").disabled = runBtn.disabled;
   /* THE SAME GATE AS THE PACK ESTIMATOR, because it is the same job, the same Drawings
      panel and the same endpoint — only the reader differs. Gating it separately is how one
      button becomes pressable in a state the other has already refused. `running` covers
@@ -2042,16 +2319,18 @@ function refresh(){
      no Excel, no client, no quantity, no drawing number. So they want drawings and a runner
      (the drawings are on the runner's side of the wire) and nothing else — asking for a client
      before somebody can see what is IN a pack is the wrong way round. */
+  /* A SAVED RUN, AND NOTHING ELSE (SCRUM-132). The extract reads one run's saved record on
+     the service; it needs no drawings and no runner, only the run the estimator chose. */
   const exMissing = [];
-  if(!drawings.length)  exMissing.push("at least one drawing");
-  if(!runnersOnline)    exMissing.push("an estimating runner (none connected)");
+  const exRunSel = document.getElementById("exRun");
+  if(!exRunSel || !exRunSel.value) exMissing.push("a saved run, chosen above");
   [["exBoms","parts-list rows"],["exRoutes","route decisions"],
    ["exBoth","both, in one workbook"]].forEach(([id, what]) => {
     const b = document.getElementById(id);
     if(!b) return;
     b.disabled = running || exMissing.length > 0;
     b.title = exMissing.length ? "Still needed: " + exMissing.join(", ")
-            : "Reads the drawings above and writes " + what + " — prices nothing";
+            : "Rebuilds " + what + " from the chosen run's saved record — prices nothing";
   });
   runBtn.textContent = running ? "Estimating…" : "SDI (UK) Intelligence Estimator";
   // Offered only while there is something to stop, so it cannot be pressed against a run
@@ -2116,6 +2395,63 @@ function showBuild(commit){
     : `Service <b>${where}</b> — build <b>${commit}</b>.`;
 }
 
+/* ── SEVERAL ESTIMATES AT ONCE, EACH IN ITS OWN WINDOW (D-732) ───────────────────────────
+   JG, 6 Nov 2026: "open up two more windows on the portal to show the multiple potential runs
+   going on." The busy line could name one run; a second or third on the desktop was invisible
+   here. Three panes, one per run the service may hold at once: what it is on, on which runner,
+   how long, its last lines, and its own Stop. A run waiting for the desktop's SolidWorks says so
+   in its lines every five minutes, and says when it switches to the Document Manager; those
+   lines are picked out. A pane beyond what the service allows says so, rather than looking
+   free. The tab's own run is stopped from Run, so its pane carries no second Stop. */
+const RUN_PANES = 3;
+const paneEsc = t => String(t == null ? "" : t).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+function paneAge(sec){
+  sec = Math.max(0, Math.round(sec || 0));
+  return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`;
+}
+function paneLine(t){
+  const c = /SWITCHING TO THE DOCUMENT MANAGER|without its models|ERROR|FAILED/i.test(t) ? "e"
+          : /SolidWorks|Waiting for|Still waiting/i.test(t) ? "w" : "";
+  return c ? `<span class="${c}">${paneEsc(t)}</span>` : paneEsc(t);
+}
+async function renderRunPanes(busy, maxRuns){
+  const runs = busy.map(x => Object.assign({runner: x.hostname || x.runner_id,
+                                            runner_id: x.runner_id}, x.running || {}))
+                   .sort((a, b) => (b.seconds || 0) - (a.seconds || 0))
+                   .slice(0, RUN_PANES);
+  const allowed = Math.max(1, Number(maxRuns) || 1);
+  const tails = await Promise.all(runs.map(async r => {
+    try{
+      const rr = await api("/api/estimate/" + encodeURIComponent(r.run_id));
+      if(!rr.ok) return [];
+      const j = await rr.json();
+      return (j.log || []).slice(-8);
+    }catch(e){ return []; }
+  }));
+  let html = "";
+  for(let i = 0; i < RUN_PANES; i++){
+    const r = runs[i];
+    if(r){
+      const mine = r.run_id === runId;
+      html += `<div class="runpane"><div class="runpane-h">Run ${i + 1} · `
+        + `${paneEsc(r.drawing_number || r.run_id)}${r.client ? " for " + paneEsc(r.client) : ""}`
+        + `</div><div class="runpane-m">${paneEsc(r.runner_id || r.runner)} · `
+        + `${paneAge(r.seconds)} in${mine ? " · this tab's run" : ""}</div>`
+        + `<div class="log">${tails[i].map(paneLine).join("\n")}</div>`
+        + (mine ? "" : `<button class="btn-stop" type="button" data-stop-run="${paneEsc(r.run_id)}">`
+                      + `Stop this estimate — ${paneEsc(r.drawing_number || r.run_id)}</button>`)
+        + `</div>`;
+    }else{
+      html += `<div class="runpane"><div class="runpane-h">Run ${i + 1}</div>`
+        + `<div class="runpane-free">${i < allowed ? "Free — the next queued estimate starts here."
+             : `Off — the service runs ${allowed} estimate${allowed > 1 ? "s" : ""} at once `
+               + `(SDI_MAX_CONCURRENT_RUNS).`}</div></div>`;
+    }
+  }
+  runPanes.innerHTML = html;
+  runPanes.hidden = false;
+}
+
 async function checkRunners(){
   let r;
   try{
@@ -2164,9 +2500,12 @@ async function checkRunners(){
          out which of them is lying, and the answer is not obvious from either screen. */
       const busy = live.filter(x => x.running);
       runnerBox.style.borderLeftColor = busy.length ? "var(--warn)" : "var(--ok)";
-      const who = live.map(x => x.hostname || x.runner_id).join(", ");
+      const who = [...new Set(live.map(x => x.hostname || x.runner_id))].join(", ");
       let state;
-      if(busy.length){
+      if(busy.length > 1){
+        state = `  ·  ${busy.length} estimates running — each in its own window below`
+              + (d.queued ? `, ${d.queued} queued behind them` : "");
+      }else if(busy.length){
         const b = busy[0].running;
         state = `  ·  busy — ${b.drawing_number} for ${b.client}, ${b.seconds}s in`
               + (d.queued ? `, ${d.queued} queued behind it` : "");
@@ -2179,14 +2518,9 @@ async function checkRunners(){
          let self-running start the job, and there was nothing on screen to press while the
          runner drove SOLIDWORKS and Excel. The service says which run the runner is busy
          with, so the stop goes beside it. */
-      const busyRun = busy.length ? (busy[0].running || {}).run_id : "";
-      if(busyRun && busyRun !== runId){
-        const sb = document.createElement("button");
-        sb.className = "btn-stop"; sb.type = "button";
-        sb.dataset.stopRun = busyRun;
-        sb.textContent = "Stop this estimate — " + (busy[0].running.drawing_number || busyRun);
-        runnerText.appendChild(sb);
-      }
+      /* EACH RUN IN ITS OWN WINDOW, WITH ITS OWN STOP (D-732). The Stop that sat on this line
+         could name one run; with two or three on the desktop it now sits in each run's pane. */
+      renderRunPanes(busy, d.max_runs);
       /* TWO RUNNERS ON ONE DESKTOP READ AS ONE GREEN TICK, FOR THREE DAYS.
          3668 on the project venv and 14796 on a user-installed Python 3.10 — same script,
          same engine root, same server — both polling and both claiming. runner_id is
@@ -2212,19 +2546,27 @@ async function checkRunners(){
       runnerBox.style.borderLeftColor = "var(--bad)";
       runnerText.innerHTML = '<span style="color:var(--bad)">No runner connected — '
         + 'estimates cannot be run</span>';
+      runPanes.hidden = true;
     }
     /* A SECOND PORTAL ON THIS MACHINE (D-369). Each has its own queue and its own runner
        list, so a job started on the other one is invisible here, and restarting either
        strands work. Said plainly, with what to do. */
     const others = d.other_local_services || [];
     if(others.length){
-      runnerBox.style.borderLeftColor = "var(--bad)";
+      /* TWO SERVICES ARE ONE GRID NOW (JG, 10 Nov 2026): each keeps its own queue, and Grid
+         Control on either shows both, with Stop on every job. Said as a fact, not an alarm;
+         red only when the other one is on a different build. */
       const esc = t => String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;");
-      runnerText.innerHTML += `<div style="color:var(--bad);margin-top:4px"><b>A second `
-        + `portal is running on this machine</b> (port ${others.map(o => esc(o.port)
-            + (o.commit ? `, ${esc(o.commit)}` : "")).join("; ")}). Jobs started there `
-        + `queue separately from this one. Use one portal: stop the other service `
-        + `between jobs.</div>`;
+      const mine = String(d.service_commit || "").slice(0, 7);
+      const differ = others.filter(o => o.commit && mine && !String(o.commit).startsWith(mine));
+      if(differ.length) runnerBox.style.borderLeftColor = "var(--bad)";
+      runnerText.innerHTML += `<div style="${differ.length ? "color:var(--bad);" : ""}margin-top:4px">`
+        + `Also on this machine: the service on port ${others.map(o => esc(o.port)
+            + (o.commit ? ` (${esc(o.commit)})` : "")).join("; ")}. It keeps its own queue; `
+        + `<a href="/estimating/wall" target="_blank" rel="noopener">Grid Control</a> shows both, `
+        + `with Stop on every job.`
+        + (differ.length ? ` <b>It is on a different build: restart it so both run the same code.</b>` : "")
+        + `</div>`;
     }
   }catch(e){
     runnersOnline = 0;
@@ -2586,6 +2928,60 @@ dAll.onclick = () => {
   });
   pickRender(); refreshAddAll();
 };
+
+/* ══ FIND DRAWING PACK (SCRUM-199/203) ══════════════════════════════════════════════════
+   One resolver for the page, Self-Running and the tracker pricer. Find shows the pack and its
+   status; Use keeps it in Live Enquiry\<client>\<drawing> (re-used if unchanged, a new version
+   beside it if changed) and adds the kept copies to the drawings, like any other source. */
+function packEsc(t){ return String(t ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function packPanel(){
+  let el = document.getElementById("packOut");
+  if(!el){
+    el = document.createElement("div");
+    el.id = "packOut"; el.className = "sub"; el.style.cssText = "margin:10px 0;font-size:13px";
+    $("findPack").parentElement.insertAdjacentElement("afterend", el);
+  }
+  return el;
+}
+async function findPack(useIt){
+  const out = packPanel();
+  const client = ($("client").value || "").trim(), dwg = ($("drawing").value || "").trim();
+  if(!dwg){ out.textContent = "Type the drawing number first, then Find drawing pack."; return; }
+  out.textContent = useIt ? "Finding and keeping the pack…" : "Finding the pack on the design share…";
+  let r, m;
+  try {
+    r = await api("/api/estimate/pack/find", {method:"POST", headers:{"Content-Type":"application/json"},
+                  body: JSON.stringify({client, drawing: dwg, store: !!useIt})});
+    m = await r.json().catch(() => ({}));
+  } catch(e){ out.textContent = "Could not ask the service: " + e.message; return; }
+  if(!r.ok){ out.textContent = "Not found: " + (m.detail || r.status); return; }
+  const tone = m.status === "verified" ? "var(--ok, #3a8)" : m.status === "provisional" ? "var(--warn, #c90)" : "var(--bad, #c44)";
+  const members = (m.members || []).map(x => `<tr><td>${packEsc(x.drawing)}</td><td>${packEsc(x.revision || "-")}</td>
+      <td>${packEsc(x.parent || "(top)")}</td><td>${packEsc([...new Set((x.files || []).map(f => f.format))].join(", "))}</td>
+      <td>${(x.superseded_revisions || []).length ? "superseded " + packEsc(x.superseded_revisions.join(",")) : ""}</td></tr>`).join("");
+  const list = (k, label) => (m[k] || []).length ? `<div><b>${label}:</b> ${packEsc(m[k].join("; "))}</div>` : "";
+  out.innerHTML = `<div><b style="color:${tone}">${packEsc((m.status || "").toUpperCase())}</b> · ${packEsc(m.drawing)}
+      ${m.revision ? " · revision " + packEsc(m.revision) + " (" + packEsc(m.revision_from) + ")" : ""} · ${(m.members || []).length} drawing(s)
+      <span class="note">· ${packEsc(m.source || "")}</span></div>
+    ${m.reason ? `<div class="note">${packEsc(m.reason)}</div>` : ""}
+    ${(m.candidates || []).length > 1 ? `<div class="note">Candidates: ${m.candidates.map(c => packEsc((c.archive ? "ARCHIVE " : "") + c.folder + " rev " + (c.revision || "?"))).join(" | ")}</div>` : ""}
+    ${members ? `<table class="tbl" style="margin-top:6px"><tr><th>Drawing</th><th>Rev</th><th>Under</th><th>Formats</th><th></th></tr>${members}</table>` : ""}
+    ${list("missing", "Missing (priced as labelled allowances)")}${list("conflicts", "Conflicts")}${list("assumptions", "Assumptions")}
+    ${m.question ? `<div><b>Ask:</b> ${packEsc(m.question)}</div>` : ""}
+    ${m.stored ? `<div class="note">Kept: ${packEsc(m.stored.state)} → ${packEsc(m.stored.folder)}</div>` : ""}
+    ${m.usable_note ? `<div><b>${packEsc(m.usable_note)}</b></div>` : ""}
+    ${!useIt && m.price_ok ? '<button type="button" id="usePack" class="btn-run">Use this pack</button>' : ""}`;
+  const use = document.getElementById("usePack");
+  if(use) use.onclick = () => findPack(true);
+  if(useIt){
+    const files = m.usable_files || [];
+    files.forEach(p => { if(!drawings.some(d => d.path === p)) drawings.push({path: p, name: p.split("\\").pop(), is_dir: false, source: "pack"}); });
+    renderFiles(); refresh();
+  } else if(m.price_ok && $("packAuto").checked){
+    findPack(true);
+  }
+}
+$("findPack").onclick = () => findPack(false);
 
 dChoose.onclick = () => {
   if(mode==="folder" && cwd){
@@ -3161,20 +3557,20 @@ function setStatus(cls, text){ dot.className = "dot " + cls; statusText.textCont
    was IN the pack either. */
 async function runExtract(kind, label){
   const out = document.getElementById("exOut");
-  const folder = drawings.find(d => d.is_dir);
+  const runSel = document.getElementById("exRun");
+  const runFolder = runSel ? runSel.value : "";
   line("");
   line("── " + label + " ──");
-  line("Reading " + drawings.length + " drawing file(s). No pricing, no workbook.");
-  line("Output → " + (destination() || OUTPUT_ROOT));
+  if(!runFolder){
+    line("Choose the saved run first: press Find saved runs and pick one.");
+    if(out) out.textContent = label + ": choose a saved run first";
+    return;
+  }
+  line("From the saved run " + runFolder.split(/[\\/]/).pop() + ". Reads no drawings; prices nothing.");
   if(out) out.textContent = label + ": working…";
   const body = {
     kind: kind,
-    job_folder: folder ? folder.path : null,
-    files: drawings.filter(d => !d.is_dir).map(d => d.path),
-    output_root: OUTPUT_ROOT,
-    // Carried when they happen to be filled, because they name the output folder — but never
-    // REQUIRED, because needing a client before you can see what is in a pack is the wrong way
-    // round. The service falls back to the pack's own name.
+    run_folder: runFolder,
     client: safe(client.value) || null,
     drawing_number: safe(drawing.value) || null
   };
@@ -3183,40 +3579,144 @@ async function runExtract(kind, label){
       headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
     const j = await r.json().catch(() => ({}));
     if(!r.ok){
-      /* SAID, NOT SWALLOWED. A button that goes quiet on a 404 teaches people it is broken and
-         they stop pressing it; one that says the service has not been updated yet sends them to
-         the right person. */
-      const why = j.detail || j.error || (r.status === 404
-        ? "this service does not have the /api/extract endpoint yet — it needs the deploy that "
-        + "added it" : "HTTP " + r.status);
+      /* SAID, NOT SWALLOWED. Each refusal names its reason: no run chosen, no record in it, two
+         records, a folder outside the shares, or a build that failed. */
+      const why = j.detail || j.error || ("HTTP " + r.status);
       line("EXTRACT REFUSED — " + why);
       if(out) out.textContent = label + " refused: " + why;
       return;
     }
     (j.lines || []).forEach(line);
-    const wrote = [j.xlsx, j.html].filter(Boolean);
-    if(wrote.length){
-      line("saved " + wrote.length + " file(s):");
-      wrote.forEach(f => line("   " + f));
-    }
     if(typeof j.boms === "number")   line(j.boms + " BOM row(s)");
     if(typeof j.routes === "number") line(j.routes + " route decision(s)");
+    const downloads = j.downloads || [];
     if(out){
       out.innerHTML = "";
-      wrote.forEach(f => {
+      /* THROUGH THE PORTAL, NOT A FILE LINK. A file link opens only on a machine that maps the
+         share the same way; /api/file serves it to anyone signed in, under the same roots. */
+      downloads.forEach(d => {
         const a = document.createElement("a");
-        a.href = "file:///" + String(f).replace(/\\/g, "/");
-        a.textContent = String(f).split(/[\\/]/).pop();
+        a.href = d.url || ("/api/file?path=" + encodeURIComponent(d.path || ""));
+        a.textContent = d.name;
         a.style.marginRight = "12px";
         out.appendChild(a);
       });
-      if(!wrote.length) out.textContent = label + ": nothing was written — see the log";
+      if(!downloads.length) out.textContent = label + ": nothing was written — see the log";
     }
   }catch(err){
     line("EXTRACT FAILED — " + (err && err.message ? err.message : String(err)));
     if(out) out.textContent = label + " failed: " + (err && err.message ? err.message : err);
   }
 }
+/* THE DRAWING'S SAVED RUNS, FOR THE ESTIMATOR TO CHOOSE FROM. Listed newest first; none is
+   selected for them. */
+async function findSavedRuns(){
+  const sel = document.getElementById("exRun");
+  const dn = safe(drawing.value) || "";
+  if(!sel) return;
+  if(!dn){ line("Type the drawing number to find its saved runs."); return; }
+  const q = "?drawing_number=" + encodeURIComponent(dn)
+          + (safe(client.value) ? "&client=" + encodeURIComponent(safe(client.value)) : "");
+  try{
+    const r = await api("/api/estimate/extract/runs" + q);
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){ line("Saved runs could not be listed — " + (j.detail || "HTTP " + r.status)); return; }
+    sel.innerHTML = '<option value="">Choose one of ' + (j.runs || []).length + ' saved run(s)</option>';
+    (j.runs || []).forEach(run => {
+      const o = document.createElement("option");
+      o.value = run.run_folder;
+      o.textContent = run.client + " · " + run.name;
+      sel.appendChild(o);
+    });
+    if(!(j.runs || []).length) line("No saved run of " + dn + " was found on the share.");
+  }catch(err){
+    line("Saved runs could not be listed — " + (err && err.message ? err.message : String(err)));
+  }
+  refresh();
+}
+/* ── PACK EXTRACT (D-640): one reader on the chosen drawings, queued for the runner ── */
+async function runPackExtract(kind, label){
+  const out = document.getElementById("pxOut");
+  const dn = safe(drawing.value), cl = safe(client.value);
+  line("");
+  line("── " + label + " ──");
+  if(!dn || !cl){
+    line("Type the client and the drawing number first: they name the folder it is filed in.");
+    if(out) out.textContent = label + ": client and drawing number needed";
+    return;
+  }
+  const folder = drawings.find(d => d.is_dir);
+  const files = drawings.filter(d => !d.is_dir).map(d => d.path);
+  if(!folder && !files.length){
+    line("Add the drawings first: Add drawing files… or Add job folder….");
+    if(out) out.textContent = label + ": add the drawings first";
+    return;
+  }
+  if(out) out.textContent = label + ": queueing…";
+  let j, r;
+  try{
+    r = await api("/api/estimate/pack-extract", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({kind: kind, client: cl, drawing_number: dn,
+                           job_folder: folder ? folder.path : "", files: files})});
+    j = await r.json().catch(() => ({}));
+  }catch(err){
+    line(label.toUpperCase() + " FAILED — " + (err && err.message ? err.message : String(err)));
+    if(out) out.textContent = label + " failed";
+    return;
+  }
+  if(!r.ok){
+    const why = j.detail || j.error || ("HTTP " + r.status);
+    line(label.toUpperCase() + " REFUSED — " + why);
+    if(out) out.textContent = label + " refused: " + why;
+    return;
+  }
+  line("Queued: " + label + " → " + (j.output_path || ""));
+  let seen = 0;
+  const tick = async () => {
+    let s, rr;
+    try{
+      rr = await api("/api/estimate/" + encodeURIComponent(j.run_id));
+      s = await rr.json();
+    }catch(e){ setTimeout(tick, 4000); return; }      /* a dropped poll is not a failed run */
+    if(rr.status === 404){
+      line("The service no longer holds this extract; look in " + (j.output_path || "its folder") + ".");
+      return;
+    }
+    (s.log || []).slice(seen).forEach(line); seen = (s.log || []).length;
+    if(s.status === "queued" || s.status === "running"){
+      if(out) out.textContent = label + ": " + (s.status === "running"
+        ? "reading on " + (s.runner || "the runner") + "…" : "queued…");
+      setTimeout(tick, 4000); return;
+    }
+    if(!out) return;
+    out.innerHTML = "";
+    if(s.status === "done"){
+      (s.deliverables || []).forEach(d => {
+        const a = document.createElement("a");
+        a.href = "/api/file?path=" + encodeURIComponent(d.path);
+        a.textContent = d.name; a.target = "_blank"; a.rel = "noopener";
+        a.style.marginRight = "12px";
+        out.appendChild(a);
+      });
+      if(!(s.deliverables || []).length) out.textContent = label + ": nothing was written — see the log";
+    }else{
+      out.textContent = label + " failed: " + (s.error || "see the log");
+      if(s.error) line(s.error);
+    }
+  };
+  tick();
+}
+[["pxSw","sw","SolidWorks pack extract"], ["pxXai","xai","xAI extract"],
+ ["pxDm","dm","SolidWorks Document Manager extract"]].forEach(([id, kind, label]) => {
+  const b = document.getElementById(id);
+  if(b) b.addEventListener("click", () => runPackExtract(kind, label));
+});
+
+const exFindBtn = document.getElementById("exFind");
+if(exFindBtn) exFindBtn.addEventListener("click", findSavedRuns);
+const exRunPick = document.getElementById("exRun");
+if(exRunPick) exRunPick.addEventListener("change", refresh);
 [["exBoms","boms","SDI Estimating Intel BOMs Extract"],
  ["exRoutes","routes","SDI Estimating Intel Routes Extract"],
  ["exBoth","both","SDI Intel BOMs and Routes"]].forEach(([id, kind, label]) => {
@@ -3281,8 +3781,82 @@ $("release").onclick = async () => {
   }
 };
 
+/* TTI PRICER: start the batch in the service, then read its status file back every 10 s. */
+let ttiTimer = null;
+const ttiEsc = t => String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+function ttiRender(st){
+  const rows = st.rows || [];
+  $("ttiStatus").textContent = (st.dry_run ? "Find drawings only" : "Pricing") + ` · ${rows.length} row(s)`
+    + (st.finished ? " · finished " + st.finished.slice(11, 16) : st.state === "starting" ? " · starting" : " · working")
+    + (st.roots && !st.roots.design_readable ? " · DESIGN AREA NOT READABLE FROM THIS SERVICE: " + st.roots.design : "");
+  $("ttiOut").innerHTML = rows.length ? `<table class="tbl"><tr><th>Row</th><th>Drawing</th><th>Estimate</th><th>Drawings found in</th><th>State</th><th>AICost</th></tr>`
+    + rows.map(r => `<tr><td>${r.row}</td><td>${ttiEsc(r.drawing || "")}</td><td>${ttiEsc(r.kind || "")}${r.pack ? `<div class="note" style="margin:2px 0 0">${ttiEsc(r.pack)}</div>` : ""}</td>
+        <td title="${ttiEsc((r.found || {}).folder || "")}">${ttiEsc(((r.found || {}).folder || "").split("\\").slice(-3).join("\\") || "—")}${r.files ? " (" + r.files + " file(s))" : ""}${r.thumbnails ? " · " + r.thumbnails + " thumbnail(s)" : ""}</td>
+        <td>${ttiEsc(r.state || "")}${r.why ? " · " + ttiEsc(r.why) : ""}</td><td>${r.unit_cost != null ? "£" + Number(r.unit_cost).toFixed(2) : ""}</td></tr>`).join("") + "</table>"
+    : `<pre style="white-space:pre-wrap">${ttiEsc(st.log_tail || "")}</pre>`;
+  if(st.finished && ttiTimer){ clearInterval(ttiTimer); ttiTimer = null; }
+}
+async function ttiStart(dry){
+  if(!dry && !confirm("Price every chosen row and write each unit cost into column P (AICost) of the sheet?\n\nClose the workbook in Excel first.")) return;
+  $("ttiStatus").textContent = "starting…"; $("ttiOut").innerHTML = "";
+  const r = await api("/api/estimate/tti/run", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({sheet: $("ttiSheet").value.trim(), rows: $("ttiRows").value.trim(), method: $("ttiMethod").value, dry_run: !!dry})});
+  const j = await r.json().catch(() => ({}));
+  if(!r.ok){ $("ttiStatus").textContent = "Not started: " + (j.detail || r.status); return; }
+  const poll = async () => { const s = await api(j.status_url); if(s.ok) ttiRender(await s.json()); };
+  if(ttiTimer) clearInterval(ttiTimer);
+  ttiTimer = setInterval(poll, 10000); setTimeout(poll, 1500);
+}
+$("ttiFind").onclick = () => ttiStart(true);
+$("ttiGo").onclick = () => ttiStart(false);
+const RUN_MODE_NOTE = {
+  "": "Every reader runs: the BOM reader, DXF flat patterns and SolidWorks where the pack has them, and the model where they do not.",
+  "targeted": "The drawing reader runs first. The whole-pack model read, the vision BOM reader, page vision and DXF interpretation are off; the model is asked one question per gap, on that part's own pages, and every ask is on the record.",
+  "deterministic": "No language model reads the drawings and no earlier AI reading is reused. Tests what the drawing reader finds on its own. Not an estimate to quote.",
+  "solidworks": "The pack's models are read by the SolidWorks analyser alone; no language model. The PDF text is still read for the parts list and title blocks. Not an estimate to quote.",
+  "docmgr": "The pack's models are read by the SolidWorks Document Manager alone; no language model, no COM analyser. Needs the Document Manager key on the runner. Not an estimate to quote.",
+  "llm": "The vision model reads the pack alone: no deterministic BOM reader, DXF or SolidWorks. It produces a total; do not quote it or compare it with a normal run's."};
+$("runMode").onchange = () => { $("runModeNote").textContent = RUN_MODE_NOTE[$("runMode").value] || ""; };
+$("bPreRun").onclick = () => { if($("bPreRun").disabled) return; window._preRunNext = true;
+  runBtn.onclick(); };
 runBtn.onclick = async () => {
+  const _preRun = !!window._preRunNext; window._preRunNext = false;
   if(running || runBtn.disabled) return;
+  /* THE SCOPE, SHOWN BEFORE IT IS SENT (D-604). The HPP 01:12 run of 31 Oct went out as
+     Samsung / TG_Standalone with no brief and no reference document. Why is not known (old
+     values left in the boxes and a reload clearing the brief and ticks is plausible, not
+     proven), because nothing showed what was about to be sent. The LLM button has
+     shown this receipt since D-479; the main estimator sent whatever was on the page without
+     a word. Computed HERE, from the state that will be sent, so a lost tick or an emptied
+     brief shows as "(none)" before staging, before the engine, before the hour. */
+  { const _fl = drawings.filter(d => !d.is_dir);
+    const _refNames = _fl.filter(f => refDocs.has(f.name)).map(f => f.name);
+    const _prodNames = _fl.filter(f => !refDocs.has(f.name)).map(f => f.name);
+    const _dir = drawings.find(d => d.is_dir);
+    const _bLen = ($("enquiryBrief").value || "").trim().length;
+    if(!confirm("Main SDI estimator.\n\nTHIS SUBMISSION:\n"
+              + "  CUSTOMER: " + (safe(client.value).trim() || "(none)") + "\n"
+              + "  DRAWING NUMBER: " + (safe(drawing.value).trim() || "(none)") + "\n"
+              + "  QUANTITY: " + unitList().join(", ") + "\n"
+              + "  PRODUCT: " + (_prodNames.join(", ") || (_dir ? "folder " + _dir.name : "(none)")) + "\n"
+              + "  REFERENCE/STANDARDS: " + (_refNames.join(", ") || "(none)") + "\n"
+              + "  ENQUIRY BRIEF: " + (_bLen ? _bLen + " chars" : "(none)") + "\n"
+              + "  DELIVERY: " + ($("delivRequired").checked ? "required" : "not required") + "\n\n"
+              + "READER MODE: " + ($("runMode").selectedOptions[0] || {}).text + "\n"
+              + (_preRun ? "PRE-RUN: BOMs and routes only, no workbook, nothing priced.\n" : "")
+              + "\n" + (RUN_MODE_NOTE[$("runMode").value] || "") + "\n\nRun it?")) return; }
+  /* AN EMPTY BRIEF BOX IS A DECISION, NOT A DEFAULT (D-473, D-604): the service removes the
+     brief an earlier run filed, so an emptied box changes what the vision read is told. */
+  if(!($("enquiryBrief").value || "").trim()
+     && !confirm("No enquiry brief is typed.\n\nWhere the drawings cannot be read by the "
+               + "other readers, the vision read prices the pack alone. An empty box also "
+               + "removes the brief an earlier run filed with this job.\n\nRun without a brief?")) return;
+  /* A STANDARDS MANUAL ALONE IS NOT A PRODUCT (D-474), refused before anything is staged. */
+  { const _files = drawings.filter(d => !d.is_dir);
+    if(refDocs.size && _files.length && _files.every(f => refDocs.has(f.name))){
+      line("Every added file is ticked as reference/standards — there is no product to "
+         + "cost. Add the product's pack beside it, or untick one.", "e");
+      return; } }
   blockedBy = ""; $("release").hidden = true;   // last run's blocker is not this run's
   runDest = null;              // the previous run's folder is not this run's
   running = true; refresh();
@@ -3301,10 +3875,16 @@ runBtn.onclick = async () => {
     job_folder: folder ? folder.path : null,
     files: drawings.filter(d => !d.is_dir).map(d => d.path),
     output_root: OUTPUT_ROOT,
+    // D-753: the drawing reader on its own, when ticked; otherwise the method stays the default.
+    // Run modes: the reader mode chosen on the page; empty is a full estimate.
+    method: ($("runMode").value || undefined),
+    bom_routes_only: _preRun,
     deliverables: true,                   // --deliverables, always
     // The optional parity partner. null means no comparison was asked for and the run is
     // exactly as it was before this existed.
     manual_workbook: runManual ? runManual.path : null,
+    // D-621: or find it by job number when the run finishes, comparing only a clear choice.
+    compare_with_manual: !runManual && document.getElementById("compareWhenDone").checked,
     // Sent as typed. The service parses and validates, and refuses the run on a typo BEFORE
     // anything is staged — one place that decides what an address is, not two.
     email_to: (document.getElementById("emailTo").value || "").trim(),
@@ -3315,6 +3895,12 @@ runBtn.onclick = async () => {
     // Only when the estimator ticked "Use these changes". Checked again by the service before
     // anything is staged; costed by the engine in place of what the drawings state.
     customer_changes: (document.getElementById("chgUse") || {}).checked ? changesSubmitted() : null,
+    // THE ENQUIRY BRIEF (D-598y): filed with every run, read only if the run falls back to
+    // the vision read because no reader could read the drawings.
+    enquiry_brief: (document.getElementById("enquiryBrief").value || "").trim() || null,
+    // A TICKED REFERENCE DOCUMENT (D-599a): held out of every reader; its words reach the
+    // vision read as the customer's requirements.
+    reference_documents: refDocs.size ? [...refDocs] : null,
     // THE DELIVERY DECLARATION (D-524): the checkbox and postcode above. Always sent — the
     // ticked default keeps today's pricing; unticked is the deliberate £0; the postcode is
     // the future per-mile calculator's destination.
@@ -3349,6 +3935,24 @@ runBtn.onclick = async () => {
     // start time, and the page must show the folder that exists rather than the
     // one it guessed a second earlier.
     if(started.output_path){ runDest = started.output_path; refresh(); }
+    /* WHAT WAS SENT MUST BE WHAT WAS FILED (D-604), the guards the LLM button already has.
+       A typed brief the service did not file, or ticked references it did not acknowledge,
+       is a run answering a different question: stopped now, not discovered on the book. */
+    const _typedMain = ($("enquiryBrief").value || "").trim();
+    if(_typedMain && started.enquiry_brief !== "filed"){
+      await api("/api/estimate/"+encodeURIComponent(runId)+"/abandon", {method:"POST"});
+      throw new Error("The service did not file the enquiry brief (it answered '"
+        + (started.enquiry_brief === undefined ? "nothing" : started.enquiry_brief)
+        + "'). The run was stopped. Update and restart the service, then run again.");
+    }
+    if(refDocs.size && !Array.isArray(started.reference_documents)){
+      await api("/api/estimate/"+encodeURIComponent(runId)+"/abandon", {method:"POST"});
+      throw new Error("The service did not acknowledge the reference/standards documents. "
+        + "The run was stopped. Update and restart the service, then run again.");
+    }
+    line("Scope sent: " + safe(client.value) + " · " + safe(drawing.value) + " · "
+       + unitList().join(", ") + " off · brief " + (_typedMain ? _typedMain.length + " chars"
+       : "none") + " · reference " + ([...refDocs].join(", ") || "none"));
     /* A RUN HOLDING THE DESKTOP THAT NOTHING ON SCREEN CAN RELEASE.
        The lease is 900s, deliberately, so a quiet engine is not killed mid-estimate. The
        cost is that a runner which has actually DIED leaves its claim looking busy for a
@@ -3404,6 +4008,10 @@ runBtn.onclick = async () => {
     clearInterval(poll); poll=null; running=false; refresh();
     if(s.status === "done"){
       setStatus("ok","Complete");
+      /* WHAT IT CAME TO, AT EVERY QUANTITY ASKED FOR (D-610), and the walkthrough page. */
+      const _priced = pricesText(s.quantity_prices, s.engine_price_gbp, s.units);
+      if(_priced) line("Priced: " + _priced + " (ex VAT, internal cost estimate)");
+      if(s.walkthrough_url) line("Walkthrough, with its commentary and questions: " + s.walkthrough_url);
       (s.deliverables||[]).forEach(d => {
         const a=document.createElement("a");
         a.href="/api/file?path="+encodeURIComponent(d.path);
@@ -3913,7 +4521,10 @@ parityRun.onclick = async () => {
     /* HTML FIRST, BECAUSE IT IS THE ONE A PERSON READS. The JSON is the record and the CSV is
        for Excel; leading with either sends an estimator into a 2,000-line file to answer
        "why did these two differ". */
-    [{url:j.bundle_html_url, name:"Parity report (HTML — read this one)"},
+    [{url:j.bundle_html_url, name:"Parity report, line by line (HTML — read this one)"},
+     {url:j.walkthrough_url, name:"Listen to the comparison (WAV)"},
+     {url:j.legacy_html_url, name:"Money-cell report (HTML)"},
+     {url:j.detail_json_url, name:"Line-by-line record (JSON)"},
      {url:j.bundle_json_url, name:"Parity bundle (JSON — the full comparison)"},
      {url:j.bundle_csv_url,  name:"Parity comparison (CSV)"}]
       .filter(d => d.url).forEach(d => {
@@ -3927,6 +4538,298 @@ parityRun.onclick = async () => {
   }finally{
     parityRun.textContent = was; refreshParity();
   }
+};
+
+
+/* ══ PARITY BY JOB NUMBER (D-619, D-621) ══════════════════════════════════════════════
+   Find both sides by job number and show why; ask when the match is not clear; compare in the
+   background; search what is filed; one period, or Period A against Period B. The service
+   runs src/parity_job.py. */
+const pjEsc = t => String(t ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+const pjGbp = v => (typeof v === "number") ? "£" + v.toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2}) : "—";
+const pjPct = v => (typeof v === "number") ? v.toFixed(1) + "%" : "";
+const pjColour = st => st === "match" ? "var(--ok)" : st === "warning" ? "var(--warn)"
+  : (st === "fail" || st === "not compared") ? "var(--bad)" : "var(--dim)";
+const pjLink = (url, text) => url ? '<a href="' + pjEsc(url) + '" target="_blank" rel="noopener">' + text + '</a>' : "";
+let pjManual = null, pjAi = null, pjClientFound = "";
+
+function pjChoices(box, items, name, preselect, pick){
+  box.innerHTML = items.length ? "" : '<p class="note" style="color:var(--warn)">None found.</p>';
+  items.forEach((it, i) => {
+    const row = document.createElement("label");
+    row.style.cssText = "display:flex;gap:8px;align-items:flex-start;margin-top:5px;cursor:pointer;text-transform:none;font-family:var(--body);letter-spacing:normal;font-size:inherit";
+    row.innerHTML = '<input type="radio" name="' + name + '"' + (preselect && i === 0 ? " checked" : "") + ' style="margin-top:3px">'
+      + '<span><b>' + pjEsc(it.name) + '</b> <span class="note" style="margin:0">'
+      + pjEsc(it.why || "") + (it.modified_text ? " · " + pjEsc(it.modified_text) : "")
+      + (it.client ? " · " + pjEsc(it.client) + (it.year ? " " + pjEsc(it.year) : "") : "") + '</span> '
+      + pjLink(it.url, "open") + '</span>';
+    row.querySelector("input").onchange = () => pick(it);
+    box.appendChild(row);
+  });
+  if(preselect && items[0]) pick(items[0]);
+}
+
+function pjRefresh(){
+  $("pjRun").disabled = !(pjManual && pjAi);
+  $("pjChosen").innerHTML = (pjManual && pjAi)
+    ? "Will compare <b>" + pjEsc(pjAi.name) + "</b> (" + pjEsc(pjAi.stamp || "") + ") with <b>"
+      + pjEsc(pjManual.name) + "</b>: " + pjEsc(pjManual.why || "chosen") + "."
+    : (pjManual ? "Choose the AI run." : "Choose the manual sheet.");
+}
+
+$("pjFind").onclick = async () => {
+  const job = $("pjJob").value.trim();
+  const out = $("pjOut"); out.innerHTML = "";
+  if(!job){ out.innerHTML = '<li><span style="color:var(--warn)">Type a job number first.</span></li>'; return; }
+  $("pjFind").disabled = true; $("pjFind").textContent = "Looking on the share…";
+  try{
+    const q = "job=" + encodeURIComponent(job) + ($("pjClient").value.trim() ? "&client=" + encodeURIComponent($("pjClient").value.trim()) : "");
+    const r = await api("/api/estimate/parity/find?" + q);
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){ out.innerHTML = '<li><span style="color:var(--bad)">' + detailText(j, r, "Not found") + '</span></li>'; $("pjFound").hidden = true; return; }
+    pjManual = pjAi = null; pjClientFound = j.client || "";
+    $("pjFound").hidden = false;
+    const d = j.decision || {};
+    $("pjDecision").innerHTML = (d.clear ? '<span style="color:var(--ok)">Clear choice.</span> '
+                                         : '<span style="color:var(--warn)">Choose the manual sheet.</span> ')
+      + pjEsc(d.reason || "") + (pjClientFound ? " Client: " + pjEsc(pjClientFound) + "." : "");
+    pjChoices($("pjManualList"), j.manual || [], "pjm", !!d.clear, it => { pjManual = it; pjRefresh(); });
+    pjChoices($("pjAiList"), (j.ai || []).map(a => ({...a, name: a.workbook.split(/[\\/]/).pop(),
+      why: a.stamp + (a.units ? " · " + a.units + " off" : "")})), "pja", true, it => { pjAi = it; pjRefresh(); });
+    pjRefresh();
+  }catch(e){
+    out.innerHTML = '<li><span style="color:var(--bad)">Could not reach the service.</span></li>';
+  }finally{ $("pjFind").disabled = false; $("pjFind").textContent = "Find both estimates"; }
+};
+$("pjJob").addEventListener("keydown", e => { if(e.key === "Enter") $("pjFind").click(); });
+$("pjPickManual").onclick = () => chooseOneFile("Select the manual estimate", [".xlsx",".xlsm",".xls"], it => {
+  pjChoices($("pjManualList"), [{path: it.path, name: it.name, why: "chosen by hand"}], "pjm", true,
+            c => { pjManual = c; pjRefresh(); });
+});
+
+function pjResult(idx){
+  const h = idx.headline || {}, q = idx.quantity || {};
+  const oc = idx.outcome || h.status || "compared";
+  const ai = q.ai_unit_at_manual_qty ?? h.ai_unit_cost_gbp;
+  const pct = q.pct_at_manual_qty ?? h.pct_variance;
+  const lines = (idx.lines || []).filter(x => x.label && !/^reference order quantity/i.test(x.label))
+    .map(x => '<tr><td>' + pjEsc(x.label) + '</td><td style="text-align:right">' + pjGbp(x.ai) + '</td><td style="text-align:right">'
+      + pjGbp(x.manual) + '</td><td>' + pjEsc(x.status || "") + '</td><td>' + pjEsc(x.cell || "") + '</td></tr>').join("");
+  return '<li><span style="color:' + pjColour(oc) + '">' + pjEsc(String(oc).toUpperCase()) + '</span> — AI '
+    + pjGbp(ai) + ' against manual ' + pjGbp(h.manual_unit_cost_gbp) + (pct != null ? ' · variance ' + pjPct(pct) : "") + '</li>'
+    + (q.note ? '<li class="note">' + pjEsc(q.note) + '</li>' : "")
+    + (!idx.walkthrough_wav && idx.walkthrough_note ? '<li class="note">Spoken comparison: '
+       + pjEsc(idx.walkthrough_note) + '</li>' : "")
+    + (idx.scope_counts ? '<li>Scope: ' + pjEsc(idx.scope_counts.manual_only ?? 0) + ' parts only on the manual · '
+      + pjEsc(idx.scope_counts.ai_only ?? 0) + ' only on the AI · ' + pjEsc(idx.scope_counts.made_bought_differs ?? 0)
+      + ' made on one, bought on the other · ' + pjEsc(idx.scope_counts.material_not_charged ?? 0) + ' with material not charged'
+      + (idx.revision && idx.revision.differs ? ' · <strong>revisions differ</strong>' : "") + '</li>' : "")
+    + (lines ? '<li><table style="border-collapse:collapse;font-size:12.5px"><tr><th style="text-align:left">Line</th><th>AI</th><th>Manual</th><th>Status</th><th>Cell</th></tr>' + lines + '</table></li>' : "")
+    + '<li>' + [pjLink(idx.report_url, "Parity report"), pjLink(idx.listen_url, "Listen to the comparison"),
+                pjLink(idx.legacy_report_url, "Money-cell report"),
+                pjLink(idx.manual_url, "Manual sheet (filed copy)"),
+                pjLink(idx.ai_url, "AI sheet (filed copy)"), pjLink(idx.bundle_csv_url, "Bundle CSV")].filter(Boolean).join(" · ") + '</li>'
+    + '<li class="note">Filed in <code>' + pjEsc(idx.folder) + '</code> · ' + pjEsc((idx.match || {}).how || "")
+    + (idx.comparison_id ? " · id " + pjEsc(idx.comparison_id) : "") + '</li>';
+}
+
+async function pjPoll(url, render, done){
+  const s = await api(url).then(x => x.json()).catch(() => ({}));
+  render(s);
+  if(s.finished) done && done(s); else setTimeout(() => pjPoll(url, render, done), 2500);
+}
+
+$("pjRun").onclick = async () => {
+  const out = $("pjOut"); out.innerHTML = "";
+  $("pjRun").disabled = true; $("pjRun").textContent = "Comparing and filing…";
+  try{
+    const r = await api("/api/estimate/parity/job", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({job: $("pjJob").value.trim(), client: pjClientFound || $("pjClient").value.trim() || null,
+                            manual_path: pjManual.path, ai_path: pjAi.workbook, read_via_excel: $("pjExcel").checked})});
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){ out.innerHTML = '<li><span style="color:var(--bad)">' + detailText(j, r, "The comparison could not start") + '</span></li>';
+               $("pjRun").textContent = "Compare and file"; pjRefresh(); return; }
+    if(j.already_running) out.innerHTML = '<li class="note">That comparison is already running; following it.</li>';
+    pjPoll(j.status_url, s => {
+      if(s.state === "done" && s.result){
+        out.innerHTML = pjResult(s.result);
+        if(s.result.folder) pjAskHere(s.result.folder,
+          (s.result.drawing || "") + (s.result.comparison_id ? " · id " + s.result.comparison_id : ""));
+      }
+      else if(s.state === "choose") out.innerHTML = '<li><span style="color:var(--warn)">' + pjEsc(s.error) + '</span></li>';
+      else if(s.state === "failed") out.innerHTML = '<li><span style="color:var(--bad)">' + pjEsc(s.error) + '</span></li>';
+      else out.innerHTML = '<li class="note">' + pjEsc(s.step || "Working…") + '</li>';
+    }, () => { $("pjRun").textContent = "Compare and file"; pjRefresh(); });
+  }catch(e){
+    out.innerHTML = '<li><span style="color:var(--bad)">Could not reach the service.</span></li>';
+    $("pjRun").textContent = "Compare and file"; pjRefresh();
+  }
+};
+
+/* ASK ABOUT THIS COMPARISON (D-628): type or speak elsewhere, here type; review; Ask; the
+   written answer always, with the comparison's own recorded figures above it. */
+let pjAskFolder = null;
+function pjAskHere(folder, label){
+  pjAskFolder = folder;
+  $("pjAsk").hidden = false;
+  $("pjAskWhich").textContent = "Answered from the filed comparison " + label + " only: the "
+    + "line-by-line record and its spoken summary. It explains the saved results; it changes "
+    + "neither estimate and authorises nothing.";
+}
+$("pjAskGo").onclick = async () => {
+  const q = $("pjAskQ").value.trim(), box = $("pjAskOut");
+  if(!q || !pjAskFolder) return;
+  $("pjAskGo").disabled = true; box.innerHTML = '<li class="note">Asking…</li>';
+  try{
+    const r = await api("/api/estimate/parity/ask", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({folder: pjAskFolder, question: q})});
+    const a = await r.json().catch(() => ({}));
+    if(!r.ok){ box.innerHTML = '<li><span style="color:var(--bad)">' + pjEsc(detailText(a, r, "It could not answer")) + '</span></li>'; return; }
+    box.innerHTML = '<li>' + pjEsc(a.answer || "Nothing came back.") + '</li>'
+      + ((a.recorded || []).length ? '<li class="note" style="white-space:pre-wrap">From the comparison:\n'
+          + pjEsc(a.recorded.join("\n")) + '</li>' : "")
+      + '<li class="note">From ' + pjEsc((a.sources || []).join(", ") || "the filed comparison")
+      + (a.model ? ' · answered by ' + pjEsc(a.model) : ' · record lookup') + '</li>';
+  }catch(e){
+    box.innerHTML = '<li><span style="color:var(--bad)">Could not reach the service.</span></li>';
+  }finally{ $("pjAskGo").disabled = false; }
+};
+$("pjAskQ").addEventListener("keydown", e => { if(e.key === "Enter") $("pjAskGo").click(); });
+$("pjResults").addEventListener("click", e => {
+  const b = e.target.closest ? e.target.closest(".pjAskBtn") : null;
+  if(b){ pjAskHere(b.dataset.folder, b.dataset.label); $("pjAsk").scrollIntoView(); }
+});
+
+function pjTable(rows, head, cells){
+  if(!rows.length) return '<p class="note">None.</p>';
+  return '<table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px"><tr>'
+    + head.map(h => '<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--line)">' + h + '</th>').join("")
+    + '</tr>' + rows.map(r => '<tr>' + cells(r).map(c => '<td style="padding:4px 8px;border-bottom:1px solid var(--line)">' + c + '</td>').join("") + '</tr>').join("")
+    + '</table>';
+}
+
+$("pjSearch").onclick = async () => {
+  const box = $("pjResults"); box.innerHTML = '<p class="note">Searching…</p>';
+  const q = new URLSearchParams();
+  if($("pjQ").value.trim()) q.set("q", $("pjQ").value.trim());
+  if($("pjFrom").value) q.set("start", $("pjFrom").value);
+  if($("pjTo").value) q.set("end", $("pjTo").value);
+  if($("pjOutcome").value) q.set("outcome", $("pjOutcome").value);
+  try{
+    const r = await api("/api/estimate/parity/reports?" + q.toString());
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){ box.innerHTML = '<p style="color:var(--bad)">' + detailText(j, r, "Search failed") + '</p>'; return; }
+    box.innerHTML = pjTable(j.reports || [], ["When", "Drawing", "Client", "Outcome", "AI unit", "Manual unit", "Variance", ""], i => {
+      const h = i.headline || {}, qy = i.quantity || {};
+      return [pjEsc(i.stamp), pjEsc(i.drawing), pjEsc(i.client),
+              '<span style="color:' + pjColour(i.outcome) + '">' + pjEsc(i.outcome || "—") + '</span>',
+              pjGbp(qy.ai_unit_at_manual_qty ?? h.ai_unit_cost_gbp), pjGbp(h.manual_unit_cost_gbp),
+              pjPct(qy.pct_at_manual_qty ?? h.pct_variance),
+              (pjLink(i.report_url, "report") || pjEsc((i.error || "").slice(0, 80)))
+              + (i.folder ? ' <button type="button" class="pjAskBtn" data-folder="' + pjEsc(i.folder)
+                 + '" data-label="' + pjEsc(i.drawing || "") + '">ask</button>' : "")];
+    }) + ((j.periods || []).length ? '<p class="note" style="margin-top:10px"><b>Period comparisons</b></p>'
+      + pjTable(j.periods, ["Kind", "Period", "Comparable", "No manual", "Failed", ""], p => [
+          pjEsc(p.kind), pjEsc(p.kind === "two periods" && p.a && p.b ? "A " + p.a.join(" to ") + " · B " + p.b.join(" to ") : p.start + " to " + p.end),
+          pjEsc(p.compared), pjEsc(p.no_manual), pjEsc(p.failed), pjLink(p.summary_url, "summary")]) : "");
+  }catch(e){ box.innerHTML = '<p style="color:var(--bad)">Could not reach the service.</p>'; }
+};
+
+function pjRows(rows){
+  return pjTable(rows || [], ["Drawing", "Client", "AI run", "Outcome", "AI unit", "Manual unit", "Variance", ""], r => [
+    pjEsc(r.drawing), pjEsc(r.client), pjEsc(r.ai_run) + (r.runs_in_period > 1 ? ' <span class="note">(' + r.runs_in_period + ' runs, newest used)</span>' : ""),
+    '<span style="color:' + pjColour(r.outcome) + '">' + pjEsc(r.outcome) + (r.reused ? " (reused)" : "") + '</span>',
+    pjGbp(r.ai_unit), pjGbp(r.manual_unit), pjPct(r.pct),
+    pjLink(r.report_url, "report") || pjEsc(r.note || r.quantity_note || r.manual || "")]);
+}
+
+function pjStats(s){
+  if(!s) return "";
+  return s.compared + " comparable (" + s.match + " match, " + s.warning + " warning, " + s.fail + " fail); median variance "
+    + (s.median_abs_pct == null ? "n/a" : s.median_abs_pct + "%") + "; apart: " + s["quantities differ"] + " quantities differ, "
+    + s.ambiguous + " ambiguous, " + s["no manual"] + " no manual, " + s.failed + " failed; "
+    + s.runs_collapsed + " repeat run(s) collapsed.";
+}
+
+async function pjStart(url, body, box, render){
+  box.innerHTML = '<p class="note">' + (body.preview ? "Looking through AISheets…" : "Starting…") + '</p>';
+  try{
+    const r = await api(url, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok){ box.innerHTML = '<p style="color:var(--bad)">' + detailText(j, r, "It could not start") + '</p>'; return; }
+    if(body.preview){ render(j, true); return; }
+    pjPoll(j.status_url, s => {
+      if(s.error){ box.innerHTML = '<p style="color:var(--bad)">' + pjEsc(s.error) + '</p>'; return; }
+      render(s, false);
+    });
+  }catch(e){ box.innerHTML = '<p style="color:var(--bad)">Could not reach the service.</p>'; }
+}
+
+/* A boundary: the date, with its optional time appended (D-625). A bare date is the whole
+   day, so one day is a period on its own; a time narrows it within the day. */
+function pjWhen(dateId, timeId){
+  const d = $(dateId).value;
+  return d ? (($(timeId).value) ? d + " " + $(timeId).value : d) : "";
+}
+
+function pjPeriod(preview){
+  const start = pjWhen("pjPFrom", "pjPFromT"), end = pjWhen("pjPTo", "pjPToT"), box = $("pjPeriodOut");
+  if(!start || !end){ box.innerHTML = '<p style="color:var(--warn)">Choose both dates.</p>'; return; }
+  pjStart("/api/estimate/parity/period", {start, end, preview, client: $("pjPClient").value.trim(), job: $("pjPJob").value.trim()},
+    box, (s, isPreview) => {
+      box.innerHTML = '<p class="note">' + (isPreview ? "Preview: " : (s.finished ? "Finished: " : "Running: " + (s.done ?? 0) + " of " + (s.of ?? "?") + ". "))
+        + pjEsc(pjStats(s.stats) || "") + " " + pjLink(s.summary_url, "summary page") + '</p>' + pjRows(s.rows);
+    });
+}
+$("pjPreview").onclick = () => pjPeriod(true);
+$("pjPeriod").onclick = () => pjPeriod(false);
+
+function pjTwo(preview){
+  const v = id => $(id).value, box = $("pjTwoOut");
+  if(!v("pjAFrom") || !v("pjATo") || !v("pjBFrom") || !v("pjBTo")){ box.innerHTML = '<p style="color:var(--warn)">Choose all four dates.</p>'; return; }
+  pjStart("/api/estimate/parity/periods", {a_start: pjWhen("pjAFrom", "pjAFromT"), a_end: pjWhen("pjATo", "pjAToT"),
+    b_start: pjWhen("pjBFrom", "pjBFromT"), b_end: pjWhen("pjBTo", "pjBToT"),
+    client: $("pjTClient").value.trim(), job: $("pjTJob").value.trim(), preview}, box, (s, isPreview) => {
+      if(!s.finished && !isPreview){
+        box.innerHTML = '<p class="note">Running period ' + pjEsc(s.period || "A") + ': ' + (s.done ?? 0) + ' of ' + (s.of ?? "?") + '…</p>'; return; }
+      const ch = s.change || {}, sa = s.stats_a || {}, sb = s.stats_b || {};
+      const mv = k => ch[k] == null ? "n/a" : (ch[k] > 0 ? "+" : "") + ch[k] + " pts";
+      box.innerHTML = '<p class="note">' + (isPreview ? "Preview. " : "Finished. ") + pjLink(s.summary_url, "comparison page") + '</p>'
+        + pjTable([["Comparable pairs", sa.compared, sb.compared, ""], ["Median variance", pjPct(sa.median_abs_pct), pjPct(sb.median_abs_pct), mv("median_abs_pct")],
+                   ["Mean variance", pjPct(sa.mean_abs_pct), pjPct(sb.mean_abs_pct), mv("mean_abs_pct")],
+                   ["Within warning", pjPct(sa.within_warning_pct), pjPct(sb.within_warning_pct), mv("within_warning_pct")],
+                   ["Quantities differ", sa["quantities differ"], sb["quantities differ"], ""], ["Ambiguous", sa.ambiguous, sb.ambiguous, ""],
+                   ["No manual estimate", sa["no manual"], sb["no manual"], ""], ["Repeat runs collapsed", sa.runs_collapsed, sb.runs_collapsed, ""]],
+                  ["", "Period A", "Period B", "Change"], r => r.map(x => pjEsc(x ?? "")))
+        + '<p class="note" style="margin-top:8px"><b>Estimated in both periods</b></p>'
+        + pjTable(s.in_both || [], ["Drawing", "Client", "Variance A", "Variance B", "Change"], x => [pjEsc(x.drawing), pjEsc(x.client),
+            pjPct(x.pct_a), pjPct(x.pct_b), x.change == null ? "" : pjEsc((x.change > 0 ? "+" : "") + x.change + " pts")])
+        + '<p class="note" style="margin-top:8px"><b>Period A</b></p>' + pjRows(s.rows_a)
+        + '<p class="note" style="margin-top:8px"><b>Period B</b></p>' + pjRows(s.rows_b);
+    });
+}
+$("pjTPreview").onclick = () => pjTwo(true);
+$("pjTRun").onclick = () => pjTwo(false);
+
+/* AT THE TIME OF A RUN: the manual sheet found by job number for the run being set up, filled
+   in only when the choice is clear (D-621). */
+$("findRunManual").onclick = async () => {
+  const job = ($("drawing").value || "").trim();
+  const client = ($("client").value || "").trim();
+  const why = $("runManualWhy"); why.hidden = false;
+  if(!job){ why.textContent = "Type the drawing number above first."; return; }
+  why.textContent = "Looking under Manual Estimates…";
+  try{
+    const r = await api("/api/estimate/parity/find?job=" + encodeURIComponent(job) + (client ? "&client=" + encodeURIComponent(client) : ""));
+    const j = await r.json().catch(() => ({}));
+    const d = j.decision || {}, best = (j.manual || [])[0];
+    if(!r.ok){ why.textContent = detailText(j, r, "Not found"); return; }
+    if(!best){ why.textContent = "No manual estimate was found for that job number; choose it by hand."; return; }
+    if(!d.clear){ why.textContent = "Not filled in: " + (d.reason || "the choice is not clear") + " Use Choose manual estimate."; return; }
+    runManual = {path: best.path, name: best.name}; renderRunManual();
+    why.textContent = "Found in " + best.client + " " + best.year + ": " + d.reason + ".";
+  }catch(e){ why.textContent = "Could not reach the service."; }
 };
 
 
@@ -4195,7 +5098,7 @@ checkDm();
    the watcher's, on the estimating machine. The page shows what the watcher last said and
    when, and refreshes every 20 seconds so a running job can be followed from here. */
 const selfRunBtn = $("selfRun"), selfStopBtn = $("selfStop"), selfJobBtn = $("selfJobStop");
-const SELF_LABELS = [["ready","ready to run"],["running","running"],
+const SELF_LABELS = [["ready","ready to run"],["running","queued or running"],
   ["waiting","waiting for drawings"],["held","held — a person must act"],["failed","failed"],
   ["done","done"],["not_asked","not asked (AI CHECK is not YES)"]];
 function selfEsc(s){
@@ -4213,39 +5116,101 @@ function selfStatusLine(v){
     const cur = w.current || {};
     return "Switched on" + (v.switched_on_at ? " at " + v.switched_on_at : "") + ". "
       + (w.phase === "running" && cur.drawing
-          ? "Running " + cur.drawing + " (" + (cur.customer || "") + ")"
-            + (cur.since ? " since " + cur.since : "") + "."
+          ? (cur.state === "queued" ? "Queued " : "Running ") + cur.drawing + " (" + (cur.customer || "") + ")"
+            + (cur.since ? " since " + cur.since : "")
+            + (cur.state === "queued" ? ", waiting for a free Grid Runner." : ".")
+            + ((cur.also || []).length ? " Also on the grid: " + cur.also.join(", ")
+               + ". Each has its own Stop under Latest runs." : "")
           : (w.message || w.phase || "Waiting for the watcher."));
   }
   return "Switched off" + (v.switched_off_at ? " at " + v.switched_off_at : "") + ". "
     + (w.connected ? "The watcher is connected and waiting for the switch."
                    : "No watcher is connected.");
 }
+/* A STOP THIS PAGE SENT, REMEMBERED (D-643). The service abandons the run the moment Stop is
+   confirmed, but the card is drawn from the office watcher's last report, which still said
+   "running" until its next beat — and the 20-second refresh overwrote the "Stop requested"
+   line, so a stop that had worked read as one that did nothing (12754-01-GA, 3 Nov 2026). */
+const selfStopped = {};
+/* WHILE A STOP IS PENDING, ASK EVERY 5 SECONDS (D-649), not every 20, so the card lets go of
+   the job as soon as the watcher reports it ended; for a minute at most. */
+let selfQuick = null;
+function quickSelf(){
+  clearInterval(selfQuick);
+  let left = 12;
+  selfQuick = setInterval(() => {
+    if(--left <= 0){ clearInterval(selfQuick); selfQuick = null; }
+    refreshSelf();
+  }, 5000);
+}
 function renderSelf(v){
   const w = v.watcher || {};
   selfRunBtn.hidden = !!v.enabled;
   selfStopBtn.hidden = !v.enabled;
   const job = (w.phase === "running" && w.connected) ? (w.current || {}) : {};
+  const stoppedAt = job.run_id ? selfStopped[job.run_id] : "";
+  if(!stoppedAt && selfQuick){ clearInterval(selfQuick); selfQuick = null; }
   selfJobBtn.hidden = !job.run_id;
   selfJobBtn.dataset.runId = job.run_id || "";
-  selfJobBtn.textContent = job.run_id ? "Stop this job — " + (job.drawing || job.run_id)
-                                      : "Stop this job";
-  $("selfStatus").textContent = selfStatusLine(v);
+  selfJobBtn.disabled = !!stoppedAt;
+  selfJobBtn.textContent = !job.run_id ? "Stop this job"
+    : stoppedAt ? "Stopping — " + (job.drawing || job.run_id) + " (stop sent " + stoppedAt + ")"
+    : "Stop this job — " + (job.drawing || job.run_id);
+  $("selfStatus").textContent = selfStatusLine(v) + (stoppedAt
+    ? " STOP SENT at " + stoppedAt + ": the service has abandoned the run and the runner "
+      + "ends the engine within about half a minute; this card lets go of the job when the office "
+      + "watcher next reports, within about 15 seconds."
+    : "");
   const c = w.counts || {};
   const parts = SELF_LABELS.filter(([k]) => c[k]).map(([k, l]) => c[k] + " " + l);
   let html = parts.length
     ? "<div><b>The sheet:</b> " + selfEsc(parts.join(" · "))
-      + (w.last_cycle_at ? " — read " + selfEsc(w.last_cycle_at) : "") + "</div>" : "";
+      + (w.last_cycle_at ? " — read " + selfEsc(w.last_cycle_at) : "")
+      + (w.workbook ? "<div class='note' style='margin:2px 0 0'>from " + selfEsc(w.workbook) + "</div>" : "")
+      + "</div>" : "";
   const recent = w.recent || [];
   if(recent.length){
+    selfRerunSeen = new Set();
     html += "<div style='margin-top:6px'><b>Latest runs:</b></div><ul style='margin:4px 0 0 18px'>"
       + recent.map(r => "<li>" + selfEsc(r.drawing) + " (" + selfEsc(r.customer) + ") — "
         + selfEsc(r.status)
-        + (r.unit_gbp ? " — £" + Number(r.unit_gbp).toFixed(2) + " a unit" : "")
-        + (r.error ? " — " + selfEsc(String(r.error).slice(0, 160)) : "") + "</li>").join("")
+        + (pricesText(r.quantity_prices, r.unit_gbp, (r.quantities || [])[0])
+           ? " — " + selfEsc(pricesText(r.quantity_prices, r.unit_gbp, (r.quantities || [])[0])) : "")
+        + (r.walkthrough_url ? " — <a href='" + selfEsc(r.walkthrough_url)
+           + "' target='_blank' rel='noopener'>walkthrough</a>" : "")
+        + (r.error ? " — " + selfEsc(String(r.error).slice(0, 160)) : "") + selfStopHtml(r) + "</li>").join("")
       + "</ul>";
   }
   $("selfOut").innerHTML = html;
+}
+/* THE PRICE AT EVERY QUANTITY THE RUN PRICED (D-610): "1 off £538.06 · 5 off £401.20 ·
+   10 off £377.00", not one unit price for a run asked for three. One quantity, or a run filed
+   before the quantities were reported, reads as before. */
+/* A Stop for each queued or running job in Latest runs (JG, 10 Nov 2026), and a Re-run on the
+   newest attempt of a job that ended without an estimate ("in case the live enquiry folder has
+   been re populated manually"). */
+let selfRerunSeen = new Set();
+function selfStopHtml(r){
+  if(r.status === "error" && !selfRerunSeen.has(r.drawing)){
+    selfRerunSeen.add(r.drawing);
+    return " <button type='button' class='btn-run' style='padding:1px 8px;font-size:12px;width:auto;display:inline-block'"
+      + " data-self-rerun='" + selfEsc(r.drawing) + "' data-customer='" + selfEsc(r.customer || "") + "'"
+      + (selfReruns[r.drawing] ? " disabled>Re-run asked " + selfEsc(selfReruns[r.drawing]) : ">Re-run") + "</button>";
+  }
+  if(r.status === "queued" || r.status === "running" || r.status === "done") selfRerunSeen.add(r.drawing);
+  if(!((r.status === "queued" || r.status === "running") && r.run_id)) return "";
+  return " <button type='button' class='btn-stop' style='padding:1px 8px;font-size:12px;width:auto;display:inline-block'"
+    + " data-self-stop='" + selfEsc(r.run_id) + "' data-server='" + selfEsc(r.server || "")
+    + "' data-name='" + selfEsc(r.drawing) + "'"
+    + (selfStopped[r.run_id] ? " disabled>Stopping…" : ">Stop") + "</button>";
+}
+function pricesText(prices, unit, units){
+  const money = v => "£" + Number(v).toLocaleString("en-GB",
+                                                   {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  if(prices && prices.length > 1)
+    return prices.map(p => p.quantity + " off " + money(p.unit_gbp)).join(" · ");
+  if(unit) return money(unit) + " a unit" + (units ? " at " + units + " off" : "");
+  return "";
 }
 async function refreshSelf(){
   try{
@@ -4281,11 +5246,12 @@ async function switchSelf(on){
   btn.disabled = false;
 }
 selfRunBtn.onclick = () => {
-  if(!confirm("Start AI Estimate Self-Running?\n\nEvery Live Enquiry row marked AI CHECK = YES "
-            + "that has not been estimated is taken in turn: its drawings are collected from "
-            + "Production into the Live Enquiry folder where the folder is empty, then it is "
-            + "estimated, one job after another. Books file to the usual place; nothing goes "
-            + "to a customer.")) return;
+  if(!confirm("Start AI Estimate Self-Running?\n\nEvery AI Live Enquiry row with AI CHECK = YES, "
+            + "a QTY and AICompleted blank, NO, N or Re-Run is taken in turn, from the top: its "
+            + "drawings are taken from the Live Enquiry folder (the Customer's folder, then the "
+            + "folder carrying the Drawing No.), then it is estimated, one job after another, "
+            + "and AICompleted is set to YES when it finishes. Books file to the usual place; "
+            + "nothing goes to a customer.")) return;
   switchSelf(true);
 };
 selfStopBtn.onclick = () => {
@@ -4296,6 +5262,55 @@ selfStopBtn.onclick = () => {
 /* STOP MEANS THE SAME HERE AS ON A RUN THIS TAB STARTED: abandoned in the service, and the
    runner told to end the engine on its next heartbeat. Self-running stays on; switch it off
    as well if nothing more should be queued. */
+/* STOP ANY ONE OF THEM, HERE (JG, 10 Nov 2026): "we also need the jobs to be killed
+   individually from either grid control or from the main estimating page". Every queued or
+   running job in Latest runs has its own Stop. A job on this service is stopped here; one the
+   watcher queued on another service of the grid is stopped there, through this one. */
+function sameService(server){
+  if(!server) return true;
+  try{ return new URL(server).port === location.port && ["localhost","127.0.0.1",location.hostname]
+         .includes(new URL(server).hostname); }catch(e){ return true; }
+}
+const selfReruns = {};
+$("selfOut").addEventListener("click", async e => {
+  const rr = e.target.closest && e.target.closest("[data-self-rerun]");
+  if(rr && !rr.disabled){
+    const drawing = rr.dataset.selfRerun;
+    if(!confirm("Run " + drawing + " again?\n\nSelf-Running reads the sheet and the Live Enquiry "
+              + "folder again within about 15 seconds and queues it.")) return;
+    rr.disabled = true; rr.textContent = "Asking…";
+    try{
+      const r = await api("/api/estimate/self-running/rerun", {method:"POST", headers:{"Content-Type":"application/json"},
+                          body: JSON.stringify({drawing, customer: rr.dataset.customer || ""})});
+      const j = await r.json().catch(() => ({}));
+      if(!r.ok) throw new Error(detailText(j, r, "refused"));
+      selfReruns[drawing] = new Date().toLocaleTimeString("en-GB");
+      refreshSelf(); quickSelf();
+    }catch(err){ rr.disabled = false; rr.textContent = "Re-run"; $("selfStatus").textContent = "Could not ask for a re-run: " + err.message; }
+    return;
+  }
+  const b = e.target.closest && e.target.closest("[data-self-stop]");
+  if(!b || b.disabled) return;
+  const id = b.dataset.selfStop, server = b.dataset.server || "";
+  if(!confirm("Stop " + (b.dataset.name || id) + "?\n\nThe run is abandoned and its Grid Runner "
+            + "ends the engine. It is held on the sheet until it is marked Re-Run.")) return;
+  b.disabled = true; b.textContent = "Stopping…";
+  try{
+    const r = sameService(server)
+      ? await api("/api/estimate/" + encodeURIComponent(id) + "/abandon", {method:"POST"})
+      : await api("/api/estimate/grid/stop", {method:"POST", headers:{"Content-Type":"application/json"},
+                  body: JSON.stringify({service: server, run_id: id})});
+    const j = await r.json().catch(() => ({}));
+    if(r.ok || r.status === 409){
+      selfStopped[id] = new Date().toLocaleTimeString("en-GB");
+      refreshSelf(); quickSelf(); return;
+    }
+    $("selfStatus").textContent = "Could not stop " + (b.dataset.name || id) + ": " + detailText(j, r, "refused");
+  }catch(err){
+    $("selfStatus").textContent = "Could not stop " + (b.dataset.name || id) + " — " + err.message;
+  }
+  b.disabled = false; b.textContent = "Stop";
+});
 selfJobBtn.onclick = async () => {
   const id = selfJobBtn.dataset.runId;
   if(!id || selfJobBtn.disabled) return;
@@ -4306,9 +5321,15 @@ selfJobBtn.onclick = async () => {
   try{
     const r = await api("/api/estimate/" + encodeURIComponent(id) + "/abandon", {method:"POST"});
     const j = await r.json().catch(() => ({}));
-    $("selfStatus").textContent = r.ok
-      ? "Stop requested. The runner ends the engine on its next heartbeat."
-      : "Could not stop it: " + detailText(j, r, "refused");
+    /* 409 here means the service already holds it as stopped or finished: the stop has
+       landed, whatever the watcher's last report still says. */
+    if(r.ok || r.status === 409){
+      selfStopped[id] = new Date().toLocaleTimeString("en-GB");
+      refreshSelf();
+      quickSelf();
+      return;
+    }
+    $("selfStatus").textContent = "Could not stop it: " + detailText(j, r, "refused");
   }catch(e){
     $("selfStatus").textContent = "Could not stop it — " + e.message;
   }

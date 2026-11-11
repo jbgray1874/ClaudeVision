@@ -64,7 +64,11 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 #       cut-outs, and one line per size for a part that follows parts of different sizes (D-490)
 #   c6  a part's stock form, with a section's size and wall, a mesh's grid and wire, and a wire's
 #       diameter in fields of their own — never in the blank's thickness (D-528)
-CONCEPT_PROMPT_VERSION = "c6"
+#   c7  a round body is its skin, rims and formers, a curved metal part is rolled, and a frame
+#       that hangs a part is its members (D-599: the HPP fixture's base, column and halo)
+#   c8  a curved flat part is blanked by the rectangle it is cut from, not its arc (D-599b: the
+#       HPP shelves' quarter segments blanked 1571 x 700 where they are cut from 1000 x 1000)
+CONCEPT_PROMPT_VERSION = "c8"
 
 SOURCE = "vision_concept"
 
@@ -648,6 +652,9 @@ SIGHTABLE_OPERATIONS = {
     # the subcontract plating line prices it (or asks for the plater's price).
     "plating":          "electroplated finish — chrome, nickel or zinc, by a subcontract plater",
     "polishing":        "polished or ground surface, by grit, before plating or as the finish",
+    # A RING IS ROLLED, NOT FOLDED (D-599). The HPP halo and guard rail were read as folded
+    # strip and sawn tube; the ROLL department was on the rate card with no word to reach it.
+    "rolling":          "rolled to a curve or ring — tube, bar, strip or plate on rolls",
 }
 
 _PROMPT = """You are looking at {n} image(s): customer-supplied renders or photos of ONE retail
@@ -660,6 +667,14 @@ This is a bill of materials a manufacturer would price, not a list of the things
 THE DIFFERENCE MATTERS AND IT IS THE WHOLE TASK:
 - An enclosure is NOT one part. A cabinet is its PANELS — front, two sides, back, base, top —
   each its own line with its own blank size. Never return a carcass as a single blank.
+- A ROUND BODY IS NOT ONE PART EITHER. A drum, plinth, column, ring or halo is its curved skin
+  (length = pi x its diameter, width = its height), its top and bottom or its two rims, and the
+  formers, blocking or ribs inside it, each its own line. A curved metal part (a ring, a rolled
+  tube, bar or strip) names rolling; a curved board skin is flexible or kerfed board, and says so
+  in why_size. A frame that carries or hangs a part (posts, cross beams, plates) is its members.
+- A CURVED FLAT PART IS BLANKED BY ITS BOX, NOT ITS ARC. A ring segment, arc or quarter circle
+  cut from sheet takes as assumed_blank_mm the rectangle it is cut from (a quarter of a ring of
+  outer radius R is R x R), never its arc length by its depth; give the arc length in why_size.
 - A printed face is TWO lines where it is a print applied to a board: the board, and the
   applied graphic.
 - PRINT IS ALWAYS ITS OWN LINE, even when it goes straight onto the board: one "graphic"
@@ -734,7 +749,7 @@ Return ONLY valid JSON, no markdown, exactly this shape:
 
 # The prompt's own hash, so a change without a version bump cannot pass silently. If a test
 # tells you this is wrong: bump CONCEPT_PROMPT_VERSION above, then put the new hash here.
-_PROMPT_FINGERPRINT = "0ec971544c51"
+_PROMPT_FINGERPRINT = "d498cc8f0392"
 
 
 class ConceptUnavailable(RuntimeError):
@@ -792,7 +807,9 @@ not in the brief" in why_size. Do not describe visual cues: there are none.
 #       from what the sheet prints (D-417)
 #   s4  a face with a window is still a panel; an internal divider spans the inside of the body
 #       (D-418: the 14:42 read dropped the front and back and sized the divider off a bag)
-SHEET_PROMPT_VERSION = "s4"
+#   s5  a sheet whose lettering is outlines carries no text: the lettering is read off the image
+#       (D-599: the HPP pack, 18 sheets printed to PDF, every word drawn as paths)
+SHEET_PROMPT_VERSION = "s5"
 # THE BUDGET FITS A WHOLE DOCUMENT (D-466). 6,000 characters was sized for single drawing
 # sheets and silently cut a sixteen-page tech brief at page six; 24,000 held such a document
 # entire. D-597 raises it to 120,000 — well inside the model's window beside the page images —
@@ -803,8 +820,10 @@ SHEET_PROMPT_VERSION = "s4"
 SHEET_TEXT_MAX_CHARS = 120000
 
 _SHEET_PREAMBLE = """THESE ARE DRAWING SHEETS, NOT PHOTOGRAPHS. Each image is a general-arrangement or
-design-intent drawing with a title block, dimensions and notes; the text printed on the sheets
-is given at the end of this request. READ THE SHEET BEFORE YOU LOOK AT THE PICTURE. Where these
+design-intent drawing with a title block, dimensions and notes; the text printed on the sheets,
+where the file carries it, is given at the end of this request. Where it does not, read the
+lettering from the images: it may be drawn as outlines and turned on its side. READ THE SHEET
+BEFORE YOU LOOK AT THE PICTURE. Where these
 rules and the ones after them differ, THESE RULES WIN.
 
 1. A DIMENSION ON THE SHEET IS A FACT. Size every part from the dimensions drawn and the notes,
@@ -896,7 +915,7 @@ in that part's why_size.
 
 # The sheet prompt's own hash (preamble + text, recheck and envelope sections), pinned beside
 # SHEET_PROMPT_VERSION as _PROMPT_FINGERPRINT is pinned beside the render prompt's version.
-_SHEET_PROMPT_FINGERPRINT = "72a1d6c427c9"
+_SHEET_PROMPT_FINGERPRINT = "d92e3153cb9e"
 
 
 # ── A PACK'S PRINTED WORDS ARE READ WITH ITS PICTURES (D-462) ────────────────────────────
@@ -1744,6 +1763,10 @@ def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "",
         raise ConceptUnavailable(
             "SDI_OFFLINE=1 — the concept read needs the vision model and this run may not "
             "call one.")
+    if os.getenv("SDI_DETERMINISTIC_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise ConceptUnavailable(
+            "deterministic-only run (D-753) — the concept read is a vision-model read, and "
+            "this run tests the drawing reader with no language model at all.")
     api_key = os.environ.get("XAI_API_KEY")
     if not api_key:
         raise ConceptUnavailable(
@@ -1761,9 +1784,14 @@ def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "",
     import time as _time                                            # noqa: WPS433
     _t0, _failed = _time.time(), True
     try:
-        resp = client.chat.completions.create(
-            model=model, temperature=0,
-            messages=[{"role": "user", "content": content}])
+        try:
+            resp = client.chat.completions.create(
+                model=model, temperature=0,
+                messages=[{"role": "user", "content": content}])
+        except Exception as exc:                                    # noqa: BLE001
+            import xai_models                                       # noqa: WPS433
+            xai_models.note_exception(exc, model)                   # said once, then raised
+            raise
         _failed = False
     finally:
         try:                                 # a partner run's call count (D-529); else nothing
@@ -1902,10 +1930,17 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     (design-intent GAs): their own text goes in with them under the sheet preamble (D-415).
     `recheck` is what `sheet_check` found wrong with a first answer, put back once.
     """
+    # BEFORE THE CACHE (D-753): a concept read replayed from the cache is still the model's
+    # reading, and a deterministic-only run uses neither a new one nor a kept one.
+    if os.getenv("SDI_DETERMINISTIC_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise ConceptUnavailable(
+            "deterministic-only run (D-753) — the concept read is a vision-model read, and "
+            "this run tests the drawing reader with no language model, new or cached.")
     import _bom_vision_reader as pathB                              # noqa: WPS433
 
     if model is None:
-        model = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
+        import xai_models                                           # noqa: WPS433
+        model = xai_models.vision_model()                           # D-612: named once
     brief = str(brief or "").strip()[:BRIEF_MAX_CHARS]
     pngs: List[bytes] = []
     rendered: List[Dict[str, Any]] = []
@@ -5630,7 +5665,7 @@ def carry_stated_finish(unit: Optional[Dict[str, Any]], parts: List[Any],
                 "this sequence",
                 "give the polishing minutes a unit for this part, grit by grit, or rule how "
                 "it is covered",
-                "concept_scan.carry_stated_finish")
+                "concept_scan.carry_stated_finish", operations=["polishing"])
             changes.append({"kind": "asked", "item": f"polishing: {polish}", "to": [pn],
                             "why": st.get("polish_source") or "the read's operations"})
     return changes
@@ -5857,6 +5892,160 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
 
 _WELD_WORDS = ("welding", "spot_welding")
 
+def _material_of(rec: Mapping[str, Any]) -> str:
+    return str(rec.get("normalized_material") or rec.get("material") or "").strip().upper()
+
+
+def _is_metal(rec: Mapping[str, Any]) -> bool:
+    """The engine's one controlled answer (D-605a): IRONWOOD is timber, not iron."""
+    try:
+        from material_preservation import is_metal                 # noqa: WPS433
+        return is_metal(_material_of(rec))
+    except Exception:                                               # noqa: BLE001
+        return False
+
+
+def _not_a_weldment(unit: Mapping[str, Any]) -> bool:
+    """The unit is positively non-metal: board, timber or plastic. An unread material is not
+    evidence either way, and a metal unit is the weldment as before."""
+    mat = _material_of(unit)
+    if not mat or _is_metal(unit):
+        return False
+    try:
+        import costed_facts                                         # noqa: WPS433
+        return bool(costed_facts.is_other_sheet_material(mat))
+    except Exception:                                               # noqa: BLE001
+        return False
+
+
+# Where another reader records which assembly a part belongs to (D-605a).
+_PARENT_FIELDS = ("parent", "parent_assembly", "parent_part_number", "assembly_parent",
+                  "sub_assembly", "bom_parent")
+
+
+def _parent_of(rec: Mapping[str, Any]) -> str:
+    for f in _PARENT_FIELDS:
+        v = rec.get(f)
+        if isinstance(v, str) and v.strip():
+            return v.strip().upper()
+    return ""
+
+
+def weld_groups(metal: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The welded metal members, grouped by what joins them (D-605a).
+
+    A STATED JOINT OR A SHARED PARENT IS A CONNECTION; NOTHING ELSE IS. Members joined by a
+    named joint (welded_to_hosts) or recorded under the same parent assembly are one weldment,
+    an established one. Members with neither are pooled into ONE ASSUMED weldment, and the
+    book says it is an assumption: nothing shows which of them are joined to which. A separate
+    halo and base frame, each with its own parent, are never joined into one."""
+    idx = {id(p): i for i, p in enumerate(metal)}
+    by_pn = {str(p.get("part_number") or ""): p for p in metal}
+    root = list(range(len(metal)))
+
+    def find(i: int) -> int:
+        while root[i] != i:
+            root[i] = root[root[i]]
+            i = root[i]
+        return i
+
+    def join(a: int, b: int) -> None:
+        root[find(a)] = find(b)
+
+    evidenced = set()
+    first_of_parent: Dict[str, int] = {}
+    for p in metal:
+        i = idx[id(p)]
+        par = _parent_of(p)
+        if par:
+            evidenced.add(i)
+            if par in first_of_parent:
+                join(i, first_of_parent[par])
+            else:
+                first_of_parent[par] = i
+        for h in p.get("welded_to_hosts") or []:
+            hp = by_pn.get(str(h))
+            if hp is not None:
+                evidenced.update({i, idx[id(hp)]})
+                join(i, idx[id(hp)])
+    unknown = [i for i in range(len(metal)) if i not in evidenced]
+    for i in unknown[1:]:
+        join(i, unknown[0])
+    groups: Dict[int, List[Dict[str, Any]]] = {}
+    for i, p in enumerate(metal):
+        groups.setdefault(find(i), []).append(p)
+    out = []
+    for members in groups.values():
+        assumed = all(idx[id(m)] in unknown for m in members)
+        pars = sorted({_parent_of(m) for m in members if _parent_of(m)})
+        basis = ("assumed" if assumed else
+                 "the same parent assembly " + ", ".join(pars) if pars else "a stated joint")
+        out.append({"members": members, "assumed": assumed, "basis": basis})
+    return out
+
+
+def _metal_weldment_inside(unit: Dict[str, Any], made: List[Dict[str, Any]]) -> List[str]:
+    """The welded METAL members of a non-metal unit are their own weldments (D-605, D-605a).
+
+    Each weldment's joints are charged once, on one of its members: the longest hosts the
+    Weld and Dress rows with at least N-1 joints for its N welded pieces, and the others point
+    to it, so one joint is never charged again against every member. Weldments are grouped by
+    what joins them (weld_groups): an assumed grouping is said to be one. The unit stays
+    unwelded, and so does any timber, board or plastic member. Each member keeps its own coat,
+    which the sheet books once per material and gauge. A member whose weld the brief states
+    keeps it, as on a metal unit."""
+    welded = [p for p in made or []
+              if set(p.get("inferred_operations") or []) & set(_WELD_WORDS)]
+    metal = [p for p in welded if _is_metal(p)]
+    if not metal:
+        return []
+
+    def _length(p: Mapping[str, Any]) -> float:
+        return max(_num(p.get("blank_length_mm")), _num(p.get("blank_width_mm")))
+    moved: List[str] = []
+    said: List[str] = []
+    _mat = _material_of(unit)
+    for g in weld_groups(metal):
+        members = g["members"]
+        pieces = sum(_qty_of(p) for p in members)
+        if pieces < 2:
+            continue                       # one piece, nothing to join it to: its own weld
+        host = max(members, key=lambda p: (_length(p), -_qty_of(p),
+                                           str(p.get("part_number") or "")))
+        hid = str(host.get("part_number") or "")
+        for p in members:
+            if p is host or p.get("weld_stated_by_brief"):
+                continue
+            p["inferred_operations"] = [o for o in (p.get("inferred_operations") or [])
+                                        if o not in _WELD_WORDS]
+            p["weld_charged_on"] = hid
+            p.setdefault("review_flags", []).append(
+                f"CONCEPT: welded into the metal weldment hosted on {hid} — the joint is "
+                f"charged once, on {hid}'s Weld and Dress rows, not again on this line")
+            moved.append(str(p.get("part_number")))
+        host["weld_joint_count"] = max(int(_num(host.get("weld_joint_count"))), pieces - 1)
+        host["weld_group"] = {"members": [str(m.get("part_number")) for m in members],
+                              "assumed": g["assumed"], "basis": g["basis"]}
+        names = ", ".join(str(m.get("part_number")) for m in members)
+        if g["assumed"]:
+            _say = (f"CONCEPT: ASSUMED weldment — {names} are read as welded, and nothing shows "
+                    f"which of them are joined to which; priced as one weldment on {hid}: "
+                    f"{pieces} welded piece(s), so at least {pieces - 1} joint(s) at the shop's "
+                    f"per-joint rate. This grouping is an assumption, not an established "
+                    f"connection. Confirm which members are welded together and the joint count")
+        else:
+            _say = (f"CONCEPT: a metal weldment of {names}, joined by {g['basis']}, charged once "
+                    f"on {hid}: {pieces} welded piece(s), so at least {pieces - 1} joint(s) at "
+                    f"the shop's per-joint rate. Confirm the joint count")
+        host.setdefault("review_flags", []).append(_say)
+        said.append(_say)
+    if said:
+        unit.setdefault("review_flags", []).append(
+            f"CONCEPT: the unit is {_mat}, which is not welded; its welded metal members are "
+            f"their own weldment(s), each charged once on one of its members — "
+            + " | ".join(said))
+    return moved
+
 
 def joints_once_on_the_unit(unit: Dict[str, Any], made: List[Dict[str, Any]]) -> List[str]:
     """A WELDED UNIT OWNS ITS JOINTS (D-531). The read marks the unit welded and every member
@@ -5881,6 +6070,12 @@ def joints_once_on_the_unit(unit: Dict[str, Any], made: List[Dict[str, Any]]) ->
     that is not welded in — a bar hung on hooks — keeps its own coat and hangs on its own."""
     if not isinstance(unit, dict):
         return []
+    # A JOINERY UNIT IS NOT THE WELDMENT (D-605, SCRUM-104). The HPP 01:12 book: the read
+    # marked the halo top rim, the posts and the guard rail welded; the unit is MDF, the
+    # material of most of its panels. Their joints moved onto the unit, the board gate took
+    # welding off an MDF record, and no weld row was charged anywhere for a steel halo.
+    if _not_a_weldment(unit):
+        return _metal_weldment_inside(unit, made)
     if not (set(unit.get("inferred_operations") or []) & set(_WELD_WORDS)):
         _welded_lines = [p for p in made or []
                          if set(p.get("inferred_operations") or []) & set(_WELD_WORDS)]

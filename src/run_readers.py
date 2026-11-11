@@ -36,8 +36,9 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
-__all__ = ["READERS", "readers_that_ran", "run_was_llm_only", "reader_by_key",
-           "pdf_reader_summary"]
+__all__ = ["READERS", "readers_that_ran", "run_was_llm_only", "run_was_deterministic_only",
+           "llm_mode", "whole_reads_off", "TARGETED_MODE_OFF",
+           "reader_by_key", "pdf_reader_summary", "DETERMINISTIC_ONLY_OFF"]
 
 
 # The order is the order the pack is read in, which is also the order that makes the list
@@ -87,7 +88,7 @@ READERS: List[Dict[str, str]] = [
     {
         "key": "vision",
         "name": "Grok vision (xAI)",
-        "library": "grok-4.3, pages rendered at 300 dpi",
+        "library": "the Grok vision model, pages rendered at 300 dpi",   # named per run
         "produces": "Everything a person reads off a drawing and no parser can: which view is "
                     "which, what a leader line points at, welding and finish notes in free "
                     "text, a BOM in a layout nothing has seen before.",
@@ -124,8 +125,21 @@ READERS: List[Dict[str, str]] = [
 _BY_KEY = {r["key"]: r for r in READERS}
 
 
+def _as_run(reader: Dict[str, str]) -> Dict[str, str]:
+    """The reader as this machine runs it: the vision reader names the model it calls (D-612),
+    so a book says which Grok read its pages, not the model the catalogue was written for."""
+    entry = dict(reader)
+    if entry.get("key") == "vision":
+        try:
+            import xai_models                                        # noqa: WPS433
+            entry["library"] = f"{xai_models.vision_model()}, pages rendered at 300 dpi"
+        except Exception:                                            # noqa: BLE001
+            pass
+    return entry
+
+
 def reader_by_key(key: str) -> Dict[str, str]:
-    return dict(_BY_KEY.get(str(key), {}))
+    return _as_run(_BY_KEY.get(str(key), {}))
 
 
 def _env_on(name: str, default: str = "") -> bool:
@@ -144,8 +158,56 @@ def run_was_llm_only(summary: Optional[Dict[str, Any]] = None) -> bool:
     return _env_on("SDI_LLM_ONLY")
 
 
+# WHAT --deterministic-only TURNS OFF (D-753, SCRUM-194). Every reader that asks a language
+# model about the drawing, AND every answer one gave before: a cached read replayed is still
+# the model's reading, so a run that only "made no new call" has not shown the drawing reader
+# can stand on its own (8 Nov review). Named once, so the banner, the report and the gates
+# all speak from this list.
+DETERMINISTIC_ONLY_OFF = (
+    "the whole-pack drawing read (Grok) and its inference pass, cached answers included",
+    "the vision BOM reader (Path B), cached pages included",
+    "the page vision pass",
+    "the DXF interpretation read",
+    "the note scan for bought-in items in prose",
+    "the concept read of a brief or a scanned pack",
+)
+
+
+# TARGETED MODE (SCRUM-194 requirement 3): the whole-pack reads are off and the model is asked
+# only about the gaps the deterministic read left (gap_fill). Kept on: the note scan (already a
+# narrow read of prose notes) and the concept read, which is the only reader of an image-only pack.
+TARGETED_MODE_OFF = (
+    "the whole-pack drawing read (Grok) and its inference pass",
+    "the vision BOM reader (Path B)",
+    "the page vision pass",
+    "the DXF interpretation read",
+)
+
+
+def llm_mode() -> str:
+    """'deterministic', 'targeted' or 'whole_pack' for the run in flight."""
+    if _env_on("SDI_DETERMINISTIC_ONLY"):
+        return "deterministic"
+    return "targeted" if os.getenv("SDI_LLM_MODE", "").strip().lower() == "targeted" else "whole_pack"
+
+
+def whole_reads_off() -> bool:
+    """True when the whole-pack and page-vision model reads must not run: a deterministic-only
+    run, or a targeted one (the gaps are asked one at a time instead)."""
+    return llm_mode() in ("deterministic", "targeted")
+
+
+def run_was_deterministic_only(summary: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether this run read the drawings with no language model at all (D-753): the
+    summary key for a saved run, the environment for the run in flight."""
+    if isinstance(summary, dict) and summary.get("deterministic_only"):
+        return True
+    return _env_on("SDI_DETERMINISTIC_ONLY")
+
+
 def readers_that_ran(*, llm_only: bool, dxf_enabled: bool = True,
-                     solidworks_enabled: Optional[bool] = None) -> List[Dict[str, Any]]:
+                     solidworks_enabled: Optional[bool] = None,
+                     deterministic_only: bool = False) -> List[Dict[str, Any]]:
     """The catalogue with `ran` decided for THIS run, and why, where it is off.
 
     The three readers --llm-only switches off are exactly the three named in main.py's own
@@ -164,7 +226,10 @@ def readers_that_ran(*, llm_only: bool, dxf_enabled: bool = True,
         "pdf_text":   (True, ""),
         "pdf_vector": (True, ""),
         "bom_reader": (not llm_only, _off_llm if llm_only else ""),
-        "vision":     (True, ""),
+        "vision":     (not deterministic_only,
+                       "switched off for this run by --deterministic-only: no language model "
+                       "read the drawings and no earlier reading was reused"
+                       if deterministic_only else ""),
         "dxf":        (bool(dxf_enabled) and not llm_only,
                        _off_llm if llm_only else
                        ("switched off for this run by --no-dxf-augment"
@@ -177,7 +242,7 @@ def readers_that_ran(*, llm_only: bool, dxf_enabled: bool = True,
     out: List[Dict[str, Any]] = []
     for reader in READERS:
         ran, why_off = state[reader["key"]]
-        entry = dict(reader)
+        entry: Dict[str, Any] = _as_run(reader)
         entry["ran"] = bool(ran)
         entry["why_off"] = why_off
         out.append(entry)
@@ -197,4 +262,6 @@ def pdf_reader_summary(summary: Optional[Dict[str, Any]] = None) -> str:
              "rendered to an image and read by Grok (xAI)"]
     if not llm:
         parts.insert(2, "deterministic BOM reader")
+    if run_was_deterministic_only(summary):
+        parts = [p for p in parts if "Grok" not in p] + ["no language model (deterministic only)"]
     return " · ".join(parts)

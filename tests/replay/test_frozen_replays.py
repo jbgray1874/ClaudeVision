@@ -11,9 +11,9 @@ message was not loud: four skips inside a 4,600-test run is indistinguishable fr
 passes, so both frozen packs sat unprotected for weeks while every push reported green. The
 difference between "this pack is protected" and "nobody froze it" has to be a red result.
 
-Set SDI_REPLAY_ALLOW_MISSING=1 to downgrade that to a skip. That is for working locally on a
-checkout without the packs; CI must never set it, which is why it is an explicit opt-out
-rather than a default.
+Set SDI_REPLAY_ALLOW_MISSING=1 to downgrade that to a skip. It is an explicit opt-out, not a
+default. A frozen record is job data and never committed, so GitHub CI sets it and prints each
+skip by name; the laptop's acceptance run, which holds the records, never does (SCRUM-137).
 
 AND A FROZEN RECORD MUST SAY WHERE IT CAME FROM. A summary.json with no provenance is an
 unlabelled number: nobody can tell the accepted run from whichever run last passed, which is
@@ -55,10 +55,12 @@ def _frozen_summary(job: Path) -> dict:
     if not frozen.is_file():
         message = (
             f"{job.name}: accepted facts exist but NO frozen summary.json — this pack is "
-            f"NOT protected. On the box:\n"
-            f"    copy output\\json\\{job.name}.json  tests\\replay\\{job.name}\\summary.json\n"
-            f"from the run the estimator signed off, write "
-            f"tests/replay/{job.name}/provenance.json, and commit both.")
+            f"NOT protected. On the box, from an archived copy of the run the estimator "
+            f"signed off:\n"
+            f"    python tools\\freeze_replay_fixture.py {job.name} --find\n"
+            f"then freeze it with --source and the accepted run, person, date and figures. "
+            f"The record and its provenance are job data: they stay on this machine and are "
+            f"never committed (SCRUM-134).")
         if ALLOW_MISSING:
             pytest.skip(message + "\n(skipped: SDI_REPLAY_ALLOW_MISSING is set)")
         pytest.fail(message)
@@ -209,6 +211,39 @@ def assert_accepted_structure(job_name: str, facts: dict, lines: list,
             f"{job_name} {pn}: material contribution is {money!r} — the line exists and is "
             f"routed, but no material money reaches it")
 
+    # ── the material the estimator accepted, not a swapped one ─────────────────
+    # Each word of the pin must appear in the line's material label, so "STAINLESS 304" holds
+    # against "Stainless Steel 304 2B" and fails against "Mild Steel". Words, not the exact
+    # label: a grade or finish printed differently is not a swap, and the estimator trims the
+    # pin to the words that matter (SCRUM-134).
+    for pn, want in (facts.get("materials") or {}).items():
+        line = _find(pn)
+        assert line is not None, f"{job_name}: {pn} is missing, so its material cannot be held"
+        label = str(line.get("material_label") or "")
+        have = set(_words(label))
+        lost = [w for w in _words(want) if w not in have]
+        assert not lost, (
+            f"{job_name} {pn}: material reads {label!r}, the accepted run was {want!r} "
+            f"(missing {lost})")
+
+    # ── the same operation charged twice on one part ───────────────────────────
+    # `operations` names an operation once whatever the rows say, so a part laser-cut on two
+    # rows looked exactly like a part laser-cut on one. The record now counts the rows. A
+    # repeat the estimator accepted (two folding set-ups on two tools) is listed under
+    # allowed_repeats and passes (SCRUM-134).
+    if facts.get("no_duplicate_operations"):
+        allowed = {str(pn).upper(): {str(o).lower() for o in ops}
+                   for pn, ops in (facts.get("allowed_repeats") or {}).items()}
+        doubled = []
+        for line in lines:
+            pn = str(line.get("part_number") or "").strip()
+            for op, n in (line.get("operation_charges") or {}).items():
+                if int(n or 0) > 1 and str(op).lower() not in allowed.get(pn.upper(), set()):
+                    doubled.append(f"{pn} {op} x{int(n)}")
+        assert not doubled, (
+            f"{job_name}: operation(s) charged more than once on one part: {doubled}. If a "
+            f"repeat is right, an estimator lists it under allowed_repeats")
+
     # ── no child minted under a part to stand in for its stock ─────────────────
     # The failure shape: rather than charging the leg's own tube, the engine mints a child
     # node beneath it to carry the stock, and the money lands twice or on a node no estimator
@@ -248,6 +283,11 @@ def test_frozen_replay(job: Path):
 
 def _squash(s: str) -> str:
     return "".join(ch for ch in str(s).upper() if ch.isalnum())
+
+
+def _words(s: str) -> list:
+    import re
+    return re.findall(r"[A-Z0-9]+", str(s or "").upper())
 
 
 @pytest.mark.parametrize("job", JOBS, ids=[j.name for j in JOBS])

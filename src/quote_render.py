@@ -285,7 +285,8 @@ def artist_impression(summary: Any, parts: Any, customer: Any, ga_png: Optional[
         scene = scene_for(customer)
         words = product_words(summary, parts, product)
         source = str(product or customer or "quote")
-        model = str(cfg.get("model") or "grok-imagine-image-2.0")
+        import xai_models                                            # noqa: WPS433
+        model = str(cfg.get("model") or xai_models.image_model())
 
         if ga_png:
             prompt = render_prompt(words, scene, cfg, from_drawing=True)
@@ -309,7 +310,7 @@ def artist_impression(summary: Any, parts: Any, customer: Any, ga_png: Optional[
                       f"({type(exc).__name__}: {exc}) — drawing the unit from its description instead",
                       flush=True)
 
-        text_model = str(cfg.get("text_model") or "grok-2-image")
+        text_model = str(cfg.get("text_model") or xai_models.image_model())
         prompt = render_prompt(words, scene, cfg, from_drawing=False)
 
         def _draw_it() -> Dict[str, Any]:

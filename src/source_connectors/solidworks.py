@@ -20,6 +20,15 @@ Public surface:
                            run=False, analyser=...) -> NativeJob | None
     apply_native_to_pre_estimate(parts, job)       -> counts      (BEFORE costing)
     apply_native_to_part_estimates(summary, job)   -> counts      (AFTER costing, reconcile)
+
+THE BACKUP READER (SCRUM-184). Where an extract is needed and the COM analyser cannot run — it
+is switched off, there is no SolidWorks on the machine, or its run failed — and SDI_SW_DOCMGR=1,
+the SOLIDWORKS Document Manager reader (tools/solidworks/sw_docmgr_analyse.py) is run instead.
+It writes the same record schema from what each file SAVED, measures nothing, and marks every
+record `"reader": "solidworks_docmgr"`. Values from such an extract are applied under source
+`solidworks_docmgr`, ranked below `solidworks_api` and below DXF; what it cannot supply is
+reported missing, and a formed part with no saved flat pattern is flagged as needing the
+SolidWorks worker. The job meta records which reader produced the extract and why.
 """
 from __future__ import annotations
 
@@ -30,9 +39,10 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from source_precedence import apply_field as _apply_field
+import solidworks_turn as _sw_turn
 
 # What a bounding box means about a part — one definition, shared with the estimator's
 # blank sizing. Soft, because this connector must still run on a machine where an optional
@@ -49,6 +59,27 @@ SOURCE_NAME = "solidworks_api"
 APPLIED_MATERIAL_SOURCE = "solidworks_applied_material"
 RELIABILITY = 1.0
 EXTRACT_FILENAME = "_sw_native_extract.json"
+
+# ── THE DOCUMENT MANAGER BACKUP READER (SCRUM-184) ─────────────────────────────────────
+#
+# The same model files, read without SolidWorks: what each file SAVED, nothing rebuilt and
+# nothing measured. Its values enter under their own source names so the waterfall can rank
+# them below the worker's measurement and below a DXF (source_precedence), and so every value
+# on the sheet says which reader produced it.
+DOCMGR_SOURCE_NAME = "solidworks_docmgr"
+DOCMGR_APPLIED_MATERIAL_SOURCE = "solidworks_docmgr_applied_material"
+# A SEPARATE FILE, NOT THE SAME NAME. A backup extract written as _sw_native_extract.json would
+# pass the freshness check on the next run — same models, current schema — and be reused for
+# ever, so a job read once without a seat would never be read WITH one again. Under its own
+# name the next run still tries the worker first, and falls back to this only when it must.
+DOCMGR_EXTRACT_FILENAME = "_sw_docmgr_extract.json"
+# THE FILES SOLIDWORKS OPENED AND COULD NOT READ, read again by the Document Manager in the
+# same run (D-706). Its own name for the same reason as above: the SolidWorks extract is left
+# exactly as the worker wrote it, so the next run with a healthy seat reads those files again.
+DOCMGR_TOPUP_FILENAME = "_sw_docmgr_topup.json"
+# The licence key's NAME. The value is read only to check it is present and to scrub it out of
+# any error text; it reaches the reader through the inherited environment, never argv.
+DOCMGR_KEY_ENV = "SDI_SW_DOCMGR_KEY"
 
 # THE MODELS DO NOT HAVE TO BE IN THE JOB FOLDER FOR US TO READ THEM.
 #
@@ -141,9 +172,25 @@ def _material_source_token(nat: "NativePart") -> str:
     """Which waterfall source a native part's MATERIAL is submitted under. A material the
     model carries only as a library appearance ('applied_library') enters below the drawing
     callout; an explicit custom property — or an older extract that never recorded which it
-    was — enters at full model rank, exactly as before."""
-    return APPLIED_MATERIAL_SOURCE if str(getattr(nat, "material_source", "") or "") \
-        == "applied_library" else SOURCE_NAME
+    was — enters at full model rank, exactly as before. A part read by the Document Manager
+    backup reader takes that reader's tokens, one step below each COM counterpart."""
+    _applied = str(getattr(nat, "material_source", "") or "") == "applied_library"
+    if str(getattr(nat, "source", "") or "") == DOCMGR_SOURCE_NAME:
+        return DOCMGR_APPLIED_MATERIAL_SOURCE if _applied else DOCMGR_SOURCE_NAME
+    return APPLIED_MATERIAL_SOURCE if _applied else SOURCE_NAME
+
+
+def _record_reader(record: Dict[str, Any]) -> str:
+    """Which reader produced an extract record. A record that does not say is the COM
+    analyser's — every extract written before the backup reader existed."""
+    return str((record or {}).get("reader") or "").strip() or SOURCE_NAME
+
+
+def job_source(job: Any) -> str:
+    """The waterfall source a whole extract's values enter under."""
+    return (DOCMGR_SOURCE_NAME
+            if str(((getattr(job, "meta", None) or {}).get("extract_reader")) or "")
+            == DOCMGR_SOURCE_NAME else SOURCE_NAME)
 
 # Stamped on a part whose blank came from the SolidWorks sheet-metal cut list. This is a
 # MEASURED flat pattern — the same class of truth as a DXF flat, from the model that
@@ -210,6 +257,10 @@ class NativePart:
     flat_pattern: bool = False
     has_weldment: bool = False
     bbox_mm: Optional[List[float]] = None
+    # The body's volume and surface area (extract schema v4, SCRUM-180): density-free
+    # measures a board whose mass never populates still has. None on older extracts.
+    volume_mm3: Optional[float] = None
+    surface_area_mm2: Optional[float] = None
     doctype: int = SW_PART
     # ── measured cut-list geometry (the estimating prize a PDF cannot supply) ──
     flat_length_mm: Optional[float] = None
@@ -229,6 +280,12 @@ class NativePart:
     formed_but_no_bend_features: bool = False
     # Imported body with no modelled fabrication features = supplier model = bought in.
     likely_bought_in: bool = False
+    # Document Manager backup reads only (SCRUM-184): a formed sheet-metal part whose file
+    # saved no flat pattern — the one number that reader cannot produce — and the fields it
+    # could not supply at all. Empty on every COM extract.
+    needs_solidworks_worker: bool = False
+    needs_solidworks_worker_reason: str = ""
+    not_saved: List[str] = field(default_factory=list)
     ops_hint: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     description: str = ""
@@ -497,6 +554,16 @@ def normalize_native_extract(records: List[Dict[str, Any]],
         return job
     job.found = True
 
+    # WHICH READER PRODUCED THIS EXTRACT. Said by the records themselves, so an extract handed
+    # over by path (SDI_SW_EXTRACT_JSON) is ranked by what it IS, not by how it arrived.
+    _readers = sorted({_record_reader(r) for r in records
+                       if isinstance(r, dict) and r.get("title")})
+    job.meta["extract_reader"] = (_readers[0] if len(_readers) == 1
+                                  else ("mixed" if _readers else SOURCE_NAME))
+    if len(_readers) > 1:
+        job.meta["extract_readers"] = _readers
+    job.meta["extract_source"] = job_source(job)
+
     # Per-part signals from every part record's route_signals (material + geometry).
     doctype_by_pn: Dict[str, int] = {}
     for r in records:
@@ -507,6 +574,8 @@ def normalize_native_extract(records: List[Dict[str, Any]],
         rs = r.get("route_signals")
         if not isinstance(rs, dict):
             continue
+        _psrc = (DOCMGR_SOURCE_NAME if _record_reader(r) == DOCMGR_SOURCE_NAME
+                 else SOURCE_NAME)
         job.part_signals[pn] = NativePart(
             part_number=pn,
             material=str(rs.get("material") or ""),
@@ -517,6 +586,8 @@ def normalize_native_extract(records: List[Dict[str, Any]],
             flat_pattern=bool(rs.get("flat_pattern_present")),
             has_weldment=bool(rs.get("has_weldment")),
             bbox_mm=rs.get("bbox_mm"),
+            volume_mm3=_num(rs.get("volume_mm3")),
+            surface_area_mm2=_num(rs.get("surface_area_mm2")),
             doctype=int(r.get("doctype") or SW_PART),
             flat_length_mm=_num(rs.get("flat_length_mm")),
             flat_width_mm=_num(rs.get("flat_width_mm")),
@@ -532,7 +603,11 @@ def normalize_native_extract(records: List[Dict[str, Any]],
             mass_kg=_num(rs.get("mass_kg")),
             formed_but_no_bend_features=bool(rs.get("formed_but_no_bend_features")),
             likely_bought_in=bool(rs.get("likely_bought_in")),
+            needs_solidworks_worker=bool(rs.get("needs_solidworks_worker")),
+            needs_solidworks_worker_reason=str(rs.get("needs_solidworks_worker_reason") or ""),
+            not_saved=[str(f) for f in (rs.get("not_saved") or []) if str(f or "").strip()],
             ops_hint=[str(o) for o in (rs.get("ops_hint") or [])],
+            source=_psrc,
         )
         _reject_folded_box_as_flat(job.part_signals[pn])
 
@@ -624,6 +699,23 @@ def normalize_native_extract(records: List[Dict[str, Any]],
     job.meta["hierarchy_assembly_records"] = sum(
         1 for r in records if int(r.get("doctype") or SW_PART) == SW_ASM)
 
+    # EVERY ASSEMBLY'S OWN BOX, AND WHICH ARE SOMEBODY'S CHILD (D-735). The product's
+    # envelope is its own model's box: 12002-02-GA's carton was sized 447 x 386 x 10 mm, the
+    # arm sub-assembly's box, because the top-assembly pick (which exists to choose a BOM)
+    # answered with the arm. Packing now reads the declared product's own box.
+    _abb: Dict[str, List[float]] = {}
+    for r in records:
+        if int(r.get("doctype") or SW_PART) != SW_ASM or not r.get("title"):
+            continue
+        _b = [v for v in (_num(x) for x in (r.get("bbox_mm") or [])) if v]
+        if len(_b) == 3:
+            _abb[_clean_pn(str(r.get("title")))] = [round(v, 1) for v in _b]
+    if _abb:
+        job.meta["assembly_bbox_mm"] = _abb
+    _kids_of_any = sorted({_clean_pn(str(c)) for _p, _kids in (job.hierarchy or {}).items()
+                           for c, _q in _kids if _clean_pn(str(c))})
+    job.meta["sub_assemblies"] = [k for k in _kids_of_any if k in _abb]
+
     # BOM = the top assembly's full-depth component list, quantities already rolled up.
     _amb: Dict[str, Any] = {}
     top = _pick_top_assembly(records, _amb, job_codes=job_codes)
@@ -661,6 +753,8 @@ def normalize_native_extract(records: List[Dict[str, Any]],
                 material=mat,
                 is_assembly=is_asm,
                 weld_candidate=weld,
+                source=(DOCMGR_SOURCE_NAME if _record_reader(top) == DOCMGR_SOURCE_NAME
+                        else SOURCE_NAME),
             )
             if desc:
                 row.flags.append(f"desc: {desc}")
@@ -683,6 +777,13 @@ def normalize_native_extract(records: List[Dict[str, Any]],
                                   if _plausible_thk(p.thickness_mm)),
         "bought_in": sum(1 for p in job.part_signals.values() if p.likely_bought_in),
     }
+    # WHAT THE BACKUP READER COULD NOT SUPPLY, said for the whole job as well as per part, so
+    # a reader of the summary learns it without opening every line.
+    _dm_parts = [p for p in job.part_signals.values() if p.source == DOCMGR_SOURCE_NAME]
+    if _dm_parts:
+        job.meta["docmgr_not_saved"] = sorted({f for p in _dm_parts for f in p.not_saved})
+        job.meta["docmgr_needs_worker"] = sorted(p.part_number for p in _dm_parts
+                                                 if p.needs_solidworks_worker)
     return job
 
 
@@ -695,6 +796,8 @@ def native_extract_for_job(
     analyser: Optional[str | Path] = None,
     python_exe: Optional[str] = None,
     job_codes: Optional[set] = None,
+    docmgr: Optional[bool] = None,
+    docmgr_analyser: Optional[str | Path] = None,
 ) -> Optional[NativeJob]:
     """Resolve + normalise the native extract for a job.
 
@@ -703,6 +806,13 @@ def native_extract_for_job(
                                      run=True, invoke the analyser (needs SolidWorks) then read.
     Returns a NativeJob (found=False if nothing native is available — the caller then
     falls back cleanly to the PDF/DXF path).
+
+    THE BACKUP. `docmgr` (default: the SDI_SW_DOCMGR switch) lets the Document Manager reader
+    stand in when an extract is needed, the folder holds models, and the COM analyser cannot
+    run: run=False (SDI_SW_RUN_ANALYSER=0), no SolidWorks registered on this machine, or the
+    analyser run failed. Its extract is written to DOCMGR_EXTRACT_FILENAME beside the COM one
+    and read in its place; the job meta records `extract_reader` and `docmgr_backup_reason`.
+    With the switch off this function behaves exactly as it did before the backup existed.
 
     FRESHNESS. An extract is a photograph of the models at the moment it was taken. Reading
     one without checking it still describes the files on disk is how a job gets costed from
@@ -723,25 +833,93 @@ def native_extract_for_job(
             if native_files_state(_src)["count"]:
                 _analyse_from = _src
                 break
+    # THE BACKUP IS ASKED ONLY WHERE THERE ARE MODELS TO READ. A drawings-only folder needs no
+    # extract from anybody, and running a reader over nothing would turn every such job into
+    # a reported reader failure the moment the switch went on.
+    _docmgr_on = docmgr_switch_on() if docmgr is None else bool(docmgr)
+    _backup_reason: Optional[str] = None
+    _has_models = bool(_docmgr_on and _analyse_from is not None
+                       and native_files_state(_analyse_from)["count"])
     _must_run = bool(jp is not None and run and _analyse_from is not None
                      and _should_run(jp, _analyse_from))
+    if _must_run and _has_models:
+        # NO SOLIDWORKS HERE AT ALL: do not launch an analyser that can only fail, go straight
+        # to the reader that needs no seat. Asked only with the switch on, so with it off the
+        # analyser is launched exactly as before and its failure reported as before.
+        _com_ok, _com_why = solidworks_com_available()
+        if not _com_ok:
+            _must_run = False
+            _backup_reason = f"no SolidWorks on this machine — {_com_why}"
+    elif (not run and _has_models and jp is not None
+          and _should_run(jp, _analyse_from)):
+        _backup_reason = ("the SolidWorks COM analyser is switched off for this run "
+                          "(SDI_SW_RUN_ANALYSER=0)")
     try:
         import run_timing as _rt_sw
         if jp is not None and (jp.exists() or _must_run):
             _rt_sw.reuse("solidworks_extract", not _must_run)
     except Exception:                                        # noqa: BLE001
         pass
+    _turn: Dict[str, Any] = {}
     if _must_run:
         _produced: List[str] = []
         _run_error = _run_analyser(_analyse_from, analyser=analyser, python_exe=python_exe,
-                                   out_path=jp, produced=_produced)
+                                   out_path=jp, produced=_produced, turn=_turn)
         if _produced and Path(_produced[0]) != jp:
             # It wrote somewhere else — a read-only share, most often. Read what exists,
             # not what was requested.
             jp = Path(_produced[0])
+        if _turn.get("state") == _sw_turn.TIMED_OUT:
+            # A WAIT THAT REACHED ITS LIMIT IS NOT A FAILED RUN (D-732). JG, 6 Nov 2026: "we
+            # should not fail.. we should report in the portal that [we] are switching to
+            # document manager." The normal wait never changes the reader; only this
+            # exceptional one does, said on the console the portal shows and on the book
+            # (extract_reader, docmgr_backup_reason). SDI_SW_TURN_TIMEOUT=none leaves the
+            # models unread instead, and the run is priced from its drawings and flagged.
+            _turn_models = bool(_analyse_from is not None
+                                and native_files_state(_analyse_from)["count"])
+            _dm_key = bool((os.environ.get(DOCMGR_KEY_ENV) or "").strip())
+            if _turn_models and _sw_turn.timeout_reader() == "docmgr" and _dm_key:
+                _turn["switched_to"] = "docmgr"
+                _backup_reason = f"{_run_error}; switched to the Document Manager"
+                print(f"  SolidWorks is still busy after "
+                      f"{float(_turn.get('waited_s') or 0) / 60:.0f} min: SWITCHING TO THE "
+                      f"DOCUMENT MANAGER for this run's models. It reads what each file saved "
+                      f"and measures nothing, and the book says so.", flush=True)
+            elif _turn_models:
+                _turn["switched_to"] = "none"
+                print(f"  SolidWorks is still busy after "
+                      f"{float(_turn.get('waited_s') or 0) / 60:.0f} min and "
+                      + ("no Document Manager key is set"
+                         if _sw_turn.timeout_reader() == "docmgr"
+                         else f"{_sw_turn.TIMEOUT_ENV}=none")
+                      + ": this run goes on without its models, priced from its drawings "
+                        "and DXFs, and its book says it is not a firm price.", flush=True)
+        elif _run_error and _has_models:
+            _backup_reason = f"the SolidWorks COM analyser failed — {_run_error}"
+
+    _docmgr_meta: Dict[str, Any] = {}
+    if _backup_reason and _analyse_from is not None:
+        jp, _docmgr_meta = _docmgr_backup(jp, _analyse_from, _backup_reason,
+                                          analyser=docmgr_analyser, python_exe=python_exe)
 
     records = load_native_extract(jp) if jp else []
+    # SOLIDWORKS READ SOME FILES AND NOT OTHERS (D-706). A seat that drops out partway through a
+    # batch, a model open in a designer's session, a file it will not open: the worker still
+    # exits zero with the files it reached, and the rest were left unread. With the backup on,
+    # the Document Manager reads exactly those files now, in this run, and their records take
+    # the place of the failures. Files SolidWorks did read keep the worker's values.
+    _topup_meta: Dict[str, Any] = {}
+    if (_docmgr_on and not _docmgr_meta and _analyse_from is not None and jp is not None
+            and records and native_files_state(_analyse_from)["count"]):
+        records, _topup_meta = _docmgr_topup(records, jp, _analyse_from,
+                                             analyser=docmgr_analyser, python_exe=python_exe)
     job = normalize_native_extract(records, job_codes=job_codes)
+    job.meta.update(_docmgr_meta)
+    job.meta.update(_topup_meta)
+    if _turn:
+        # WHETHER THIS RUN WAITED FOR ANOTHER RUN'S SOLIDWORKS READ, and for how long (D-731).
+        job.meta["solidworks_turn"] = dict(_turn)
     job.meta.setdefault("extract_path", str(jp) if jp else None)
     if (_analyse_from is not None and folder is not None
             and Path(_analyse_from) != Path(folder)):
@@ -834,11 +1012,35 @@ def native_extract_for_job(
             job.meta["native_present_but_unread"] = True
             job.meta["native_files_present"] = _known_models
             _where = job.meta.get("models_analysed_from") or "the job folder"
-            job.meta["native_unread_reason"] = _run_error or (
+            _dm_err = _docmgr_meta.get("docmgr_error")
+            job.meta["native_unread_reason"] = (
+                (_run_error + (f"; the Document Manager backup also failed — {_dm_err}"
+                               if _dm_err else "")) if _run_error else
+                (f"{_backup_reason}, and the Document Manager backup failed — {_dm_err}"
+                 if _dm_err else None)) or (
                 f"native models are in {_where} but no extract has been generated. "
                 "Run tools/solidworks/sw_native_analyse.py on a machine with SolidWorks")
+    if _topup_meta.get("docmgr_topped_up"):
+        # THE COUNTS SAY WHAT THIS RUN HAS, not what the worker alone managed: a file the
+        # Document Manager read in place of a failure is read, and only what neither reader
+        # could open is still failed.
+        _done = {_path_key(p) for p in _topup_meta["docmgr_topped_up"]}
+        _n = len(_done)
+        job.meta["files_read"] = int(job.meta.get("files_read") or 0) + _n
+        job.meta["files_failed"] = max(0, int(job.meta.get("files_failed") or 0) - _n)
+        job.meta["extract_errors"] = [e for e in (job.meta.get("extract_errors") or [])
+                                      if not (isinstance(e, dict)
+                                              and _path_key(e.get("path")) in _done)]
+        job.meta["extract_incomplete"] = False
     if _run_error:
         job.meta["analyser_error"] = _run_error
+    elif _docmgr_meta.get("docmgr_error"):
+        # THE BACKUP WAS ASKED FOR AND IT FAILED. Somebody switched it on because the worker
+        # could not run; a reader that then failed too is a fault to fix (the key, the
+        # install), not the ordinary drawings-only path, so it is reported as an analyser
+        # failure and the invariant layer treats it as one.
+        job.meta["analyser_error"] = (f"the SolidWorks Document Manager backup reader failed "
+                                      f"({_backup_reason}): {_docmgr_meta['docmgr_error']}")
     return job
 
 
@@ -925,7 +1127,7 @@ def native_files_state(folder: str | Path) -> Dict[str, Any]:
 # estimate needs. An extract stamped below this is regenerated even when the models have not
 # changed — so an analyser CODE fix reaches an OLD job (2019 models, last year's extract)
 # automatically, instead of being frozen out by a freshness check that only compares file dates.
-_MIN_EXTRACT_SCHEMA_VERSION = 3
+_MIN_EXTRACT_SCHEMA_VERSION = 4
 
 
 def _extract_schema_version(extract_path: Path) -> int:
@@ -1040,13 +1242,19 @@ _ELEVATED_HINT = (
 def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
                   python_exe: Optional[str] = None,
                   out_path: Optional[str | Path] = None,
-                  produced: Optional[List[str]] = None) -> Optional[str]:
+                  produced: Optional[List[str]] = None,
+                  turn: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Invoke sw_native_analyse.py on a folder (Windows + SolidWorks only).
 
     Returns None on success, or a description of the failure. It used to swallow every
     exception and return nothing, so an analyser that could not start — no SolidWorks, no
     licence, a bad path — was indistinguishable from a job with no models: the run simply
-    continued on PDF+DXF and said nothing. The caller records the reason."""
+    continued on PDF+DXF and said nothing. The caller records the reason.
+
+    IN TURN WITH EVERY OTHER RUN ON THIS DESKTOP (SCRUM-183 phase 2, D-731). The analyser runs
+    only while this run holds the desktop's SolidWorks turn (solidworks_turn); a run that finds
+    it in use waits, and reads its models exactly as it would alone. `turn`, when given, is
+    filled with what happened: held, waited, timed out or unavailable."""
     if analyser is None:
         analyser = Path(__file__).resolve().parents[2] / "tools" / "solidworks" / "sw_native_analyse.py"
     # THE INTERPRETER THAT IS ALREADY RUNNING, not whatever `python` means on PATH.
@@ -1087,6 +1295,15 @@ def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
         # caller cannot assume the path it asked for — it used to read a different file from
         # the one that had just been produced.
         cmd += ["--out", str(out_path)]
+    # ONE SOLIDWORKS PER DESKTOP, TAKEN IN TURN (D-731). Held for the read only, so a second
+    # run waits for one model read, never for a whole estimate, and says so every few minutes.
+    # A turn that never comes returns its reason; the caller decides what reads the models
+    # then (native_extract_for_job: the Document Manager, said, D-732).
+    _handle, _turn = _sw_turn.take_turn(say=lambda m: print(f"  {m}", flush=True))
+    if turn is not None:
+        turn.update(_turn)
+    if _turn["state"] == _sw_turn.TIMED_OUT:
+        return _sw_turn.timed_out_reason(_turn)
     try:
         r = subprocess.run(cmd, check=False, timeout=1800,
                            capture_output=True, text=True)
@@ -1107,6 +1324,231 @@ def _run_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
     except Exception as exc:
         return (f"the SolidWorks analyser could not be run: {exc}"
                 + (f" — {_ELEVATED_HINT}" if running_elevated() else ""))
+    finally:
+        _sw_turn.release(_handle)
+        if _handle is not None:
+            # SAID, SO THE WALL KNOWS THE LICENCE IS FREE AGAIN (D-738).
+            print("  SolidWorks turn given back: the next run may read its models.", flush=True)
+
+
+# ── the Document Manager backup (SCRUM-184) ──────────────────────────────────────────
+
+def docmgr_switch_on() -> bool:
+    """SDI_SW_DOCMGR=1: let the Document Manager reader stand in when the COM analyser cannot
+    run. OFF unless set — a reader that measures nothing is a fallback somebody chooses, and
+    with it off nothing about the SolidWorks layer changes."""
+    return os.getenv("SDI_SW_DOCMGR", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def solidworks_com_available() -> Tuple[bool, str]:
+    """(False, why) only on DEFINITE evidence that the COM analyser cannot reach SolidWorks.
+
+    Two facts settle it: SolidWorks COM exists only on Windows, and an installed SolidWorks
+    registers the SldWorks.Application class. Anything this cannot determine counts as
+    available, so the analyser is tried and its own failure — which is better evidence than a
+    guess here — decides whether the backup runs. Asked only when the backup is switched on."""
+    if os.name != "nt":
+        return False, "SolidWorks COM exists only on Windows and this machine is not Windows"
+    try:
+        import winreg                                                # noqa: PLC0415
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "SldWorks.Application"))
+    except FileNotFoundError:
+        return False, ("SolidWorks is not registered on this machine (no SldWorks.Application "
+                       "COM class)")
+    except Exception:                                                # noqa: BLE001
+        pass
+    return True, ""
+
+
+def _redact_docmgr_key(text: Any) -> str:
+    """Error text with the Document Manager licence key removed — the whole key and each of
+    its comma-separated grants. Whatever the reader printed before it failed may end up on
+    the job record and in a log; the key must not."""
+    s = "" if text is None else str(text)
+    key = (os.environ.get(DOCMGR_KEY_ENV) or "").strip()
+    if not key:
+        return s
+    for frag in sorted({key} | {f.strip() for f in re.split(r"[,;]", key)}, key=len,
+                       reverse=True):
+        if len(frag) >= 8:
+            s = s.replace(frag, f"[{DOCMGR_KEY_ENV}]")
+    return s
+
+
+def _run_docmgr_analyser(folder: str | Path, analyser: Optional[str | Path] = None,
+                         python_exe: Optional[str] = None,
+                         out_path: Optional[str | Path] = None,
+                         produced: Optional[List[str]] = None,
+                         extra_args: Optional[Sequence[str]] = None) -> Optional[str]:
+    """Invoke sw_docmgr_analyse.py on a folder — the same subprocess pattern as _run_analyser.
+    `extra_args` passes the reader's own options, such as --only-from (D-706).
+
+    Returns None on success or a description of the failure, with the licence key scrubbed
+    out. The key is never put on the command line, where any process list would show it; the
+    reader takes it from the environment this process already has."""
+    if analyser is None:
+        analyser = (Path(__file__).resolve().parents[2] / "tools" / "solidworks"
+                    / "sw_docmgr_analyse.py")
+    exe = python_exe or os.environ.get("SDI_PYTHON_EXE") or sys.executable or "python"
+    produced = produced if produced is not None else []
+    if not (os.environ.get(DOCMGR_KEY_ENV) or "").strip():
+        return (f"{DOCMGR_KEY_ENV} is not set — the SOLIDWORKS Document Manager reads nothing "
+                f"without its licence key")
+    cmd = [exe, str(analyser), str(folder)]
+    if out_path:
+        cmd += ["--out", str(out_path)]
+    cmd += [str(a) for a in (extra_args or ())]
+    try:
+        r = subprocess.run(cmd, check=False, timeout=1800,
+                           capture_output=True, text=True)
+        for _line in reversed((r.stdout or "").splitlines()):
+            if _line.startswith("EXTRACT_PATH="):
+                produced.append(_line.split("=", 1)[1].strip())
+                break
+        if r.returncode != 0:
+            _tail = (r.stderr or r.stdout or "").strip().splitlines()
+            return _redact_docmgr_key(
+                f"the Document Manager reader exited {r.returncode}"
+                + (f": {_tail[-1][:300]}" if _tail else ""))
+        return None
+    except FileNotFoundError:
+        return (f"could not start the Document Manager reader — python executable {exe!r} "
+                f"not found")
+    except subprocess.TimeoutExpired:
+        return "the Document Manager reader timed out after 30 minutes"
+    except Exception as exc:                                         # noqa: BLE001
+        return _redact_docmgr_key(f"the Document Manager reader could not be run: {exc}")
+
+
+def _docmgr_backup(jp: Optional[Path], analyse_from: str | Path, reason: str, *,
+                   analyser: Optional[str | Path] = None,
+                   python_exe: Optional[str] = None) -> Tuple[Optional[Path], Dict[str, Any]]:
+    """Read the models with the Document Manager because the worker could not. Returns the
+    extract path to read — the backup's, when it holds a usable record, else `jp` unchanged —
+    and the meta that says what happened.
+
+    A backup extract that is still fresh for these files is reused rather than re-read, by the
+    same fingerprint test the COM extract gets."""
+    meta: Dict[str, Any] = {"docmgr_backup_reason": reason}
+    djp = (Path(jp).parent if jp is not None else Path(analyse_from)) / DOCMGR_EXTRACT_FILENAME
+    err: Optional[str] = None
+    if _should_run(djp, analyse_from):
+        produced: List[str] = []
+        err = _run_docmgr_analyser(analyse_from, analyser=analyser, python_exe=python_exe,
+                                   out_path=djp, produced=produced)
+        if produced and Path(produced[0]) != djp:
+            djp = Path(produced[0])
+        meta["docmgr_ran"] = True
+    else:
+        meta["docmgr_ran"] = False
+    if err:
+        meta["docmgr_error"] = err
+    meta["docmgr_extract_path"] = str(djp)
+    usable = [r for r in (load_native_extract(djp) if djp.exists() else [])
+              if isinstance(r, dict) and r.get("title") and not r.get("errors")]
+    if not usable:
+        return jp, meta
+    if jp is not None and Path(jp).exists() and Path(jp) != djp:
+        # A COM extract that no longer describes these files, set aside for the backup's read
+        # of the files as they are now. Named, so the choice is on the record.
+        meta["com_extract_set_aside"] = str(jp)
+    return djp, meta
+
+
+def _path_key(p: Any) -> str:
+    return os.path.normcase(os.path.normpath(str(p or "").strip())) if str(p or "").strip() else ""
+
+
+def _unread_model_paths(records: Sequence[Any]) -> List[str]:
+    """The files the SolidWorks worker opened and got nothing from: an error and no title.
+    A record with a title and a partial error (say, its bounding box) keeps the worker's
+    values; the Document Manager has less to offer on that file, never more."""
+    out: List[str] = []
+    for r in records:
+        if (isinstance(r, dict) and r.get("errors") and not str(r.get("title") or "").strip()
+                and str(r.get("path") or "").strip()
+                and _record_reader(r) != DOCMGR_SOURCE_NAME):
+            out.append(str(r["path"]).strip())
+    return out
+
+
+def _docmgr_topup(records: List[Dict[str, Any]], jp: Path, analyse_from: str | Path, *,
+                  analyser: Optional[str | Path] = None,
+                  python_exe: Optional[str] = None
+                  ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Fill the files SolidWorks could not read with the Document Manager's read of them.
+
+    Returns the records to normalise and the meta that says what happened. A top-up already
+    taken for the same failures of the same files is reused; anything else is read now. The
+    worker's extract is never rewritten."""
+    unread = _unread_model_paths(records)
+    if not unread:
+        return records, {}
+    meta: Dict[str, Any] = {
+        "docmgr_backup_reason": (f"SolidWorks could not read {len(unread)} of "
+                                 f"{sum(1 for r in records if isinstance(r, dict))} model "
+                                 f"file(s) in this run"),
+    }
+    tp = Path(jp).parent / DOCMGR_TOPUP_FILENAME
+    want = sorted({_path_key(p) for p in unread})
+    have = (load_native_payload(tp) or {}).get("_manifest") if tp.exists() else None
+    fresh = bool(isinstance(have, dict) and not _should_run(tp, analyse_from)
+                 and sorted({_path_key(p) for p in (have.get("only") or [])}) == want
+                 and tp.stat().st_mtime >= Path(jp).stat().st_mtime)
+    if not fresh:
+        produced: List[str] = []
+        lst = Path(jp).parent / (DOCMGR_TOPUP_FILENAME + ".list")
+        err: Optional[str]
+        try:
+            lst.write_text("\n".join(unread) + "\n", encoding="utf-8")
+            err = _run_docmgr_analyser(analyse_from, analyser=analyser, python_exe=python_exe,
+                                       out_path=tp, produced=produced,
+                                       extra_args=["--only-from", str(lst)])
+        except OSError as exc:
+            err = f"could not write the list of files to read: {exc}"
+        finally:
+            try:
+                lst.unlink()
+            except OSError:
+                pass
+        if produced and Path(produced[0]) != tp:
+            tp = Path(produced[0])
+        meta["docmgr_ran"] = True
+        if err:
+            meta["docmgr_error"] = err
+    else:
+        meta["docmgr_ran"] = False
+    meta["docmgr_extract_path"] = str(tp)
+    got = {}
+    for r in (load_native_extract(tp) if tp.exists() else []):
+        if (isinstance(r, dict) and r.get("title") and not r.get("errors")
+                and _path_key(r.get("path")) in set(want)):
+            got[_path_key(r.get("path"))] = r
+    if not got:
+        return records, meta
+    merged = [r for r in records
+              if not (isinstance(r, dict) and _path_key(r.get("path")) in got
+                      and r.get("errors") and not str(r.get("title") or "").strip())]
+    merged += list(got.values())
+    meta["docmgr_topped_up"] = sorted(str(r.get("path")) for r in got.values())
+    left = [p for p in unread if _path_key(p) not in got]
+    if left:
+        meta["docmgr_still_unread"] = left
+    return merged, meta
+
+
+def extract_reader_summary(job: Any) -> Dict[str, Any]:
+    """Which reader produced this job's extract, and why — for the estimate summary. The COM
+    analyser's extract reports `solidworks_api` and nothing else, exactly as before."""
+    m = getattr(job, "meta", None) or {}
+    out: Dict[str, Any] = {"source": m.get("extract_source") or SOURCE_NAME,
+                           "extract_reader": m.get("extract_reader") or SOURCE_NAME}
+    for k in ("docmgr_backup_reason", "docmgr_error", "docmgr_extract_path",
+              "docmgr_not_saved", "docmgr_needs_worker", "com_extract_set_aside",
+              "docmgr_topped_up", "docmgr_still_unread", "extract_readers"):
+        if m.get(k) not in (None, "", [], {}):
+            out[k] = m[k]
+    return out
 
 
 # ── material normalisation ───────────────────────────────────────────────────
@@ -1372,6 +1814,65 @@ def _reject_dxf_geometry(part: Dict[str, Any], nat: "NativePart",
                  f"costed from the SolidWorks flat {fl:g} x {fw:g}mm")
 
 
+def _docmgr_flat_lands(part: Dict[str, Any], fl: float, fw: float) -> bool:
+    """Submit a Document Manager flat through the resolver; True when the part now holds it.
+
+    The COM flat is written directly, as it always has been. A backup read is not entitled to
+    that: it ranks below a DXF and below the worker, so it goes through apply_field like any
+    other source and a blank something stronger already holds is kept. Agreement counts as
+    landing — the value is right and the provenance now names the model file."""
+    _apply_field(part, "blank_length_mm", fl, DOCMGR_SOURCE_NAME)
+    _apply_field(part, "blank_width_mm", fw, DOCMGR_SOURCE_NAME)
+    _l, _w = _num(part.get("blank_length_mm")), _num(part.get("blank_width_mm"))
+    return bool(_l is not None and _w is not None
+                and abs(_l - fl) < 1e-6 and abs(_w - fw) < 1e-6)
+
+
+def _docmgr_cross_check_dxf(part: Dict[str, Any], fl: float, fw: float,
+                            flags: List[str], out: Dict[str, Any]) -> None:
+    """A Document Manager flat held against the part's DXF — a check, never a replacement.
+
+    The same geometric comparison the COM path runs, with one difference that is the whole
+    point: the DXF is the winner whatever it says, because a SAVED flat ranks below the cut
+    file. Where the two disagree beyond tolerance the part is marked unreconciled, which the
+    geometry invariant reports — the size is then unconfirmed, and saying so is the honest
+    outcome when the weaker reading is the one that looks complete."""
+    _dl, _dw = _dxf_blank_mm(part)
+    if not (_dl and _dw):
+        flags.append(f"blank check NOT PERFORMED — the part is DXF-backed but no DXF blank could "
+                     f"be read to compare against the SolidWorks file's saved flat {fl:g}x{fw:g}mm "
+                     f"(Document Manager backup read). The DXF is kept")
+        out["geometry_unchecked"] = out.get("geometry_unchecked", 0) + 1
+        return
+    from geometry_arbitration import arbitrate_flat, DXF
+    _v = dict(arbitrate_flat(_dl, _dw, fl, fw))
+    # THE ARBITER'S OWN SENTENCE IS NOT REPEATED. It is written for the COM path and may end
+    # "costed from the model" — which here would describe the opposite of what was done.
+    _v["arbiter_reason"] = _v.get("reason")
+    _v["winner"] = DXF
+    _v["unreconciled"] = not bool(_v.get("agree"))
+    _v["model_reader"] = DOCMGR_SOURCE_NAME
+    _ratio = _v.get("area_ratio")
+    _v["reason"] = (f"DXF flat {_dl:g} x {_dw:g}mm against the SolidWorks file's SAVED flat "
+                    f"{fl:g} x {fw:g}mm (Document Manager backup read)"
+                    + (f", area ratio {float(_ratio):.0%}" if _ratio else "")
+                    + (" — they agree" if _v["agree"] else
+                       " — the DXF is kept, because a saved flat ranks below it"))
+    part["flat_arbitration"] = _v
+    if _v["agree"]:
+        flags.append(f"blank check: {_v['reason']}")
+        return
+    part["flat_unreconciled"] = True
+    out["geometry_conflict"] = out.get("geometry_conflict", 0) + 1
+    flags.append(
+        f"blank check: the DXF blank {_dl:g} x {_dw:g}mm is KEPT against the SolidWorks file's "
+        f"saved flat {fl:g} x {fw:g}mm"
+        + (f" (the DXF is {float(_ratio):.0%} of it by area)" if _ratio else "")
+        + " — a Document Manager backup read ranks below a DXF and never replaces it. The two "
+          "disagree beyond tolerance, so the blank is UNRECONCILED until the SolidWorks worker "
+          "or a person settles it")
+
+
 def _native_match_index(job: NativeJob):
     """The (exact, tail) index every native match runs through. ONE construction.
 
@@ -1606,6 +2107,18 @@ def extract_is_for_this_job(parts: List[Dict[str, Any]], job: NativeJob,
     }
 
 
+_MODEL_ASSEMBLY_WORDS = re.compile(
+    r"^(.*?[A-Z0-9])[\s_\-]+(?:SA|S/A|SUB[\s_\-]?ASSY|SUB[\s_\-]?ASSEMBLY|ASSY|ASSEMBLY|ASM)$",
+    re.IGNORECASE)
+
+
+def model_assembly_stem(name: Any) -> str:
+    """The drawing number inside a model assembly's name — "12002-02-101 SA" gives
+    "12002-02-101" — or '' when the name carries no sub-assembly word (D-734)."""
+    m = _MODEL_ASSEMBLY_WORDS.match(str(name or "").strip())
+    return m.group(1).strip().upper() if m else ""
+
+
 def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
                                     job: NativeJob) -> List[Dict[str, Any]]:
     """Stamp the model's parent->child edges onto the parts, as assembly_children.
@@ -1628,15 +2141,38 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
         return stamped
     by_code = {_clean_pn(str(p.get("part_number") or "")).upper(): p
                for p in parts if isinstance(p, dict) and p.get("part_number")}
+
+    # A MODEL ASSEMBLY NAMED "<drawing number> SA" IS THAT DRAWING'S ASSEMBLY (D-734).
+    # 12002-02-GA, 6 Nov 2026: the drawing's sub-assemblies are 12002-02-101 and -102; the
+    # model's files are "12002-02-101 SA" and "12002-02-102 SA". With no record of that name,
+    # each model assembly was minted beside the drawing's own, so the job carried both: the
+    # drawing record as a steel part with no size (unpriced, or a market material allowance),
+    # the minted one holding the members, a second weld and dress group, and a GA whose
+    # members looked like uncoated steel, so the GA was coated again over two coated
+    # sub-assemblies. A name that is a job record's code plus a sub-assembly word is that
+    # record.
+    def _resolve(name: Any) -> str:
+        code = _clean_pn(str(name or "")).upper()
+        if code in by_code:
+            return code
+        stem = model_assembly_stem(code)
+        return stem if stem and stem in by_code else code
+
     # TWO PHASES: STAMP THE PARENTS THAT EXIST, THEN JUDGE THE ONES THAT DON'T. The
     # minting decision below needs to know which children the job's REAL assemblies
     # already claim — and within one call, an existing parent (7332's 101) may be
     # stamped by a later dict entry than a mint candidate (102). All existing-record
     # edges land first, so the claim census the mint consults is complete.
     _items = list((job.hierarchy or {}).items())
-    _items.sort(key=lambda kv: by_code.get(_clean_pn(str(kv[0])).upper()) is None)
+    _items.sort(key=lambda kv: by_code.get(_resolve(kv[0])) is None)
     for parent, kids in _items:
-        target = by_code.get(_clean_pn(str(parent)).upper())
+        target = by_code.get(_resolve(parent))
+        if target is not None and _resolve(parent) != _clean_pn(str(parent)).upper():
+            _said = (f"the SolidWorks model names this assembly '{_clean_pn(str(parent))}': "
+                     f"it is this drawing's record, not a second assembly")
+            if _said not in (target.get("review_flags") or []):
+                target.setdefault("review_flags", []).append(_said)
+            target["model_assembly_name"] = _clean_pn(str(parent))
         if target is None:
             # THE PARENT THE MODEL NAMES MAY HAVE NO RECORD OF ITS OWN. On 10975-02 the
             # GA is an assembly page — a drawing number the pack detects but never a part
@@ -1649,8 +2185,8 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
             # record claims stays out, which is a different, named problem.
             _known_kids = [
                 _clean_pn(str(c)) for c, _q in kids
-                if _clean_pn(str(c)) and _clean_pn(str(c)).upper() in by_code
-                and _clean_pn(str(c)).upper() != _clean_pn(str(parent)).upper()
+                if _clean_pn(str(c)) and _resolve(c) in by_code
+                and _resolve(c) != _clean_pn(str(parent)).upper()
             ]
             if not _known_kids:
                 continue
@@ -1717,7 +2253,12 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
         added = []
         for child, _qty in kids:
             code = _clean_pn(str(child))
-            if not code or code.upper() in seen or code.upper() == _clean_pn(str(parent)).upper():
+            # A CHILD NAMED BY ITS MODEL FILE IS THE JOB'S RECORD OF IT (D-734).
+            if _resolve(code) in by_code:
+                code = str(by_code[_resolve(code)].get("part_number") or code)
+            if (not code or code.upper() in seen
+                    or code.upper() == str(target.get("part_number") or "").upper()
+                    or code.upper() == _clean_pn(str(parent)).upper()):
                 continue
             existing.append(code)
             seen.add(code.upper())
@@ -1733,6 +2274,464 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
             f"{'is' if len(added) == 1 else 'are'} held by {target.get('part_number')}")
         stamped.append({"part_number": target.get("part_number"), "children": added})
     return stamped
+
+
+def hollow_board_takeoff(bbox_mm: Any, volume_mm3: Any, surface_area_mm2: Any
+                         ) -> Optional[Dict[str, Any]]:
+    """The panel take-off of a HOLLOW board construction modelled as one body, or None.
+
+    12678-01-01J BASE: the drawing's Section B-B shows a mitred plinth box — a top and four
+    walls, open beneath, with internal rails — while the model is one part 552 x 125 x 370.
+    The plate test (D-512) rightly refuses that box as a board, so nothing gauged it, nothing
+    sized it, and the line went out unpriced. The model still knows what it is made of:
+
+      FILL   volume / envelope. A solid block fills it; a board box fills a small fraction.
+             Only a fill under one half is read as a hollow construction.
+      GAUGE  a constant-thickness board body has volume V = A t and surface S = 2A + P t
+             (both faces, plus the edges of perimeter P). Started from 2V/S and corrected
+             for the edges of the panels it implies, it converges on the board's thickness.
+      PANELS the envelope's faces — top, the two long walls, the two short walls, then the
+             second large face — taken in that order while the measured board area (V / t)
+             accounts for them; area left over is internal rails of the box's own height.
+
+    Every figure is DERIVED from the model's own geometry, never a category default, and the
+    caller enters it provisionally with a question: the drawing's construction still decides.
+    """
+    try:
+        dims = sorted(float(x) for x in (bbox_mm or []) if x)
+        V = float(volume_mm3 or 0.0)
+        S = float(surface_area_mm2 or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if len(dims) != 3 or V <= 0 or S <= 0 or dims[0] <= 0:
+        return None
+    H, W, L = dims
+    fill = V / (H * W * L)
+    if fill >= 0.5:
+        return None
+    faces = [("top", L, W), ("long wall", L, H), ("long wall", L, H),
+             ("short wall", W, H), ("short wall", W, H), ("second face", L, W)]
+    t = 2.0 * V / S
+    pieces: List[Tuple[str, float, float]] = []
+    for _ in range(12):
+        A = V / t
+        pieces, acc = [], 0.0
+        for name, a, b in faces:
+            if acc + a * b <= A * 1.02:
+                pieces.append((name, a, b))
+                acc += a * b
+            else:
+                break
+        rest = A - acc
+        if rest > 0.02 * A:
+            run = rest / H
+            n = max(1, int(-(-run // L)))
+            pieces += [("internal rail", run / n, H)] * n
+        P = sum(2.0 * (a + b) for _, a, b in pieces)
+        denom = S - P * t
+        if denom <= 0:
+            return None
+        t_new = 2.0 * V / denom
+        if abs(t_new - t) < 0.01:
+            t = t_new
+            break
+        t = t_new
+    if not (3.0 <= t <= min(60.0, H / 2.0)) or len(pieces) < 4:
+        return None
+    gauge = round(t * 2.0) / 2.0
+    grouped: Dict[Tuple[str, float, float], int] = {}
+    for name, a, b in pieces:
+        k = (name, round(a, 1), round(b, 1))
+        grouped[k] = grouped.get(k, 0) + 1
+    return {
+        "envelope_mm": [L, W, H], "fill": round(fill, 3),
+        "volume_mm3": V, "surface_area_mm2": S,
+        "gauge_mm": gauge, "gauge_measured_mm": round(t, 2),
+        "board_area_m2": round(V / t / 1e6, 4),
+        "panels": [{"name": n, "length_mm": a, "width_mm": b, "count": c}
+                   for (n, a, b), c in grouped.items()],
+    }
+
+
+def mint_hollow_board_panels(parts: List[Dict[str, Any]], job: "NativeJob") -> List[str]:
+    """A hollow board construction is costed as the panels it is made of (SCRUM-180).
+
+    A board LEAF whose model fails the plate test (its thinnest extent is no gauge) but
+    whose volume fills under half its envelope is a box made of boards — 12678-01-01J's
+    plinth. hollow_board_takeoff reads its gauge and panels from the model's volume and
+    surface area; each panel becomes a made record (<code>-P<n>) at that gauge, a child of
+    the part, which then stands as their assembly: its material is carried by its panels,
+    its own route (machining, edging, fitting) stays on it. Everything enters provisionally
+    with one question — the drawing's construction decides. Never a part with a measured
+    flat or a DXF, never a bought-in, never a part already split. Returns the parts split."""
+    split: List[str] = []
+    signals = getattr(job, "part_signals", None) or {}
+    if not parts or not signals:
+        return split
+    try:
+        from costed_facts import is_other_sheet_material as _board
+    except Exception:                                                # noqa: BLE001
+        return split
+    by_key = {_pn_key(k): v for k, v in signals.items()}
+    held = {_pn_key(p.get("part_number")) for p in parts if isinstance(p, dict)}
+    for part in list(parts):
+        if not isinstance(part, dict) or part.get("hollow_board_takeoff"):
+            continue
+        pn = str(part.get("part_number") or "").strip()
+        nat = by_key.get(_pn_key(pn))
+        if nat is None or nat.has_flat() or _dxf_backed(part):
+            continue
+        if (part.get("is_assembly_parent") or part.get("is_sub_assembly")
+                or part.get("assembly_children") or part.get("is_bought_in")
+                or getattr(nat, "likely_bought_in", False)):
+            continue
+        mat = (part.get("normalized_material")
+               or _norm_sw_material(getattr(nat, "material", "") or ""))
+        if not (mat and _board(str(mat))):
+            continue
+        tk = hollow_board_takeoff(nat.bbox_mm, getattr(nat, "volume_mm3", None),
+                                  getattr(nat, "surface_area_mm2", None))
+        if not tk:
+            continue
+        g = float(tk["gauge_mm"])
+        L, W, H = tk["envelope_mm"]
+        why = (f"HOLLOW BOARD CONSTRUCTION FROM THE MODEL: {pn}'s solid measures "
+               f"{L:g} x {W:g} x {H:g} mm but fills {tk['fill']:.0%} of that envelope, so "
+               f"it is a box made of boards, not a block. Its volume "
+               f"({tk['volume_mm3'] / 1e6:.2f} litres) and surface "
+               f"({tk['surface_area_mm2'] / 1e6:.3f} m2) give a {g:g} mm board "
+               f"(measured {tk['gauge_measured_mm']:g}), {tk['board_area_m2']:.3f} m2 of it, "
+               f"costed as the panels below — provisional, from the model alone; the "
+               f"drawing's construction decides")
+        children: List[str] = []
+        for i, pnl in enumerate(tk["panels"], 1):
+            code = f"{pn}-P{i}"
+            if _pn_key(code) in held:
+                continue
+            a, b = float(pnl["length_mm"]), float(pnl["width_mm"])
+            rec: Dict[str, Any] = {
+                "part_number": code,
+                "description": f"{part.get('description') or pn} — {pnl['name']} "
+                               f"{a:g} x {b:g} x {g:g} mm (from the model's take-off)",
+                "quantity": int(pnl["count"]),
+                "normalized_material": mat,
+                "materials": list(part.get("materials") or [mat]),
+                "blank_length_mm": a, "blank_width_mm": b,
+                "normalized_geometry": {"blank_length_mm": a, "blank_width_mm": b},
+                "geometry_source": "solidworks_native",
+                "owning_assembly": pn, "bom_parent": pn,
+                "hollow_board_panel_of": pn,
+                "is_bought_in": False,
+                "page_roles": list(part.get("page_roles") or []),
+                "pages": list(part.get("pages") or []),
+                "review_flags": [f"panel of {pn}: {why}"],
+            }
+            for _k in ("surface_finishes", "construction_note_laminate"):
+                if part.get(_k):
+                    rec[_k] = part.get(_k)
+            _apply_field(rec, "normalized_thickness_mm", g, "model_extents_board_gauge")
+            # THE CUT TRAVELS WITH THE PANEL. Once the part stands for its panels the
+            # route rules its own routing not applicable (an assembly is not routed), so
+            # a panel carrying no cut would let the cutting labour vanish. A board panel
+            # is cut on the router — the board convention the parent's own line used.
+            try:
+                from estimator import record_operation as _rec_op
+                _rec_op(rec, "cnc_routing", "hollow_board_takeoff", inferred=True)
+            except Exception:                                        # noqa: BLE001
+                rec.setdefault("inferred_operations", []).append("cnc_routing")
+            parts.append(rec)
+            held.add(_pn_key(code))
+            children.append(code)
+        if not children:
+            continue
+        # precedence: direct-write ok — a structural stamp (the part now stands for its
+        # panels), not an arbitrated datum; the material it no longer carries is theirs.
+        part["is_assembly_parent"] = True
+        part["assembly_children"] = list(part.get("assembly_children") or []) + children
+        part["hollow_board_takeoff"] = dict(tk)
+        part.setdefault("review_flags", []).append(why)
+        try:
+            from source_precedence import raise_manufacturing_question as _ask_h
+            _ask_h(part,
+                   f"{pn} is costed as a {g:g} mm board box from its model",
+                   why + ": " + "; ".join(
+                       f"{p['count']} x {p['name']} {p['length_mm']:g} x {p['width_mm']:g}"
+                       for p in tk["panels"]),
+                   "confirm the construction, the board gauge and the panels against the "
+                   "drawing's section; correct any panel and the price follows",
+                   "solidworks.hollow_board_takeoff")
+        except Exception:                                            # noqa: BLE001
+            pass
+        split.append(pn)
+        print(f"   [hierarchy] {pn}: hollow board construction — {len(children)} panel "
+              f"line(s) at {g:g} mm from the model's volume and surface", flush=True)
+    return split
+
+
+def _shared_child_split(total: Optional[float],
+                        by_parent: Dict[str, Tuple[float, float]]
+                        ) -> Tuple[Optional[Dict[str, int]], str]:
+    """Per-parent counts for a child under MORE THAN ONE parent, or (None, why not).
+
+    12678-01-06M (SCRUM-105): two ribs in each of two bracket designs. No single
+    per-parent count exists, the division rule refused, and 1 per parent was carried —
+    the sheet charged 8 of a part the model counts 16 of. The information was there all
+    along: the hierarchy held 12 under 101SA (x6) and 4 under 102SA (x2), and
+    12/6 = 4/2 = 2 reassembles to exactly 16.
+
+    `by_parent` maps each parent to (the hierarchy's edge figure, that parent's own
+    product total). The edge figure is ambiguous by construction: an assembly's own
+    document states the count ONE of it takes, while a full-depth document lists one
+    sighting per instance — and the hierarchy builder keeps the larger. The model's own
+    product total for the child arbitrates which reading the figures carry:
+
+      reading A (already per-parent): every figure is whole and the reassembly
+                                      sum(edge x parent_total) equals the total;
+      reading B (one sighting per instance): every edge / parent_total divides whole
+                                      and the plain sum of the edges equals the total.
+
+    A reading the model's own total corroborates is evidence; both failing — or both
+    passing with different answers — is the conflict the caller says out loud. Never a
+    figure invented to make the arithmetic tidy.
+    """
+    if not total or total <= 0 or len(by_parent) < 2:
+        return None, "a single parent or no product total is not this rule's case"
+    try:
+        _vals = [(float(e), float(p)) for e, p in by_parent.values()]
+    except (TypeError, ValueError):
+        return None, "unreadable edge figures"
+    if any(e <= 0 or p <= 0 for e, p in _vals):
+        return None, "an empty edge or parent count"
+    _whole = lambda x: abs(x - round(x)) < 1e-9 and round(x) >= 1  # noqa: E731
+    a_ok = (all(_whole(e) for e, _ in _vals)
+            and abs(sum(e * p for e, p in _vals) - float(total)) < 1e-9)
+    b_ok = (all(_whole(e / p) for e, p in _vals)
+            and abs(sum(e for e, _ in _vals) - float(total)) < 1e-9)
+    a_map = {pn: int(round(e)) for pn, (e, _p) in by_parent.items()}
+    b_map = {pn: int(round(float(e) / float(p))) for pn, (e, p) in by_parent.items()}
+    if a_ok and b_ok and a_map != b_map:
+        return None, (f"the model's edge figures reassemble to {total:g} read either "
+                      f"way and the two readings disagree")
+    if b_ok:
+        return b_map, (
+            f"the model counts {total:g} in the whole product; its edge figures are "
+            f"sightings, one per parent instance ("
+            + "; ".join(f"{e:g} under {pn} = {b_map[pn]} x {p:g}"
+                        for pn, (e, p) in sorted(by_parent.items()))
+            + f"), reassembling to exactly {total:g}")
+    if a_ok:
+        return a_map, (
+            f"the model counts {total:g} in the whole product and its edge figures "
+            f"are already per-parent counts ("
+            + "; ".join(f"{a_map[pn]} per {pn} x {p:g}"
+                        for pn, (e, p) in sorted(by_parent.items()))
+            + f"), reassembling to exactly {total:g}")
+    return None, (f"neither reading of the edge figures reassembles the model's own "
+                  f"product total of {total:g}")
+
+
+def mint_model_children(parts: List[Dict[str, Any]], job: NativeJob) -> List[str]:
+    """Mint a priced record for a model-only child the product reaches (SCRUM-155).
+
+    12678-01-GA: 04M, 05M and 06M hang off the two bracket assemblies in the model tree,
+    carry the welding, dressing and powder charged on their parents — and have no record,
+    so no material line anywhere holds the bracket steel. reached_bom_item_unaccounted
+    fired, the unit cost was short exactly that money, and the only remedy on the sheet
+    was a question. The hierarchy pass above wires the EDGES; nothing minted the leaves.
+
+    DELIBERATELY NARROW, the same shape as the D-512 board gauge:
+      - only a child an EXISTING parent record claims, so the tree is this job's;
+      - only when its own model file read cleanly (part_signals) with sheet geometry the
+        costing can price: a flat pattern, or a plate-shaped solid whose smallest extent
+        is a plausible gauge at most a quarter of the next dimension — a bolt, a tube
+        and a block all fail that test and stay out;
+      - never a part SDI's own conventions call bought in, and never a code that already
+        has a record;
+      - stamped minted_from_model with its question, so the sheet says where the line
+        came from and an estimator confirms it against the drawing office.
+    A child whose file failed, or whose shape this cannot read, stays unminted and keeps
+    the missing-price question — short in the open, never guessed."""
+    minted: List[str] = []
+    if not parts or not getattr(job, "part_signals", None):
+        return minted
+    by_code = {_clean_pn(str(p.get("part_number") or "")).upper(): p
+               for p in parts if isinstance(p, dict) and p.get("part_number")}
+    # Every edge to a record-less child, PER PARENT, with the edge figures kept as a SET:
+    # the analyser lists an edge once per instance, configuration and reporting SLDASM,
+    # so the list records what was SEEN, never a count (_per_parent_count's own lesson,
+    # 11650-06). The parent's per-unit count rides along for the division below.
+    edges: Dict[str, Dict[str, Tuple[List[float], float]]] = {}
+    for parent, kids in (getattr(job, "hierarchy", None) or {}).items():
+        pk = _clean_pn(str(parent)).upper()
+        parent_rec = by_code.get(pk)
+        if parent_rec is None:
+            continue
+        try:
+            p_qty = max(1.0, float(parent_rec.get("quantity") or 1))
+        except (TypeError, ValueError):
+            p_qty = 1.0
+        for child, q in kids or ():
+            ck = _clean_pn(str(child))
+            if not ck or ck.upper() in by_code or ck.upper() == pk:
+                continue
+            try:
+                e_qty = max(1.0, float(q or 1))
+            except (TypeError, ValueError):
+                e_qty = 1.0
+            _slot = edges.setdefault(ck, {}).setdefault(_clean_pn(str(parent)),
+                                                        ([], p_qty))
+            _slot[0].append(e_qty)
+    # The child's own full-depth product total, where the flattened BOM states one — the
+    # reliable count the division rule needs.
+    _bom_totals: Dict[str, float] = {}
+    for _row in getattr(job, "bom", None) or []:
+        _bk = _clean_pn(str(getattr(_row, "part_number", "") or "")).upper()
+        _bq = float(getattr(_row, "quantity", 0) or 0)
+        if _bk and _bq > 0:
+            _bom_totals[_bk] = _bom_totals.get(_bk, 0.0) + _bq
+    for ck, owned_by in edges.items():
+        owns = [(pn, qtys, pq) for pn, (qtys, pq) in sorted(owned_by.items())]
+        nat = (getattr(job, "part_signals", {}) or {}).get(ck)
+        if nat is None:
+            continue
+        try:
+            from bought_in_policy import is_bought_in as _bi
+            if getattr(nat, "likely_bought_in", False) or _bi(
+                    {"part_number": ck, "description": getattr(nat, "description", "") or ""}):
+                continue
+        except Exception:                                            # noqa: BLE001
+            pass
+        L = W = thk = None
+        basis = ""
+        if nat.has_flat():
+            L, W = _num(nat.flat_length_mm), _num(nat.flat_width_mm)
+            thk = _num(nat.thickness_mm)
+            basis = "its flat pattern"
+        if not (L and W):
+            _dims = sorted(v for v in (_num(x) for x in (nat.bbox_mm or [])) if v)
+            if (len(_dims) == 3 and 0.3 <= _dims[0] <= 60.0
+                    and _dims[0] * 4 <= _dims[1]
+                    and _plausible_mm(_dims[1]) and _plausible_mm(_dims[2])):
+                L, W, thk = _dims[2], _dims[1], (thk or _dims[0])
+                basis = "a plate-shaped solid's extents"
+        if not (L and W and thk):
+            continue
+        # THE ROW'S OWN QUANTITY, ON _per_parent_count's OWN BASIS. Two lessons, both
+        # paid for on real sheets: the first mint wrote the per-unit total and the
+        # compiler multiplied by the parent again (05M on 12678's sheet as a row of
+        # 216); and the edge figures are a record of what was SEEN, once per instance
+        # and configuration, never a count (11650-06's extender, 3 summed to 6). So:
+        # PER PARENT = THE CHILD'S PRODUCT TOTAL ÷ THE PARENT'S, where both exist and
+        # divide whole — 6 ribs in the product over 6 bracket assemblies is ONE per
+        # bracket. With no usable totals, the DEDUPLICATED edge figure stands where the
+        # model states exactly one; and where nothing divides (a shared child whose
+        # total cannot be attributed), ONE per parent is carried with the conflict said
+        # out loud, for the BOM-ranked edges and the quantity check to decide — never a
+        # figure invented to make the arithmetic tidy.
+        _parents = sorted({pn for pn, _, _ in owns})
+        _total_ck = _bom_totals.get(ck.upper())
+        qty = 1
+        qty_basis = ""
+        if _total_ck and len(_parents) == 1:
+            _p_total = owns[0][2]
+            if _p_total > 0 and abs(_total_ck / _p_total
+                                    - round(_total_ck / _p_total)) < 1e-9:
+                qty = max(1, int(round(_total_ck / _p_total)))
+                qty_basis = (f"the model counts {_total_ck:g} in the whole product and "
+                             f"{_p_total:g} of {_parents[0]}, so one takes {qty}")
+        # A SHARED CHILD'S SPLIT, ARBITRATED BY THE MODEL'S OWN TOTAL (SCRUM-105).
+        # One figure per parent and the child's product total: _shared_child_split
+        # says which reading the figures carry, or refuses out loud.
+        qty_by_parent: Optional[Dict[str, int]] = None
+        if not qty_basis and _total_ck and len(_parents) > 1:
+            _bp: Dict[str, Tuple[float, float]] = {}
+            for pn, qtys, pq in owns:
+                _figs = sorted(set(qtys))
+                if len(_figs) != 1:
+                    _bp = {}
+                    break
+                _bp[pn] = (_figs[0], _bom_totals.get(pn.upper()) or pq)
+            if _bp:
+                qty_by_parent, _split_basis = _shared_child_split(_total_ck, _bp)
+                if qty_by_parent:
+                    qty_basis = _split_basis
+                    _uniq = sorted(set(qty_by_parent.values()))
+                    # The record's one quantity field means "per parent": it carries
+                    # the count only where every parent takes the same; otherwise the
+                    # per-parent map rides on the record and the route reads it edge
+                    # by edge.
+                    qty = _uniq[0] if len(_uniq) == 1 else 1
+                    if len(_uniq) != 1:
+                        qty_basis += (" — the parents take different counts, so the "
+                                      "row carries its per-parent split and the route "
+                                      "multiplies each edge once")
+        if not qty_basis:
+            _distinct = sorted({e for _, qtys, _ in owns for e in qtys})
+            if len(_parents) == 1 and len(_distinct) == 1 and not _total_ck:
+                qty = max(1, int(round(_distinct[0])))
+                qty_basis = (f"the model's tree states {qty} per {_parents[0]} "
+                             f"(deduplicated edge, no product total to divide)")
+            else:
+                qty = 1
+                qty_basis = (f"no per-parent count divides (product total "
+                             f"{_total_ck:g} across {', '.join(_parents)}" if _total_ck
+                             else f"the edges state {_distinct} across "
+                                  f"{', '.join(_parents)}")
+                qty_basis += (" — 1 per parent is carried; the BOM edges and the "
+                              "quantity check decide")
+        _counts = qty_by_parent or {pn: qty for pn, _, _ in owns}
+        per_unit = int(round(sum(_counts.get(pn, qty) * p for pn, _, p in owns))) or 1
+        trail = " + ".join(f"{_counts.get(pn, qty):g} per {pn} x{p:g}"
+                           for pn, _, p in owns)
+        mat = _norm_sw_material(getattr(nat, "material", "") or "")
+        rec: Dict[str, Any] = {
+            "part_number": ck,
+            "description": (getattr(nat, "description", "") or
+                            "from the SolidWorks model's own tree"),
+            "quantity": qty,
+            "normalized_material": mat or None,
+            "normalized_thickness_mm": float(thk),
+            "blank_length_mm": float(L), "blank_width_mm": float(W),
+            "normalized_geometry": {"blank_length_mm": float(L),
+                                    "blank_width_mm": float(W)},
+            "geometry_source": "solidworks_native",
+            "minted_from_model": True,
+            "owning_assembly": owns[0][0],
+            "review_flags": [
+                f"part minted from the SolidWorks model ({basis}): the product tree "
+                f"holds it under {', '.join(sorted({pn for pn, _, _ in owns}))} and the "
+                f"pack has no sheet for it — quantity basis: {qty_basis}; the tree "
+                f"implies x{per_unit} a unit ({trail}); the row carries its own "
+                f"per-parent count and the route multiplies, once; its material is "
+                f"priced from the modelled blank so the unit is not silently short; "
+                f"confirm the count and the part against the drawing office"],
+        }
+        if qty_by_parent:
+            # precedence: direct-write ok — a per-parent COUNT MAP, not an arbitrated
+            # scalar; the route reads it edge by edge and ranks it there.
+            rec["quantity_by_parent"] = dict(qty_by_parent)
+            rec["quantity_by_parent_source"] = (getattr(nat, "source", "") or job_source(job))
+        if nat.has_flat():
+            rec["native_flat_pattern"] = True
+        try:
+            from source_precedence import raise_manufacturing_question as _ask_m
+            _ask_m(rec,
+                   f"{ck} is priced from its model alone",
+                   f"minted from the SolidWorks tree ({trail}): blank {float(L):g} x "
+                   f"{float(W):g} x {float(thk):g} mm"
+                   + (f", {mat}" if mat else "") + " — no drawing sheet of its own",
+                   "confirm the part, its size and its material against the drawing "
+                   "office, or rule it out of scope",
+                   "solidworks.minted_from_model")
+        except Exception:                                            # noqa: BLE001
+            pass
+        parts.append(rec)
+        by_code[ck.upper()] = rec
+        minted.append(ck)
+    if minted:
+        print(f"   [hierarchy] {len(minted)} model-only part(s) minted and priced from "
+              f"their own files: {', '.join(sorted(minted))}", flush=True)
+    return minted
 
 
 def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
@@ -1902,6 +2901,11 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
         return _total, "from the SolidWorks assembly BOM (component count, all levels)", \
             None, None
 
+    # THE SOURCE EVERY VALUE BELOW ENTERS UNDER. The COM analyser's extract enters as
+    # solidworks_api, exactly as it always has; a Document Manager backup read enters as
+    # solidworks_docmgr, which source_precedence ranks below the worker and below a DXF.
+    # Decided per part from the record that supplied it, falling back to the extract's.
+    _job_src = job_source(job)
     for part in parts:
         if not isinstance(part, dict):
             continue
@@ -1910,8 +2914,12 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
             continue
         nat = job.part_signals.get(pn)
         row = bom_by_pn.get(_pn_key(pn))
+        _src = (str(getattr(nat, "source", "") or "") if nat is not None else "") or _job_src
+        _docmgr = _src == DOCMGR_SOURCE_NAME
         part["solidworks_native"] = True
         part["solidworks_part_number"] = pn
+        if _docmgr:
+            part["solidworks_reader"] = DOCMGR_SOURCE_NAME
         flags = part.setdefault("review_flags", [])
 
         # ── THE MODEL'S BOUNDING BOX, KEPT ─────────────────────────────────────────
@@ -1929,7 +2937,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
         _bbox_all = [f for f in (_num(v) for v in (getattr(nat, "bbox_mm", None) or [])) if f]
         if _bbox_all:
             part["bbox_mm"] = list(_bbox_all)
-            part["bbox_mm_source"] = SOURCE_NAME
+            part["bbox_mm_source"] = _src
             _ng_bb = part.setdefault("normalized_geometry", {})
             if isinstance(_ng_bb, dict):
                 _ng_bb["bbox_mm"] = list(_bbox_all)
@@ -1953,7 +2961,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
             if _bc is not None and _bc.envelope_proves_it_never_leaves_the_plane(
                     _bbox_all, part.get("normalized_thickness_mm")):
                 _env_thk = min(_bbox_all)
-                if _apply_field(part, "normalized_thickness_mm", _env_thk, SOURCE_NAME):
+                if _apply_field(part, "normalized_thickness_mm", _env_thk, _src):
                     flags.append(
                         f"thickness {_env_thk:g}mm confirmed by the model's bounding box "
                         f"({' x '.join(f'{v:g}' for v in sorted(_bbox_all, reverse=True))}"
@@ -2015,7 +3023,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                 # two were saying opposite things. A derivation that adds an assumption
                 # steps down — the same rule that puts mirror_of_measured below the flat it
                 # mirrors.
-                _len_src = "geometry_inference" if _bent else SOURCE_NAME
+                _len_src = "geometry_inference" if _bent else _src
                 # THROUGH THE RESOLVER, AND UNDER THE CONVENTION. This wrote `length_source`
                 # by hand — a key nothing in the codebase reads, so section length was never
                 # arbitrated by anything and never appeared in a provenance trail either.
@@ -2120,8 +3128,44 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                 else:
                     _total, _edges = _tw_total, _tw_edges
             part["quantity_total_per_unit"] = _total
-            part["quantity_total_per_unit_source"] = SOURCE_NAME
+            part["quantity_total_per_unit_source"] = _src
             _q, _basis, _parent, _note = _per_parent_count(_total, _edges)
+            # A SHARED CHILD'S SPLIT, ARBITRATED BY THE MODEL'S OWN TOTAL (SCRUM-105).
+            # Where no single per-parent count exists, the per-parent figures may still
+            # be derivable: one figure per parent plus the product total, and the total
+            # says which reading the figures carry. On success the map rides on the
+            # record for the route to read edge by edge; a uniform map also submits the
+            # one `quantity` through the resolver, exactly as a single-parent count
+            # would. On failure the refusal note stands unchanged.
+            if _q <= 0 and len({_pp for _pp, _ in _edges}) > 1:
+                _bp2: Dict[str, Tuple[float, float]] = {}
+                for _pp, _qq in _edges:
+                    _figs = _bp2.get(_pp)
+                    if _figs is not None and abs(_figs[0] - float(_qq or 0)) > 1e-9:
+                        _bp2 = {}
+                        break
+                    _prow2 = bom_by_pn.get(_pn_key(_pp))
+                    _ptot2 = (float(_prow2.quantity)
+                              if _prow2 is not None and _prow2.quantity
+                              else (1.0 if _pn_key(_pp) in asm_keys else None))
+                    if not _ptot2 or not _qq or _qq <= 0:
+                        _bp2 = {}
+                        break
+                    _bp2[_pp] = (float(_qq), _ptot2)
+                if len(_bp2) > 1:
+                    _split_map, _split_basis = _shared_child_split(float(_total), _bp2)
+                    if _split_map:
+                        # precedence: direct-write ok — a per-parent COUNT MAP, not an
+                        # arbitrated scalar; the route reads it edge by edge and ranks
+                        # it there.
+                        part["quantity_by_parent"] = dict(_split_map)
+                        part["quantity_by_parent_source"] = _src
+                        flags.append(f"qty per parent from the model: {_split_basis}")
+                        out["qty"] += 1
+                        _note = None
+                        _uniq2 = sorted(set(_split_map.values()))
+                        if len(_uniq2) == 1:
+                            _q, _basis = _uniq2[0], _split_basis
             if _note:
                 flags.append(_note)
             _cur = _num(part.get("quantity"))
@@ -2134,7 +3178,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                 # The counter belongs INSIDE the success branch. Outside it, a quantity the
                 # resolver refused — because an estimator had already corrected it — was
                 # still counted as applied, so the run reported work it did not do.
-                if _apply_field(part, "quantity", _q, SOURCE_NAME):
+                if _apply_field(part, "quantity", _q, _src):
                     flags.append(f"qty {_cur if _cur is not None else '-'} -> {_q} "
                                  f"{_basis}")
                     out["qty"] += 1
@@ -2169,6 +3213,19 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
 
         if nat is None:
             continue
+
+        # ── WHAT THE BACKUP READER COULD NOT SUPPLY, SAID ON THE PART ─────────────
+        # A Document Manager read has no bounding box, volume or surface area by construction,
+        # and a mass or flat pattern only where the file saved one. Each is MISSING on this
+        # record — nothing below infers it from anything nearby — and the estimator is told
+        # which, once, rather than left to notice what is absent.
+        if _docmgr and nat.not_saved:
+            _ns = (f"SolidWorks Document Manager (backup reader): {', '.join(nat.not_saved)} — "
+                   f"not saved in the file; only the SolidWorks worker measures them. Nothing was inferred "
+                   f"in their place")
+            if _ns not in flags:
+                flags.append(_ns)
+            part["solidworks_not_saved"] = list(nat.not_saved)
 
         # ── SURFACE THE ANALYSER'S OWN REJECTIONS ────────────────────────────────
         # A value the geometry gates threw out (a folded box read as a flat, an impossible
@@ -2205,7 +3262,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
             # default that must lose to the drawing's own callout. An older extract that never
             # recorded which it was enters at full rank, exactly as before.
             _mat_src = _material_source_token(nat)
-            _applied_only = _mat_src == APPLIED_MATERIAL_SOURCE
+            _applied_only = _mat_src in (APPLIED_MATERIAL_SOURCE, DOCMGR_APPLIED_MATERIAL_SOURCE)
             if new_mat and not cur_mat:
                 if _apply_field(part, "normalized_material", new_mat, _mat_src):
                     flags.append(f"material '{new_mat}' from the SolidWorks model "
@@ -2280,7 +3337,15 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                 f"error in the cut list, or a blank that genuinely spans more than one sheet.")
         if nat.has_flat():
             fl, fw = float(nat.flat_length_mm), float(nat.flat_width_mm)
-            if _dxf_backed(part):
+            if _dxf_backed(part) and _docmgr:
+                # A SAVED FLAT NEVER REPLACES A DXF. The arbitration below lets the model's
+                # flat supersede a DXF that measured materially less — a judgement that rests
+                # on the model's flat being a fresh measurement. A Document Manager read is
+                # the flat as last SAVED, unrebuilt and unchecked against the solid, and it
+                # ranks below the DXF; so the DXF is kept whatever the comparison says, and a
+                # disagreement is recorded as unreconciled for a person to settle.
+                _docmgr_cross_check_dxf(part, fl, fw, flags, out)
+            elif _dxf_backed(part):
                 # Two independent measurements of the same blank. Arbitrated on geometry
                 # alone — see geometry_arbitration for why a materially SMALLER DXF loses to
                 # the model while a larger one is kept and marked unreconciled. Flagging the
@@ -2324,7 +3389,10 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                         f"could be read to compare against the SolidWorks flat "
                         f"{fl:g}x{fw:g}mm. The two measurements are UNRECONCILED")
                     out["geometry_unchecked"] += 1
-            else:
+            elif not _docmgr or _docmgr_flat_lands(part, fl, fw):
+                # The COM analyser's flat is written as it always was. A Document Manager flat
+                # reaches this branch only once the resolver has accepted it under
+                # solidworks_docmgr — so a blank a stronger source already holds is kept.
                 ng = part.get("normalized_geometry")
                 ng = dict(ng) if isinstance(ng, dict) else {}
                 ng["blank_length_mm"] = fl
@@ -2338,8 +3406,14 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                 # the engine's measured-geometry gates and the credibility gate key on.
                 part["native_flat_pattern"] = True
                 part["flat_pattern_detected"] = True
-                flags.append(f"flat blank {fl:g} x {fw:g}mm from the SolidWorks sheet-metal "
-                             f"cut list (modelled flat pattern — measured, not inferred)")
+                flags.append(
+                    f"flat blank {fl:g} x {fw:g}mm from the SolidWorks sheet-metal "
+                    f"cut list (modelled flat pattern — measured, not inferred)" if not _docmgr
+                    else
+                    f"flat blank {fl:g} x {fw:g}mm from the SolidWorks sheet-metal cut list "
+                    f"as SAVED in the file (Document Manager backup read: SolidWorks' own flat, "
+                    f"not rebuilt and not checked against the solid; ranked below a DXF and "
+                    f"below the SolidWorks worker)")
                 out["flat"] += 1
                 # CUT LENGTH. Laser run time is driven by profile length, so a part with a
                 # real blank but no cut length would be costed as if it took no cutting at
@@ -2362,9 +3436,13 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                 if isinstance(gr, dict):
                     if nat.cut_length_mm and nat.cut_length_mm > 0:
                         _apply_field(part, "geometry_rollup.estimated_cut_length_mm",
-                                     float(nat.cut_length_mm), SOURCE_NAME,
+                                     float(nat.cut_length_mm), _src,
                                      note=(f"cut length {nat.cut_length_mm:,.2f}mm from the "
-                                           f"SolidWorks cut list — measured on the model"))
+                                           f"SolidWorks cut list — measured on the model"
+                                           if not _docmgr else
+                                           f"cut length {nat.cut_length_mm:,.2f}mm from the "
+                                           f"SolidWorks cut list as SAVED in the file "
+                                           f"(Document Manager backup read)"))
                         gr.pop("estimated_cut_length_is_floor", None)
                         gr.pop("cut_length_basis", None)
                     elif not _num(gr.get("estimated_cut_length_mm")):
@@ -2381,6 +3459,43 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                             f"(2 x ({fl:g}+{fw:g})) — the model gave no cut length; holes and "
                             f"any non-rectangular profile add to this, so laser time is a "
                             f"MINIMUM, not a measurement")
+
+        # ── A FORMED PART WITH NO SAVED FLAT: NEEDS THE SOLIDWORKS WORKER ──────────
+        # The developed blank of a folded part is the one number a Document Manager read
+        # cannot produce: it exists only if SolidWorks saved a flat pattern into the cut list,
+        # and on this part it did not. The COM analyser would flatten the part and MEASURE it;
+        # this reader cannot, and its bounding box is not saved either. So nothing is written
+        # here — no folded envelope standing in for a blank, no floor — and the part says,
+        # in the open, that its blank waits on the worker. A DXF already on the part is the
+        # cut file and stands; only a part with no DXF is left with the question.
+        if _docmgr and nat.needs_solidworks_worker and not nat.has_flat():
+            _why_w = nat.needs_solidworks_worker_reason or (
+                "formed sheet-metal part with no flat pattern saved in its file")
+            if _dxf_backed(part):
+                flags.append(f"SolidWorks Document Manager: {_why_w} — the DXF's blank stands; "
+                             f"the model offered nothing to check it against")
+            else:
+                part["needs_solidworks_worker"] = True
+                part["needs_solidworks_worker_reason"] = _why_w
+                flags.append(
+                    f"NEEDS THE SOLIDWORKS WORKER: {_why_w}. No blank was taken from the model "
+                    f"and none was guessed; until the worker (or a DXF) measures it, any blank "
+                    f"on this line comes from the drawing and is not a measurement")
+                try:
+                    from source_precedence import raise_manufacturing_question as _ask_w
+                    _ask_w(part,
+                           f"{part.get('part_number')}: developed blank not measured — the "
+                           f"SolidWorks file saved no flat pattern",
+                           f"{_why_w}; the backup reader measures nothing, so the blank is not "
+                           f"taken from the model",
+                           "run the SolidWorks worker (sw_native_analyse.py on a machine with a "
+                           "seat) or supply the part's DXF, and re-run the estimate",
+                           "solidworks.docmgr_needs_worker")
+                except Exception:                                    # noqa: BLE001
+                    pass
+                out["needs_solidworks_worker"] = out.get("needs_solidworks_worker", 0) + 1
+                out.setdefault("needs_solidworks_worker_parts", []).append(  # type: ignore[union-attr]
+                    str(part.get("part_number") or pn))
 
         # ── THICKNESS ────────────────────────────────────────────────────────────
         # A GAUGE NEEDS A SHEET BODY BEHIND IT. On 12567-05-02M the model gave no flat
@@ -2413,7 +3528,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                 _plastic_sheet_solid = False
         if _plastic_sheet_solid:
             thk = float(nat.thickness_mm)
-            if _apply_field(part, "normalized_thickness_mm", thk, SOURCE_NAME):
+            if _apply_field(part, "normalized_thickness_mm", thk, _src):
                 flags.append(f"thickness {thk:g}mm from the SolidWorks solid: a {_bbox_text(nat)} "
                              f"sheet one thickness thick, in a material the Other Sheet block "
                              f"prices — no flat pattern because it is not sheet metal")
@@ -2429,8 +3544,8 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                               reverse=True)[:2]
                 if len(_ext) == 2 and all(_plausible_mm(v) for v in _ext):
                     _was = (_num(part.get("blank_length_mm")), _num(part.get("blank_width_mm")))
-                    _wrote = _apply_field(part, "blank_length_mm", _ext[0], SOURCE_NAME)
-                    _wrote = _apply_field(part, "blank_width_mm", _ext[1], SOURCE_NAME) or _wrote
+                    _wrote = _apply_field(part, "blank_length_mm", _ext[0], _src)
+                    _wrote = _apply_field(part, "blank_width_mm", _ext[1], _src) or _wrote
                     if _wrote:
                         ng = part.get("normalized_geometry")
                         ng = dict(ng) if isinstance(ng, dict) else {}
@@ -2457,7 +3572,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
             cur_thk = _num(part.get("normalized_thickness_mm"))
             if not cur_thk or abs(cur_thk - thk) <= 0.05:
                 # Empty, or already agreeing: submit either way so the model's rank attaches.
-                if _apply_field(part, "normalized_thickness_mm", thk, SOURCE_NAME):
+                if _apply_field(part, "normalized_thickness_mm", thk, _src):
                     flags.append(f"thickness {thk:g}mm from the SolidWorks sheet-metal cut list")
                     out["thickness"] += 1
             else:
@@ -2469,7 +3584,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                 #
                 # The model's sheet thickness is the gauge the part is made from; a PDF
                 # thickness is often lifted from a tolerance table. Model wins, and says so.
-                if _apply_field(part, "normalized_thickness_mm", thk, SOURCE_NAME):
+                if _apply_field(part, "normalized_thickness_mm", thk, _src):
                     flags.append(f"thickness {cur_thk:g}mm -> {thk:g}mm from the SolidWorks "
                                  f"cut list (modelled sheet gauge)")
                     out["thickness"] += 1
@@ -2524,6 +3639,37 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                     except Exception:                                # noqa: BLE001
                         pass
                     out["thickness"] += 1
+                # AND THE TWO LARGER EXTENTS ARE ITS BLANK (SCRUM-180). The same shelf
+                # that had no gauge had no blank, so geometry_inference's category
+                # default sized it: 12678-01-GA's shelves were nested, priced and
+                # weighed as the "tier" default 350 x 250 while the model that measures
+                # them at 520 x 370 sat in the pack. The verified plate shape above is
+                # what justifies it — the board's envelope IS the rectangle it is cut
+                # from — and the figures enter at the same provisional rank as the
+                # gauge, under the same question; a measured flat, a DXF or a stated
+                # size still displaces them. A box-shaped board (the plinth) fails the
+                # plate test and is deliberately left to its own construction question.
+                if (_board_mat and _leaf and len(_dims) == 3
+                        and 3.0 <= _dims[0] <= 60.0 and _dims[0] * 4 <= _dims[1]
+                        and not _dxf_backed(part) and not nat.has_flat()
+                        and not (_num(part.get("blank_length_mm"))
+                                 and _num(part.get("blank_width_mm")))):
+                    _bl, _bw = float(_dims[2]), float(_dims[1])
+                    if _plausible_mm(_bl) and _plausible_mm(_bw):
+                        _wb2 = _apply_field(part, "blank_length_mm", _bl,
+                                            "model_extents_board_gauge")
+                        _wb2 = _apply_field(part, "blank_width_mm", _bw,
+                                            "model_extents_board_gauge") or _wb2
+                        if _wb2:
+                            _ngb = part.get("normalized_geometry")
+                            _ngb = dict(_ngb) if isinstance(_ngb, dict) else {}
+                            _ngb["blank_length_mm"], _ngb["blank_width_mm"] = _bl, _bw
+                            part["normalized_geometry"] = _ngb
+                            flags.append(
+                                f"blank {_bl:g} x {_bw:g}mm from the model's extents for "
+                                f"the board — provisional with its gauge; a measured flat "
+                                f"or a stated size displaces it")
+                            out["flat"] += 1
 
         # ── SURFACE TREATMENT ────────────────────────────────────────────────────
         # The cut list publishes the finish the designer specified. This is the datum the
@@ -2579,7 +3725,10 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
             # The number is not discarded. It is recorded as what it is, and `fold_count`
             # publishes a disagreement wherever it differs from the charge.
             part["solidworks_bend_features"] = _bends
-            flags.append(f"{_bends} bend(s) counted in the SolidWorks feature tree")
+            flags.append(f"{_bends} bend(s) counted in the SolidWorks feature tree"
+                         if not _docmgr else
+                         f"{_bends} bend(s) saved in the SolidWorks cut list (Document Manager "
+                         f"backup read — the feature tree is not readable without SolidWorks)")
             out["bends"] += 1
             if _plausible_thk(nat.bend_radius_mm):
                 part["bend_radius_mm"] = float(nat.bend_radius_mm)
@@ -2619,7 +3768,7 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                 if _num(mf.get("bend_count")):
                     _removed = True
                 mf["bend_count"] = 0
-                mf["bend_count_source"] = SOURCE_NAME
+                mf["bend_count_source"] = _src
             _rf = part.get("risk_flags")
             if isinstance(_rf, list):
                 _rf[:] = [f for f in _rf if "fold" not in str(f).lower()
@@ -2682,11 +3831,11 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
             _prev = max(_num((part.get("manufacturing_features") or {}).get("pierce_count")) or 0,
                         _num((part.get("geometry_rollup") or {}).get("estimated_pierce_count")) or 0)
             _apply(part, "manufacturing_features.cut_out_count",
-                   int(nat.cut_out_count), SOURCE_NAME)
+                   int(nat.cut_out_count), _src)
             _w1 = _apply(part, "manufacturing_features.pierce_count",
-                         _native_pierces, SOURCE_NAME)
+                         _native_pierces, _src)
             _w2 = _apply(part, "geometry_rollup.estimated_pierce_count",
-                         _native_pierces, SOURCE_NAME)
+                         _native_pierces, _src)
             # Gated on the writes actually landing. The flag claimed the previous count had
             # been replaced whatever the resolver decided, so a rank-100 estimator value
             # could survive while the audit trail said SolidWorks had overwritten it.
@@ -2782,7 +3931,7 @@ def apply_native_to_part_estimates(summary: Dict[str, Any], job: NativeJob) -> D
         q = qty_by_pn.get(pn)
         if q is not None and int(q) > 0 and p.get("quantity") != int(q):
             _old = p.get("quantity")
-            if _apply_field(p, "quantity", int(q), SOURCE_NAME):
+            if _apply_field(p, "quantity", int(q), job_source(job)):
                 p.setdefault("review_flags", []).append(
                     f"Quantity {_old} -> {int(q)} from SolidWorks BOM")
                 out["qty_corrected"] += 1

@@ -113,8 +113,12 @@ MATERIAL_NORMALISATION = {
     "STEEL TUBE": "MILD_STEEL",
     "MILD STEEL ERW": "MILD_STEEL",
     "CR4": "MILD_STEEL",
-    "PETG": "ACRYLIC",
-    "PET": "ACRYLIC",
+    # PETG AND PET ARE THEMSELVES (D-600). They were "ACRYLIC" here, so a stated PETG panel
+    # left the record as acrylic and was priced at acrylic's rate, which the 22 Sep 2026
+    # decision on 11650 refuses: PETG has no invented rate; it takes the researched rung with
+    # its evidence, or stays unpriced and visible.
+    "PETG": "PETG",
+    "PET": "PET",
     "POLYSTYRENE": "HIPS",      # HIPS = High Impact PolyStyrene — keep as HIPS
     "HIPS": "HIPS",             # keep HIPS distinct so it prices from live UDEF HIPS
                                 # sheet rates (labour still routes acrylic-like via
@@ -222,6 +226,20 @@ def _hints_mild_steel_blob(blob_upper: str) -> bool:
     return False
 
 
+# A KEY IS A WORD, NOT A FRAGMENT (D-600). The lexicon was matched as a substring, so "SS" in
+# GLASS and BRASS read as stainless, "PET" in CARPET as a plastic, and "ASH" in WASHER and
+# "PINE" in SPINE as timber. A key now matches only where it stands as a word: no letter
+# against a key's letters, and no digit against a key's digits. A gauge may still touch it,
+# so "18MDF", "MDF18" and "2MM MS" read as before, and the approved run-together spellings
+# (MRMDF, MILDSTEEL, MFMDF, CR4) are keys of their own.
+def _key_pattern(key: str) -> "re.Pattern[str]":
+    left = r"(?<![A-Z0-9])" if key[0].isdigit() else r"(?<![A-Z])"
+    right = r"(?![0-9])" if key[-1].isdigit() else r"(?![A-Z])"
+    return re.compile(left + re.escape(key) + right)
+
+
+_MATERIAL_KEY_PATTERNS = {key: _key_pattern(key) for key in _MATERIAL_KEYS_SORTED}
+
 # Keys worth trying WORD-ORDER-FREE. A one-word key is excluded deliberately: matching it
 # loosely would let a stray token anywhere in a description decide the material, and every
 # one-word key already matches as a substring in the pass above, so it has nothing to gain.
@@ -263,9 +281,8 @@ def normalise_material(text: Optional[str]) -> Optional[str]:
     if re.search(_print_stock or r"^\s*\d+(?:\.\d+)?\s*(?:MIC|MICRONS?|MU|GSM|G/?M2)\b", cleaned):
         return "BOUGHT_IN"
     for key in _MATERIAL_KEYS_SORTED:
-        code = MATERIAL_NORMALISATION[key]
-        if key in cleaned:
-            return code
+        if _MATERIAL_KEY_PATTERNS[key].search(cleaned):
+            return MATERIAL_NORMALISATION[key]
     tokens = set(cleaned.split())
     if tokens:
         for key in _MATERIAL_KEYS_MULTIWORD:

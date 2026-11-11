@@ -31,6 +31,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 
@@ -84,7 +85,8 @@ from typing import Any, Dict, List, Optional, Tuple
 # be imported and tested on a machine that has neither requests nor a server.
 
 DELIVERABLE_SUFFIXES = (".xlsx", ".html", ".json", ".log", ".csv", ".txt", ".md",
-                        ".sql", ".xlsm")
+                        ".sql", ".xlsm",
+                        ".wav")         # the spoken walkthrough (D-609)
 
 # THE WORKBOOK TEMPLATE, RESOLVED THE SAME WAY THE ENGINE RESOLVES IT.
 #
@@ -114,6 +116,17 @@ _BEAT_SECONDS = max(5, min(30, int(os.getenv("SDI_RUNNER_LEASE_SECONDS", "900"))
 # minutes, because the person watching needs to know it is working well before the lease
 # would have expired -- that uncertainty is most of what made this morning expensive.
 _SAY_QUIET_AFTER = 120
+# How often the engine's console reaches the service (D-598w): at most one post every this many
+# seconds, or sooner once this many lines are waiting. Was one post per line.
+_POST_EVERY_SECONDS = float(os.getenv("SDI_RUNNER_POST_SECONDS", "2"))
+_POST_MAX_LINES = 500
+# HOW SOON A STOP IS HEARD AND ACTED ON (D-649). A stop reaches this process only as the
+# answer to a post. The engine is often silent for minutes, so the only post was the 30s
+# beat, and the stop it heard was acted on at the NEXT beat: up to a minute before the
+# engine was even told, then up to 30s more while it unwound Excel and SOLIDWORKS
+# (3 Nov 2026: "why does stop this job take so long to shut down"). Now the runner asks
+# every few seconds while the engine is quiet, and ends the engine the moment it hears.
+_LISTEN_SECONDS = float(os.getenv("SDI_RUNNER_LISTEN_SECONDS", "5"))
 
 # The engine's output tree. Deliverables land in estimates/ (workbook AND the HTML
 # quote/report, which share a folder); the auditable summary lands in json/.
@@ -359,7 +372,8 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
                    quantity_breaks: Optional[List[int]] = None,
                    manual_workbook: Optional[Path] = None,
                    llm_only: bool = False, fresh_read: bool = False,
-                   product: str = "") -> List[str]:
+                   product: str = "", deterministic_only: bool = False,
+                   reader_mode: str = "", bom_routes_out: Optional[Path] = None) -> List[str]:
     """Exactly what a person would type. --deliverables is not optional: the page
     promises a complete set every time, so it is not a flag the caller can forget.
 
@@ -412,7 +426,21 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
         # not a tidy-up: the caches are what make two runs of one pack agree, and 2085 halved
         # its own unit cost between identical runs before they existed.
         ["--fresh-read"] if fresh_read else []
+    ) + (
+        # THE DRAWING READER ON ITS OWN (D-753). No language model reads the drawings and no
+        # cached answer from one is replayed: the SCRUM-194 test, never an estimate to quote.
+        ["--deterministic-only"] if deterministic_only else []
+    ) + (
+        # ONE READER MODE PER RUN, CHOSEN ON THE PAGE (run modes): never from this machine's .env.
+        [READER_MODE_FLAG[reader_mode]] if reader_mode in READER_MODE_FLAG else []
+    ) + (
+        # A PRE-RUN: the BOMs and Routes, then stop before the workbook.
+        ["--bom-routes-only", "--bom-routes-out", str(bom_routes_out)] if bom_routes_out else []
     )
+
+
+READER_MODE_FLAG = {"targeted": "--targeted", "solidworks": "--solidworks-only",
+                    "docmgr": "--docmgr-only"}
 
 
 # ── one runner per machine, advisory ─────────────────────────────────────────
@@ -678,6 +706,9 @@ def main() -> int:
     ap.add_argument("--api-key", default=os.getenv("SDI_API_KEY", ""))
     ap.add_argument("--poll-seconds", type=float, default=5.0)
     ap.add_argument("--runner-id", default=os.getenv("SDI_RUNNER_ID", ""))
+    # A SLOT IS ONE MORE RUNNER ON THIS DESKTOP (D-731), in its own checkout of the same build
+    # (tools\start\install-runner-slot.ps1). Slot 1 is the machine's original runner.
+    ap.add_argument("--slot", type=int, default=int(os.getenv("SDI_RUNNER_SLOT", "1") or 1))
     a = ap.parse_args()
 
     engine_root = Path(a.engine_root)
@@ -698,6 +729,8 @@ def main() -> int:
     # STABLE ACROSS RESTARTS, per machine. A fresh id on every start would leave
     # the service listing a graveyard of runners that were all the same one.
     runner_id = a.runner_id or f"{platform.node()}-{uuid.getnode():x}"
+    if a.slot and a.slot > 1 and not a.runner_id:
+        runner_id = f"{runner_id}-s{a.slot}"
 
     # WHICH PROCESS, AND WHICH BUILD. Both are answers this runner could never give.
     #
@@ -751,7 +784,12 @@ def main() -> int:
     print(f"  process  {_process}")
     print(f"  build    {_build}")
     print(f"  polling every {a.poll_seconds:g}s — Ctrl+C to stop")
-    print(f"  log      {log_path}\n")
+    print(f"  log      {log_path}")
+    start_compute_sampler()
+    _by = (compute_now() or {}).get("by")
+    print(f"  compute  measured every {_COMPUTE_EVERY:g}s for the wall: "
+          + ("the machine, SolidWorks, Excel and each job" if _by == "psutil"
+             else "the machine's totals only (install psutil for each job's own use)") + "\n")
 
     complained: Dict[str, Optional[str]] = {}
     consecutive = 0
@@ -769,6 +807,19 @@ def main() -> int:
       # alive to the service and does no work, which is worse than being restarted.
       try:
         worked = False
+        # A SECOND OR THIRD RUN ON THIS DESKTOP (D-731) is claimed only while the machine has
+        # the room for it. Slot 1, the machine's own runner, is never held back.
+        _ok, _measured = slot_may_claim(a.slot)
+        note_gate(a.slot, _ok, _measured)
+        if not _ok:
+            report_gate(requests, servers, headers, runner_id, _process, _build)
+            complained["__compute__"] = _say_once(
+                complained.get("__compute__"), "compute",
+                f"slot {a.slot}: not the room for one more run on this desktop: {_measured}",
+                "   waiting for memory or CPU to free up.")
+            time.sleep(a.poll_seconds)
+            continue
+        complained["__compute__"] = None
         for server in servers:
             job, complained[server] = _ask_for_work(
                 requests, server, headers, runner_id, _process, _build,
@@ -780,7 +831,8 @@ def main() -> int:
             with _heartbeat_while_busy(requests, others, headers, runner_id, _process,
                                        _build):
                 _execute(requests, base, headers, job, engine_root, engine_python,
-                         runner_id)
+                         runner_id, claimed_from={"service": server,
+                                              "commit": _SERVICE_COMMIT.get(server, "")})
             worked = True
             consecutive = 0
             break           # back to the top of the list: no service waits behind another
@@ -804,6 +856,351 @@ def main() -> int:
         time.sleep(a.poll_seconds)
 
 
+# The commit each service reported on its last claim reply (D-607).
+_SERVICE_COMMIT: Dict[str, str] = {}
+
+
+# THE JOB TYPES THIS RUNNER EXECUTES BESIDES A FULL ESTIMATE (D-640), told to the service on
+# every claim. "sw_extract": the SolidWorks analyser on the pack, organised; "xai_extract": the
+# whole-document xAI read on the pack's PDFs, exactly as returned and laid out as tables.
+# "dm_extract" (D-737) is added by runner_capabilities() only where the Document Manager key is.
+RUNNER_CAPABILITIES = ("sw_extract", "xai_extract", "bom_routes")
+
+
+# ── SEVERAL RUNS ON ONE DESKTOP (SCRUM-183 phase 2, D-731) ────────────────────────────
+#
+# JG, 6 Nov 2026: two estimating workers share one SolidWorks reader, waiting briefly for their
+# turn, and the same job always gets the same model evidence whatever else is running. The turn
+# is taken by the ENGINE around its model read (src/solidworks_turn.py), not by this runner
+# around the whole run: a second run waits for one model read, never for a whole estimate, and
+# reads its models exactly as it would alone. Nothing here changes how a run reads models.
+#
+# What a slot adds here is the compute gate: a second or third run is claimed only while the
+# machine has the memory and CPU to carry it.
+
+
+def compute_headroom(min_free_gb: Optional[float] = None,
+                     max_cpu_pct: Optional[float] = None) -> Tuple[bool, str]:
+    """(enough, what was measured). Enough when free memory and CPU leave room for one more
+    run. Settings: SDI_SLOT_MIN_FREE_GB (default 3), SDI_SLOT_MAX_CPU_PCT (default 85). What
+    cannot be measured is not held against the run."""
+    def _num(name: str, default: float) -> float:
+        try:
+            return float(str(os.getenv(name, "")).strip() or default)
+        except ValueError:
+            return default
+    min_free_gb = _num("SDI_SLOT_MIN_FREE_GB", 3.0) if min_free_gb is None else min_free_gb
+    max_cpu_pct = _num("SDI_SLOT_MAX_CPU_PCT", 85.0) if max_cpu_pct is None else max_cpu_pct
+    free_gb: Optional[float] = None
+    cpu: Optional[float] = None
+    try:
+        import psutil                                              # noqa: PLC0415
+        free_gb = psutil.virtual_memory().available / 1e9
+        cpu = psutil.cpu_percent(interval=0.5)
+    except Exception:                                              # noqa: BLE001
+        try:
+            import ctypes                                          # noqa: PLC0415
+
+            class _MEM(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            m = _MEM()
+            m.dwLength = ctypes.sizeof(_MEM)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):  # type: ignore
+                free_gb = m.ullAvailPhys / 1e9
+        except Exception:                                          # noqa: BLE001
+            pass
+    said = []
+    ok = True
+    if free_gb is not None:
+        said.append(f"{free_gb:.1f} GB free (needs {min_free_gb:g})")
+        ok = ok and free_gb >= min_free_gb
+    if cpu is not None:
+        said.append(f"CPU {cpu:.0f}% (limit {max_cpu_pct:g}%)")
+        ok = ok and cpu <= max_cpu_pct
+    return ok, ("; ".join(said) or "compute not measurable here, not held against the run")
+
+
+# ── WHAT THIS MACHINE IS USING, FOR THE WALL (D-743) ─────────────────────────────────────
+# JG, 7 Nov 2026: "a graphical representation of the compute resources available on the
+# laptop ... what compute resource each job is taking and it updates dynamically and the
+# remaining compute is also available." A thread measures every SDI_RUNNER_COMPUTE_SECONDS
+# (5): the machine's CPU, memory and disk; SolidWorks and Excel, which Windows starts for the
+# engine rather than the engine starting them; and this runner's own engine and its children.
+# The newest reading rides on the calls the runner already makes (claim, heartbeat, console),
+# so measuring never waits on the network and the network never waits on measuring. Where
+# psutil is missing only the machine's totals can be read, and the reading says so.
+_COMPUTE_EVERY = max(2.0, float(os.getenv("SDI_RUNNER_COMPUTE_SECONDS", "5") or 5))
+_COMPUTE_APPS = {"SolidWorks": ("sldworks.exe", "sldworks"), "Excel": ("excel.exe", "excel")}
+_JOB_PIDS: Dict[str, int] = {}                 # run id -> the engine process this runner started
+_COMPUTE: Dict[str, Any] = {"sample": None, "procs": {}, "sys": None, "thread": None}
+_GIB = float(1024 ** 3)
+
+
+def _disk_root() -> str:
+    try:
+        return Path(__file__).resolve().anchor or os.sep
+    except Exception:                                              # noqa: BLE001
+        return os.sep
+
+
+def _sample_with_psutil(psutil) -> Dict[str, Any]:
+    threads = psutil.cpu_count(logical=True) or os.cpu_count() or 1
+    vm = psutil.virtual_memory()
+    out: Dict[str, Any] = {"by": "psutil", "cpu_pct": round(psutil.cpu_percent(interval=None), 1),
+                           "threads": threads, "cores": psutil.cpu_count(logical=False),
+                           "mem_total_gb": round(vm.total / _GIB, 2),
+                           "mem_used_gb": round((vm.total - vm.available) / _GIB, 2),
+                           "mem_free_gb": round(vm.available / _GIB, 2)}
+    try:
+        du = psutil.disk_usage(_disk_root())
+        out.update(disk=_disk_root(), disk_free_gb=round(du.free / _GIB, 1),
+                   disk_total_gb=round(du.total / _GIB, 1))
+    except Exception:                                              # noqa: BLE001
+        pass
+    cache: Dict[int, Any] = _COMPUTE["procs"]
+    seen: set = set()
+
+    def use(p) -> Tuple[float, int]:
+        """Share of the whole machine's CPU since the last reading, and resident memory. A
+        process seen for the first time reads 0 CPU: there is nothing yet to compare with."""
+        try:
+            q = cache.get(p.pid)
+            if q is None or q != p:
+                cache[p.pid] = q = p
+            seen.add(p.pid)
+            return q.cpu_percent(None) / threads, q.memory_info().rss
+        except Exception:                                          # noqa: BLE001
+            return 0.0, 0
+    app_names = {n for names in _COMPUTE_APPS.values() for n in names}
+    apps: Dict[str, Dict[str, float]] = {}
+    for p in psutil.process_iter(["name"]):
+        name = str((p.info or {}).get("name") or "").lower()
+        for label, names in _COMPUTE_APPS.items():
+            if name in names:
+                c, m = use(p)
+                a = apps.setdefault(label, {"cpu_pct": 0.0, "mem_gb": 0.0, "count": 0})
+                a["cpu_pct"] += c
+                a["mem_gb"] += m / _GIB
+                a["count"] += 1
+    jobs: Dict[str, Dict[str, float]] = {}
+    for run_id, pid in list(_JOB_PIDS.items()):
+        try:
+            root = psutil.Process(pid)
+            tree = [root] + root.children(recursive=True)
+        except Exception:                                          # noqa: BLE001
+            continue
+        cpu, mem, n = 0.0, 0, 0
+        for p in tree:
+            try:
+                if str(p.name() or "").lower() in app_names:      # counted as itself, above
+                    continue
+            except Exception:                                      # noqa: BLE001
+                continue
+            c, m = use(p)
+            cpu, mem, n = cpu + c, mem + m, n + 1
+        jobs[run_id] = {"cpu_pct": round(cpu, 1), "mem_gb": round(mem / _GIB, 2), "procs": n}
+    for pid in [pid for pid in cache if pid not in seen]:
+        cache.pop(pid, None)
+    out["apps"] = {k: {"cpu_pct": round(v["cpu_pct"], 1), "mem_gb": round(v["mem_gb"], 2),
+                       "count": v["count"]} for k, v in apps.items()}
+    out["jobs"] = jobs
+    return out
+
+
+def _sample_windows_totals() -> Dict[str, Any]:
+    """The machine's totals from Windows itself, where psutil is not installed."""
+    import ctypes                                                  # noqa: PLC0415
+
+    class _MEM(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+    class _FT(ctypes.Structure):
+        _fields_ = [("lo", ctypes.c_ulong), ("hi", ctypes.c_ulong)]
+    out: Dict[str, Any] = {"by": "windows", "threads": os.cpu_count()}
+    k32 = ctypes.windll.kernel32                                   # type: ignore[attr-defined]
+    m = _MEM()
+    m.dwLength = ctypes.sizeof(_MEM)
+    if k32.GlobalMemoryStatusEx(ctypes.byref(m)):
+        out.update(mem_total_gb=round(m.ullTotalPhys / _GIB, 2),
+                   mem_used_gb=round((m.ullTotalPhys - m.ullAvailPhys) / _GIB, 2),
+                   mem_free_gb=round(m.ullAvailPhys / _GIB, 2))
+    idle, kernel, user = _FT(), _FT(), _FT()
+    if k32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
+        now = tuple((t.hi << 32) | t.lo for t in (idle, kernel, user))
+        before = _COMPUTE["sys"]
+        _COMPUTE["sys"] = now
+        if before:
+            d_idle, d_kernel, d_user = (a - b for a, b in zip(now, before))
+            busy_total = d_kernel + d_user                         # kernel time includes idle
+            if busy_total > 0:
+                out["cpu_pct"] = round(100.0 * (busy_total - d_idle) / busy_total, 1)
+    du = shutil.disk_usage(_disk_root())
+    out.update(disk=_disk_root(), disk_free_gb=round(du.free / _GIB, 1),
+               disk_total_gb=round(du.total / _GIB, 1), apps={}, jobs={})
+    return out
+
+
+def sample_compute() -> Dict[str, Any]:
+    """One reading of this machine. Never raises: a failure is reported as the reading."""
+    try:
+        try:
+            import psutil                                          # noqa: PLC0415
+        except ImportError:
+            psutil = None
+        if psutil is not None:
+            out = _sample_with_psutil(psutil)
+        elif os.name == "nt":
+            out = _sample_windows_totals()
+        else:
+            du = shutil.disk_usage(_disk_root())
+            out = {"by": "none", "threads": os.cpu_count(), "disk": _disk_root(),
+                   "disk_free_gb": round(du.free / _GIB, 1),
+                   "disk_total_gb": round(du.total / _GIB, 1), "apps": {}, "jobs": {}}
+    except Exception as exc:                                       # noqa: BLE001
+        out = {"by": "none", "error": f"{type(exc).__name__}: {exc}"[:200]}
+    out.update(at=round(time.time(), 1), host=platform.node())
+    return out
+
+
+def start_compute_sampler() -> None:
+    """Measure in the background from now on; once per process."""
+    if _COMPUTE["thread"] is not None:
+        return
+
+    def loop() -> None:
+        while True:
+            _COMPUTE["sample"] = sample_compute()
+            time.sleep(_COMPUTE_EVERY)
+    _COMPUTE["sample"] = sample_compute()        # primes the CPU counters; the next is real
+    _COMPUTE["thread"] = threading.Thread(target=loop, name="compute-sampler", daemon=True)
+    _COMPUTE["thread"].start()
+
+
+def compute_now() -> Optional[Dict[str, Any]]:
+    """The newest reading, or None before the sampler has started."""
+    return _COMPUTE["sample"]
+
+
+def slot_may_claim(slot: int) -> Tuple[bool, str]:
+    """(may claim, what was measured). Slot 1 always may; slot 2 or more only with the room."""
+    if int(slot or 1) <= 1:
+        return True, "slot 1, the machine's own runner"
+    return compute_headroom()
+
+
+# THE LAST COMPUTE CHECK, SENT WITH EVERY CLAIM AND BEAT (JG, 10 Nov 2026): "we also need to be
+# able to see that it's at least tried to check for compute resources on the second grid
+# runner". A slot held back by the check used to sleep and tell nobody, so Grid Control showed
+# it offline with no reason. Now each check (when, what was measured, took work or held) goes
+# to every service on the list, and a held slot still checks in.
+_GATE: Dict[str, Any] = {}
+
+
+def note_gate(slot: int, ok: bool, measured: str, at: Optional[float] = None) -> Dict[str, Any]:
+    _GATE.clear()
+    _GATE.update({"slot": int(slot or 1), "ok": bool(ok), "measured": str(measured)[:300],
+                  "at": round(time.time() if at is None else at, 1)})
+    return dict(_GATE)
+
+
+def report_gate(requests, servers: List[str], headers: Dict[str, str], runner_id: str,
+                process: str, build: str) -> None:
+    """A held slot's check-in: /runner/heartbeat (never a claim), carrying the check."""
+    for server in servers:
+        try:
+            requests.post(f"{server}/api/estimate/runner/heartbeat", json={
+                "runner_id": runner_id, "hostname": platform.node(), "process": process,
+                "build": build, "compute": compute_now(), "gate": dict(_GATE)},
+                headers=headers, timeout=10)
+        except Exception:                            # noqa: BLE001 — a beat, not a job
+            pass
+
+
+def excel_installed() -> Optional[bool]:
+    """Is a desktop Excel registered on this machine? None where it cannot be told (not Windows)."""
+    if os.name != "nt":
+        return None
+    try:
+        import winreg                                              # noqa: PLC0415
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, r"Excel.Application\CLSID"))
+        return True
+    except OSError:
+        return False
+    except Exception:                                              # noqa: BLE001
+        return None
+
+
+def extract_only() -> Tuple[bool, str]:
+    """(this runner takes pack extracts only, why). JG, 10 Nov 2026: the server has no Excel, and
+    every estimate is written and recalculated in Excel, so a runner there would claim estimates
+    it cannot finish. SDI_RUNNER_EXTRACT_ONLY=1 says so; a Windows machine with no Excel says so
+    by itself; SDI_RUNNER_EXTRACT_ONLY=0 overrides the detection."""
+    v = str(os.getenv("SDI_RUNNER_EXTRACT_ONLY", "")).strip().lower()
+    if v in {"1", "true", "yes", "on"}:
+        return True, "SDI_RUNNER_EXTRACT_ONLY=1"
+    if v in {"0", "false", "no", "off"}:
+        return False, ""
+    if excel_installed() is False:
+        return True, "no Excel on this machine"
+    return False, ""
+
+
+def runner_capabilities() -> List[str]:
+    """What this runner tells the service on every claim. "no_models" (D-703, SCRUM-183): it
+    will not drive SolidWorks (SDI_SW_RUN_ANALYSER=0) and has no Document Manager backup
+    (SDI_SW_DOCMGR unset), so the service keeps packs that need a model reader for a runner
+    that has one. A runner with either says nothing extra, as before.
+
+    The backup counts only with its licence key (SDI_SW_DOCMGR_KEY) present: the switch alone
+    reads nothing (SCRUM-184), and a runner that took a model job on the switch alone would
+    price it from the drawings. "On" means what the engine's docmgr_switch_on() means."""
+    # "desktop_token" (D-731): this runner's engine takes the desktop's one SolidWorks in turn,
+    # so the service may give it a run while another runner on this desktop has one.
+    caps = list(RUNNER_CAPABILITIES) + ["desktop_token"]
+    _key = bool(str(os.getenv("SDI_SW_DOCMGR_KEY", "")).strip())
+    # THE DOCUMENT MANAGER EXTRACT NEEDS THE KEY, NOT THE SWITCH (D-737). The button asks for
+    # that reader by name, for the SCRUM-184 comparison, so it is offered wherever the key is;
+    # SDI_SW_DOCMGR still governs only whether an ESTIMATE may fall back to it.
+    if _key:
+        caps.append("dm_extract")
+    _off = str(os.getenv("SDI_SW_RUN_ANALYSER", "")).strip().lower() in {"0", "false", "no"}
+    _dm = (str(os.getenv("SDI_SW_DOCMGR", "")).strip().lower() in {"1", "true", "yes", "on"}
+           and _key)
+    if _off and not _dm:
+        caps.append("no_models")
+    # AN EXTRACT-ONLY RUNNER (the server without Excel): it says so, and offers only the pack
+    # extracts that need no workbook: the xAI read, the Document Manager read where the key is,
+    # and the SolidWorks read only where SolidWorks runs here.
+    if extract_only()[0]:
+        caps = ["extract_only", "xai_extract"] + (["dm_extract"] if _key else []) \
+            + ([] if _off else ["sw_extract"]) + (["no_models"] if "no_models" in caps else [])
+    return caps
+PACK_EXTRACT_KIND = {"sw_extract": "sw", "xai_extract": "xai", "dm_extract": "dm"}
+
+
+def pack_extract_command(engine_root: Path, engine_python: Path, job: Dict[str, Any]
+                         ) -> List[str]:
+    """The one command a pack-extract job runs: src/pack_extract.py, never main.py."""
+    kind = PACK_EXTRACT_KIND[str(job.get("job_type"))]
+    paths = [str(job["pdf_path"])] if job.get("pdf_path") else [str(job["job_folder"])]
+    return [str(engine_python), "-u", str(engine_root / "src" / "pack_extract.py"), kind,
+            *paths, "--out", str(job["output_path"]),
+            "--name", str(job.get("drawing_number") or Path(paths[0]).name)]
+
+
 def _ask_for_work(requests, server: str, headers: Dict[str, str], runner_id: str,
                   process: str, build: str,
                   complained: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -815,7 +1212,15 @@ def _ask_for_work(requests, server: str, headers: Dict[str, str], runner_id: str
     try:
         r = requests.post(f"{base}/runner/claim", json={
             "runner_id": runner_id, "hostname": platform.node(),
-            "process": process, "build": build},
+            "process": process, "build": build,
+            # WHAT THIS RUNNER CAN DO BESIDES AN ESTIMATE (D-640). The service hands a
+            # pack-extract job only to a runner that says it can run one: an older runner
+            # would build a full main.py estimate for it.
+            "capabilities": runner_capabilities(),
+            # WHAT THIS MACHINE IS USING (D-743), for the wall.
+            "compute": compute_now(),
+            # AND THE LAST COMPUTE CHECK BEFORE THIS CLAIM (JG, 10 Nov 2026).
+            "gate": dict(_GATE) or None},
             headers=headers, timeout=20)
     except Exception as exc:                       # noqa: BLE001 — keep polling
         # SAY IT ONCE. A runner that cannot reach the server prints a line a
@@ -847,6 +1252,12 @@ def _ask_for_work(requests, server: str, headers: Dict[str, str], runner_id: str
             f"the service at {server} answered {r.status_code} — {exc}")
     if complained:
         print(f"[{time.strftime('%H:%M:%S')}] connected to {server}.")
+    # WHICH BUILD THIS SERVICE IS ON (D-607). Two services can answer on one machine, and HPP
+    # 03:18 was claimed from one that a restart of the other had not touched. The commit is
+    # the one the service stamps on every reply; kept beside the job, not in it, because the
+    # job is the claim's own fields.
+    _SERVICE_COMMIT[server] = str(
+        (getattr(r, "headers", None) or {}).get("X-SDI-Commit") or "").strip()
     return job, None
 
 
@@ -856,9 +1267,13 @@ class _heartbeat_while_busy:
     Through /runner/heartbeat, never /runner/claim: a claim is a request for work, and a
     service that had something queued would hand this runner a second job in the middle of
     the first. An older service without the endpoint answers 404 and is simply shown
-    offline for the length of the job — which is how every service looked before."""
+    offline for the length of the job — which is how every service looked before.
 
-    _EVERY = 15.0
+    AS OFTEN AS THE MACHINE IS MEASURED (D-746). The other services' walls get this machine's
+    compute from this beat alone; at 15 s their numbers were up to 20 s old while the service
+    running the job had them every few seconds."""
+
+    _EVERY = _COMPUTE_EVERY
 
     def __init__(self, requests, servers: List[str], headers: Dict[str, str],
                  runner_id: str, process: str, build: str) -> None:
@@ -873,7 +1288,7 @@ class _heartbeat_while_busy:
                 try:
                     requests.post(f"{server}/api/estimate/runner/heartbeat", json={
                         "runner_id": runner_id, "hostname": platform.node(),
-                        "process": process, "build": build},
+                        "process": process, "build": build, "compute": compute_now()},
                         headers=headers, timeout=10)
                 except Exception:                    # noqa: BLE001 — a beat, not a job
                     pass
@@ -907,7 +1322,8 @@ def _say_once(current: Optional[str], kind: str, *lines: str) -> Optional[str]:
 
 
 def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
-             engine_root: Path, engine_python: Path, runner_id: str) -> None:
+             engine_root: Path, engine_python: Path, runner_id: str,
+             claimed_from: Optional[Dict[str, str]] = None) -> None:
     run_id = job["run_id"]
     dest = Path(job["output_path"])
     folder = Path(job["job_folder"])
@@ -924,30 +1340,40 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     # reported "no output for 645s" with engine output ten seconds above it. A console that
     # is wrong about how long it has been quiet is no better than one that says nothing.
     last_said = time.time()
-    _post_lock = threading.Lock()
+    _post_lock = threading.Lock()       # guards `pending`, held only to take or return a batch
+    _send_lock = threading.Lock()       # one post at a time, so batches arrive in order
 
     def say(text: str) -> None:
         nonlocal last_said
         text = text.rstrip("\n")
         log.append(text)
-        pending.append(text)
+        with _post_lock:
+            pending.append(text)
         last_said = time.time()
         print(text)
 
     def flush(force: bool = False) -> None:
-        nonlocal last_sent, pending
-        # Batched, because a chatty engine would otherwise be one HTTP request per
-        # console line.
-        if not force and not pending and (time.time() - last_sent) < 20:
-            return
-        if not force and not pending:
-            return
-        nonlocal stop_asked
+        nonlocal last_sent, pending, stop_asked
+        # BATCHED IN TIME, NOT PER LINE (D-598w). This said "batched" and was not: it returned
+        # early only when nothing was pending, so every line the engine printed was its own
+        # HTTP post, made from the loop that reads the engine's pipe. While each post was in
+        # flight the pipe filled and the ENGINE waited. 9439-07-04, 25 Oct: printing eight
+        # parts' details took 146.4 s of a 762 s run. Now a batch goes at most every
+        # _POST_EVERY_SECONDS, or sooner once _POST_MAX_LINES are waiting, and the post is made
+        # outside the lock `say` needs, so reading the pipe never waits on the network.
         with _post_lock:
+            if not force:
+                if not pending:
+                    return
+                if ((time.time() - last_sent) < _POST_EVERY_SECONDS
+                        and len(pending) < _POST_MAX_LINES):
+                    return
             batch, pending = pending, []
+        with _send_lock:
             try:
                 resp = requests.post(f"{base}/runner/{run_id}/progress",
-                                     json={"runner_id": runner_id, "lines": batch},
+                                     json={"runner_id": runner_id, "lines": batch,
+                                           "compute": compute_now()},
                                      headers=headers, timeout=20)
                 last_sent = time.time()
                 # STOP ARRIVES ON THE HEARTBEAT, because nothing else reaches this process.
@@ -975,7 +1401,31 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                 elif resp.ok and (resp.json() or {}).get("cancel"):
                     stop_asked = "stopped from the page"
             except Exception:                          # noqa: BLE001
-                pending = batch + pending              # keep it for the next try
+                with _post_lock:
+                    pending = batch + pending          # keep it for the next try
+
+    def poster() -> None:
+        """Send what the engine has said while it is quiet, so a line printed just before a
+        silent Excel phase reaches the page within seconds, not at the next line or beat."""
+        while proc.poll() is None:
+            time.sleep(_POST_EVERY_SECONDS)
+            flush()
+
+    def until_next_beat() -> None:
+        """Wait out one beat, listening for a stop every _LISTEN_SECONDS, and return the
+        moment one is heard or the engine ends (D-649). A stop heard by the console poster
+        is acted on within a second, not at the end of a 30s sleep."""
+        end = time.time() + _BEAT_SECONDS
+        listened = time.time()
+        while proc.poll() is None and not stop_asked:
+            now = time.time()
+            if now >= end:
+                return
+            if now - listened >= _LISTEN_SECONDS:
+                flush(force=True)
+                listened = time.time()
+                continue
+            time.sleep(min(1.0, end - now))
 
     def beat() -> None:
         """Renew the lease while the ENGINE PROCESS is alive, said or unsaid.
@@ -1002,7 +1452,7 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         said_at = 0.0
         spoke_at = last_said
         while proc.poll() is None:
-            time.sleep(_BEAT_SECONDS)
+            until_next_beat()
             if proc.poll() is not None:
                 break
             if stop_asked:
@@ -1072,8 +1522,16 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     #
     # None of the reading, pricing or arbitration was wasted effort in principle -- but the one
     # fact that decided the outcome was knowable before any of it started.
+    # A PACK EXTRACT IS NOT AN ESTIMATE (D-640): no template, no workbook check, nothing
+    # filed to the briefs or parity areas. One command, and exactly the files it names; the
+    # launch, the lease, the console and Stop are the estimate's own.
+    # A PRE-RUN (job_type bom_routes) files like an extract: the files its PACK_EXTRACT_OUTPUTS
+    # line names, no template, no workbook check.
+    pre_run = str(job.get("job_type") or "") == "bom_routes"
+    extract_job = str(job.get("job_type") or "") in PACK_EXTRACT_KIND or pre_run
+
     tpl = workbook_template()
-    if not Path(tpl).is_file():
+    if not extract_job and not Path(tpl).is_file():
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"The estimate workbook template is not readable from this runner: {tpl} — "
                 f"so no workbook could be built and the run would produce a summary and no "
@@ -1090,25 +1548,48 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                          quantity_breaks=[int(q) for q in (job.get("quantity_breaks") or [])],
                          llm_only=bool(job.get("llm_only")),
                          fresh_read=bool(job.get("fresh_read")),
-                         product=str(job.get("drawing_number") or ""))
+                         product=str(job.get("drawing_number") or ""),
+                         deterministic_only=bool(job.get("deterministic_only")),
+                         reader_mode=str(job.get("reader_mode") or ""),
+                         bom_routes_out=Path(str(job["output_path"])) if pre_run else None)
+    if extract_job and not pre_run:
+        cmd = pack_extract_command(engine_root, engine_python, job)
     say("$ " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
     flush(force=True)
 
     try:
+        # WHO CLAIMED IT, ON THE BOOK (D-601). The engine names its own machine; only the
+        # runner knows its runner id and the portal's run id, so it hands them down.
         proc = subprocess.Popen(cmd, cwd=str(engine_root), stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                                errors="replace", bufsize=1)
+                                errors="replace", bufsize=1,
+                                env={**os.environ, "SDI_CLAIMED_BY_RUNNER": str(runner_id),
+                                     "SDI_SERVICE_RUN_ID": str(run_id),
+                                     # AND WHAT WAS SUBMITTED (D-604), so the book can say
+                                     # whether what reached the engine is what was sent.
+                                     # null when the service sent no scope field at all,
+                                     # apart from an empty one (D-607).
+                                     "SDI_SUBMITTED_SCOPE": json.dumps(
+                                         job.get("submitted_scope")),
+                                     # AND WHICH SERVICE, ON WHICH BUILD (D-607).
+                                     "SDI_CLAIMED_FROM": json.dumps(claimed_from or {})})
     except OSError as exc:
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"Could not start the engine: {exc}", log)
         return
 
     assert proc.stdout is not None
+    if isinstance(getattr(proc, "pid", None), int):
+        _JOB_PIDS[str(run_id)] = proc.pid       # measured as this job's own use (D-743)
     threading.Thread(target=beat, name="lease-heartbeat", daemon=True).start()
-    for text in proc.stdout:
-        say(text)
-        flush()
-    code = proc.wait()
+    threading.Thread(target=poster, name="progress-poster", daemon=True).start()
+    try:
+        for text in proc.stdout:
+            say(text)
+            flush()
+        code = proc.wait()
+    finally:
+        _JOB_PIDS.pop(str(run_id), None)
 
     # A STOPPED RUN FILES NOTHING, WHATEVER THE ENGINE'S EXIT CODE (D-588c). The beat ends the
     # engine when a stop arrives, but a stop that lands as the engine finishes cleanly found
@@ -1122,6 +1603,16 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"Stopped — {stop_asked}. The engine was ended and nothing was filed; anything "
                 f"it wrote stays in the engine's own output folder on this machine.", log)
+        return
+
+    if extract_job:
+        filed = pack_extract_outputs(log)
+        if code != 0 or not filed:
+            _finish(requests, base, headers, run_id, runner_id, "error",
+                    f"The {'pre-run' if pre_run else 'pack extract'} exited with code {code} and wrote "
+                    f"{len(filed)} file(s) — the log above says why.", log, filed)
+            return
+        _finish(requests, base, headers, run_id, runner_id, "done", "", log, filed)
         return
 
     if code != 0:
@@ -1150,6 +1641,8 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                   "engine did instead.", log, filed)
         return
 
+    file_a_copy(job, filed, log)          # D-617: and in the completed AI briefs area
+    file_parity(job, filed, engine_root, engine_python, log)   # D-619: and the parity folder
     _finish(requests, base, headers, run_id, runner_id, "done", "", log, filed)
 
 
@@ -1220,6 +1713,199 @@ def _unit_cost_from_deliverables(deliverables: List[Dict[str, str]]) -> Optional
     return None
 
 
+def quantity_prices_from(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The unit cost at every quantity the run priced (D-610), from the quantity sweep the
+    engine wrote: [{"quantity": 1, "unit_gbp": 538.06}, {"quantity": 5, ...}]. Empty for a
+    run priced at one quantity, which unit_cost_from already answers."""
+    rows = ((summary or {}).get("quantity_sweep") or {}).get("rows") \
+        if isinstance(summary, dict) else None
+    out: Dict[int, float] = {}
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            q, unit = int(r.get("quantity")), float(r.get("unit"))
+        except (TypeError, ValueError):
+            continue
+        if q >= 1 and unit > 0:
+            out[q] = round(unit, 2)
+    return [{"quantity": q, "unit_gbp": out[q]} for q in sorted(out)] if len(out) > 1 else []
+
+
+def _quantity_prices_from_deliverables(deliverables: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    import json as _json
+    for item in deliverables or []:
+        if not str(item.get("name") or "").lower().endswith(".json"):
+            continue
+        try:
+            with open(item["path"], "r", encoding="utf-8") as fh:
+                found = quantity_prices_from(_json.load(fh))
+        except Exception:                                # noqa: BLE001
+            continue
+        if found:
+            return found
+    return []
+
+
+# ── A SECOND COPY WHERE THE ESTIMATORS FILE THEIR WORK (D-617) ────────────────────────────
+# JG, 1 Nov 2026: every finished run is also saved to the completed AI briefs area, under the
+# client area and the job pack number, a new sub-folder for every run "with a timestamp and some
+# other identifier like a version number so that we have a record of them all". The service
+# names the root and the run's own time in the claim; this machine, which holds the files,
+# makes the folder and copies them. A copy that fails is said in the run log and never fails
+# the estimate, which is already filed in AISheets.
+_ARCHIVE_VERSION = re.compile(r"\bv(\d+)\b", re.I)
+_ARCHIVE_UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _archive_segment(text: Any) -> str:
+    cleaned = _ARCHIVE_UNSAFE.sub("-", str(text or "")).strip()
+    return re.sub(r"\s+", " ", cleaned).rstrip(". ")[:120] or "unnamed"
+
+
+def _bare(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(text or "").lower())
+
+
+def client_area(root: Path, client: str) -> Path:
+    """The client's folder under the root: one already there whose name matches with case and
+    punctuation removed ("M & S" is "M&S"), so a client is never filed twice under two
+    spellings; otherwise a new one in the client's name."""
+    want = _bare(client)
+    if want:
+        try:
+            for entry in sorted(root.iterdir()):
+                if entry.is_dir() and _bare(entry.name) == want:
+                    return entry
+        except OSError:
+            pass
+    return root / _archive_segment(client)
+
+
+def archive_folder(base: Path, stamp: str, units: Any) -> Path:
+    """A new folder for this run under the job pack: "<stamp> v<N> (<units> off)", N one more
+    than the highest version already there. Made exclusively, so two runs can never share one
+    and an earlier run's files are never written over."""
+    base.mkdir(parents=True, exist_ok=True)
+    highest = 0
+    for entry in base.iterdir():
+        found = _ARCHIVE_VERSION.search(entry.name) if entry.is_dir() else None
+        if found:
+            highest = max(highest, int(found.group(1)))
+    try:
+        units = int(units)
+    except (TypeError, ValueError):
+        units = 1
+    for version in range(highest + 1, highest + 200):
+        folder = base / f"{_archive_segment(stamp)} v{version} ({units} off)"
+        try:
+            folder.mkdir()
+            return folder
+        except FileExistsError:
+            continue
+    raise OSError(f"no free version folder under {base}")
+
+
+def file_a_copy(job: Dict[str, Any], filed: List[Dict[str, str]], log: List[str]) -> str:
+    """Copy a finished run's files to the completed AI briefs area. The folder, or ""."""
+    root = str(job.get("archive_root") or "").strip()
+    if not root or not filed:
+        return ""
+    try:
+        base = (client_area(Path(root), str(job.get("client") or ""))
+                / _archive_segment(job.get("drawing_number")))
+        folder = archive_folder(base, str(job.get("archive_stamp")
+                                          or time.strftime("%Y-%m-%d %H-%M-%S")),
+                                job.get("units"))
+        copied, failed = 0, []
+        for item in filed:
+            try:
+                shutil.copy2(item["path"], folder / item["name"])
+                copied += 1
+            except OSError as exc:
+                failed.append(f"{item.get('name')} ({exc})")
+        log.append(f"[archive] {copied} of {len(filed)} file(s) also filed to {folder}")
+        for f in failed:
+            log.append(f"[archive] NOT copied: {f}")
+        return str(folder)
+    except OSError as exc:
+        log.append(f"[archive] NOT filed to the completed AI briefs area ({exc}). The estimate "
+                   f"is filed in AISheets as usual.")
+        return ""
+
+
+def _engine_book(filed: List[Dict[str, str]]) -> Optional[str]:
+    """The engine's workbook among the filed files: the one stamped _YYYYMMDD_HHMMSS."""
+    books = [f for f in filed if f["name"].lower().endswith(".xlsx")]
+    stamped = [f for f in books if re.search(r"_\d{8}_\d{6}\.xlsx$", f["name"], re.I)]
+    pool = stamped or books
+    return min(pool, key=lambda f: len(f["name"]))["path"] if pool else None
+
+
+def file_parity(job: Dict[str, Any], filed: List[Dict[str, str]], engine_root: Path,
+                engine_python: Path, log: List[str]) -> str:
+    """A run that came with a manual estimate also files its comparison to the parity folder
+    (D-619): both sheets, the report and the index, as a comparison by job number does, so the
+    search on the page finds it beside the rest. The folder, or "".
+
+    JG, 1 Nov 2026: "for every run we save down the two s/sheets compared and the parity reports
+    that are available to be searched through in the web page and app and also at the time of
+    run". The deliverables already hold the run's own parity section; this is the filed copy.
+    Never fails the run: the estimate is filed whatever happens here."""
+    root = str(job.get("parity_root") or "").strip()
+    manual = str(job.get("manual_workbook") or "").strip()
+    find = not manual and bool(job.get("compare_with_manual"))     # D-621: by job number
+    book = _engine_book(filed)
+    if not root or not (manual or find) or not book:
+        return ""
+    cli = Path(engine_root) / "src" / "parity_job.py"
+    if not cli.is_file():
+        log.append(f"[parity] NOT filed to the parity folder: {cli} is not on this runner yet.")
+        return ""
+    env = dict(os.environ, SDI_PARITY_ROOT=root)
+    cmd = [str(engine_python) if Path(engine_python).is_file() else sys.executable, str(cli),
+           "job", str(job.get("drawing_number") or Path(book).stem),
+           *(["--manual", manual] if manual else []),
+           *(["--client", str(job.get("client"))] if job.get("client") else []),
+           "--ai", book, "--made-by", f"run {job.get('run_id', '')}", "--json"]
+    try:
+        proc = subprocess.run(cmd, cwd=str(engine_root), capture_output=True, text=True,
+                              timeout=300, env=env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log.append(f"[parity] NOT filed to the parity folder ({type(exc).__name__}). The run's "
+                   f"own deliverables are unaffected.")
+        return ""
+    line = next((ln for ln in reversed((proc.stdout or "").splitlines())
+                 if ln.strip().startswith("{")), "")
+    try:
+        body = json.loads(line) if line else {}
+    except ValueError:
+        body = {}
+    if proc.returncode == 3:
+        log.append(f"[parity] NOT compared: the manual estimate is not a clear choice "
+                   f"({str(body.get('error') or '')[:300]}). Choose it on the parity card.")
+        return ""
+    if proc.returncode != 0 or not body.get("folder"):
+        why = body.get("error") or ((proc.stderr or "").strip().splitlines() or ["no answer"])[-1]
+        log.append(f"[parity] NOT filed to the parity folder: {str(why)[:300]}")
+        return ""
+    log.append(f"[parity] comparison filed to {body['folder']}")
+    return str(body["folder"])
+
+
+def pack_extract_outputs(log: List[str]) -> List[Dict[str, str]]:
+    """The files a pack extract wrote, from its own PACK_EXTRACT_OUTPUTS line; only those
+    that exist. pack_extract.py writes straight into the run's output folder."""
+    for text in reversed(log):
+        if text.startswith("PACK_EXTRACT_OUTPUTS="):
+            try:
+                paths = [str(x) for x in json.loads(text.split("=", 1)[1])]
+            except ValueError:
+                return []
+            return [{"name": Path(w).name, "path": w} for w in paths if Path(w).is_file()]
+    return []
+
+
 def _finish(requests, base: str, headers: Dict[str, str], run_id: str, runner_id: str,
             status: str, error: str, log: List[str],
             deliverables: Optional[List[Dict[str, str]]] = None) -> None:
@@ -1228,7 +1914,10 @@ def _finish(requests, base: str, headers: Dict[str, str], run_id: str, runner_id
         print(error)
     body = {"runner_id": runner_id, "status": status, "error": error,
             "lines": [], "deliverables": deliverables or [],
-            "unit_cost_gbp": _unit_cost_from_deliverables(deliverables or [])}
+            "unit_cost_gbp": _unit_cost_from_deliverables(deliverables or []),
+            # AND THE PRICE AT EVERY QUANTITY ASKED FOR (D-610), so the page shows 1, 5 and 10
+            # off, not one unit price for a run that priced three.
+            "quantity_prices": _quantity_prices_from_deliverables(deliverables or [])}
     # The whole log goes with the completion, so a run whose progress posts were
     # lost to a blip still arrives complete rather than half-reported.
     body["lines"] = log

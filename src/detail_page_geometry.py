@@ -30,6 +30,7 @@ does not.
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -109,6 +110,15 @@ def _is_section_stock(part: Mapping[str, Any]) -> bool:
         return True
     if isinstance(part.get("section_stock"), Mapping) and part["section_stock"]:
         return True
+    # THE PART'S OWN PRINTED MATERIAL WORDS NAME ITS STOCK (D-653): '1/2" SQUARE STEEL TUBE'
+    # and '10mm SQUARE STEEL BAR' are one size and a shape, which the a x b x t reader below
+    # does not read. Asked of the material fields alone, never of a page.
+    try:
+        from section_profile import stock_in_own_material_words
+        if stock_in_own_material_words(part):
+            return True
+    except Exception:                                                # noqa: BLE001
+        pass
     words = " ".join(str(part.get(k) or "") for k in
                      ("description", "material", "normalized_material", "dimension",
                       "stock_size", "size", "bom_dimension", "profile",
@@ -211,6 +221,8 @@ _NUMBER_WORD = re.compile(r"\d{2,4}(?:[.,]\d+)?")
 # against the weight the same sheet states.
 _SMALL_DECIMAL = re.compile(r"\d[.,]\d+")
 _SMALL_DECIMAL_MIN_MM = 3.0
+# "0116", "005": a zero then more digits before any decimal point. "0.5" is not caught.
+_LEADING_ZERO = re.compile(r"0\d+(?:[.,]\d+)?")
 
 
 def _local_page_number(page: Mapping[str, Any]) -> Optional[int]:
@@ -254,31 +266,32 @@ def _zone_holds_words(layout: Mapping[str, Any], box: Sequence[float], words: An
     return False
 
 
-def read_sheet_figures(page: Mapping[str, Any]) -> Dict[str, Any]:
-    """{"figures": [(value, axis)], "text": page text} — the bare dimension figures printed
-    in a sheet's drawing area, each with the axis its text runs along ("h" or "v"), read with
-    PyMuPDF (which keeps rotated text). The title block and revision zones are left out —
-    that is where a date, a sheet size or a weight sits. Text at an angle is left out (it
-    belongs to no axis). Figures from 10 mm to 4 m only. Empty when the PDF is not at hand."""
-    out: Dict[str, Any] = {"figures": [], "text": ""}
+def _drawing_area_lines(page: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """{"lines": [(text, axis)], "text": page text} — every text line printed in a sheet's
+    drawing area, with the axis it runs along ("h", "v", or "" at an angle), read with PyMuPDF
+    (which keeps rotated text). The title block and revision zones are left out — that is
+    where a date, a sheet size or a weight sits. None when the PDF is not at hand.
+
+    The one reading of a sheet's drawing area: read_sheet_figures takes a blank's figures from
+    it, and round stock (D-692) every figure its weight might single out."""
     path = str(page.get("source_pdf_path") or "")
     local = _local_page_number(page)
     if not path or not local:
-        return out
+        return None
     try:
         import fitz                                                  # noqa: WPS433
         doc = fitz.open(path)
     except Exception:                                                # noqa: BLE001
-        return out
+        return None
     try:
         if not 0 < local <= doc.page_count:
-            return out
+            return None
         pg = doc.load_page(local - 1)
         width, height = float(pg.rect.width), float(pg.rect.height)
         layout = pg.get_text("dict") or {}
-        out["text"] = pg.get_text() or ""
+        full_text = pg.get_text() or ""
     except Exception:                                                # noqa: BLE001
-        return out
+        return None
     finally:
         try:
             doc.close()
@@ -296,30 +309,54 @@ def read_sheet_figures(page: Mapping[str, Any]) -> Dict[str, Any]:
             skip.append(zones["revision"])
     except Exception:                                                # noqa: BLE001
         skip = [(width * 0.58, height * 0.72, width, height)]
+    lines: List[Tuple[str, str]] = []
     for block in layout.get("blocks") or []:
         for line in block.get("lines") or []:
             dx, dy = (line.get("dir") or (1.0, 0.0))[:2]
             axis = "h" if abs(dx) >= 0.9 else ("v" if abs(dy) >= 0.9 else "")
-            if not axis:
-                continue
             x0, y0, x1, y1 = (float(v) for v in (line.get("bbox") or (0, 0, 0, 0)))
             if any(x1 >= b[0] and x0 <= b[2] and y1 >= b[1] and y0 <= b[3] for b in skip):
                 continue
-            text = "".join(str(sp.get("text") or "") for sp in line.get("spans") or [])
-            # A DIMENSION LEADS ITS LINE (D-584). "400 GRIT FINAL POLISH", "BETWEEN 80 - 120
-            # MICRON", "304 - STAINLESS STEEL" and a postcode in the consultant's address put
-            # 400, 304, 120, 93 and 80 on every sheet of a pack, and a 250 mm angle read as
-            # 400 x 50. A printed dimension is a figure first — "1192 TUBE LENGTH", "1154
-            # INT", "258 259 259" — so figures are taken from the front of a line up to its
-            # first word, and a line that opens with a word, a bullet or a symbol gives none.
-            for token in text.split():
-                _tok = token.strip()
-                _small = bool(_SMALL_DECIMAL.fullmatch(_tok))
-                if not (_NUMBER_WORD.fullmatch(_tok) or _small):
-                    break
-                value = float(_tok.replace(",", "."))
-                if 10.0 <= value <= 4000.0 or (_small and _SMALL_DECIMAL_MIN_MM <= value < 10.0):
-                    out["figures"].append((value, axis))
+            lines.append(("".join(str(sp.get("text") or "") for sp in line.get("spans") or []),
+                          axis))
+    return {"lines": lines, "text": full_text}
+
+
+def read_sheet_figures(page: Mapping[str, Any]) -> Dict[str, Any]:
+    """{"figures": [(value, axis)], "text": page text} — the bare dimension figures printed
+    in a sheet's drawing area, each with the axis its text runs along ("h" or "v"), read with
+    PyMuPDF (which keeps rotated text). The title block and revision zones are left out —
+    that is where a date, a sheet size or a weight sits. Text at an angle is left out (it
+    belongs to no axis). Figures from 10 mm to 4 m only. Empty when the PDF is not at hand."""
+    out: Dict[str, Any] = {"figures": [], "text": ""}
+    area = _drawing_area_lines(page)
+    if area is None:
+        return out
+    out["text"] = area["text"]
+    for text, axis in area["lines"]:
+        if not axis:
+            continue
+        # A DIMENSION LEADS ITS LINE (D-584). "400 GRIT FINAL POLISH", "BETWEEN 80 - 120
+        # MICRON", "304 - STAINLESS STEEL" and a postcode in the consultant's address put
+        # 400, 304, 120, 93 and 80 on every sheet of a pack, and a 250 mm angle read as
+        # 400 x 50. A printed dimension is a figure first — "1192 TUBE LENGTH", "1154
+        # INT", "258 259 259" — so figures are taken from the front of a line up to its
+        # first word, and a line that opens with a word, a bullet or a symbol gives none.
+        # A FIGURE WITH A LEADING ZERO IS NOT A DIMENSION (D-661). The consultant's phone
+        # number, "0116 274 7040", sits outside the title-block zone on every 12684-02
+        # sheet and gave 116 and 274 to each: on the hook bracket's sheet that is a 274 mm
+        # "length" for a 39.7 mm part. A drawing prints 116, never 0116; a line that opens
+        # with one is a number of another kind and gives no figures at all.
+        for token in text.split():
+            _tok = token.strip()
+            if _LEADING_ZERO.fullmatch(_tok):
+                break
+            _small = bool(_SMALL_DECIMAL.fullmatch(_tok))
+            if not (_NUMBER_WORD.fullmatch(_tok) or _small):
+                break
+            value = float(_tok.replace(",", "."))
+            if 10.0 <= value <= 4000.0 or (_small and _SMALL_DECIMAL_MIN_MM <= value < 10.0):
+                out["figures"].append((value, axis))
     return out
 
 
@@ -471,10 +508,21 @@ def sheet_envelope(sheets: Sequence[Mapping[str, Any]]) -> Optional[Dict[str, An
             "pages": [s.get("page_number") for s in sheets]}
 
 
-def _weight_on_sheets(sheets: Sequence[Mapping[str, Any]]) -> Optional[float]:
-    """The one weight the given sheets' own title blocks state, in kg; None when they state
-    none, or more than one (two weights on the sheets that size a part decide nothing)."""
-    seen: List[float] = []
+def _half_unit(figure: Any) -> float:
+    """Half a unit of the last decimal a figure is printed to: 0.06 stands for anything from
+    0.055 to 0.065, so 0.005. Read from the figure as printed where it is still text; a number
+    gives its shortest form, which is the printed one unless trailing zeros were dropped (then
+    the band is wider than printed, never narrower). 0 when it cannot be told."""
+    t = str(figure if not isinstance(figure, float) else repr(figure)).strip().replace(",", ".")
+    if not t or "e" in t.lower() or not re.fullmatch(r"\d+(?:\.\d+)?", t):
+        return 0.0
+    return 0.5 * 10.0 ** -(len(t.split(".")[1]) if "." in t else 0)
+
+
+def _sheet_weight_readings(sheets: Sequence[Mapping[str, Any]]) -> List[Tuple[float, float]]:
+    """[(kg, half a unit of its printed last decimal, in kg)] — every distinct weight the given
+    sheets' own title blocks state."""
+    seen: List[Tuple[float, float]] = []
     for sheet in sheets or []:
         tb = ((sheet.get("page_analysis") or {}).get("title_block") or {}) \
             if isinstance(sheet, Mapping) else {}
@@ -482,10 +530,18 @@ def _weight_on_sheets(sheets: Sequence[Mapping[str, Any]]) -> Optional[float]:
             m = _WEIGHT_TEXT.match(str(w).strip().upper().replace(",", "").replace(" ", ""))
             if not m:
                 continue
-            val = float(m.group(1)) / (1000.0 if m.group(2) == "G" else 1.0)
-            if 0.001 <= val <= 500.0 and not any(abs(val - s) < 1e-9 for s in seen):
-                seen.append(val)
-    return seen[0] if len(seen) == 1 else None
+            per = 1000.0 if m.group(2) == "G" else 1.0
+            val = float(m.group(1)) / per
+            if 0.001 <= val <= 500.0 and not any(abs(val - s) < 1e-9 for s, _h in seen):
+                seen.append((val, _half_unit(m.group(1)) / per))
+    return seen
+
+
+def _weight_on_sheets(sheets: Sequence[Mapping[str, Any]]) -> Optional[float]:
+    """The one weight the given sheets' own title blocks state, in kg; None when they state
+    none, or more than one (two weights on the sheets that size a part decide nothing)."""
+    seen = _sheet_weight_readings(sheets)
+    return seen[0][0] if len(seen) == 1 else None
 
 
 def _small_blank_agrees_with_its_weight(part: Mapping[str, Any],
@@ -936,9 +992,664 @@ def own_sheets(part: Mapping[str, Any], summary: Mapping[str, Any]) -> List[Mapp
         dns = [_squash(d) for d in (tb.get("drawing_numbers") or [])] if isinstance(tb, Mapping) else []
         dns += [_squash(page.get(k)) for k in ("drawing_number", "page_drawing_number")
                 if page.get(k)]
-        if pn in dns:
+        # THE NUMBER IN THE SHEET'S OWN DRAWING-NUMBER BOX (D-662). 12684-02-GA's 18:53 run kept
+        # "12684 - TABLETOP" as the drawing number of pages 8 and 9, the project line above the
+        # box, so the outer frame and the cross bar had no own sheet and no length was read off
+        # them. Where the kept reading does not name the part, the box itself is asked, through
+        # the reader that rolls each part's own facts up (drawing_facts, D-657): the box only,
+        # never a code found elsewhere on the page.
+        if pn in dns or _squash(_sheet_number_in_its_box(page)) == pn:
             out.append(page)
     return out
+
+
+_BOX_NUMBERS: Dict[Tuple[str, float, int], Optional[str]] = {}
+
+
+def _sheet_number_in_its_box(page: Mapping[str, Any]) -> Optional[str]:
+    """The drawing number printed in this sheet's title-block box, or None (no PDF at hand, or
+    no number in the box). Read once per file version and page."""
+    import os
+    path = str(page.get("source_pdf_path") or "")
+    local = _local_page_number(page)
+    if not path or not local:
+        return None
+    try:
+        key = (path, os.path.getmtime(path), int(local))
+    except OSError:
+        return None
+    if key in _BOX_NUMBERS:
+        return _BOX_NUMBERS[key]
+    found: Optional[str] = None
+    try:
+        import pdfplumber
+        from drawing_facts import _title_block_part
+        with pdfplumber.open(path) as pdf:
+            if 0 < local <= len(pdf.pages):
+                pg = pdf.pages[local - 1]
+                found = _title_block_part(pg, "", box_only=True)
+    except Exception:                                                # noqa: BLE001
+        found = None
+    _BOX_NUMBERS[key] = found
+    return found
+
+
+# ── A SECTION'S LENGTH FROM ITS OWN SHEET (D-661) ──────────────────────────────────────
+#
+# 12684-02-GA, 3 Nov 2026 18:11. Once the tube and the bar were recognised as section stock
+# (D-653, D-657) they were no longer sized as sheet: right, because a section is cut to length,
+# not from a blank. But the sheet-blank reader had been the only thing reading their sheets'
+# figures, so the section path found no length at all, priced nothing, and the parts fell
+# through to the Sheet Steel block on the hook bracket's 39.7 x 30 flat, lent by
+# geometry_inference. Their own sheets print the length: 1500 beside UNDEVELOPED TUBE on the
+# outer frame's, 484.6 on the cross bar's, each beside a stated weight.
+#
+# THE RULE. A part its own evidence names as section stock, with no length any reader gave,
+# takes the LARGEST figure printed on its OWN sheet (bound to it and titled with its number)
+# as a provisional cut length. The weight that sheet states CHECKS it, in the band the
+# provisional blank uses: outside the band the figure is refused and the length is asked; no
+# weight leaves it INDICATIVE.
+SECTION_LENGTH_FROM_OWN_SHEET = "own_sheet_largest_figure"
+
+
+def _has_a_section_length(part: Mapping[str, Any]) -> bool:
+    """A length some reader already gave this section: the rungs the estimator reads before
+    the largest-dimension fallback (estimator._infer_section_length_mm)."""
+    ss = part.get("section_stock") if isinstance(part.get("section_stock"), Mapping) else {}
+    if _num(ss.get("length_mm")) or any(_num(x) for x in (ss.get("cut_lengths_mm") or [])
+                                         if not isinstance(x, (dict, list))):
+        return True
+    ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"),
+                                                        Mapping) else {}
+    return bool(_num(part.get("length_mm")) or _num(ng.get("developed_length_mm"))
+                or _num(part.get("overall_length_mm")))
+
+
+def _section_stock_of(part: Mapping[str, Any]) -> Dict[str, Any]:
+    """The section this part is: the stock already on the record, else the one its own printed
+    material words name (section_profile, D-653). Empty when neither sizes it."""
+    ss = part.get("section_stock") if isinstance(part.get("section_stock"), Mapping) else {}
+    if _num(ss.get("a")) and _num(ss.get("b")):
+        return dict(ss)
+    try:
+        from section_profile import stock_in_own_material_words
+        return dict(stock_in_own_material_words(part) or {})
+    except Exception:                                                # noqa: BLE001
+        return {}
+
+
+def section_length_from_own_sheets(part: Mapping[str, Any],
+                                   sheets: Sequence[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """{length_mm, pages, agrees, mass_kg, weight_kg, weight_whose, ratio, wall_mm,
+    wall_assumed, section} for a section part, or None when its sheets print no figure longer
+    than the section itself. `agrees` is True / False / None (no stated weight)."""
+    stock = _section_stock_of(part)
+    a, b = _num(stock.get("a")), _num(stock.get("b"))
+    if not (a and b) or not sheets:
+        return None
+    figures = []
+    for sheet in sheets:
+        figures.extend(v for v, _a in read_sheet_figures(sheet)["figures"])
+    longer = [v for v in figures if v > max(a, b)]
+    if not longer:
+        return None
+    length = max(longer)
+    form = str(stock.get("profile_form") or "")
+    t, wall_assumed = _num(stock.get("t")), False
+    if not t and not stock.get("solid"):
+        try:
+            import config
+            walls = getattr(config, "CONCEPT_SECTION_DEFAULT_WALL_MM", {}) or {}
+            t = _num(walls.get(stock.get("form"))) or 1.5
+        except Exception:                                            # noqa: BLE001
+            t = 1.5
+        wall_assumed = True
+    cfg = _cfg()
+    mat = str(part.get("normalized_material") or "").upper()
+    dens = next((float(d) for k, d in (cfg.get("density_kg_m3") or {}).items() if k in mat),
+                7850.0)
+    kg_m = None
+    try:
+        from section_profile import section_kg_per_m
+        kg_m = section_kg_per_m(a, b, t or a, form, dens)
+    except Exception:                                                # noqa: BLE001
+        kg_m = None
+    on_sheet = _weight_on_sheets(sheets)
+    weight = on_sheet or _stated_weight_kg(part)
+    whose = "its own sheet's" if on_sheet else ("the record's stated" if weight else "")
+    mass = (kg_m * length / 1000.0) if kg_m else None
+    ratio = (mass / weight) if (mass and weight) else None
+    lo = float(cfg.get("min_blank_to_part_weight_ratio") or 0.9)
+    hi = float(cfg.get("weight_question_above_ratio") or 1.6)
+    words = str(stock.get("source_text") or "").strip()
+    if not words:
+        try:
+            from section_profile import section_description
+            words = section_description(stock)
+        except Exception:                                            # noqa: BLE001
+            words = ""
+    return {"length_mm": round(length, 1),
+            "pages": [s.get("page_number") for s in sheets],
+            "agrees": (lo <= ratio <= hi) if ratio is not None else None,
+            "mass_kg": round(mass, 3) if mass else None,
+            "weight_kg": weight, "weight_whose": whose,
+            "ratio": round(ratio, 2) if ratio is not None else None, "band": [lo, hi],
+            "wall_mm": t, "wall_assumed": wall_assumed,
+            "section": words or f"{a:g} x {b:g} section",
+            "source": SECTION_LENGTH_FROM_OWN_SHEET}
+
+
+def apply_section_lengths_from_own_sheets(parts: Any, summary: Mapping[str, Any]) -> List[str]:
+    """Give each section part with no length the one its own sheet prints (D-661). Returns the
+    part numbers that gained one; a refused figure is said on the part and asked."""
+    if not isinstance(parts, Sequence) or not isinstance(summary, Mapping):
+        return []
+    done: List[str] = []
+    for part in parts:
+        if not isinstance(part, dict) or not _is_section_stock(part) or not _made_here(part):
+            continue
+        if part.get("_section_length_from_own_sheet") or _has_a_section_length(part):
+            continue
+        sheets = own_sheets(part, summary)
+        if not sheets:
+            continue
+        got = section_length_from_own_sheets(part, sheets)
+        if not got:
+            continue
+        pn = str(part.get("part_number") or "this part")
+        pages = ", ".join(str(p) for p in got["pages"])
+        wall = (f" at the working wall of {got['wall_mm']:g} mm"
+                if got["wall_assumed"] else "")
+        if got["agrees"] is False:
+            why = (f"{pn}: the largest figure on its own sheet (page {pages}), "
+                   f"{got['length_mm']:g} mm, is NOT taken as its length: as {got['section']}"
+                   f"{wall} that weighs {got['mass_kg']:.2f} kg against {got['weight_whose']} "
+                   f"{got['weight_kg']:g} kg ({got['ratio']:.2f}x, outside the "
+                   f"{got['band'][0]:g}-{got['band'][1]:g}x band). Give the cut length.")
+            part["_section_length_refused"] = why
+            if why not in (part.get("review_flags") or []):
+                part.setdefault("review_flags", []).append(why)
+            try:
+                from source_precedence import raise_manufacturing_question as _ask
+                _ask(part, f"What is the cut length of {pn}?", why,
+                     "state the cut length; the section's weight and price follow it",
+                     "detail_page_geometry.apply_section_lengths_from_own_sheets")
+            except Exception:                                        # noqa: BLE001
+                pass
+            continue
+        part["_section_length_from_own_sheet"] = got
+        said = (f"{pn}: section length {got['length_mm']:g} mm read off its own sheet (page "
+                f"{pages}), the largest figure printed there and not captioned as a cut "
+                f"length; ")
+        if got["agrees"]:
+            said += (f"as {got['section']}{wall} it weighs {got['mass_kg']:.2f} kg against "
+                     f"{got['weight_whose']} {got['weight_kg']:g} kg ({got['ratio']:.2f}x, "
+                     f"within the {got['band'][0]:g}-{got['band'][1]:g}x band). Confirm the "
+                     f"cut length.")
+        else:
+            said += ("no weight is stated to check it against, so it is INDICATIVE. Confirm "
+                     "the cut length.")
+        if said not in (part.get("review_flags") or []):
+            part.setdefault("review_flags", []).append(said)
+        done.append(pn)
+    return done
+
+
+# ── ROUND STOCK SIZED BY ITS OWN STATED WEIGHT (D-692) ──────────────────────────────────
+#
+# 12693-01-GA, 4 Nov 2026 17:16. Two mild steel wires, four of each in weldment 104, whose own
+# sheets print bare figures, a weight and a material, and nothing else that sizes them:
+#
+#     05M  TABLE EDGE - WIRE A   "1100"  "0.5"  "4"   WEIGHT: 0.11   MATERIAL: MILD STEEL WIRE
+#     06M  TABLE EDGE - WIRE B   "1100"  "0.5"  "8"   WEIGHT: 0.43   MATERIAL: MILD STEEL WIRE
+#
+# The Ø glyph is not in the text layer, so nothing could call 4 or 8 a diameter, and the
+# document builder rightly takes no diameter and no length it cannot warrant. 05M went out
+# unpriced ("the gauge was never read"), 06M at a market indication of GBP 2.50 each, and the
+# workbook's Wire block stayed empty. The reviewer: "Neither is demonstrated as a verified
+# wire-stock calculation."
+#
+# The weight is the warrant, as a read blank is held to its own weight (D-652). Ø4 x 1100 of
+# steel weighs 0.1085 kg against the stated 0.11, and Ø8 x 1100 weighs 0.434 against 0.43;
+# every other pairing of those figures is far off (Ø0.5 x 1100 is 0.0017 kg).
+#
+# THE RULE. A part its own evidence names as round stock (wire, rod, round bar) that has no
+# diameter and/or no length after every reader tries each pairing of the figures printed on its
+# OWN sheets: a plausible wire or bar diameter against a length at least ten diameters long, at
+# its material's density, against the weight it states. Exactly ONE pairing inside the band is
+# the part's size. Two or more decide nothing and are asked; none leaves the size to be stated.
+# A diameter (or length) some reader already gave is never replaced, so an explicit printed Ø
+# still wins and the rule settles only the other figure. The size is recorded under its own
+# source, never as a measurement, and the figures taken and the arithmetic are said on the part.
+#
+# THE BAND IS ±5%, AND WHY. Nothing on the sheet says which figure is the diameter, so the
+# weight has to single one pairing out, and only a tight band can. A true pairing may miss by
+# the grade's density (7800-7900 kg/m3 against the 7850 used: under 1%) and by the title
+# block's rounding of its weight (0.11 stands for 0.105-0.115: ±4.5%); a straight cut length is
+# exact. A wrong pairing misses by multiples, because mass goes as the diameter squared: Ø4 and
+# Ø8 at one length are four times apart. D-652's blank band (0.9-1.6x) is far wider because
+# there the size is already the size and the weight only checks it; here the weight chooses.
+# A part whose weight is rounded more coarsely than the band simply finds no pairing and keeps
+# asking, which is the safe way to be wrong.
+ROUND_STOCK_FROM_OWN_WEIGHT = "own_figures_confirmed_by_stated_weight"
+
+_ROUND_STOCK_WORDS = re.compile(r"\b(?:WIRE|ROD|ROUND\s+BAR)\b")
+_OWN_MATERIAL_CALLOUT = re.compile(r"\bMATERIAL\b\s*[:\-]?\s*([^\n]{0,60})")
+_DIAMETER_MARKS = "Ø⌀∅"
+# A figure as a sheet prints one ("1100", "0.5", "1100mm", "7,4"), or one marked Ø, which can
+# only be a diameter.
+_ROUND_FIGURE_TOKEN = re.compile(r"(?P<dia>[" + _DIAMETER_MARKS + r"])?"
+                                 r"(?P<num>\d+(?:[.,]\d+)?)(?:MM)?", re.IGNORECASE)
+# The title block's WEIGHT, with or without a unit: "WEIGHT: 0.11", "WEIGHT (kg): 0.43",
+# "WEIGHT: 140.69g".
+_PRINTED_WEIGHT = re.compile(
+    r"\bWEIGHT\b\s*(?:\((?P<paren>[^)]{0,12})\))?\s*[:\-]?\s*(?P<num>\d+(?:[.,]\d+)?)"
+    r"[ \t]*(?P<unit>KG|G)?(?![A-Z])", re.IGNORECASE)
+# The text fields the scan keeps for a page that still hold its LINES. normalized_text has
+# its newlines folded away, and a figure is read off the front of a line.
+_LINE_TEXT_FIELDS = ("pdfplumber_text", "text", "page_text", "raw_text", "pypdf_text")
+
+
+def _round_cfg() -> Dict[str, Any]:
+    base: Dict[str, Any] = {"diameter_mm": (1.5, 25.0), "min_length_to_diameter": 10.0,
+                            "max_length_mm": 6000.0, "weight_tolerance": 0.05}
+    try:
+        import config as _c
+        base.update(dict(getattr(_c, "ROUND_STOCK_FROM_OWN_WEIGHT", {}) or {}))
+    except Exception:                                                # noqa: BLE001
+        pass
+    return base
+
+
+def _record_text(page: Mapping[str, Any]) -> str:
+    for key in _LINE_TEXT_FIELDS:
+        text = page.get(key)
+        if isinstance(text, str) and text.strip():
+            return text
+    return ""
+
+
+def _round_stock_reason(part: Mapping[str, Any], sheets: Sequence[Mapping[str, Any]]) -> str:
+    """What on the part's own record says it is round stock (wire, rod, round bar), or "".
+
+    Its stock form, its material, its name, or the material its own sheet prints. WIRE MESH is
+    a panel, not a bar; a part's own stated section (a tube, a flat) is the section readers'."""
+    if part.get("_bar_recognised") or part.get("bar_schedule"):
+        return "its own sheet's bar schedule"
+    for holder in (part, part.get("manufacturing_interpretation"), part.get("material_estimate")):
+        if isinstance(holder, Mapping) and str(holder.get("stock_form") or "").lower() in (
+                "wire", "bar", "rod"):
+            return f"its stock form ({str(holder.get('stock_form')).lower()})"
+    mats = " ".join(str(part.get(k) or "") for k in ("normalized_material", "material_stated",
+                                                     "material_text_as_printed", "material"))
+    mats = (mats + " " + " ".join(str(m) for m in (part.get("materials") or []) if m)).upper()
+    if _ROUND_STOCK_WORDS.search(mats) and "MESH" not in mats:
+        return "its material"
+    desc = str(part.get("description") or "").upper()
+    if re.search(r"\b(?:WIRE|ROD)\b", desc) and "MESH" not in desc:
+        return "its name"
+    for sheet in sheets:
+        for m in _OWN_MATERIAL_CALLOUT.finditer(_record_text(sheet).upper()):
+            if _ROUND_STOCK_WORDS.search(m.group(1)) and "MESH" not in m.group(1):
+                return "its own sheet's material callout"
+    return ""
+
+
+def _round_stock_lines(page: Mapping[str, Any]) -> Tuple[List[str], str, str]:
+    """(lines, where they were read, the page's whole text). The lines are its drawing area's,
+    off the PDF where it is at hand (the title block, where a date, a phone number and the
+    weight sit, left out), else the text layer the scan kept for the page; the whole text, title
+    block and all, is where its WEIGHT is printed."""
+    area = _drawing_area_lines(page)
+    text = _record_text(page) or str((area or {}).get("text") or "")
+    if area is not None and area["lines"]:
+        return [line for line, _axis in area["lines"]], "drawing area", text
+    return text.splitlines(), "text layer", text
+
+
+def _round_stock_figures(lines: Sequence[str]) -> Tuple[List[float], List[float]]:
+    """(figures, figures marked Ø) a sheet's lines open with.
+
+    THE RULE read_sheet_figures keeps (D-584, D-661): a dimension leads its line, so figures are
+    taken from the front of a line up to its first word, and a line that opens with a figure
+    with a leading zero (a phone number) gives none. Unlike a blank's figures these are kept
+    whatever their size — a wire's diameter is a single digit — with a Ø mark admitted, since
+    a figure so marked is a diameter."""
+    plain: List[float] = []
+    marked: List[float] = []
+    for line in lines:
+        pending_mark = False
+        for token in str(line).split():
+            tok = token.strip()
+            if tok in _DIAMETER_MARKS:
+                pending_mark = True
+                continue
+            if _LEADING_ZERO.fullmatch(tok):
+                break
+            m = _ROUND_FIGURE_TOKEN.fullmatch(tok)
+            if not m:
+                break
+            value = float(m.group("num").replace(",", "."))
+            if value > 0:
+                (marked if (m.group("dia") or pending_mark) else plain).append(value)
+            pending_mark = False
+    return sorted(set(plain)), sorted(set(marked))
+
+
+def _round_stock_weights(part: Mapping[str, Any], sheets: Sequence[Mapping[str, Any]],
+                         texts: Sequence[str]) -> Tuple[List[Tuple[float, str, float]], str]:
+    """([(kg, how it was read, half a unit of its printed last decimal in kg)], whose) — the
+    weight the part's own sheet states.
+
+    Its own title block's weight with a unit, then the record's stated weight, then the figure
+    its own sheet prints after WEIGHT. A SolidWorks title block prints that figure with no unit
+    ("WEIGHT: 0.11"), so the unit cannot choose itself: the figure is offered in kilograms AND
+    in grams, and the rule's demand for exactly one fitting pairing decides between them. Two
+    different printed weights decide nothing."""
+    on_sheet = _sheet_weight_readings(sheets)
+    if len(on_sheet) == 1:
+        return [(on_sheet[0][0], "", on_sheet[0][1])], "its own sheet's stated"
+    stated = _stated_weight_kg(part)
+    if stated:
+        return [(stated, "", _half_unit(float(stated)))], "the record's stated"
+    try:
+        from extractor_patterns import strip_weights_not_the_parts as _strip
+    except Exception:                                                # noqa: BLE001
+        _strip = lambda _t: _t                                       # noqa: E731
+    printed = set()
+    for text in texts:
+        for m in _PRINTED_WEIGHT.finditer(_strip(text or "")):
+            raw = float(m.group("num").replace(",", "."))
+            unit = (m.group("unit") or "").upper()
+            paren = re.sub(r"[^A-Z]", "", str(m.group("paren") or "").upper())
+            if not unit and paren in ("KG", "KGS", "KILOGRAMS"):
+                unit = "KG"
+            elif not unit and paren in ("G", "GRAMS"):
+                unit = "G"
+            printed.add((raw, unit, _half_unit(m.group("num"))))
+    if len({(r, u) for r, u, _h in printed}) != 1:
+        return [], ""
+    raw, unit, half = max(printed, key=lambda t: t[2])
+    if unit:
+        per = 1000.0 if unit == "G" else 1.0
+        out = [(raw / per, "", half / per)]
+    else:
+        out = [(raw, "read in kilograms", half), (raw / 1000.0, "read in grams", half / 1000.0)]
+    out = [(kg, how, h) for kg, how, h in out if 0.001 <= kg <= 500.0]
+    return out, ("its own sheet's printed" if out else "")
+
+
+def _round_stock_density(part: Mapping[str, Any]) -> Tuple[Optional[float], str]:
+    """(kg/m3, the material it was read for) — the estimator's own density table under the key
+    the material prices under (D-602), else this module's family table."""
+    names = [part.get("normalized_material"), part.get("material_stated")]
+    names += list(part.get("materials") or [])
+    names = [str(n).strip() for n in names if str(n or "").strip()]
+    try:
+        from estimator import _density_for_material
+    except Exception:                                                # noqa: BLE001
+        _density_for_material = None
+    for name in names:
+        dens = _density_for_material(name) if _density_for_material else None
+        if dens:
+            return float(dens), name
+    joined = " ".join(names).upper()
+    table = _cfg().get("density_kg_m3") or {}
+    for key in sorted(table, key=len, reverse=True):     # STAINLESS before STEEL
+        if key in joined:
+            return float(table[key]), joined
+    return None, ""
+
+
+_STATED_ROUND_DIAMETER = re.compile(
+    r"(?:[ØØ⌀]\s*|DIA\.?\s*)?(\d+(?:\.\d+)?)\s*MM\b[^,;/]*?\b(?:WIRE|ROD|ROUND)\b")
+
+
+def _stated_round_diameter(part: Mapping[str, Any]) -> Optional[float]:
+    """The diameter the part's own material words state — "8mm STEEL WIRE" is Ø8, "5mm STEEL
+    WIRE" Ø5 (12002-02-M04, -M05, D-735) — or None."""
+    mats = " ".join(str(part.get(k) or "") for k in ("material_stated",
+                                                     "material_text_as_printed", "material"))
+    mats = (mats + " " + " ".join(str(m) for m in (part.get("materials") or []) if m)).upper()
+    m = _STATED_ROUND_DIAMETER.search(mats)
+    d = _num(m.group(1)) if m else None
+    return d if d and d > 0 else None
+
+
+def _known_round(part: Mapping[str, Any], key: str) -> Optional[float]:
+    for holder in (part, part.get("manufacturing_interpretation"), part.get("material_estimate")):
+        if isinstance(holder, Mapping) and _num(holder.get(key)):
+            return _num(holder.get(key))
+    return None
+
+
+def round_stock_mass_kg(diameter_mm: float, length_mm: float, density_kg_m3: float) -> float:
+    """A solid round's mass: π/4 · d² · L, in mm³, at the density."""
+    return math.pi / 4.0 * diameter_mm * diameter_mm * length_mm * density_kg_m3 / 1e9
+
+
+def round_stock_size_from_own_weight(part: Mapping[str, Any],
+                                     sheets: Sequence[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Every pairing of the figures on these sheets that weighs the part's stated weight, or
+    None when there is nothing to settle (diameter and length both known), no stated weight or
+    no density. `status` is "settled" (exactly one fits), "ambiguous" (more than one),
+    "no_fit" or "no_figures"."""
+    known_d = _known_round(part, "wire_gauge_mm")
+    known_l = _known_round(part, "wire_length_mm")
+    if known_d and known_l:
+        return None
+    # THE DIAMETER ITS OWN MATERIAL STATES (D-735): "8mm STEEL WIRE" on 12002-02-M04's sheet
+    # is Ø8, not a figure to pair. Taken as the diameter to try; set on the record as a reading
+    # once a length settles, so the record says where it came from.
+    stated_d = None if known_d else _stated_round_diameter(part)
+    texts = []
+    plain: List[float] = []
+    marked: List[float] = []
+    read_from: List[str] = []
+    for sheet in sheets:
+        lines, how, text = _round_stock_lines(sheet)
+        p, m = _round_stock_figures(lines)
+        plain += p
+        marked += m
+        read_from.append(how)
+        texts.append(text)
+    weights, whose = _round_stock_weights(part, sheets, texts)
+    if not weights:
+        return None
+    density, density_for = _round_stock_density(part)
+    if not density:
+        return None
+    cfg = _round_cfg()
+    lo_d, hi_d = (float(v) for v in cfg["diameter_mm"])
+    min_ratio = float(cfg["min_length_to_diameter"])
+    max_l = float(cfg["max_length_mm"])
+    tol = float(cfg["weight_tolerance"])
+    # THE PRINTED FIGURE'S OWN ROUNDING (D-707). A title block prints the model's mass to a
+    # fixed number of decimals, so a printed 0.06 kg stands for anything from 0.055 to 0.065.
+    # Ø4 x 575 mm weighs 0.0567 kg, 5.8% under 0.06 and outside ±5%, yet it IS what prints as
+    # 0.06; holding the rounded figure to ±5% as if it were exact left 12693-03-05M unpriced.
+    # A pairing fits when it is within the tolerance OR within the rounding, the rounding
+    # capped so a figure printed to one significant digit cannot fit anything.
+    cap = float(cfg.get("weight_rounding_cap", 0.25))
+    plain, marked = sorted(set(plain)), sorted(set(marked))
+    # A figure marked Ø is a diameter and never a length; a bare figure may be either.
+    _try_d = known_d or stated_d
+    diameters = [_try_d] if _try_d else sorted({v for v in plain + marked if lo_d <= v <= hi_d})
+    pairings = 0
+    fits: List[Dict[str, Any]] = []
+    for d in diameters:
+        # A STATED DIAMETER HAS NOTHING TO BE CONFUSED WITH, so a short pin is a length too:
+        # 12002-02-M05 is Ø5 x 14, a stop, and the ten-diameters floor that keeps two bare
+        # figures from pairing with each other never tried it (D-735).
+        _floor = (d * 1.0001) if _try_d else (min_ratio * d)
+        lengths = [known_l] if known_l else [v for v in plain if _floor <= v <= max_l]
+        for length in lengths:
+            if length < _floor:
+                continue
+            pairings += 1
+            mass = round_stock_mass_kg(d, length, density)
+            for weight, how, half in weights:
+                deviation = (mass - weight) / weight
+                rounding = min(half, cap * weight)
+                in_tol = abs(deviation) <= tol
+                if in_tol or abs(mass - weight) <= rounding + 1e-12:
+                    fits.append({"diameter_mm": d, "length_mm": length,
+                                 "mass_kg": round(mass, 5), "weight_kg": weight,
+                                 "weight_read": how, "deviation": round(deviation, 4),
+                                 "within": "tolerance" if in_tol else "rounding",
+                                 "printed_from_kg": round(weight - half, 6),
+                                 "printed_to_kg": round(weight + half, 6)})
+    # ONE DIAMETER, SEVERAL LENGTHS: THE OVERALL IS THE LONGEST (D-735). 12002-02-M04 is Ø8 and
+    # both 441 and 447 weigh its stated 0.174 kg; 447 is the overall and 441 a dimension inside
+    # it. The bar bought must cover the overall, so where every fit shares one diameter the
+    # longest is the cut length, and the shorter readings are named as lying inside it.
+    overall_of: List[float] = []
+    if len(fits) > 1 and len({f["diameter_mm"] for f in fits}) == 1:
+        overall_of = sorted({f["length_mm"] for f in fits})
+        fits = [max(fits, key=lambda f: (f["length_mm"], -abs(f["deviation"])))]
+    status = ("settled" if len(fits) == 1 else "ambiguous" if fits
+              else "no_fit" if pairings else "no_figures")
+    return {"status": status, "fits": fits, "pairings": pairings,
+            "overall_of": overall_of, "stated_diameter_mm": stated_d,
+            "figures": sorted(set(plain + marked)), "marked_diameters": marked,
+            "pages": [s.get("page_number") for s in sheets], "read_from": sorted(set(read_from)),
+            "weight_whose": whose, "weights_kg": [w for w, _h, _r in weights],
+            "density_kg_m3": density, "density_for": density_for,
+            "known_diameter_mm": known_d, "known_length_mm": known_l,
+            "tolerance": tol, "source": ROUND_STOCK_FROM_OWN_WEIGHT}
+
+
+def _owns_another_stock_reading(part: Mapping[str, Any]) -> str:
+    """Why another reader owns this part's stock, or "": a measured flat says sheet; a section
+    on the record, or one its own material words name ('5mm DIA ROD'), is the section readers'
+    (D-653, D-661); a wire schedule of several rows is several wires; a frame's length derived
+    from its outline is the wire sheet reader's (D-437)."""
+    if has_measured_flat(part):
+        return "measured flat"
+    if isinstance(part.get("section_stock"), Mapping) and part.get("section_stock"):
+        return "section on the record"
+    try:
+        from section_profile import stock_in_own_material_words
+        if stock_in_own_material_words(part):
+            return "section in its own material words"
+    except Exception:                                                # noqa: BLE001
+        pass
+    if len(part.get("wire_schedule") or []) > 1:
+        return "several wire-schedule rows"
+    if _num(part.get("wire_length_derived_mm")):
+        return "outline-derived wire length"
+    return ""
+
+
+def apply_round_stock_sizes_from_own_weight(parts: Any, summary: Mapping[str, Any]) -> List[str]:
+    """Size each round-stock part that still lacks a diameter or a length from the figures on
+    its own sheet its stated weight singles out (D-692). Returns the part numbers sized; a part
+    whose figures fit more than one way, or none, is told so and keeps asking."""
+    if not isinstance(parts, Sequence) or not isinstance(summary, Mapping):
+        return []
+    from source_precedence import apply_field, raise_manufacturing_question
+    done: List[str] = []
+    for part in parts:
+        if not isinstance(part, dict) or not _made_here(part):
+            continue
+        if _owns_another_stock_reading(part):
+            continue
+        sheets = own_sheets(part, summary)
+        if not sheets:
+            continue
+        why = _round_stock_reason(part, sheets)
+        if not why:
+            continue
+        got = round_stock_size_from_own_weight(part, sheets)
+        if not got:
+            continue
+        pn = str(part.get("part_number") or "this part")
+        pages = ", ".join(str(p) for p in got["pages"])
+        figs = ", ".join((f"Ø{v:g}" if v in got["marked_diameters"] else f"{v:g}")
+                         for v in got["figures"]) or "none"
+        band = f"±{got['tolerance'] * 100:g}% or the printed figure's rounding"
+        weights = " or ".join(f"{w:g} kg" for w in got["weights_kg"])
+        on_sheet = f"its own sheet (page {pages}, {' / '.join(got['read_from'])}: {figs})"
+        if got["status"] == "settled":
+            fit = got["fits"][0]
+            d, length = fit["diameter_mm"], fit["length_mm"]
+            if not got["known_diameter_mm"]:
+                apply_field(part, "wire_gauge_mm", d, ROUND_STOCK_FROM_OWN_WEIGHT)
+            if not got["known_length_mm"]:
+                apply_field(part, "wire_length_mm", length, ROUND_STOCK_FROM_OWN_WEIGHT)
+            if (_known_round(part, "wire_gauge_mm") != d
+                    or _known_round(part, "wire_length_mm") != length):
+                continue                                  # a stronger reading held; nothing settled
+            # THE SHARED SIGNALS, as the document builder sets them for a bar: stock form "wire"
+            # on manufacturing_interpretation is the channel that reaches costing (the estimator
+            # prices it by the workbook's bar formula and the workbook writes it to its Wire
+            # block), and the route compiler's stock-form gate drops the laser and the fold.
+            mi = part.get("manufacturing_interpretation")
+            if not isinstance(mi, dict):
+                mi = part["manufacturing_interpretation"] = {}
+            mi["stock_form"] = "wire"
+            mi["wire_gauge_mm"] = d
+            me = part.get("material_estimate")
+            if not isinstance(me, dict):
+                me = part["material_estimate"] = {}
+            me.update({"stock_form": "wire", "wire_gauge_mm": d, "wire_length_mm": length})
+            if _num(part.get("normalized_thickness_mm")) == d:
+                part["normalized_thickness_mm"] = None   # precedence: direct-write ok — clears a diameter misread as a gauge — removal, not evidence
+            part["round_stock_size_from_own_weight"] = dict(got, diameter_mm=d, length_mm=length)
+            # The builder's "its LENGTH is not known" is no longer true once the length is.
+            if not got["known_length_mm"]:
+                stale = f"{pn} is round stock and its LENGTH is not known"
+                part["review_flags"] = [f for f in (part.get("review_flags") or [])
+                                        if not str(f).startswith(stale)]
+            unit = (f" The WEIGHT figure is printed with no unit; it is {fit['weight_read']} "
+                    f"(the other reading fits no pairing)." if fit["weight_read"] else "")
+            settled = ("the length alone, at its stated diameter" if got["known_diameter_mm"]
+                       else "the diameter alone, at its stated length" if got["known_length_mm"]
+                       else "the diameter and the length")
+            said = (f"{pn}: round stock Ø{d:g} x {length:g} mm ({why}) — {settled} taken from "
+                    f"the figures printed on {on_sheet}, singled out by its stated weight; not "
+                    f"measured. Ø{d:g} x {length:g} mm at {got['density_kg_m3']:g} kg/m3 = "
+                    f"π/4 x {d:g}² x {length:g} mm³ = {fit['mass_kg']:.4f} kg, against "
+                    f"{got['weight_whose']} {fit['weight_kg']:g} kg ({fit['deviation'] * 100:+.1f}%,"
+                    + (f" within ±{got['tolerance'] * 100:g}%)" if fit.get("within") != "rounding"
+                       else f" within the printed figure's rounding: {fit['weight_kg']:g} kg "
+                            f"stands for {fit['printed_from_kg']:g} to {fit['printed_to_kg']:g} "
+                            f"kg)")
+                    + (f"; the readings {', '.join(f'{v:g}' for v in got['overall_of'])} mm "
+                       f"all fit at Ø{d:g}, and the longest, {length:g} mm, is the overall: "
+                       f"the shorter lies inside it and the bar bought covers the overall."
+                       if got.get("overall_of") else
+                       f", the only one of the {got['pairings']} pairing"
+                       f"{'s' if got['pairings'] != 1 else ''} tried that is.")
+                    + (f" The diameter Ø{d:g} is the one its own material states."
+                       if got.get("stated_diameter_mm") else "")
+                    + f"{unit} Confirm the stock.")
+            if said not in (part.get("review_flags") or []):
+                part.setdefault("review_flags", []).append(said)
+            done.append(pn)
+        elif got["status"] == "ambiguous":
+            each = "; ".join(f"Ø{f['diameter_mm']:g} x {f['length_mm']:g} mm = "
+                             f"{f['mass_kg']:.3f} kg" for f in got["fits"])
+            said = (f"{pn}: round stock ({why}) with no size of its own — {len(got['fits'])} "
+                    f"pairings of the figures on {on_sheet} weigh {got['weight_whose']} "
+                    f"{weights} within {band} ({each}), so none is taken. State the diameter "
+                    f"and the cut length.")
+            if said not in (part.get("review_flags") or []):
+                part.setdefault("review_flags", []).append(said)
+            raise_manufacturing_question(
+                part, f"What diameter and cut length is {pn}?", said,
+                "state the diameter and the cut length; the weight and the price follow them",
+                "detail_page_geometry.apply_round_stock_sizes_from_own_weight")
+        else:
+            at = (f" at its stated Ø{got['known_diameter_mm']:g}" if got["known_diameter_mm"]
+                  else f" at its stated length {got['known_length_mm']:g} mm"
+                  if got["known_length_mm"] else "")
+            said = (f"{pn}: round stock ({why}) with no size of its own — no pairing of the "
+                    f"figures on {on_sheet}{at} weighs {got['weight_whose']} {weights} within "
+                    f"{band} ({got['pairings']} tried), so its size is still to be stated.")
+            if said not in (part.get("review_flags") or []):
+                part.setdefault("review_flags", []).append(said)
+    return done
 
 
 def _sum_page_geometry(sheets: Sequence[Mapping[str, Any]]) -> Dict[str, float]:
@@ -1297,7 +2008,8 @@ def bound_cutting_to_blank(part: Dict[str, Any], length_mm: Any = None,
                      f"kept as read because {why} — the page's lines may include other views, "
                      f"notes and the title block, so the figure is a candidate, not a measurement",
                      "give the DXF, or confirm the blank, the hole count and the internal cutting",
-                     "detail_page_geometry.bound_cutting_to_blank")
+                     "detail_page_geometry.bound_cutting_to_blank",
+                     operations=["laser_cutting", "plasma_cutting", "waterjet_cutting", "cnc_routing"])
             except Exception:                                        # noqa: BLE001
                 pass
         return []
@@ -1354,7 +2066,8 @@ def bound_cutting_to_blank(part: Dict[str, Any], length_mm: Any = None,
                  + " — a provisional allowance; the holes and internal cutting on its drawing "
                    "were not measured, and the page's lines are not them",
                  "give the DXF, or the hole count and sizes, and the cutting is costed from it",
-                 "detail_page_geometry.bound_cutting_to_blank")
+                 "detail_page_geometry.bound_cutting_to_blank",
+                 operations=["laser_cutting", "plasma_cutting", "waterjet_cutting", "cnc_routing"])
         except Exception:                                            # noqa: BLE001
             pass
     return notes
@@ -1499,7 +2212,7 @@ def stamp_rolled_radii(parts: Any, summary: Mapping[str, Any]) -> List[str]:
             from source_precedence import raise_manufacturing_question as _ask
             _ask(part, f"Rolling of {pn}: R{r:g} from its own sheet",
                  why, "confirm it is rolled to this radius, and the rolling time",
-                 "detail_page_geometry.stamp_rolled_radii")
+                 "detail_page_geometry.stamp_rolled_radii", operations=["rolling"])
         except Exception:                                            # noqa: BLE001
             pass
         marked.append(pn)
@@ -1618,7 +2331,8 @@ def mint_missing_hand_records(parts: Any, bom_rows: Any) -> List[str]:
             continue                           # a record already answers to this row
         if carries_assembly_role(pn):
             continue                           # a handed ASSEMBLY mirrors as a route, not a blank
-        base = by_key.get(_key(mirror_base(pn)))
+        _base_code = mirror_base(pn)
+        base = by_key.get(_key(_base_code))
         if base is None or not_cut_from_a_blank(base):
             continue                           # nothing to be the other hand OF
         base_pn = str(base.get("part_number") or "")
@@ -1626,6 +2340,31 @@ def mint_missing_hand_records(parts: Any, bom_rows: Any) -> List[str]:
             qty = float(row.get("quantity") or 1.0) or 1.0
         except (TypeError, ValueError):
             qty = 1.0
+        if not _key(_base_code) or not base_pn.strip():
+            # A ROW WHOSE CODE NAMES NO HAND IS NOT A HAND (D-719). mirror_base answers "" for
+            # a code with no hand marker, and "" found a record with no part number: 12676-01-
+            # GA2's two bought-in bumpers and its UPC sticker were minted as "the other hand
+            # of" a blank, given that record's stock, and asked about as mirrored fabrications.
+            # That is a software error, not an inference. The rows stay lines, so what they
+            # cost to buy and fit stays on the estimate; the false hand, the borrowed stock
+            # and the handed question go.
+            parts.append({
+                "part_number": pn,
+                "description": str(row.get("description") or "").strip() or pn,
+                "quantity": qty,
+                "is_assembly_parent": False,
+                "manufacturing_questions": [],
+                "normalized_geometry": {},
+                "_minted_bill_row": True,
+                "review_flags": [
+                    f"RECORD MADE FOR A BILL ROW — {pn} is on the bill ({qty:g} off) and no "
+                    f"reader made it a record, so it is kept as a line here. Its code names no "
+                    f"other part's hand, so it is not a handed part and takes no other part's "
+                    f"stock."],
+            })
+            by_key[_key(pn)] = parts[-1]
+            minted.append(pn)
+            continue
         rec: Dict[str, Any] = {
             "part_number": pn,
             "description": (str(row.get("description") or "").strip()
@@ -1658,6 +2397,83 @@ def mint_missing_hand_records(parts: Any, bom_rows: Any) -> List[str]:
 
 
 ASSEMBLY_ALLOWANCE_SOURCE = "assembly_envelope_allowance"
+
+
+def _read_agrees_with_own_weight(part: Mapping[str, Any], big: float, small: float,
+                                 cfg: Mapping[str, Any]) -> str:
+    """The working, if this read size at the part's own gauge weighs what its own sheet states;
+    otherwise "" (D-652).
+
+    The same band the provisional blank is judged by: no lighter than the finished part, and
+    no more than weight_question_above_ratio heavier. A provisional blank already judged on
+    this very size says so itself; otherwise it is worked here, so a size read by another
+    path is held to the same evidence."""
+    prov = part.get("_blank_provisional") if isinstance(part.get("_blank_provisional"),
+                                                         Mapping) else {}
+    if prov.get("weight_agrees") and _num(prov.get("length")) and _num(prov.get("width")):
+        pb, ps = (max(_num(prov["length"]), _num(prov["width"])),
+                  min(_num(prov["length"]), _num(prov["width"])))
+        if abs(pb - big) <= 0.5 and abs(ps - small) <= 0.5:
+            return "judged when the blank was read off its sheet"
+    weight = _stated_weight_kg(part)
+    t = _num(part.get("normalized_thickness_mm") or part.get("thickness_mm"))
+    mat = str(part.get("normalized_material") or "").upper()
+    dens = next((float(d) for k, d in (cfg.get("density_kg_m3") or {}).items() if k in mat),
+                None)
+    if not (weight and t and dens):
+        return ""
+    implied_m2 = weight / (t / 1000.0 * dens)
+    ratio = (big * small / 1e6) / implied_m2 if implied_m2 else 0.0
+    lo = float(cfg.get("min_blank_to_part_weight_ratio") or 0.9)
+    hi = float(cfg.get("weight_question_above_ratio") or 1.6)
+    if lo <= ratio <= hi:
+        return (f"{big:g} x {small:g} x {t:g} mm weighs {ratio:.2f}x the stated "
+                f"{weight:g} kg")
+    return ""
+
+
+def _outline_beaten_by_a_measured_member(parent_pn: str, env: Mapping[str, Any],
+                                         parts: Sequence[Any], parent_of: Mapping[str, str],
+                                         bare_code: Any, allowance: float,
+                                         tol: float) -> Optional[str]:
+    """The measured member of `parent_pn` that this outline cannot contain, as words; else None.
+
+    AN OUTLINE ITS OWN MEASURED MEMBER EXCEEDS IS NOT A SIZE (D-684). 12693-01-04J, the MDF
+    insert of a worktop, was read 1145 x 1145 mm off its own sheet and its own parts table, and
+    was costed on 1145 x 500 because the worktop 12693-01-102 carried an outline of 1161 x 500.
+    The same worktop holds 12693-01-03M, whose DXF measures 1250 x 1250 before its folds: a
+    measured member, developed at the same flange allowance, already proves 500 is not the
+    worktop's width. The check that protects against a misread member must not be run against
+    an outline the job's own measurement has already contradicted. Members are found through
+    the parts-list tree, at any depth below the parent."""
+    target = bare_code(parent_pn)
+    if not target:
+        return None
+    for member in parts:
+        if not isinstance(member, Mapping) or not has_measured_flat(member):
+            continue
+        code = bare_code(str(member.get("part_number") or ""))
+        seen, up = set(), parent_of.get(code)
+        inside = False
+        while up and bare_code(up) not in seen:
+            if bare_code(up) == target:
+                inside = True
+                break
+            seen.add(bare_code(up))
+            up = parent_of.get(bare_code(up))
+        if not inside:
+            continue
+        ml, mw = _blank_pair(member)
+        if not (ml and mw):
+            continue
+        folds = _fold_count(member)
+        cap_l = float(env["length"]) + folds * allowance
+        cap_w = float(env["width"]) + folds * allowance
+        big, small = max(ml, mw), min(ml, mw)
+        if big > cap_l * (1 + tol) or small > cap_w * (1 + tol):
+            return (f"{member.get('part_number')}, measured {big:g} x {small:g} mm "
+                    f"with {folds} fold(s)")
+    return None
 
 
 def check_parts_against_their_assembly(parts: Any, summary: Mapping[str, Any]) -> List[str]:
@@ -1717,6 +2533,42 @@ def check_parts_against_their_assembly(parts: Any, summary: Mapping[str, Any]) -
         cap_w = float(env["width"]) + folds * allowance
         big, small = max(pl, pw), min(pl, pw)
         if big <= cap_l * (1 + tol) and small <= cap_w * (1 + tol):
+            continue
+        # A SIZE ITS OWN WEIGHT CONFIRMS IS THE PART'S SIZE (D-652, SCRUM-180). 12684-02-M04
+        # BASEPLATE was read 504 x 313 off its own sheet, at 3 mm the stated 3.68 kg to within
+        # 1%, and was then costed on 39.7 x 30 because its frame 12684-02-102SA carried that
+        # outline: the arm bracket's size, not the frame's. Two figures disagree, and the one
+        # the part's own printed weight agrees with is not the one to overrule. The read
+        # stands; the parent's outline is the figure in doubt, and is said to be.
+        agrees = _read_agrees_with_own_weight(part, big, small, cfg)
+        if agrees:
+            part["_blank_kept_over_assembly"] = {
+                "read_mm": [round(big, 1), round(small, 1)], "read_source": src or "unrecorded",
+                "assembly": parent_pn, "assembly_outline_mm": [env["length"], env["width"]],
+                "weight": agrees}
+            doubt = (f"OUTLINE IN DOUBT — {parent_pn}'s outline, {float(env['length']):g} x "
+                     f"{float(env['width']):g} mm, is smaller than its member {pn}, read "
+                     f"{big:g} x {small:g} mm off that part's own sheet, which its own stated "
+                     f"weight confirms ({agrees}). The member's size stands; this outline is "
+                     f"not used as a size check on it.")
+            parent.setdefault("review_flags", [])
+            if doubt not in parent["review_flags"]:
+                parent["review_flags"].append(doubt)
+            continue
+        beaten = _outline_beaten_by_a_measured_member(parent_pn, env, parts, parent_of,
+                                                      bare_code, allowance, tol)
+        if beaten:
+            part["_blank_kept_over_assembly"] = {
+                "read_mm": [round(big, 1), round(small, 1)], "read_source": src or "unrecorded",
+                "assembly": parent_pn, "assembly_outline_mm": [env["length"], env["width"]],
+                "measured_member": beaten}
+            doubt = (f"OUTLINE IN DOUBT — {parent_pn}'s outline, {float(env['length']):g} x "
+                     f"{float(env['width']):g} mm, cannot hold its own measured member "
+                     f"{beaten}. It is not used to resize {pn}, read {big:g} x {small:g} mm "
+                     f"off that part's own sheet; that reading stands.")
+            parent.setdefault("review_flags", [])
+            if doubt not in parent["review_flags"]:
+                parent["review_flags"].append(doubt)
             continue
         new_l, new_w = min(big, cap_l), min(small, cap_w)
         part["_blank_capped_to_assembly"] = {

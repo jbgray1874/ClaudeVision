@@ -65,8 +65,10 @@ def test_the_single_pack_endpoint_takes_a_method():
 def test_it_validates_the_same_three_words_as_the_batch_endpoint():
     """Two vocabularies for one idea is how a page ends up sending 'llm_only' to an endpoint
     that wants 'llm'."""
-    assert _ROUTES.count('{"both", "llm", "engine"}') >= 2, (
-        "the single-pack endpoint does not validate the same three methods as the batch one")
+    assert 'RUN_METHODS = {"both", "llm", "engine", "deterministic"} | set(READER_MODE_FLAG)' in _ROUTES
+    assert 'BATCH_METHODS = {"both", "llm", "engine", "deterministic", "targeted"}' in _ROUTES
+    assert _ROUTES.count("if method not in BATCH_METHODS:") == 2, (
+        "the batch endpoint does not validate one vocabulary in both places")
 
 
 def test_it_refuses_before_it_stages():
@@ -74,7 +76,7 @@ def test_it_refuses_before_it_stages():
     typo in one word leaves the estimator's job folder rewritten for nothing."""
     at = _ROUTES.index('def start(req: EstimateRequest')
     body = _ROUTES[at:_ROUTES.index("_sources: List[str] = []", at)]
-    assert 'method not in {"both", "llm", "engine"}' in body, (
+    assert "method not in RUN_METHODS" in body, (
         "the method is validated after staging, or not at all")
 
 

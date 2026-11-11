@@ -192,6 +192,209 @@ def document_gauge_to_hand_down(summary: Dict[str, Any]) -> Any:
     return (doc.get("primary_fields") or {}).get("thickness_mm")
 
 
+def _the_listed_spelling(pn: str, parts: Dict[str, Dict[str, Any]]) -> str:
+    """The parts list's own key for a code a sheet prints another way (D-748).
+
+    0358141's parts list reads "UPC0358141 M4" and the part's own sheet, whose PDF text has
+    its spaces stripped ("MILDSTEELBALLAST", "CUTOUTTHRUALL"), reads "UPC0358141M4". Keyed by
+    the literal string, the sheet minted a second record that held the geometry and was never
+    priced, while the listed record, with the quantity and the parent, bound to the parts
+    list and was priced as a 1,400 mm length of somebody else's tube. One part, one record:
+    the spellings are joined by part_identity.normalize_part_code, and only where exactly one
+    listed part answers, so two parts are never made one.
+    """
+    if pn in parts:
+        return pn
+    try:
+        from part_identity import normalize_part_code
+    except Exception:                                                   # noqa: BLE001
+        return pn
+    want = normalize_part_code(pn)
+    if not want:
+        return pn
+    hits = [k for k in parts if normalize_part_code(k) == want]
+    return hits[0] if len(hits) == 1 else pn
+
+
+def _the_listed_part_one_digit_away(pn: str, description: Any,
+                                    parts: Dict[str, Dict[str, Any]]) -> Optional[str]:
+    """A listed part whose number differs from this sheet's by one digit in the drawing
+    number, corroborated by its description and its siblings (D-749); None otherwise. Only a
+    listed part that no sheet has claimed is a candidate."""
+    if pn in parts:
+        return None
+    try:
+        from part_identity import corroborated_near_code
+    except Exception:                                                   # noqa: BLE001
+        return None
+    unclaimed = {k: v.get("description") for k, v in parts.items()
+                 if isinstance(v, dict) and not v.get("pages")}
+    return corroborated_near_code(pn, description, unclaimed, list(parts))
+
+
+def _page_mentions(pn: str, text: str) -> bool:
+    """Whether a page's text names this code, with or without the spaces the PDF text may
+    have lost (D-748). The spaced form is tried first, exactly as before; the joined form
+    only where it is not followed by another digit, so M1 never answers for M10."""
+    if not pn or not text:
+        return False
+    if pn in text:
+        return True
+    want = re.sub(r"\s+", "", pn).upper()
+    if len(want) < 4 or want == pn.upper():
+        return False
+    flat = re.sub(r"\s+", "", text).upper()
+    return any(not flat[m.end():m.end() + 1].isdigit()
+               for m in re.finditer(re.escape(want), flat))
+
+
+# ── A TITLE BLOCK THAT PRINTS THE DRAWING REFERENCE AND THE MEMBER IN SEPARATE FIELDS (D-758) ──
+#
+# 0358141's detail sheets print "UPC 0358141" in one title-block field and "M2" (page 5), "M4"
+# (page 7) or "M7" (page 10) in another, with the quantity beside them. No field holds the parts
+# list's "UPC0358141 M2", so no spelling of it matched, and the drawing reference on its own named
+# the top assembly UPC0358141: the members' own sheets were never bound to them, and the strips
+# and caps were priced off the lists they appear on (D-751, D-755, D-756).
+#
+# The identity is rebuilt from the title block alone, never from the whole page, so a parts list
+# that prints several members' numbers cannot answer. A listed part answers when its own number
+# splits into a drawing reference and a member suffix, that reference is in the title block, the
+# suffix stands there as a field of its own, exactly one listed part answers that way, and its
+# description or its quantity agrees with the sheet. The fields read, the page and the evidence
+# are kept on the part. A reference one digit away from the parts list's (0358141's M7 is listed
+# as UPC0358131 M7) binds only where nothing matches exactly, and is said on the part.
+_MEMBER_SPLIT = re.compile(r"^(?P<base>.*?[A-Z0-9])[\s\-_/.]+(?P<suf>[A-Z]{1,3}\d{1,3}[A-Z]?|\d{1,3}[A-Z]?)$")
+
+
+def _compact_code(text: Any) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(text or "").upper())
+
+
+def _one_digit_apart(a: str, b: str) -> bool:
+    diff = [(x, y) for x, y in zip(a, b) if x != y]
+    return len(a) == len(b) and len(diff) == 1 and diff[0][0].isdigit() and diff[0][1].isdigit()
+
+
+def _field_stands_alone(suffix: str, text: str) -> bool:
+    return re.search(rf"(?<![A-Z0-9]){re.escape(suffix)}(?![A-Z0-9])", text) is not None
+
+
+def _composite_title_block_identity(page: Dict[str, Any], title_block: Dict[str, Any],
+                                    parts: Dict[str, Dict[str, Any]]) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """(listed part, evidence) for a sheet whose title block prints the drawing reference and
+    the member suffix as separate fields (D-758); None where it does not, or not uniquely."""
+    tb_text = str((page.get("region_text") or {}).get("title_block") or "").upper()
+    if not tb_text.strip():
+        return None
+    tb_compact = _compact_code(tb_text)
+    exact: List[Tuple[str, str, str]] = []
+    near: List[Tuple[str, str, str, str]] = []
+    for pn in parts:
+        m = _MEMBER_SPLIT.match(str(pn or "").upper().strip())
+        if not m:
+            continue
+        base, suf = _compact_code(m.group("base")), m.group("suf")
+        if len(base) < 5 or not _field_stands_alone(suf, tb_text):
+            continue
+        if base in tb_compact:
+            exact.append((pn, m.group("base"), suf))
+            continue
+        for i in range(0, max(0, len(tb_compact) - len(base) + 1)):
+            window = tb_compact[i:i + len(base)]
+            if window[:3] == base[:3] and _one_digit_apart(window, base):
+                near.append((pn, m.group("base"), suf, window))
+                break
+    if exact:
+        found = {pn for pn, _b, _s in exact}
+        if len(found) != 1:
+            return None
+        pn, base, suf = exact[0]
+        printed_ref = base
+    else:
+        found = {pn for pn, _b, _s, _w in near}
+        if len(found) != 1:
+            return None
+        pn, base, suf, printed_ref = near[0]
+    rec = parts.get(pn) or {}
+    corroborated: List[str] = []
+    words = [w for w in re.findall(r"[A-Z]{3,}", str(rec.get("description") or "").upper())]
+    page_text = (tb_text + " " + str(page.get("normalized_text") or "").upper())
+    page_compact = _compact_code(page_text)
+    hits = [w for w in words if w in page_text or w in page_compact]
+    if words and len(hits) * 2 >= len(words):
+        corroborated.append(f"description '{rec.get('description')}'")
+    qty = rec.get("quantity")
+    qty_read = re.search(r"\bQ(?:TY|UANTITY)\b\W{0,3}(\d{1,4})\b", tb_text)
+    if qty not in (None, "") and qty_read and str(qty_read.group(1)) == str(qty).split(".")[0]:
+        corroborated.append(f"quantity {qty_read.group(1)}")
+    if not corroborated:
+        return None
+    return pn, {"page": page.get("page_number"), "drawing_reference_printed": printed_ref,
+                "member_field_printed": suf, "listed_as": pn,
+                "reference_differs_from_list": not exact, "corroborated_by": corroborated,
+                "source": "title_block_region"}
+
+
+# ── THE TITLE BLOCK'S MATERIALS FIELD, GLUED TO ITS GAUGE (D-761) ──────────────────────────
+#
+# 0358141's detail sheets print the material field as the PDF text runs it together:
+# "3mmSTAINLESSSTELL" (the sheet's own spelling), "30x30x2mmM S", "3mmM S". The title-block
+# parser found no material in any of them, so M3 to M7 reached the book with no material at
+# all. Read from the part's OWN sheet's title-block region only: a gauge or a section run
+# straight into a metal name. "M S" and "M/S" are mild steel and "S/S" stainless, as SDI's
+# sheets write them. The printed words and the page are kept, and the reading is said.
+_TB_GAUGE_MATERIAL = re.compile(
+    r"(?P<size>(?:\d+(?:\.\d+)?\s*[xX]\s*){0,2}\d+(?:\.\d+)?)\s*MM\s*"
+    r"(?P<mat>STAINLESS\s*STE[EL]{2}|MILD\s*STEEL|M\s*/?\s*S(?![A-Z])|S\s*/\s*S(?![A-Z])|"
+    r"ALUMINI?UM|ZINTEC|GALVANI[SZ]ED(?:\s*STEEL)?)", re.IGNORECASE)
+
+
+# A MATERIALS FIELD WITH NO GAUGE (SCRUM-194). A weldment's sheet prints only the metal: 0358141's
+# rail prints "... QTY BULKQTY M1 A 1 MILDSTEEL SHEET DATE ..." — its sections are on the
+# drawing, so the field holds no size. Read only in the title block's own field window (after
+# the QTY / BULK QTY headings, before SHEET), and only where it holds exactly one metal name, so
+# a specification legend's "304-STAINLESS STEEL" or "POWDER COATED STEEL" is never it.
+_TB_BARE_MATERIAL = re.compile(
+    r"(?<![A-Z0-9-])(MILD\s*STEEL|STAINLESS\s*STE[EL]{2}|ALUMINI?UM|ZINTEC|GALVANI[SZ]ED\s*STEEL)(?![A-Z])",
+    re.IGNORECASE)
+_TB_FIELD_WINDOW = re.compile(r"BULK\s*QTY(?P<field>.{0,80}?)\bSHEET\b", re.IGNORECASE | re.DOTALL)
+
+
+def _title_block_bare_material(tb_text: Any) -> Optional[Dict[str, Any]]:
+    m = _TB_FIELD_WINDOW.search(str(tb_text or ""))
+    if not m:
+        return None
+    hits = list(_TB_BARE_MATERIAL.finditer(m.group("field")))
+    if len({re.sub(r"\s+", "", h.group(0).upper()) for h in hits}) != 1:
+        return None
+    word = re.sub(r"\s+", "", hits[0].group(0).upper())
+    material = ("STAINLESS STEEL" if word.startswith("STAINLESS") else "MILD STEEL" if word.startswith("MILD")
+                else "ALUMINIUM" if word.startswith("ALUMIN") else "ZINTEC" if word == "ZINTEC"
+                else "GALVANISED STEEL")
+    return {"printed": hits[0].group(0).strip(), "material": material, "thickness_mm": None, "section": None}
+
+
+def _title_block_gauge_and_material(tb_text: Any) -> Optional[Dict[str, Any]]:
+    """{printed, material, thickness_mm, section} from a title block's glued MATERIALS field,
+    or None where the field does not hold exactly one such reading (D-761). A field holding a
+    metal with no gauge (a weldment's) gives the metal alone."""
+    hits = list(_TB_GAUGE_MATERIAL.finditer(str(tb_text or "")))
+    if not hits:
+        return _title_block_bare_material(tb_text)
+    if len({h.group(0).upper().replace(" ", "") for h in hits}) != 1:
+        return None
+    h = hits[0]
+    word = re.sub(r"\s+", "", h.group("mat").upper())
+    material = ("STAINLESS STEEL" if word.startswith("STAINLESS") or word in {"S/S"} else
+                "MILD STEEL" if word.startswith("MILD") or word in {"MS", "M/S"} else
+                "ALUMINIUM" if word.startswith("ALUMIN") else
+                "ZINTEC" if word == "ZINTEC" else "GALVANISED STEEL")
+    dims = [float(x) for x in re.findall(r"\d+(?:\.\d+)?", h.group("size"))]
+    return {"printed": h.group(0).strip(), "material": material,
+            "thickness_mm": dims[-1] if len(dims) in (1, 3) else None,
+            "section": dims if len(dims) == 3 else None}
+
+
 def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[str, Any]]:
     dedupe = deps.dedupe
     is_valid_part_identifier = deps.is_valid_part_identifier
@@ -272,6 +475,13 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             if len(title_block_drawing_numbers) == 1 and is_valid_part_identifier(title_block_drawing_numbers[0]):
                 page_target_part_numbers.extend(title_block_drawing_numbers)
 
+        # THE SHEET'S OWN MEMBER, FROM ITS TITLE BLOCK'S SEPARATE FIELDS (D-758). Where the
+        # title block prints the drawing reference and the member suffix apart, the sheet is
+        # that member's, not the reference's on its own (which can name the top assembly).
+        _composite = (_composite_title_block_identity(page, title_block, parts)
+                      if page_role == "detail" else None)
+        if _composite:
+            page_target_part_numbers = [_composite[0]]
         page_target_part_numbers = dedupe(page_target_part_numbers)
         component_sheet = is_component_sheet(page_role, title_block, page_target_part_numbers, cues, ops)
         effective_page_role = effective_part_page_role(page_role, title_block_drawing_numbers, component_sheet)
@@ -279,6 +489,14 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         for pn in page_target_part_numbers:
             if not is_valid_part_identifier(pn):
                 continue
+            pn = _the_listed_spelling(pn, parts)
+            _near = _the_listed_part_one_digit_away(
+                pn, " ".join(str(d) for d in (title_block.get("descriptions") or []) if d), parts)
+            if _near:
+                from part_identity import near_code_note
+                parts[_near].setdefault("review_flags", []).append(
+                    near_code_note(_near, pn, parts[_near].get("description")))
+                pn = _near
             if pn not in parts:
                 parts[pn] = empty_part_record(part_number=pn)
 
@@ -287,6 +505,33 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
                 part["pages"].append(page["page_number"])
             if effective_page_role:
                 part["page_roles"].append(effective_page_role)
+            if page_role == "detail" and not (title_block.get("materials") or []):
+                _tbm = _title_block_gauge_and_material(
+                    (page.get("region_text") or {}).get("title_block"))
+                if _tbm:
+                    if _tbm["material"] not in part["materials"]:
+                        part["materials"].append(_tbm["material"])
+                    if _tbm["thickness_mm"] and not _tbm["section"]:
+                        part["thicknesses_mm"].append(f"{_tbm['thickness_mm']:g}")
+                    part.setdefault("material_text_as_printed", _tbm["printed"])
+                    part.setdefault("title_block_material", dict(_tbm, page=page.get("page_number")))
+                    part.setdefault("review_flags", []).append(
+                        f"material {_tbm['material']}"
+                        + (f", {_tbm['thickness_mm']:g} mm" if _tbm["thickness_mm"] and not _tbm["section"] else "")
+                        + f" read from page {page.get('page_number')}'s title-block MATERIALS "
+                          f"field, printed '{_tbm['printed']}'")
+            if _composite and pn == _composite[0]:
+                _ev = _composite[1]
+                part.setdefault("title_block_identity", []).append(_ev)
+                _differs = (f" The sheet's reference '{_ev['drawing_reference_printed']}' is one "
+                            f"digit away from the parts list's, which lists it as {pn}: the "
+                            f"two disagree and the list's number is kept, to confirm"
+                            if _ev.get("reference_differs_from_list") else "")
+                part.setdefault("review_flags", []).append(
+                    f"bound to page {_ev['page']} by its title block, which prints the drawing "
+                    f"reference and the member '{_ev['member_field_printed']}' in separate fields, "
+                    f"matched to the listed {pn} and corroborated by "
+                    f"{' and '.join(_ev['corroborated_by'])}.{_differs}")
 
             allow_local_component_data = bool(component_sheet)
             # A TITLE-BLOCK READ THAT CAPTURED A PARTS LIST SPEAKS FOR NO PART (D-587).
@@ -350,6 +595,21 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             part["slot_detected"] = part["slot_detected"] or cues.get("slot_detected", False)
             part["assembly_candidate"] = part["assembly_candidate"] or effective_page_role == "assembly"
             part["textual_operations"].extend(ops)
+            # THE WORDS THE SHEET STATES THE WORK IN TRAVEL WITH IT (D-586, closed for this
+            # writer by SCRUM-194 requirement 2). An operation the page's text gave this part
+            # reached the record with no source and nothing quoted, so the drawing ledger could
+            # not tell "(9x) M3x0.5" from an inference. Each op the page's own words name is
+            # stamped a note on the drawing with those words; one the text does not quote stays
+            # unsourced and is never promoted.
+            if ops:
+                try:
+                    from extractor_patterns import operation_evidence_in_text as _op_words
+                    _quoted = _op_words(page.get("pdfplumber_text") or page.get("normalized_text") or "", ops)
+                except Exception:                                    # noqa: BLE001
+                    _quoted = {}
+                for _op, _snippet in (_quoted or {}).items():
+                    part.setdefault("operation_evidence", {}).setdefault(_op, _snippet)
+                    part.setdefault("operation_sources", {}).setdefault(_op, "drawing_notes")
             # Title-block readings: rank 70. `x = x or y` fills a gap, which is the right
             # direction, but records no source — and an unattributed datum is invisible to
             # arbitration, so the next pass has nothing to weigh itself against.
@@ -462,7 +722,8 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         pn = part.get("part_number")
         if not pn:
             continue
-        matching_pages = [page for page in summary["pages"] if pn in (page.get("normalized_text") or "")]
+        matching_pages = [page for page in summary["pages"]
+                          if _page_mentions(pn, page.get("normalized_text") or "")]
         if not matching_pages:
             continue
         # An assembly's OWN parts list is the page that defines it, so it is not demoted for
@@ -488,8 +749,12 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             # part with no detail sheet has no measured size either and the two go together.
             part.setdefault("review_flags", []).append(
                 f"{pn} is bound to page {chosen_page.get('page_number')}, which is a parts "
-                f"list — no page in this pack details it, so it has no drawing of its own to "
-                f"take dimensions from")
+                f"list — no detail sheet in this pack was bound to it, so nothing of its own "
+                f"gives it dimensions. Where its sheet exists, the engine failed to bind it: "
+                f"check the binding before the dimensions")
+            # Kept as a fact, not only as words (D-751): a page that lists many parts speaks
+            # for none of them on its own, and the stock readers downstream must know it.
+            part["bound_to_parts_list_page"] = chosen_page.get("page_number")
 
     result: List[Dict[str, Any]] = []
     for part in parts.values():
