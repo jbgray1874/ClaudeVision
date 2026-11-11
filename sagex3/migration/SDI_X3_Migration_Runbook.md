@@ -1536,3 +1536,14 @@ date, so rebuild on the day if Ethan loads later. Holding lines on PHANT product
 Sent with the four: the route file from 5 Nov 09:55 as built (33,499). 116 lines are on 15 products X3 holds as bought-in; X3 skips them (James). Ethan didn't raise this.
 
 All five, with load files: `Ethan_fixes_2026-11-05` (scratchpad). E-mail: `Email_to_Ethan_fixes_2026-11-05.md`.
+
+### 19.8 Order dates regenerated for a later reload (11 Nov)
+
+6 Nov had passed before the reload, so YA004POH and YA004SOHPJ were regenerated from the 4 Nov
+extract with `--required-date 20261130`. Every required date before 30 Nov 2026 is now 30 Nov,
+so the files load on any day up to 29 Nov:
+- POH: 517 of 733 lines (85 from before 6 Nov, 286 from 6–11 Nov, 146 from 12–29 Nov);
+- SOHPJ: 3,128 of 3,712 lines (2,680, 201 and 247 in the same bands).
+
+Nothing else changed, checked cell by cell against the extract build. Each file's "Re-dated" tab
+keeps the original date. The 6 Nov versions are in `Ethan_fixes_2026-11-05/superseded_6Nov`.
