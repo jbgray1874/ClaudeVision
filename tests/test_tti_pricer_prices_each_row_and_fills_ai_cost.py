@@ -626,3 +626,52 @@ def test_a_read_back_names_any_other_cell_that_moved():
     msg = tp.check_write(before, {"N": 2, "P": 12.5, "Q": 12.5}, "Q", 12.5)
     assert "P changed from 50.0 to 12.5" in msg
     assert "reads None" in tp.check_write(before, before, "Q", 12.5)
+
+
+class _BreaksPortal(FakePortal):
+    """Prices the run's own quantity and every break it was asked for: £100 a unit less £10 a step."""
+
+    def status(self, run_id):
+        body = self.started[int(run_id[1:]) - 1]
+        qs = [body["units"]] + list(body.get("quantity_breaks") or [])
+        return {"status": "done", "run_id": run_id,
+                "quantity_prices": [{"quantity": q, "unit_gbp": 100.0 - 10 * i} for i, q in enumerate(sorted(qs))]}
+
+
+def _same_ga_three_quantities(tmp_path) -> Path:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["L1"], ws["G1"], ws["D1"], ws["P1"] = "Drawing Number", "Notes", "Qty", "AICost"
+    for r, q in ((2, 1), (3, 2), (4, 3), (5, 1)):
+        ws[f"L{r}"], ws[f"G{r}"], ws[f"D{r}"] = "12110-01-GA1", "booth", q
+    p = tmp_path / "d.xlsx"
+    wb.save(p)
+    return p
+
+
+def test_one_run_prices_every_quantity_the_sheet_asks_for_one_drawing(tmp_path, monkeypatch):
+    """11 Nov 2026 dry run: 12110-01-GA1 on five rows at 1, 2 and 3 off was three full estimates."""
+    p = _same_ga_three_quantities(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: None)
+    portal = _BreaksPortal()
+    rep = tp.run_batch(_args(p), portal=portal, status_path=None, sleep=lambda s: None)
+    assert len(portal.started) == 1, "one run for one drawing"
+    assert portal.started[0]["units"] == 1 and portal.started[0]["quantity_breaks"] == [2, 3]
+    by = {x["row"]: x for x in rep["rows"]}
+    assert (by[2]["unit_cost"], by[3]["unit_cost"], by[4]["unit_cost"], by[5]["unit_cost"]) == (100.0, 90.0, 80.0, 100.0)
+    assert by[3]["same_run_as_row"] == 2 and "2-off break" in by[3]["why"]
+
+
+def test_a_dry_run_says_which_rows_share_a_run_and_which_are_asked(tmp_path, monkeypatch):
+    p = _same_ga_three_quantities(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    rep = tp.run_batch(_args(p, dry_run=True), portal=None, status_path=None, sleep=lambda s: None)
+    by = {x["row"]: x for x in rep["rows"]}
+    assert by[3]["state"] == "same run as row 2" and by[5]["state"] == "same as row 2"
+    monkeypatch.setattr(tp, "pack_for", lambda d, l, c: (
+        {"folder": "X", "files": [], "match": "pack"},
+        {"status": "ambiguous", "price_ok": False, "question": "Which copy is the issued one?",
+         "assumptions": [], "members": [], "conflicts": ["x"]}))
+    rep = tp.run_batch(_args(p, dry_run=True), portal=None, status_path=None, sleep=lambda s: None)
+    assert rep["rows"][0]["state"] == "ask", "an ambiguous pack is asked in a dry run too, not 'planned'"

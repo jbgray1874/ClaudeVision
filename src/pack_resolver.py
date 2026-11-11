@@ -96,6 +96,21 @@ def _same(a: str, b: str) -> bool:
     return re.sub(r"[\s_]", "", a).upper() == re.sub(r"[\s_]", "", b).upper()
 
 
+def _segments(folder: str) -> List[str]:
+    return [x.strip().lower() for x in re.split(r"[\\/]", str(folder)) if x.strip()]
+
+
+def _in_job(folder: str, job: str) -> bool:
+    """A folder of job `job`: a path segment that opens with the job number ("11203 - QUIK-LOK
+    Holder", "11203-Technical", "12754_Gen 5 Wall CDU")."""
+    return any(re.match(re.escape(job) + r"(?!\d)", seg) for seg in _segments(folder))
+
+
+def _customer_folder(folder: str) -> bool:
+    """Under a customers folder of the design share, where the next segment names the customer."""
+    return any("customers" in seg for seg in _segments(folder))
+
+
 def family_prefix(drawing: str) -> str:
     """11896-01-00-GA -> 11896-01-; 12181-00-GA -> 12181-; 7758C-GA -> 7758C-; 12739 -> 12739."""
     segs = [s for s in str(drawing or "").upper().split("-") if s]
@@ -240,6 +255,19 @@ def _members(rows: Sequence[FileRow], drawing: str, also: Iterable[str] = ()) ->
     return out
 
 
+# A PART'S NUMBERED PIECE IN ITS FILE NAME, as drawing_job_merge.member_number_from_filename reads
+# it (D-669): "...01A_-07_5MM..." -> "07", "...01J_PART5_10.8mm..." -> "5". Mirrored here because
+# that module takes seconds to import; a test holds the two readings together.
+_MEMBER_NUMBER = re.compile(r"[_\s-]-(\d{1,3})(?=[_\s.-])")
+_PIECE_WORD_NUMBER = re.compile(r"(?<=[_\s-])(?:PART|PIECE)[\s_-]?(\d{1,2})(?=[_\s-]|\.(?!\d)|$)", re.I)
+
+
+def piece_number(name: str) -> str:
+    stem = Path(str(name)).stem
+    m = _MEMBER_NUMBER.search(stem) or _PIECE_WORD_NUMBER.search(stem)
+    return (m.group(1).lstrip("0") or "0") if m else ""
+
+
 def _pick_revision(files: List[FileRow]) -> Tuple[List[FileRow], str, List[str], List[str]]:
     """The files of a member's latest revision (untagged CAD files ride with it), that revision,
     the superseded revisions present, and any conflict found."""
@@ -261,9 +289,40 @@ def _pick_revision(files: List[FileRow]) -> Tuple[List[FileRow], str, List[str],
     for f in chosen:
         if revision_from_name(f[0].name) == best and best:
             by_kind.setdefault((f[0].suffix.lower(), best), []).append(f)
+    dropped: set = set()
     for (ext, r), fs in by_kind.items():
-        if len({(s, int(m)) for _p, s, m in fs}) > 1:
-            notes.append(f"{len(fs)} different {ext} files claim revision {r}")
+        # A PART'S NUMBERED PIECES ARE NOT COPIES (D-669): "01J_PART1" .. "01J_PART5" are five
+        # flats of one part. Each piece number is compared with its own copies only.
+        by_piece: Dict[str, List[FileRow]] = {}
+        for f in fs:
+            by_piece.setdefault(piece_number(f[0].name), []).append(f)
+        for piece, pf in by_piece.items():
+            # THE SAME BYTES ARE ONE FILE: a copy keeps its size whatever date the copy got.
+            if len({s for _p, s, _m in pf}) <= 1:
+                continue
+            what = f"{ext} files" + (f" for piece {piece}" if piece else "")
+            dirs: Dict[Path, List[FileRow]] = {}
+            for f in pf:
+                dirs.setdefault(f[0].parent, []).append(f)
+            # COPIES IN OTHER FOLDERS (TTI dry run, 11 Nov 2026): a job keeps cutting copies in
+            # sub-folders (Cutters, CNC, laser). The issued file sits beside the member's own PDF;
+            # elsewhere is a copy, kept out of the pack and said. With no PDF beside one of them
+            # the evidence cannot choose, and it is asked.
+            pick = None
+            if len(dirs) > 1:
+                pdf_dirs = {f[0].parent for f in chosen if f[0].suffix.lower() == ".pdf"
+                            and revision_from_name(f[0].name) in (r, "")}
+                beside = [d for d in dirs if d in pdf_dirs]
+                pick = beside[0] if len(beside) == 1 else None
+            if pick is not None and len({s for _p, s, _m in dirs[pick]}) <= 1:
+                others = [f for d, g in dirs.items() if d != pick for f in g]
+                dropped.update(id(f) for f in others)
+                notes.append(f"{len(others)} other {what} claiming revision {r} sit away from the "
+                             f"drawing's PDF ({', '.join(sorted({str(f[0].parent) for f in others}))}); "
+                             f"the copy beside the PDF is used")
+                continue
+            notes.append(f"{len(pf)} different {what} claim revision {r}")
+    chosen = [f for f in chosen if id(f) not in dropped]
     return chosen, best, [r for r in revs if r != best], notes
 
 
@@ -299,8 +358,11 @@ def _is_assembly(did: str) -> bool:
 def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             read_text: Callable[[Path], str] = read_pdf_text, now: Optional[datetime] = None,
             area_rank: Optional[Callable[[Path], int]] = None,
-            lookup: Optional[Callable[[str], List[FileRow]]] = None) -> Dict[str, Any]:
-    """The pack for one drawing number, from the index's folders: chosen, proved and explained."""
+            lookup: Optional[Callable[[str], List[FileRow]]] = None,
+            client_folders_only: bool = False) -> Dict[str, Any]:
+    """The pack for one drawing number, from the index's folders: chosen, proved and explained.
+    `client_folders_only`: a caller whose client is spelt as its folder is (the TTI tracker) asks
+    about a pack found only under another customer's folder instead of pricing it."""
     rank = area_rank or _default_area_rank()
     _reads = {"n": 0}
     _inner = read_text
@@ -370,6 +432,37 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             manifest["assumptions"].append(f"{c['folder']} also holds {drawing} (revision {c['revision'] or '?'}) "
                                            f"in a later search area; the first area's copy is used")
     live = [c for c in live if rank(Path(c["folder"])) == first]
+    # THE DRAWING'S OWN JOB FOLDER OVER ANOTHER JOB'S COPY (TTI dry run, 11 Nov 2026): 11203-01-GA
+    # also sits in 11437's data folder, where that job reused it. A copy in another job's folder
+    # is noted, never compared, so it cannot make a conflict.
+    _jobm = re.match(r"\s*(\d{3,})", drawing)
+    if _jobm:
+        mine = [c for c in live if _in_job(c["folder"], _jobm.group(1))]
+        if mine and len(mine) < len(live):
+            for c in live:
+                if c not in mine:
+                    manifest["assumptions"].append(
+                        f"{c['folder']} also holds {drawing} (revision {c['revision'] or '?'}); it is "
+                        f"another job's folder, so job {_jobm.group(1)}'s own copy is used")
+            live = mine
+    # THE CLIENT'S OWN FOLDERS (same review): row 12775 of the TTI tracker matched a file under an
+    # M&S folder. Where the client is known, a copy in its folders wins; a pack found only in
+    # another customer's folders is asked about, not priced on a name match.
+    _cl = str(client or "").strip().lower()
+    if _cl:
+        ours = [c for c in live if _cl in _segments(c["folder"])]
+        if ours and len(ours) < len(live):
+            for c in live:
+                if c not in ours:
+                    manifest["assumptions"].append(
+                        f"{c['folder']} also holds {drawing}; it is not in a {client} folder, so "
+                        f"the {client} copy is used")
+            live = ours
+        elif not ours and client_folders_only and any(_customer_folder(c["folder"]) for c in live):
+            manifest["conflicts"].append(
+                f"{drawing} was found only outside the {client} folders ("
+                + "; ".join(sorted({c['folder'] for c in live})[:2])
+                + f"): is this the {client} drawing?")
 
     def better(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
         if a["carries_number"] != b["carries_number"]:
@@ -389,9 +482,12 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         if c is best:
             continue
         if c["revision"] and c["revision"] == best["revision"]:
+            # ONLY A FORMAT BOTH COPIES HOLD IS COMPARED: a folder with the model and one with
+            # the PDF are two halves of one issue, not two issues (12754-01-GA's 2D and 3D CAD).
             a = {(f[0].suffix.lower(), f[1]) for f in best["files"]}
             b = {(f[0].suffix.lower(), f[1]) for f in c["files"]}
-            if a != b:
+            shared = {e for e, _s in a} & {e for e, _s in b}
+            if any({x for x in a if x[0] == e} != {x for x in b if x[0] == e} for e in shared):
                 manifest["conflicts"].append(f"{c['folder']} holds a different {drawing} also marked revision "
                                              f"{best['revision']}")
         elif c["revision"] and best["revision"] and later(best["revision"], c["revision"]):

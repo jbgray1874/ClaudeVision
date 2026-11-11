@@ -487,6 +487,17 @@ def wait_for(portal: Any, run_id: str, timeout_s: int = 4 * 3600, every_s: int =
     return {"status": "timeout"}
 
 
+def unit_cost_at(st: Dict[str, Any], qty: int) -> Optional[float]:
+    """The unit cost at exactly `qty` from the run's quantity breaks; None when it priced none."""
+    for q in st.get("quantity_prices") or []:
+        try:
+            if int(q.get("quantity")) == int(qty) and q.get("unit_gbp") is not None:
+                return round(float(q["unit_gbp"]), 2)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def unit_cost_of(st: Dict[str, Any], qty: int) -> Optional[float]:
     for q in st.get("quantity_prices") or []:
         try:
@@ -514,7 +525,7 @@ def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
         # THE LOOKUP DATABASE: the drawing's own and its job's folders, the GA's surroundings
         # re-listed now, and shared-library parts found anywhere: the page's and Self-Running's way.
         rows, _src, lookup = pr.folders_for(drawing)
-        m = pr.resolve(drawing, rows, client=client, lookup=lookup)
+        m = pr.resolve(drawing, rows, client=client, lookup=lookup, client_folders_only=True)
         if m["status"] == "not found":
             return {}, None
         area = "prototype" if "prototype" in str(m.get("selected_folder") or "").lower() else "design"
@@ -532,7 +543,7 @@ def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
     keep = [f for f, _a in folders
             if any(f == o or o in f.parents for o in own) or (job and job.group(1) in str(f))]
     rows = [(f, [(x, _size(x), _mtime(x)) for x in drawings_in(f)], False) for f in keep]
-    m = pr.resolve(drawing, rows, client=client)
+    m = pr.resolve(drawing, rows, client=client, client_folders_only=True)
     if m["status"] == "not found":
         return {}, None
     area = next((a for f, a in folders if str(f) == m.get("selected_folder")), "design")
@@ -752,6 +763,16 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     # THE TAB THE ROWS WERE READ FROM IS THE TAB WRITTEN TO, by name, never the active one.
     writer = None if args.dry_run else SheetWriter(sheet, data["sheet"], args.col_cost)
     priced: Dict[Tuple[str, int], Dict[str, Any]] = {}
+    # ONE RUN PER DRAWING, EVERY QUANTITY THE SHEET ASKS FOR AS ITS BREAKS (11 Nov 2026 dry run:
+    # 12110-01-GA1 is on five rows at 1, 2 and 3 off; three full estimates of one pack). The run
+    # prices each quantity; a later row at another quantity takes that quantity's break.
+    qtys_of: Dict[str, List[int]] = {}
+    for _r in data["rows"]:
+        if _r.get("drawing"):
+            qtys_of.setdefault(_r["drawing"], [])
+            if _r["quantity"] not in qtys_of[_r["drawing"]]:
+                qtys_of[_r["drawing"]].append(_r["quantity"])
+    runs_of: Dict[str, Dict[str, Any]] = {}
     for r in data["rows"]:
         manifest = None
         found: Dict[str, Any] = {}
@@ -850,9 +871,20 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             if args.dry_run or same.get("unit_cost") is None:
                 save()
                 continue
+        if same is None and manifest and not manifest["price_ok"]:
+            # An ambiguity the evidence cannot settle is asked, not priced on a guess (SCRUM-199).
+            # A dry run says so too: "planned" there read as if it would be priced.
+            item.update(state="ask", why=manifest["question"])
+            save()
+            continue
+        _shared = runs_of.get(r["drawing"]) if (r["drawing"] and same is None) else None
         if args.dry_run:
-            if r["drawing"]:
+            if _shared is not None:
+                item.update(state="same run as row %d" % _shared["row"],
+                            why=f"priced from that run's {r['quantity']}-off break")
+            elif r["drawing"]:
                 priced[(r["drawing"], r["quantity"])] = item
+                runs_of[r["drawing"]] = {"row": r["row"]}
             continue
         if same is not None:
             item["unit_cost"] = same["unit_cost"]
@@ -863,11 +895,20 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 item["why"] = f"{args.col_cost}{r['row']} could not be written ({exc})"
             save()
             continue
-        if manifest and not manifest["price_ok"]:
-            # An ambiguity the evidence cannot settle is asked, not priced on a guess (SCRUM-199).
-            item.update(state="ask", why=manifest["question"])
-            save()
-            continue
+        if _shared is not None and _shared.get("st") is not None:
+            _bc = unit_cost_at(_shared["st"], r["quantity"])
+            if _bc is not None:
+                item.update(state="done", unit_cost=_bc, run_id=_shared["st"].get("run_id") or _shared.get("run_id"),
+                            same_run_as_row=_shared["row"],
+                            why=f"the {r['quantity']}-off break of row {_shared['row']}'s run")
+                try:
+                    writer.write(r["row"], _bc)
+                    item["written"] = f"{args.col_cost}{r['row']} = {_bc}"
+                except OSError as exc:
+                    item["why"] = f"{args.col_cost}{r['row']} could not be written ({exc})"
+                priced[(r["drawing"], r["quantity"])] = item
+                save()
+                continue
         name = re.sub(r"[^\w .-]", "_", r["drawing"] or f"row{r['row']}")
         if manifest:
             # THE PACK IS KEPT IN LIVE ENQUIRY\<client>\<drawing> (src/pack_store.py): re-used when
@@ -885,6 +926,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             continue
         body = {"client": args.client, "drawing_number": r["drawing"] or f"TTI-row{r['row']}",
                 "units": r["quantity"], "files": inputs, "deliverables": True,
+                "quantity_breaks": sorted(q for q in qtys_of.get(r["drawing"] or "", []) if q != r["quantity"]),
                 "method": args.method if found else "llm",
                 "enquiry_brief": brief_for(r) + (
                     f" Drawing pack {manifest['status']}: " + "; ".join(manifest["assumptions"][:6])
@@ -942,6 +984,8 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                     quality=st.get("quality") or None, review=st.get("review") or None)
         if r["drawing"]:
             priced[(r["drawing"], r["quantity"])] = item
+            if str(st.get("status")) == "done":
+                runs_of[r["drawing"]] = {"row": r["row"], "st": st, "run_id": item.get("run_id")}
         if cost is not None and str(st.get("status")) == "done":
             try:
                 try:
