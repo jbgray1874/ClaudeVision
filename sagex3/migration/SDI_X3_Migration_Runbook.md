@@ -1547,3 +1547,26 @@ so the files load on any day up to 29 Nov:
 
 Nothing else changed, checked cell by cell against the extract build. Each file's "Re-dated" tab
 keeps the original date. The 6 Nov versions are in `Ethan_fixes_2026-11-05/superseded_6Nov`.
+
+### 19.9 Run 4 (11 Nov): Ethan's results and the fixes
+
+**Loaded with 0 errors:** ZSDIITM, YA00408BOM, ZSDIROU2, YITC, YA004MFG.
+**Errors from master data only (no change needed):** BICY, BISY, SMR, BPCDL, ZSDIITMSUP.
+
+**Ledger reconciliation:**
+- **Customers:** X3 £6,853,365.26 equals Access net, less the 6 customers not in X3 (MAR101, TEC105, UNI103; TEC100, PER101 and DRE100 hold no items). Ties to the penny.
+- **Suppliers:** X3 £5,588,058.58 ties once these are accounted for:
+  - the 11 suppliers not in X3 (SOG500, ECO500 and BAL500 hold items);
+  - the CAP500 "SAVINGS" journal of £22,500, which the file adds but X3 deducts (a £45,000 swing; Jim to confirm its direction);
+  - BRW500 invoice 1209156, £1,772.40, dated 2 Nov 2026, which isn't in X3 (Ethan to check).
+
+  "Net" means invoices less credits and receipts / payments; journals as above.
+
+**Fixes, now rules in `scripts/run_transactions.py` (`x3_rules`):**
+- **Sales orders:** order date ≤ ship date ≤ required delivery date (Ethan). A ship date before the order date becomes the order date (548 lines); one after the delivery date becomes it (7). 558 SHIDAT changes in all, counting lines whose order date moved.
+- **Order dates before 2024** are outside X3's calendar (`--order-floor 20240101`). They become 01/01/2026 (`--order-to`): 17 PO lines (8 Access POs) and 385 SO lines (115 order references). Ethan prefers closing them in Access. Lists for Purchasing and Customer Service are in `deliver/Run4_actions_for_SDI.xlsx`. If they're closed, the next extract drops them.
+- Required dates still move to 30 Nov (19.8). Every move is listed on "Re-dated".
+
+**Still open:**
+- **Customers:** XPOSCOD on TEC100, TEC105, UNI103, PER101; XSAT on DRE100, MAR101, PER101, TEC105. Acuity investigating with us. 14 countries appear only on these customers (PT, CA, SG, MY, TH, BR, PY, MC, MT, CY, IN, RO, TR, BM), which points at X3's country set-up (postcode format / mandatory region).
+- **Suppliers:** 11 with blank VAT / company number (10 FR, 1 ES). Finance to supply. GAL500, ICE500 and BUR500 have their FR VAT; they need the SIRET.

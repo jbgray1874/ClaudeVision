@@ -60,15 +60,22 @@ def data_rows(path, sheet, first):
 # per file: (product column, {date column: name} that X3 needs in the future), 0-based (Ethan, 5 Nov)
 RULES = {"YA004SMR": (7, {}), "YA004POH": (7, {12: "EXTRCPDAT"}),  # PHANT holds only with --hold-phant
          "YA004SOHPJ": (16, {5: "DEMDLVDAT"}), "YA004MFG": (2, {})}
+# order-date column per file, and the sales order ship-date column (Ethan, 11 Nov - Run 4)
+ORDER_COL = {"YA004POH": 2, "YA004SOHPJ": 4}
+SHIP_COL = {"YA004SOHPJ": 8}
 PHANT_WHY = "product is PHANT in X3 (Ethan, 5 Nov: PHANT stays PHANT) - waiting on Marc's PHANT workaround"
 
 
-def x3_rules(path, sheet, first, cats, required):
+def x3_rules(path, sheet, first, cats, required, order_floor="20240101", order_to="20260101"):
     """Ethan's Run 3 findings, applied to a built transaction file in place:
     * a line on a PHANT product is held back - X3 holds no sales, purchase or stock data on PHANT
     * a required date in the past (POH EXTRCPDAT; SOHPJ DEMDLVDAT - the fields Ethan named) becomes `required` -
       X3 needs it in the future; each one is listed on 'Re-dated' with its old date, for SDI to
-      confirm the order is still open or close it in Access."""
+      confirm the order is still open or close it in Access.
+    * an order date before `order_floor` is outside X3's calendar (Ethan, 11 Nov: the 2023 POs) and
+      becomes `order_to`, listed the same way; closing the order in Access is the better fix
+    * sales orders: order date <= ship date <= required delivery date (Ethan, 11 Nov). A ship date
+      before the order date becomes the order date; one after the delivery date becomes it."""
     stem = next((k for k in RULES if path.name.startswith(k + "_")), None)
     if not stem:
         return 0, 0
@@ -81,15 +88,28 @@ def x3_rules(path, sheet, first, cats, required):
         if cats and cats.get(str(r[pcol] or "")) == "PHANT":
             held.append(r + [PHANT_WHY])
             continue
+        if stem == "YA004SOHPJ":     # customer, order date (as in Access), customer ref, line, product, qty
+            who = [r[3], r[4], r[6], r[15], r[16], r[19]]
+        else:                        # supplier, order date (as in Access), -, line, product, qty
+            who = [r[3], r[2], "", r[6], r[7], r[11]]
+
+        def move(col, name, new):
+            redated.append(who + [name, int(r[col]), int(new)])
+            r[col] = int(new)
         for col, name in dates.items():
             v = r[col]
             if v not in (None, "") and str(v).isdigit() and str(v) < required:
-                if stem == "YA004SOHPJ":     # customer, order date, customer ref, line, product, qty
-                    who = [r[3], r[4], r[6], r[15], r[16], r[19]]
-                else:                        # supplier, order date, -, line, product, qty
-                    who = [r[3], r[2], "", r[6], r[7], r[11]]
-                redated.append(who + [name, int(v), int(required)])
-                r[col] = int(required)
+                move(col, name, required)
+        oc = ORDER_COL.get(stem)
+        if oc is not None and r[oc] not in (None, "") and str(r[oc]) < order_floor:
+            move(oc, "ORDDAT", order_to)
+        sc = SHIP_COL.get(stem)
+        if sc is not None and r[sc] not in (None, ""):
+            o, d = str(r[oc]), str(r[5])
+            if str(r[sc]) < o:
+                move(sc, "SHIDAT", o)
+            elif d and str(r[sc]) > d:
+                move(sc, "SHIDAT", d)
         keep.append(r)
     ws.delete_rows(first, ws.max_row - first + 1)
     for r in keep:
@@ -150,6 +170,9 @@ def main():
     ap.add_argument("--previous", default=str(SET), help="the set to compare with")
     ap.add_argument("--hold-phant", action="store_true",
                     help="hold back lines on PHANT products (off: James, 5 Nov - Ethan's fixes only)")
+    ap.add_argument("--order-floor", default="20240101",
+                    help="an order date before this is outside X3's calendar (Ethan, 11 Nov) ...")
+    ap.add_argument("--order-to", default="20260101", help="... and becomes this")
     ap.add_argument("--required-date", default=(dt.date.today() + dt.timedelta(days=1)).strftime("%Y%m%d"),
                     help="a past required date on POH / SOHPJ becomes this (X3 needs it in the future; default tomorrow)")
     ap.add_argument("--legacy-views", help="test only: an old views_v2 output (positional grids)")
@@ -228,7 +251,7 @@ def main():
         src = work / rel
         dst = out / src.name
         shutil.copy(src, dst)
-        h, d = x3_rules(dst, sheet, first, cats, a.required_date)
+        h, d = x3_rules(dst, sheet, first, cats, a.required_date, a.order_floor, a.order_to)
         if h or d:
             applied.append(f"- {dst.name}: {h:,} lines held back on PHANT products; {d:,} past dates set to {a.required_date}")
         txt, n, _ = write_load(dst, sheet, first)
