@@ -84,6 +84,12 @@ def drawing_id(name: str) -> str:
         return ""
     m = _ID.match(tokens[0])
     first = m.group(1).upper() if m else ""
+    # "12773-02 GA.SLDASM" IS DRAWING 12773-02-GA (12 Nov 2026): the assembly word stood apart
+    # from its number, the file read as "12773-02", and the lower-body assembly the GA calls
+    # for was never gathered; the estimate priced a lower body with no members.
+    if first and "-" in first and len(tokens) > 1 and _ASSEMBLY.match(tokens[1]) \
+            and not _ASSEMBLY.match(first.split("-")[-1]) and re.fullmatch(r"\d+[A-Z]?", first.split("-")[-1]):
+        return first + "-" + tokens[1].upper()
     if first and "-" not in first:
         for tok in tokens[1:]:
             n = _ID.match(tok)
@@ -222,8 +228,23 @@ def read_drawing(path: Path, drawing: str, read_text: Callable[[Path], str] = re
            if revision_rank(m.group(1)) and m.group(1) not in _REV_HEADINGS]
     if _tb:
         best = max(_tb, key=lambda r: revision_rank(r) or ("", 0))
-    refs = sorted({m.upper() for m in _REF.findall(text.upper())} - {drawing.upper()})
+    refs = sorted({m.upper() for m in _REF.findall(_joined_assembly_words(text.upper()))} - {drawing.upper()})
     return {"read": bool(text), "carries_number": carries, "revision": best, "references": refs}
+
+
+_SPLIT_ASSEMBLY = re.compile(r"(?<![0-9A-Z\-/.:])(\d{3,}[A-Z]?(?:-\d+[A-Z]?)+)[ ]?(GA|SA|ASSY|ASM)(?![0-9A-Z])")
+
+
+def _joined_assembly_words(text: str) -> str:
+    """"12773-02 GA" and "12773-02GA" in a parts list are drawing 12773-02-GA."""
+    return _SPLIT_ASSEMBLY.sub(r"\1-\2", text)
+
+
+def sheets_of(assembly: str, ids: Iterable[str]) -> List[str]:
+    """The members that are numbered SHEETS of an assembly drawing: 11896-04-00-GA-01, -02, -03
+    are the three sheets of 11896-04-00-GA."""
+    pre = assembly.upper() + "-"
+    return sorted(d for d in ids if d.upper().startswith(pre) and re.fullmatch(r"\d{1,2}", d[len(pre):]))
 
 
 # ── fingerprints ─────────────────────────────────────────────────────────────────────────
@@ -528,6 +549,10 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     all_refs: set = set()
     queue = [drawing] + sorted(d for d in groups if _is_assembly(d) and not _same(d, drawing))
     done: set = set()
+    read_any: set = set()                  # assemblies whose own drawing, or a sheet of it, was read
+    sheets_read: Dict[str, List[str]] = {}
+    if best.get("pdf_read"):
+        read_any.add(drawing)
     while queue:
         a = queue.pop(0)
         if a in done:
@@ -537,6 +562,23 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             pdfs = [f for f in groups.get(a, []) if f[0].suffix.lower() == ".pdf"]
             refs_of[a] = set(read_drawing(max(pdfs, key=lambda f: f[2])[0], a, read_text)["references"]) \
                 if pdfs else set()
+            if pdfs:
+                read_any.add(a)
+        # AN ASSEMBLY ISSUED AS NUMBERED SHEETS IS READ FROM ITS SHEETS (12 Nov 2026).
+        # 11896-04-00-GA has no PDF of its own: its drawing is 11896-04-00-GA-01, -02 and -03.
+        # None was read, so not one part it calls for was gathered, and the pack of 15 files
+        # with no parts was reported "drawings complete". Each sheet's references are the
+        # assembly's.
+        for sheet in sheets_of(a, groups):
+            spdfs = [f for f in groups[sheet] if f[0].suffix.lower() == ".pdf"]
+            if not spdfs:
+                continue
+            got = read_drawing(max(spdfs, key=lambda f: f[2])[0], a, read_text)
+            if got["read"]:
+                read_any.add(a)
+                sheets_read.setdefault(a, []).append(sheet)
+            refs_of[a] |= {x for x in got["references"] if not x.upper().startswith(a.upper() + "-")
+                           or not re.fullmatch(r"\d{1,2}", x[len(a) + 1:])}
         for x in sorted(refs_of[a]):
             if _same(x, a) or _same(x, drawing) or not _looks_drawing(x):
                 continue
@@ -609,7 +651,20 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         # IDENTITY AND COMPLETENESS ARE TWO FACTS (10 Nov 2026 review): a GA proved by its own
         # title block with made parts missing is not a verified PACK. "verified" needs both.
         manifest["identity"] = "verified" if proved else "named"
-        manifest["complete"] = not manifest["missing"]
+        # COMPLETE NEEDS A PARTS LIST THAT WAS READ (12 Nov 2026). "No reference is missing" is
+        # true of a GA nobody read: 11896-04-00-GA was called complete on 0 drawings read.
+        manifest["references_read"] = drawing in read_any
+        manifest["sheets_read"] = sheets_read.get(drawing, [])
+        manifest["unread_assemblies"] = sorted(a for a in done if a not in read_any and not _same(a, drawing))
+        manifest["complete"] = not manifest["missing"] and manifest["references_read"]
+        if not manifest["references_read"]:
+            manifest["assumptions"].append(
+                "the GA's parts list was NOT READ (no readable PDF of the GA or of its sheets), so "
+                "what it calls for is unknown and the pack is not proved complete")
+        if manifest["unread_assemblies"]:
+            manifest["assumptions"].append(
+                "sub-assembly drawing(s) with no readable PDF, so their parts were not followed: "
+                + ", ".join(manifest["unread_assemblies"]))
         # A bought item still to be priced keeps the pack provisional too: its cost is a catalogue
         # match or a labelled allowance, not yet a fact.
         manifest["status"] = ("verified" if proved and manifest["complete"]
@@ -785,7 +840,8 @@ def main(argv: Optional[List[str]] = None) -> int:
               + (f"  superseded {','.join(x['superseded_revisions'])}" if x["superseded_revisions"] else ""))
     if m.get("identity"):
         print(f"  GA identity {m['identity']}; drawings "
-              f"{'complete' if m.get('complete') else 'INCOMPLETE'}"
+              f"{'complete' if m.get('complete') else ('NOT PROVED COMPLETE: the parts list was not read' if not m.get('references_read') and not m.get('missing') else 'INCOMPLETE')}"
+              + (f"; parts list read from sheet(s) {', '.join(m['sheets_read'])}" if m.get("sheets_read") else "")
               + (f"; {len(m['bought_in_unmatched'])} bought-in item(s) to price"
                  if m.get("bought_in_unmatched") else ""))
     for x in m["members"]:

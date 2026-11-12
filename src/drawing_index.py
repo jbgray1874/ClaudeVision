@@ -231,7 +231,8 @@ def db_path(index_path: Path) -> Path:
 # THE RULE THAT READS A DRAWING NUMBER FROM A FILE NAME, BY VERSION. Each file's number is worked
 # out once, when the database is made; a database made under an older rule is made again on its
 # first use (2: a customer's item number in front, "0359829_12674-01-GA_...PDF", JG 10 Nov 2026).
-DID_RULE = "2"
+# 3: an assembly word standing apart from its number, "12773-02 GA.SLDASM" (12 Nov 2026).
+DID_RULE = "3"
 
 
 def build_db(index: Dict[str, Any], db: Path) -> int:
