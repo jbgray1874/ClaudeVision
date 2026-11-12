@@ -428,7 +428,9 @@ def made_here_reason(part: Dict[str, Any]) -> str:
     return ""
 
 
-_SDI_DRAWN_PART = re.compile(r"^\d{4,5}[A-Z]?-\d{2}(?:-\d{2})?-\d{2,3}[A-Z]{0,2}$")
+# job, assembly, item, and a weldment's own cut-list items after it: 6364-02-011, 12674-01-01J,
+# 11896-04-01-01M, 6364-02-004-01, 6364-02-004-5MM, 6364-02-016-INNER-01.
+_SDI_DRAWN_PART = re.compile(r"^\d{4,5}[A-Z]?-\d{2}(?:-[A-Z0-9]{1,6}){1,4}$")
 
 
 def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = True,
@@ -528,6 +530,14 @@ class PricingService:
         # merely correct. Falling through silently looks exactly like an empty catalogue,
         # and would send somebody chasing price files that are already loaded.
         self.catalogue_quarantine: List[str] = []
+        # LOOKUPS THAT WERE ABANDONED, COUNTED (12 Nov 2026). A query that timed out printed one
+        # console line, returned "nothing found", and the part fell through to the next source,
+        # ending at a web or AI figure. 6364-01's 14:30 run, made while a second job ran beside
+        # it, has no historical, catalogue or purchasing price on any line: 23 web or AI prices,
+        # the corner guards at 180.00 where the run the day before found 5.74. Nothing in the
+        # record said a lookup had failed. Each one is kept here, by table, for the record,
+        # the note and the release decision.
+        self.lookup_failures: List[Dict[str, str]] = []
 
     def __enter__(self) -> "PricingService":
         return self
@@ -607,12 +617,14 @@ class PricingService:
                 if self._is_query_timeout(exc):
                     # slow/locked query — abandon this lookup (part flags 'no price'), reconnect so
                     # subsequent parts still price, and never block the whole run on one query.
+                    self._note_lookup_failure(query, "timed out")
                     print(f"   [pricing] SQL query timed out — skipping this lookup, run continues", flush=True)
                     try:
                         self.conn = self._connection_factory()
                     except Exception:
                         pass
                     return None
+                self._note_lookup_failure(query, f"failed ({type(exc).__name__})")
                 raise
             finally:
                 if cursor is not None:
@@ -634,12 +646,14 @@ class PricingService:
                     self.conn = self._connection_factory()
                     continue
                 if self._is_query_timeout(exc):
+                    self._note_lookup_failure(query, "timed out")
                     print(f"   [pricing] SQL query timed out — skipping this lookup, run continues", flush=True)
                     try:
                         self.conn = self._connection_factory()
                     except Exception:
                         pass
                     return []
+                self._note_lookup_failure(query, f"failed ({type(exc).__name__})")
                 raise
             finally:
                 if cursor is not None:
@@ -648,6 +662,27 @@ class PricingService:
                     except Exception:
                         pass
         return []
+
+    def _note_lookup_failure(self, query: str, why: str) -> None:
+        m = re.search(r"\bFROM\s+([\w.\[\]]+)", str(query or ""), flags=re.I)
+        try:
+            self.lookup_failures.append({"table": (m.group(1) if m else "unknown").strip("[]"), "why": why})
+        except AttributeError:                       # a service built without __init__ (tests)
+            self.lookup_failures = [{"table": (m.group(1) if m else "unknown").strip("[]"), "why": why}]
+
+    def lookup_failure_summary(self) -> Dict[str, Any]:
+        """{"count", "by_table": {table: n}, "says"}: the price lookups this job abandoned."""
+        fails = list(getattr(self, "lookup_failures", []) or [])
+        by: Dict[str, int] = {}
+        for f in fails:
+            by[f["table"]] = by.get(f["table"], 0) + 1
+        says = ""
+        if fails:
+            says = (f"{len(fails)} price lookup(s) were abandoned on this run ("
+                    + ", ".join(f"{t}: {n}" for t, n in sorted(by.items()))
+                    + "). A line priced after an abandoned lookup may carry a web or AI figure "
+                      "where SDI holds a real price. Run it again before relying on those lines.")
+        return {"count": len(fails), "by_table": by, "says": says}
 
     def _freshness_adjustment(self, raw_date: Any) -> Dict[str, Any]:
         if raw_date is None:

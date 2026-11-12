@@ -436,7 +436,12 @@ class SolidWorksSession:
         # 2. The full array of open documents.
         _by_title = None
         try:
-            docs = self.sw.GetDocuments()
+            # GetDocuments IS A PROPERTY IN THIS BINDING, NOT A CALL (12674-02-GA 19:46, the
+            # run's own trace: "GetDocuments: raised TypeError"). Called with (), the whole
+            # route that lists every open document, the one that finds a part held under
+            # another folder's copy, never ran: both side panels were lost and priced at
+            # nothing. Read as _get0 reads every other no-argument getter.
+            docs = _get0(self.sw, "GetDocuments")
             _n = len(docs) if docs is not None else 0
             trace.append(f"GetDocuments: {_n} open")
             for d in (docs or []):

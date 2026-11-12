@@ -46,6 +46,15 @@ _PRICING_SERVICE_SINGLETON = None
 _PRICING_SERVICE_FAILED = False
 _PRICING_SERVICE_ERROR = None      # why, when it could not be reached. See _get_pricing_service.
 
+def _lookups_abandoned() -> Dict[str, Any]:
+    """The pricing service's count of lookups it gave up on, or an empty count without one."""
+    try:
+        svc = _PRICING_SERVICE_SINGLETON
+        return svc.lookup_failure_summary() if svc is not None else {"count": 0, "by_table": {}, "says": ""}
+    except Exception:                                                # noqa: BLE001
+        return {"count": 0, "by_table": {}, "says": ""}
+
+
 def _get_pricing_service():
     """Return a shared PricingService, or None if it can't be constructed
     (e.g. DB unavailable). Cached; never raises into the estimate path."""
@@ -17532,6 +17541,9 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                     }
                 ),
                 "pricing_basis": "external_or_config_fallback",
+                # PRICE LOOKUPS ABANDONED ON THIS RUN (12 Nov 2026), so a run priced from web
+                # and AI figures because its own databases timed out says so in its record.
+                "lookups_abandoned": _lookups_abandoned(),
             },
         },
     }

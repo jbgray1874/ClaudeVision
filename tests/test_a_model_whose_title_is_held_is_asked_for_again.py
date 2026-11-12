@@ -56,3 +56,48 @@ def test_the_open_path_waits_before_it_fails():
     text = (ROOT / "tools/solidworks/sw_native_analyse.py").read_text(encoding="utf-8")
     refusal = text.index("could not be retrieved; tried:")
     assert text.index("wait_for_a_held_title(\n                    _again") < refusal
+
+
+# ── the open-document list is read whether it is a call or a property (12674-02-GA trace) ────
+class _Doc:
+    def __init__(self, path, title):
+        self.GetPathName, self.GetTitle = path, title          # properties, as this binding gives them
+
+
+class _SwProperty:
+    """SolidWorks as the laptop's binding presents it: GetDocuments is the tuple itself."""
+    def __init__(self, docs):
+        self.GetDocuments = tuple(docs)
+        self.GetFirstDocument = None
+
+    def GetOpenDocumentByName(self, path):
+        return None
+
+
+def _session(sw_obj):
+    s = sw.SolidWorksSession.__new__(sw.SolidWorksSession)
+    s.sw = sw_obj
+    return s
+
+
+def test_a_part_held_under_another_folders_copy_is_found_by_its_title():
+    held = _Doc("/packs/12674-01-GA/12674-01-02J.SLDPRT", "12674-01-02J.SLDPRT")
+    other = _Doc("/packs/12674-01-GA/12674-01-03J.SLDPRT", "12674-01-03J.SLDPRT")
+    trace = []
+    got = _session(_SwProperty([other, held]))._get_open_document(
+        "/packs/12674-02-GA/12674-01-02J.SLDPRT", trace)
+    assert got is held, trace
+    assert any("GetDocuments: 2 open" in t for t in trace) and "matched on title" in trace[-1]
+
+
+def test_the_list_is_also_read_where_it_is_a_call():
+    held = _Doc("/packs/a/X-01.SLDPRT", "X-01.SLDPRT")
+
+    class _SwCall(_SwProperty):
+        def __init__(self, docs):
+            self.GetFirstDocument = None
+            self._docs = tuple(docs)
+
+        def GetDocuments(self):
+            return self._docs
+    assert _session(_SwCall([held]))._get_open_document("/packs/a/X-01.SLDPRT", []) is held

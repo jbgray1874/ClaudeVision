@@ -168,6 +168,19 @@ def into_note(note: Dict[str, str], record: Dict[str, Any],
     """The note with the section near its top: just inside its first <div>, where the mail
     service later puts its buttons above it."""
     s = section(record, manifest)
+    # PRICE LOOKUPS THE RUN GAVE UP ON, SAID AT THE TOP (12 Nov 2026): a run whose databases
+    # timed out prices from web and AI figures, and its note must not read like any other.
+    says = ""
+    try:
+        est = record.get("estimate_summary") if isinstance(record.get("estimate_summary"), dict) else record
+        says = str(((((est.get("cost_breakdown") or {}).get("pricing_metadata") or {})
+                     .get("lookups_abandoned") or {}).get("says")) or "")
+    except AttributeError:
+        says = ""
+    if says and "price lookup(s) were abandoned" not in str(note.get("html") or ""):
+        s = {"html": ('<p style="margin:10px 0;padding:10px 12px;border:2px solid #8a1f11;color:#8a1f11;'
+                      'font-weight:bold;font-size:14px">' + _html.escape(says) + "</p>") + s["html"],
+             "text": "!! " + says + "\n\n" + s["text"]}
     if not s["html"] or "Drawing pack used for this estimate" in str(note.get("html") or ""):
         return note
     html = str(note.get("html") or "")

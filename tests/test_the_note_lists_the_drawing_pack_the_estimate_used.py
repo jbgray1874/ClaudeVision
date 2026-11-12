@@ -77,3 +77,13 @@ def test_a_failure_in_the_section_never_stops_the_note(capsys):
     assert "no drawing pack section" in capsys.readouterr().out
     src = (Path(__file__).resolve().parents[1] / "src" / "main.py").read_text(encoding="utf-8")
     assert "into_note_safely" in src
+
+
+def test_a_run_that_gave_up_on_price_lookups_says_so_at_the_top_of_its_note():
+    rec = dict(_record(), cost_breakdown={"pricing_metadata": {"lookups_abandoned": {
+        "count": 7, "says": "7 price lookup(s) were abandoned on this run (dbo.historical_quote_material_line: 7). Run it again before relying on those lines."}}})
+    out = pu.into_note({"html": "<div><h1>Estimate</h1></div>", "text": "Estimate"}, rec, _manifest())
+    assert out["html"].index("7 price lookup(s) were abandoned") < out["html"].index("Drawing pack used")
+    assert out["text"].startswith("!! 7 price lookup(s) were abandoned")
+    quiet = pu.into_note({"html": "<div><h1>Estimate</h1></div>", "text": "Estimate"}, _record(), _manifest())
+    assert "abandoned" not in quiet["html"]
