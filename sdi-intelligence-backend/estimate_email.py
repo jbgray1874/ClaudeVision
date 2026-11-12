@@ -231,6 +231,9 @@ def send(recipients: List[str], subject: str, body_html: str, body_text: str,
     graph_failed = ""
     if graph_sender():
         result = send_via_graph(recipients, subject, body_html, list(paths or []))
+        # WHAT WAS SENT IS KEPT WITH THE RESULT (12 Nov 2026): the subject says which message
+        # went, the engine's own note or the short form, long after the files have changed.
+        result.setdefault("subject", subject)
         if result.get("sent") or not smtp_configured():
             return result
         # A GRAPH FAILURE DOES NOT LOSE THE ESTIMATE. With SMTP configured as well, the note
@@ -265,7 +268,7 @@ def send(recipients: List[str], subject: str, body_html: str, body_text: str,
     except Exception as exc:                                     # noqa: BLE001
         return {"sent": False, "reason": f"{type(exc).__name__}: {exc}",
                 "recipients": recipients, "attached": attached, "skipped": skipped}
-    out = {"sent": True, "recipients": recipients, "attached": attached,
+    out = {"sent": True, "recipients": recipients, "attached": attached, "subject": subject,
            "skipped": skipped, "via": f"SMTP as {settings['sender']}"}
     if graph_failed:
         out["graph_failed"] = graph_failed

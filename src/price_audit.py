@@ -81,10 +81,22 @@ def email_evidence(run: Dict[str, Any], files: List[Dict[str, Any]]) -> Dict[str
     attached = [str(a) for a in (res.get("attached") or [])]
     note = next((str(f.get("name")) for f in files
                  if any(m in str(f.get("path") or "").lower() for m in _NOTE)), None)
+    # A NOTE FILED WITH THE RUN AFTERWARDS WAS NOT THE MESSAGE (12 Nov 2026). Three runs went
+    # out in the service's short form because their notes were never collected; once the notes
+    # were recovered this said the message "was" the covering note. The message was the note
+    # only when the note went with it: it is among the attachments the service listed, or the
+    # subject it recorded is not the short form's. A run recovered later says so.
+    subject = str(res.get("subject") or "")
+    short = subject.startswith("SDI Intelligence estimate.") or "INCOMPLETE RUN" in subject
+    after = bool(note) and (short or (bool(run.get("recovered_at")) and not subject
+                                      and note not in attached))
+    said = (f"the service's short form; {note} was filed with the run afterwards"
+            if after else note)
     return {"sent": bool(res.get("sent")), "recipients": len(res.get("recipients") or []),
             "attached": attached,
             "attached_from_another_job": sorted(a for a in attached if a in theirs),
-            "message_note": note, "message_was_another_jobs": bool(note and note in theirs)}
+            "message_note": said, "message_was_short_form": after,
+            "message_was_another_jobs": bool(note and not after and note in theirs)}
 
 
 def find_record(row: Dict[str, Any], runs: List[Dict[str, Any]],
