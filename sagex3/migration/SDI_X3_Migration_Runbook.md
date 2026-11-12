@@ -1954,3 +1954,18 @@ The X3 version goes to Acuity with the reports list (SCRUM-212).
     - a feed in the SQL's exact layout gives £549,211.31 / £32,952.68;
     - `--basis order` on the sample gives 0, correct because the sample has no order dates.
 - **Next:** James runs `rebate_rolling.sql` (save as `rebate_lines.txt`), then I build the live report and compare it with the November PDF line by line.
+
+**12 Nov, evening – live run proved against Claire's November report.**
+- James ran `rebate_rolling.sql`: **37 invoice lines**. Saved in the scratchpad at `rebate/live/rebate_lines.txt`; the paste had no header row, so one was added.
+- **The month is the order line's customer due date (COR_CUSTOMER_DUE), not the invoice date:**
+  - **By due date: total £549,211.31 and rebate £32,952.68, both to the penny.** December 90,472.95, July 231,854.20 and August 52,750.00 match exactly.
+  - By invoice date: December is £17,295.60 too high. MUL01 B/B 38, CAD 2 and TOB 30 are on invoice 5014699 dated 16 Dec 2025, but due 28 Nov 2025; Claire's report shows them blank.
+  - **So `build_rebate_report.py` now defaults to `--basis due`.**
+- **The only difference, by due date:**
+  - HHA01 10932-00-GA1 M&M 72 (£19,080, order 0000010016441, invoice 5019203, 30 Sep) is now due 9 Nov 2026, so it falls in November instead of September.
+  - That order line was last changed on 12 Nov at 16:04 (the `ASC_COR_TBL` discovery row), after Claire's report. The due date was most likely moved.
+  - The rebate total is the same: Sep 9,303.25 + Nov 1,144.80 = 10,448.05.
+- **Line count: 37 in Access against 39 on Claire's.** Her HHA-INSTALL M&M shows 4 lines (30, -72, +72, +72); Access has 2 (30, 72) on invoice 5019204. Both net to 102 = £13,770.00. A credit and re-invoice pair that `TBI_TBL` no longer holds, or that sits in a credit-note table. Ask Claire.
+- **Access per-customer rebate % (CU_USRNUM1) = 0 for every customer on the report.** The 6% is not taken from the customer account.
+- Descriptions on Claire's report are the order-line text; ours are the part description (PMA_DESC_1). The values are not affected.
+- **Live report:** `rebate/live/out/SDI_Rebate_Rolling_2026-11.html` and `.xlsx`. The sample stays in `rebate/out` (invoice basis, rebuilt from the PDF).

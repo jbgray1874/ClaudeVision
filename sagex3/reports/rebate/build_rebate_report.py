@@ -6,7 +6,9 @@ rebate_parts.csv, and writes an SDI-branded HTML report and Excel workbook:
   * a rolling 12 months ending with --end (default: the month of the run date)
   * monthly totals, a rebate of --rate (default 6%) on each month's total, grand totals
   * invoice, due and order dates are carried on every line; --basis picks which one puts a line in
-    a month (default invoice). Source: rebate_rolling.sql - Access's own invoiced-sales joins
+    a month. Default due - the order line's customer due date (COR_CUSTOMER_DUE): that is what the
+    Access report does (12 Nov: by due date the live data gives its totals to the penny; by invoice
+    date December is GBP 17,295.60 higher). Source: rebate_rolling.sql - Access's own invoiced-sales joins
     (TBI_TBL invoice lines -> COR_TBL order lines -> SL_ACCOUNTS2), as in dbo.UDEF_INVOICED_SALES
 
 Usage:
@@ -61,7 +63,7 @@ def read_lines(path):
     return [{k.strip().lower(): (v or "").strip() for k, v in r.items() if k} for r in rows]
 
 
-def build(lines_path, out_dir, end=None, rate="0.06", basis="invoice", parts_path=None, sample=False):
+def build(lines_path, out_dir, end=None, rate="0.06", basis="due", parts_path=None, sample=False):
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     today = dt.date.today()
@@ -319,19 +321,21 @@ def notes(meta):
         f"Selection: by part code only, any customer – the {len(meta['parts'])} codes in rebate_parts.csv (the codes on the "
         "November 2026 report). Add or remove a code there; no code change is needed.",
         "Value = quantity x price per, to the penny; a credit note is a negative line.",
-        f"Month: by {meta['basis']} date. Invoice, due and order dates are all on the Lines tab, and the report can be "
-        "re-run by due or order date.",
+        f"Month: by {meta['basis']} date" + (" – the customer due date on the sales order line, as the Access report does"
+        if meta["basis"] == "due" else "") + ". Invoice, due and order dates are all on the Lines tab; the report can be "
+        "re-run by invoice or order date.",
         f"Rebate: {meta['rate'] * 100:.0f}% of each month's total, rounded to the penny per month; the rebate total is the sum "
         "of the twelve. The rate is one cell (Summary!B5) – change it and every rebate follows.",
-        "Lines with no value in any month were invoiced outside the 12 months (on the November report: November 2025). "
+        "Lines with no value in any month fall outside the 12 months (on the November report: due in November 2025). "
         "They are listed so the report shows the same lines as the Access report; they add nothing to the totals.",
         "Prices are as on the invoice line, in GBP.",
         "",
         "Assumptions to confirm (Finance):",
-        "1. The rebate is due on invoiced value (not ordered or delivered).",
-        "2. The rate is a flat 6% on every part and customer, paid to Morrisons - not the per-customer rebate % that Access "
-        "holds on the customer account (used by Access's invoiced-sales view; shown on the Lines tab).",
-        "3. Lines invoiced before the window are listed but not counted, as on the Access report.",
+        "1. The rebate is on invoiced value, placed in the month the order line was due (as the Access report does), "
+        "not the month it was invoiced.",
+        "2. The rate is a flat 6% on every part and customer, paid to Morrisons. Access's own per-customer rebate % "
+        "(customer account) is 0% for every customer on this report, so the 6% is a separate agreement.",
+        "3. Lines due before the window are listed but not counted, as on the Access report.",
         "4. The part list is complete – other 10932-00-GA variants (e.g. PEP, DOV, CCE, REG) are sold but are not on the report.",
     ] + (["", "THIS IS A SAMPLE: lines, quantities and prices rebuilt from the November 2026 PDF; dates are the month only "
           "(15th of the month). It reproduces the PDF to the penny: £549,211.31 and rebate £32,952.68."] if meta["sample"] else [])
@@ -453,7 +457,9 @@ if __name__ == "__main__":
     ap.add_argument("out_dir")
     ap.add_argument("--end", help="last month of the 12, YYYY-MM (default: this month)")
     ap.add_argument("--rate", default="0.06")
-    ap.add_argument("--basis", default="invoice", choices=["invoice", "due", "order"])
+    ap.add_argument("--basis", default="due", choices=["invoice", "due", "order"],
+                    help="date that puts a line in a month - due (the order line's customer due date) is what the "
+                         "Access report uses (proved 12 Nov)")
     ap.add_argument("--parts")
     ap.add_argument("--sample", action="store_true", help="label the output as a sample")
     a = ap.parse_args()
