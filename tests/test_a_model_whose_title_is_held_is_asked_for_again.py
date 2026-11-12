@@ -80,12 +80,17 @@ def _session(sw_obj):
     return s
 
 
-def test_a_part_held_under_another_folders_copy_is_found_by_its_title():
-    held = _Doc("/packs/12674-01-GA/12674-01-02J.SLDPRT", "12674-01-02J.SLDPRT")
-    other = _Doc("/packs/12674-01-GA/12674-01-03J.SLDPRT", "12674-01-03J.SLDPRT")
+def test_a_part_held_under_another_folders_copy_is_found_by_its_title(tmp_path):
+    # The two copies are the same file, byte for byte (12 Nov 2026): a document of the same
+    # name with other contents is not read for this one.
+    for job in ("12674-01-GA", "12674-02-GA"):
+        (tmp_path / job).mkdir()
+        (tmp_path / job / "12674-01-02J.SLDPRT").write_bytes(b"the shared side panel")
+    held = _Doc(str(tmp_path / "12674-01-GA" / "12674-01-02J.SLDPRT"), "12674-01-02J.SLDPRT")
+    other = _Doc(str(tmp_path / "12674-01-GA" / "12674-01-03J.SLDPRT"), "12674-01-03J.SLDPRT")
     trace = []
     got = _session(_SwProperty([other, held]))._get_open_document(
-        "/packs/12674-02-GA/12674-01-02J.SLDPRT", trace)
+        str(tmp_path / "12674-02-GA" / "12674-01-02J.SLDPRT"), trace)
     assert got is held, trace
     assert any("GetDocuments: 2 open" in t for t in trace) and "matched on title" in trace[-1]
 

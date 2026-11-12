@@ -237,6 +237,29 @@ class RouteSignals:
 SAME_TITLE_OPEN = 65536          # swFileWithSameTitleAlreadyOpen
 
 
+def same_file_by_content(a: str, b: str) -> bool:
+    """Are these two paths the same file, byte for byte? Two jobs that share a panel each
+    stage their own copy of it; SolidWorks will hold only one document of that name, so the
+    second job reads the first's open copy, and only when it IS the same file. A copy of
+    another size, or one that cannot be read, is not the same file."""
+    try:
+        if os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b)):
+            return True
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        import hashlib
+        digests = []
+        for path in (a, b):
+            h = hashlib.sha256()
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    h.update(chunk)
+            digests.append(h.hexdigest())
+        return digests[0] == digests[1]
+    except OSError:
+        return False
+
+
 def wait_for_a_held_title(open_again, find_open, tries: int = 0, wait_s: float = -1.0,
                           sleep=None):
     """(document or None, what happened). A file refused because another document of its
@@ -433,24 +456,56 @@ class SolidWorksSession:
             except Exception as exc:
                 trace.append(f"{_name}: raised {type(exc).__name__}")
 
-        # 2. The full array of open documents.
+        # 1b. BY ITS FILE NAME (12 Nov 2026). The documented call takes a document NAME. Asked by
+        # full path it answers only for that path, and a part another run holds open from its
+        # own pack folder has the same name and another path: "GetOpenDocumentByName: None",
+        # then every listing route failed in this binding, and a shared side panel was lost
+        # twice and priced at nothing. Asked by name it returns the document that holds the
+        # title, wherever its file is. Whether that document may be read for ours is decided
+        # by same_file_by_content, below.
         _by_title = None
+        for _name in ("GetOpenDocumentByName2", "GetOpenDocumentByName"):
+            for _asked in (os.path.basename(path), os.path.splitext(os.path.basename(path))[0]):
+                try:
+                    d = getattr(self.sw, _name)(_asked)
+                except Exception:
+                    continue
+                if d is None:
+                    continue
+                _held = _safe_str(_get0(d, "GetPathName"))
+                if self._norm(_held) == _target:
+                    trace.append(f"{_name} by name: found")
+                    return d
+                if _held and not same_file_by_content(_held, path):
+                    trace.append(f"{_name} by name: a DIFFERENT file of this name is open "
+                                 f"({_held}); not read for this one")
+                    continue
+                trace.append(f"{_name} by name: the same file is open from "
+                             f"{_held or 'an unsaved document'}; read in place")
+                return d
+
+        # 2. The full array of open documents.
         try:
             # GetDocuments IS A PROPERTY IN THIS BINDING, NOT A CALL (12674-02-GA 19:46, the
             # run's own trace: "GetDocuments: raised TypeError"). Called with (), the whole
             # route that lists every open document, the one that finds a part held under
             # another folder's copy, never ran: both side panels were lost and priced at
             # nothing. Read as _get0 reads every other no-argument getter.
+            # ...and what it gives back is not always something len() accepts (the same trace,
+            # 12 Nov: still "raised TypeError" with the property read). Made a list first.
             docs = _get0(self.sw, "GetDocuments")
-            _n = len(docs) if docs is not None else 0
+            docs = list(docs) if docs is not None else []
+            _n = len(docs)
             trace.append(f"GetDocuments: {_n} open")
-            for d in (docs or []):
+            for d in docs:
                 try:
-                    if self._norm(_safe_str(_get0(d, "GetPathName"))) == _target:
+                    _held = _safe_str(_get0(d, "GetPathName"))
+                    if self._norm(_held) == _target:
                         trace.append("GetDocuments: path match")
                         return d
                     _t = _safe_str(_get0(d, "GetTitle"))
-                    if _by_title is None and _t and os.path.splitext(_t)[0].lower() == _stem:
+                    if (_by_title is None and _t and os.path.splitext(_t)[0].lower() == _stem
+                            and (not _held or same_file_by_content(_held, path))):
                         _by_title = d
                 except Exception:
                     continue
@@ -467,7 +522,9 @@ class SolidWorksSession:
                     trace.append(f"GetFirstDocument walk: path match after {seen}")
                     return d
                 _t = _safe_str(_get0(d, "GetTitle"))
-                if _by_title is None and _t and os.path.splitext(_t)[0].lower() == _stem:
+                _held = _safe_str(_get0(d, "GetPathName"))
+                if (_by_title is None and _t and os.path.splitext(_t)[0].lower() == _stem
+                        and (not _held or same_file_by_content(_held, path))):
                     _by_title = d
                 d = _get0(d, "GetNext")
             trace.append(f"GetFirstDocument walk: {seen} document(s), no path match")
