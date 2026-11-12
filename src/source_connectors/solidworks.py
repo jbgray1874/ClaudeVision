@@ -1151,6 +1151,29 @@ def _extract_schema_version(extract_path: Path) -> int:
     return 0
 
 
+def files_the_extract_left_unread(extract_path: str | Path) -> int:
+    """How many model files the saved extract failed to read; 0 when none or unreadable.
+
+    AN EXTRACT THAT FAILED ON A FILE IS NOT FINISHED (6364-01 and 12674-02-GA, 12 Nov 2026).
+    6364-01 ran alone at 18:24 and still reported three models "open under the same title".
+    Nothing was open: the run never asked SolidWorks. The extract beside the pack had been
+    written by an earlier run, its fingerprint matched the unchanged models, and so it was
+    reused, three failures included. The same reuse kept the 12674-02-GA side panel at
+    nothing after the reader was fixed, which is why no trace ever showed the new wait.
+    """
+    try:
+        data = json.loads(Path(extract_path).read_text(encoding="utf-8"))
+    except Exception:                                            # noqa: BLE001
+        return 0
+    man = data.get("_manifest") if isinstance(data, dict) and isinstance(data.get("_manifest"), dict) else {}
+    try:
+        n = int(man.get("files_failed") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    errs = man.get("errors")
+    return max(n, len(errs) if isinstance(errs, list) else 0)
+
+
 def _should_run(extract_path: Path, folder: str | Path) -> bool:
     """Run the analyser when there is no extract, the one we have predates the MODELS, or it
     predates the analyser CODE (its schema version is behind what the estimate now needs)."""
@@ -1162,6 +1185,8 @@ def _should_run(extract_path: Path, folder: str | Path) -> bool:
     # we can now read out of the same unchanged models has moved on.
     if _extract_schema_version(extract_path) < _MIN_EXTRACT_SCHEMA_VERSION:
         return True
+    if files_the_extract_left_unread(extract_path):
+        return True          # a failed file is asked for again, never inherited as failed
     # THE FINGERPRINT, NOT THE TIMESTAMP, WHEN THERE IS ONE.
     #
     # These two questions -- "is this extract stale" and "should I regenerate it" -- were

@@ -712,6 +712,15 @@ _EXTRACT_NAME = "_sw_native_extract.json"
 _MODEL_POINTER = "_sdi_model_sources.json"
 
 
+def _extract_left_files_unread(extract: Path) -> bool:
+    """Whether the saved SolidWorks extract records a model file it could not read."""
+    try:
+        man = (json.loads(extract.read_text(encoding="utf-8")) or {}).get("_manifest") or {}
+        return bool(int(man.get("files_failed") or 0) or man.get("errors"))
+    except Exception:                                                # noqa: BLE001
+        return False
+
+
 def _needs_model_reader(job_folder: Any) -> bool:
     try:
         folder = Path(str(job_folder or ""))
@@ -725,7 +734,9 @@ def _needs_model_reader(job_folder: Any) -> bool:
             return False
         extract = folder / _EXTRACT_NAME
         if extract.is_file() and newest_model and extract.stat().st_mtime >= newest_model:
-            return False
+            # An extract that failed on a file is not finished: the run needs a machine that
+            # can read the models again (6364-01 and 12674-02-GA, 12 Nov 2026).
+            return _extract_left_files_unread(extract)
         return True
     except OSError:
         return False
