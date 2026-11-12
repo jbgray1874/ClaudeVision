@@ -2087,3 +2087,56 @@ James has an X3 admin login. **Work in the test folder only.** Production rules 
   6. Their MCP server: terms, data scope, and whether it works against test.
   7. Vasion device requirements.
 - **Rebuild REP-22 in X3 via GraphQL / REST, or a request**, proved against Access as before.
+
+### 21.2 Requirements e-mail to Acuity (Neil Morphew) – SDI developer and API access (12 Nov)
+
+James is **telling** Acuity what SDI needs, not asking permission.
+- **To:** Neil Morphew.
+- **Cc:** Marc Davies, Jim Hildreth, Richard Sadler, Charlotte Blackwell.
+- **Subject:** "Sage X3 Cloud – SDI developer and API access".
+
+What the e-mail requires, first in the **test folder**, then mirrored in **live** once proved:
+1. **API access:** an API client / connected application with credentials; REST and GraphQL base URLs; documentation of the objects exposed; read **and write**; a dedicated SDI integration user. **Also confirm whether API calls consume user licences** (add this line if it isn't in the sent version).
+2. **Events and scheduling:** webhooks (order, works-order and opportunity changes) and the batch server. Can SDI set them up directly, and if not, Acuity's process and turnaround?
+3. **Development access:** Safe X3 rights for SDI objects (Y/Z) in test; the process and lead time from test to live.
+4. **Reporting:** the Crystal designer and report dictionary; queries / inquiries to Excel; any read-only data access on SaaS (reporting copy, export, BI connector), or a clear "none".
+5. **Acuity MCP server:** scope, terms, access against test.
+6. **Printing:** the specification of the SDI PC that hosts the Vasion client.
+7. Which items can be set up straight away, dates for the rest, and a call this week.
+
+It replaces the earlier draft ("developer access for reports, imports and integrations"), which asked the same seven things as questions.
+
+**Actions:**
+
+| Action | Owner | Status |
+|---|---|---|
+| Send the requirements e-mail | James | to send |
+| API client + credentials + base URLs (test) | Acuity (Neil) | requested |
+| Webhooks / batch server – who sets up | Acuity | requested |
+| Safe X3 development rights, test → live process | Acuity | requested |
+| Reporting tools + read-only data answer | Acuity | requested |
+| MCP server scope and terms | Acuity | requested |
+| Vasion PC specification; choose and prepare the machine | Acuity → SDI IT (Chris Sherlock) | requested |
+| API licence consumption | Acuity | to confirm |
+| Call with Neil | James / Neil | to book |
+| Once the API client exists: rebuild REP-22 (rebate) on X3 data, proved against Access | James | after access |
+
+### 21.3 What James can find out himself in the X3 web portal (admin login, TEST folder)
+
+Read-only look-round, with nothing changed. Screenshot each screen for the runbook.
+- **Menu paths vary by version.** If a menu isn't where expected, search for the function code (e.g. GESAOE).
+- On SaaS, server-level screens may be hidden or locked. That itself is an answer – note it.
+
+1. **The user / help menu ("?" → About):** product version, update / patch level, the current folder. This decides which APIs (REST / GraphQL) exist.
+2. **The folder / endpoint selector (top right, by the user name):** every folder you can open – test, live, any seed / demo. Note the exact names.
+3. **Administration → Administration → Endpoints / Solutions:** the folder and server set-up (may be hidden on SaaS).
+4. **Administration → Users (GESAUS) and Roles / Groups:** our users, any existing integration or API user, and what an admin may change.
+5. **Administration → Web services / Connected applications (GESAWE and the connected-apps screen):** whether any API client already exists, what's published, and whether REST / GraphQL appear.
+6. **Usage → Imports/exports → Import/export templates (GESAOE):** the list of templates (YA004…, ZSDI…, YITC, the opportunity template). Open one and note the fields, separator and structure.
+7. **Usage → Imports/exports → Imports:** how a template is run, and the import log, where Ethan's errors come from.
+8. **Report dictionary (GESARP):** the reports present, including YINVLIST; which are standard and which are specific (Y / Z).
+9. **Queries / inquiries (Requester):** whether we can build a query and export it to Excel – the quickest route for simple reports.
+10. **Development → Data and parameters → Tables / dictionary:** table names behind the screens (ITMMASTER, SORDER, SORDERQ, SINVOICE, BPCUSTOMER, MFGHEAD …). They're the names the API objects use.
+11. **Dashboards / landing pages:** what Customer Service will see (CS-08).
+
+Send the screenshots or notes back, and they'll be logged here against each question in the e-mail. Some questions may be answered before Neil replies.
