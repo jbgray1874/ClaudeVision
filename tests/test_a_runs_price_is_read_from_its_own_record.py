@@ -251,3 +251,27 @@ def test_a_record_filed_with_another_run_is_located_and_checked(tmp_path):
     rows = {r["run_id"]: r for r in price_audit.check_runs(runs)}
     assert rows["c2623d"]["verdict"] == "ok" and "filed with run b45095" in rows["c2623d"]["record_found"]
     assert rows["b45095"]["verdict"] == "MISMATCH"
+
+
+def test_a_record_declaring_another_drawing_is_never_used(tmp_path):
+    own = _run_files(tmp_path, "6364-01", "20261111_143000", 1383.58)
+    rec = Path(own[1]["path"])
+    rec.write_text(json.dumps({"declared_product": "12674-01-GA", "totals": {"unit_cost_gbp": 1034.37}}))
+    row = price_audit.check_run(_saved("x", "6364-01", 1034.37, own))
+    assert row["verdict"] == "not checked" and "declares drawing 12674-01-GA" in row["why"]
+
+
+def test_a_run_whose_record_priced_other_quantities_is_held_not_rewritten(tmp_path, capsys):
+    own = _run_files(tmp_path, "11896-02-01-GA", "20261110_135633", 1311.40, {1: 1311.40, 8: 943.47})
+    run = _saved("ad01", "11896-02-01-GA", 898.96, own, {1: 898.96, 68: 423.85}, started="20261110_130000")
+    run["quantity_breaks"] = [1, 68]
+    path = _saved_run_file(tmp_path / "runs", run)
+    was = path.read_text()
+    price_correct.main(["--runs", str(tmp_path / "runs"), "--apply"])
+    out = capsys.readouterr().out
+    assert "HELD" in out and "[1, 68]" in out and "[1, 8]" in out
+    assert path.read_text() == was
+    run["quantity_breaks"] = [1, 8]                 # the run was asked for what the record priced
+    path.write_text(json.dumps(run))
+    price_correct.main(["--runs", str(tmp_path / "runs"), "--apply"])
+    assert json.loads(path.read_text())["engine_price_gbp"] == 1311.40

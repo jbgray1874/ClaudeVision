@@ -137,7 +137,23 @@ def check_run(run: Dict[str, Any]) -> Dict[str, Any]:
         return dict(out, verdict="not checked", why=f"{item.get('name')} could not be read: {exc}")
     own, own_q = unit_cost_from(record), quantity_prices_from(record)
     out.update(record=item.get("name"), record_path=str(item.get("path")), own=own, own_by_quantity=own_q)
+    # THE RECORD MUST SAY IT IS THIS RUN'S (reviewer, 12 Nov 2026: "positively matched to the
+    # same run, drawing and quantities, not merely the same drawing's latest record"). Its
+    # name ties it to the run's workbook; what it holds must agree: the drawing it declares,
+    # and the quantities it priced against the quantities this run was asked for.
+    declared = str(record.get("declared_product") or record.get("job_output_stem") or "")
+    asked = sorted({int(q) for q in (run.get("quantity_breaks") or []) if str(q).isdigit() or isinstance(q, int)}
+                   | ({int(run["units"])} if str(run.get("units") or "").isdigit() else set()))
+    out.update(record_declares=declared, asked_quantities=asked, priced_quantities=sorted(own_q) or
+               ([int(float(record.get("requested_order_quantity")))] if str(record.get("requested_order_quantity") or "").replace(".", "", 1).isdigit() else []))
+    if declared and orc._key(declared) != orc._key(run.get("drawing_number")):
+        return dict(out, verdict="not checked",
+                    why=f"{item.get('name')} declares drawing {declared}, not this run's {run.get('drawing_number')}")
+    out["quantities_match"] = (not asked or not out["priced_quantities"]
+                               or set(asked) == set(out["priced_quantities"]))
     wrong = []
+    if not out["quantities_match"]:
+        wrong.append(f"this run was asked for quantities {asked}; its record priced {out['priced_quantities']}")
     if out["shown"] is not None and own is not None and abs(float(out["shown"]) - own) > 0.005:
         wrong.append(f"shows {out['shown']} at one off, its record says {own}")
     if out["shown"] is None and own is not None:

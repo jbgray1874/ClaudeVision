@@ -43,6 +43,13 @@ def proposal(run: Dict[str, Any], row: Dict[str, Any]) -> Optional[Dict[str, Any
     theirs = set(row.get("other_jobs_files") or [])
     own, own_q = row.get("own"), row.get("own_by_quantity") or {}
     changes: List[Dict[str, Any]] = []
+    # ONLY FROM A RECORD POSITIVELY THE RUN'S: same drawing declared, same quantities as asked.
+    # A run whose record priced other quantities than it was asked for is reported, not rewritten.
+    if row.get("verdict") == "MISMATCH" and own is not None and row.get("quantities_match") is False:
+        return {"run_id": run.get("run_id"), "drawing": run.get("drawing_number"), "record": row.get("record"),
+                "changes": [], "email": row.get("email") or {},
+                "held": f"not corrected: asked for {row.get('asked_quantities')}, its record priced "
+                        f"{row.get('priced_quantities')}. Which quantities were wanted must be confirmed first"}
     if row.get("verdict") == "MISMATCH" and own is not None:
         if run.get("engine_price_gbp") != own:
             changes.append({"field": "engine_price_gbp", "from": run.get("engine_price_gbp"), "to": own})
@@ -114,8 +121,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         prop = proposal(run, rows.get(rid) or {})
         if not prop:
             continue
+        if prop.get("held"):
+            print(f"\n{prop['drawing']}  run {rid}   own record: {prop.get('record')}\n  HELD, {prop['held']}")
+            continue
         props.append(prop)
-        print(f"\n{prop['drawing']}  run {rid}   own record: {prop.get('record')}")
+        print(f"\n{prop['drawing']}  run {rid}   own record: {prop.get('record')}"
+              f"\n  matched: record declares {rows[rid].get('record_declares') or '?'}; asked for quantities "
+              f"{rows[rid].get('asked_quantities') or '?'}, record priced {rows[rid].get('priced_quantities') or '?'}")
         for c in prop["changes"]:
             if c["field"] == "engine_price_gbp":
                 print(f"  price at 1 off      {c['from']}  ->  {c['to']}")
