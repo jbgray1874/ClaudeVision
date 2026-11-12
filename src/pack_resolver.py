@@ -214,7 +214,13 @@ def read_drawing(path: Path, drawing: str, read_text: Callable[[Path], str] = re
     """What a PDF drawing says about itself: does it carry this number, which revision, what it references."""
     text = read_text(path) if path.suffix.lower() == ".pdf" else ""
     flat = re.sub(r"\s+", "", text).upper()
-    carries = bool(text) and re.sub(r"[\s_]", "", drawing).upper() in flat
+    # THE NUMBER AS THE TITLE BLOCK PRINTS IT (12 Nov 2026): 12674-01-GA and 12674-02-GA were
+    # read, yet "the GA is matched by file name; its own title block did not confirm". A title
+    # block prints the number across boxes, "12674-01" and "GA", or with other dashes; compared
+    # letter for letter with its hyphens the number was never found. Letters and digits only.
+    _only = lambda t: re.sub(r"[^0-9A-Z]", "", str(t).upper())          # noqa: E731
+    carries = bool(text) and (re.sub(r"[\s_]", "", drawing).upper() in flat
+                              or (len(_only(drawing)) >= 7 and _only(drawing) in _only(text)))
     up = text.upper()
     revs = [r for r in _REV_TEXT.findall(up) if revision_rank(r) and r not in _REV_HEADINGS]
     best = ""

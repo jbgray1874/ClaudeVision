@@ -166,3 +166,11 @@ def test_a_file_with_no_drawing_number_in_its_name_is_assigned_by_its_text_or_li
     assert "11999-01-02M" not in {x["drawing"] for x in m["members"]}
     assert not any("Old back panel" in str(v) for v in (m["unassigned_files"], m["assigned_by_text"]))
     assert any("NOT in the pack" in a for a in m["assumptions"])
+
+
+def test_a_title_block_that_prints_the_number_across_boxes_still_confirms_it():
+    for printed in ("DWG No 12674-01-GA REV B", "DWG No\n12674-01\nGA\nREV B", "12674 - 01 - GA", "12674-01 GA"):
+        got = pr.read_drawing(Path("x.pdf"), "12674-01-GA", lambda p: printed)
+        assert got["carries_number"], printed
+    assert not pr.read_drawing(Path("x.pdf"), "12674-01-GA", lambda p: "12674-02-GA REV B")["carries_number"]
+    assert not pr.read_drawing(Path("x.pdf"), "12674-01-GA", lambda p: "")["carries_number"]

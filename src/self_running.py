@@ -106,6 +106,20 @@ def recent_runs(ledger: Dict[str, Any], limit: int = RECENT_RUNS_SHOWN,
     return out[:limit]
 
 
+def recent_from_ledger(ledger_path: Any) -> List[Dict[str, Any]]:
+    """The Latest runs list straight from the ledger on disk, for a beat that ran no cycle.
+
+    THE LIST, AND ITS RE-RUN BUTTONS, SURVIVE A RESTART AND THE SWITCH BEING OFF (JG, 12 Nov
+    2026: "where have all the re-run buttons gone on the portal now?"). The list was sent only
+    after a read of the sheet, and the service keeps it in memory: each publish restarted the
+    service, and with Self-Running switched off no read followed, so the card showed no runs
+    and no buttons. The ledger holds them; every beat carries them. Never stops a beat."""
+    try:
+        return recent_runs(ler.load_ledger(Path(str(ledger_path))))
+    except Exception:                                                # noqa: BLE001
+        return []
+
+
 def report(phase: str, message: str = "", **extra: Any) -> Dict[str, Any]:
     return {"host": socket.gethostname(), "pid": os.getpid(), "phase": phase,
             "message": message, "at": ler._now(), **extra}
@@ -815,7 +829,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         next_cycle = 0.0
         while True:
             on = switch.beat(report("idle", "waiting for the next read of the sheet"
-                                    if next_cycle else "started; waiting for the switch"))
+                                    if next_cycle else "started; waiting for the switch",
+                                    recent=recent_from_ledger(s["ledger"])))
             ler._touch_lock(s["ledger"])
             pressed = bool(switch.last.get("run_now")) or bool(getattr(switch, "reruns", []))
             if on and (pressed or time.time() >= next_cycle):
