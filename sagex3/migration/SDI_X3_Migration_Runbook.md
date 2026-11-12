@@ -1969,3 +1969,39 @@ The X3 version goes to Acuity with the reports list (SCRUM-212).
 - **Access per-customer rebate % (CU_USRNUM1) = 0 for every customer on the report.** The 6% is not taken from the customer account.
 - Descriptions on Claire's report are the order-line text; ours are the part description (PMA_DESC_1). The values are not affected.
 - **Live report:** `rebate/live/out/SDI_Rebate_Rolling_2026-11.html` and `.xlsx`. The sample stays in `rebate/out` (invoice basis, rebuilt from the PDF).
+
+### 20.3 Rebate report – Jira, register, and a web app to re-run it (12 Nov)
+
+**Jira SCRUM-275:**
+- Moved to **In Progress**.
+- The description is rewritten: how the report works (proved), step 1 done, web app to come.
+- A comment records the live reconciliation: to the penny by due date; December £17,295.60 out by invoice date; the two differences; Access customer rebate % = 0.
+
+**Register REP-22:** status **In test**. The next action is Claire's four confirmations, then the X3 version.
+
+**The query now takes an end month.** `rebate_rolling.sql` has `@end_month` (default: this month), with `@from` = 12 months earlier and `@to` = the month after. That's 13 months, and nothing after the window is pulled in, so a past month can be re-run cleanly.
+
+**Web app: `sagex3/reports/rebate/rebate_app.py`.**
+- **Built on Python's own web server.** Nothing to install but `openpyxl`, plus `pyodbc` for "Run from Access". (Flask isn't available in the build environment and isn't needed.)
+- **To run it, on a PC or server inside SDI that can reach SDILive:**
+  ```
+  pip install openpyxl pyodbc
+  set SDI_SQL_CONN=DRIVER={ODBC Driver 17 for SQL Server};SERVER=<server>;DATABASE=SDILive;Trusted_Connection=yes;ApplicationIntent=ReadOnly
+  python rebate_app.py                 (http://localhost:8765)
+  python rebate_app.py --host 0.0.0.0  (shared on the SDI network - there's no login, so keep it inside SDI)
+  ```
+- **What the page does:**
+  - **Run from Access:** pick the last month of the 12, the month basis (due / invoice / order) and the rebate %. It runs the same `rebate_rolling.sql` read-only (pyodbc `readonly=True`).
+  - **Paste:** the SQL Server grid, with or without the heading row (the missing heading that caught us on 12 Nov is added automatically). Rows with fewer than 11 columns are refused, with the reason shown.
+  - **Every run is kept** in `runs/<timestamp>_<YYYY-MM>/`: `rebate_lines.txt`, the HTML and the xlsx. They're listed on the page with the sales and rebate, and the Excel can be downloaded.
+  - `runs/` is in `.gitignore`, because it names customers.
+- **Tests (12 Nov):**
+  - Paste the 37 live rows with no heading: report £549,211.31 / £32,952.68; Excel downloads.
+  - "Run from Access" without a connection: refused, with the reason on the page.
+  - A bad paste: refused.
+  - "Run from Access" through a stand-in pyodbc that replays the 37 rows: it checks the SQL has the end month set, contains no INSERT / UPDATE / DELETE / DROP / ALTER, and the connection is read-only. Result £549,211.31 / £32,952.68.
+  - Checked at desktop and phone width.
+- **Still to do:**
+  - James to choose the machine and the SQL login (read-only).
+  - Optionally a Windows scheduled task to start it at boot.
+  - Re-run when Claire answers.

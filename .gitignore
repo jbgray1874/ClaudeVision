@@ -27,3 +27,5 @@ output/
 *.xlsx
 
 *.sql
+# rebate report runs name customers - keep them out of git
+sagex3/reports/rebate/runs/

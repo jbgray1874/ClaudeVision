@@ -8,7 +8,9 @@
 SET NOCOUNT ON;
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 
-DECLARE @from date = DATEADD(month, -12, DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1));
+DECLARE @end_month date = DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1);   -- last month of the 12 (the web app sets it)
+DECLARE @from date = DATEADD(month, -12, @end_month);    -- 13 months: the Access report also lists the month before
+DECLARE @to   date = DATEADD(month, 1, @end_month);
 
 SELECT LTRIM(RTRIM(i.TBI_CUS))                                   AS customer_code,
        LTRIM(RTRIM(ISNULL(a.CUNAME, '')))                        AS customer_name,
@@ -29,7 +31,7 @@ LEFT JOIN COR_TBL c       ON i.TBI_PART_ONLY = c.COR_PART_ONLY AND i.TBI_PART_RE
 LEFT JOIN SL_ACCOUNTS2 s  ON s.CUCODE2 = i.TBI_CUS COLLATE LATIN1_GENERAL_BIN
 LEFT JOIN SL_ACCOUNTS a   ON a.CUCODE = i.TBI_CUS COLLATE LATIN1_GENERAL_BIN
 OUTER APPLY (SELECT TOP 1 PMA_DESC_1 FROM PMA_TBL WHERE PMA_PART_ONLY = i.TBI_PART_ONLY) p   -- one row per part, never duplicates
-WHERE i.TBI_INVOICE_DATE >= @from
+WHERE i.TBI_INVOICE_DATE >= @from AND i.TBI_INVOICE_DATE < @to
   AND LTRIM(RTRIM(i.TBI_PART_ONLY)) IN (
       '10932-00-GA1 HAR', '10932-00-GA1 M&M', '10932-00-GA HVL', '10932-00-GA1 KEN', '10932-00-GA1 B/B',
       '10932-00-GA1 BEL', '10932-00-GA1 CAD', '10932-00-GA1 TOB', '10932-00-GA1 BRU', '10932-00-GA1 NES',
