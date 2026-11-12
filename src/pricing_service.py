@@ -391,6 +391,46 @@ def _claimed_as_bought(part: Dict[str, Any]) -> bool:
         return False
 
 
+def made_here_reason(part: Dict[str, Any]) -> str:
+    """Why this line is something SDI makes, or "" when it may be bought: fabrication evidence
+    of its own, SDI's cut-part numbering (a material letter on the code), or a place in the
+    structure as an assembly of costed members."""
+    try:
+        from bought_in_policy import has_fabrication_evidence
+        if has_fabrication_evidence(part):
+            return "the part has measured geometry of its own, so SDI makes it"
+    except Exception:                                                # noqa: BLE001
+        pass
+    try:
+        from part_code_conventions import material_suffix
+        if str(part.get("_estimator_make_or_buy") or "").strip().lower() != "buy" \
+                and material_suffix(str(part.get("part_number") or "")):
+            return "its number carries SDI's cut-part material letter, so SDI makes it"
+    except Exception:                                                # noqa: BLE001
+        pass
+    if part.get("assembly_children") or part.get("is_assembly") or part.get("is_rollup_parent"):
+        return "it is an assembly whose members are costed on their own lines"
+    # DRAWN UNDER SDI'S OWN JOB NUMBER, AND NOT SAID TO BE BOUGHT. "12674-01-01J", "6364-02-011":
+    # job, assembly, item. A supplier's article ("HAFELE: 637.30.941", "FIXING308", "GGC-10-401")
+    # is not numbered that way, and a part SDI draws but buys says so (the X suffix, a make-or-
+    # buy ruling, the bought-in policy).
+    code = str(part.get("part_number") or "").strip().upper()
+    if _SDI_DRAWN_PART.match(code):
+        try:
+            from bought_in_policy import is_bought_in
+            from part_code_conventions import purchased_suffix
+            bought = bool(purchased_suffix(code)) or is_bought_in(part) \
+                or str(part.get("_estimator_make_or_buy") or "").strip().lower() == "buy"
+        except Exception:                                            # noqa: BLE001
+            bought = False
+        if not bought:
+            return "it is drawn under SDI's own job number and nothing says it is bought"
+    return ""
+
+
+_SDI_DRAWN_PART = re.compile(r"^\d{4,5}[A-Z]?-\d{2}(?:-\d{2})?-\d{2,3}[A-Z]{0,2}$")
+
+
 def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = True,
                               structure_decides: bool = True) -> bool:
     """May a market price be asked for this line at all? False for anything we make or build.
@@ -1608,7 +1648,22 @@ class PricingService:
         bought = self._get_bought_in_part(part)
         if bought:
             return bought
+        # A PART WE MAKE IS NOT PRICED FROM ANOTHER JOB'S QUOTE LINE (reviewer, 12 Nov 2026:
+        # "prevent weak historical matches becoming authoritative prices, prevent bought-complete
+        # and manufactured-component double charging"). The historical lookup matches WORDS, at
+        # 45% overlap and up: 6364-02's bin was charged £569.92 from a 50% match to a different
+        # drawing's "BIN SLOPE" while its own components and labour were charged beside it, and
+        # 12674-01-GA's panels took £1,009 and £1,890 from other jobs' lines. A quote line for
+        # somebody else's finished item is no price for material we cut ourselves; that is
+        # costed from its own blank and operations. The lookup stays for what we buy.
+        _made = made_here_reason(part)
         historical = self._get_historical_rag(part)
+        if historical and _made:
+            print(f"   [pricing] {str(part.get('part_number') or '')[:40]}: a historical quote line "
+                  f"(GBP {float(historical.get('unit_price_gbp') or 0):.2f}, "
+                  f"{float(historical.get('token_overlap_score') or 0):.0%} word match) is NOT used: "
+                  f"{_made}", flush=True)
+            historical = None
         if historical:
             return historical
         catalog = self._get_supplier_catalog(part)
