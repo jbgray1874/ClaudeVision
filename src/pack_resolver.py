@@ -234,11 +234,28 @@ def read_drawing(path: Path, drawing: str, read_text: Callable[[Path], str] = re
             "sheet_of": f"{_sh.group(1)} of {_sh.group(2)}" if _sh and int(_sh.group(2)) > 1 else ""}
 
 
-_SPLIT_ASSEMBLY = re.compile(r"(?<![0-9A-Z\-/.:])(\d{3,}[A-Z]?(?:-\d+[A-Z]?)+)[ ]?(GA|SA|ASSY|ASM)(?![0-9A-Z])")
+_SPLIT_ASSEMBLY = re.compile(r"(?<![0-9A-Z\-/.:])(\d{3,}[A-Z]?(?:-\d+[A-Z]?)+)[ ](GA|SA|ASSY|ASM)(?![0-9A-Z])")
+_TAIL_ASSEMBLY = re.compile(r"^(.*\d)-?(GA|SA|ASSY|ASM)(\d*)$")
+
+
+def spellings(drawing: str) -> List[str]:
+    """One assembly number as it may be written: 12674-01-101SA and 12674-01-101-SA are the
+    same drawing (12 Nov 2026: joining every glued form with a dash made the estimator's own
+    "12674-01-101SA.SLDASM" a missing reference). The number as given comes first."""
+    d = str(drawing or "").upper()
+    m = _TAIL_ASSEMBLY.match(d)
+    if not m:
+        return [d]
+    out = [d]
+    for alt in (f"{m.group(1)}-{m.group(2)}{m.group(3)}", f"{m.group(1)}{m.group(2)}{m.group(3)}"):
+        if alt not in out:
+            out.append(alt)
+    return out
 
 
 def _joined_assembly_words(text: str) -> str:
-    """"12773-02 GA" and "12773-02GA" in a parts list are drawing 12773-02-GA."""
+    """"12773-02 GA" in a parts list is drawing 12773-02-GA. A glued "12773-02GA" is kept as
+    printed and matched by `spellings`."""
     return _SPLIT_ASSEMBLY.sub(r"\1-\2", text)
 
 
@@ -589,6 +606,20 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                            or not re.fullmatch(r"\d{1,2}", x[len(a) + 1:])}
         for x in sorted(refs_of[a]):
             if _same(x, a) or _same(x, drawing) or not _looks_drawing(x):
+                continue
+            # the same assembly, however its word is joined to its number
+            _alts = spellings(x)
+            _held = next((g for alt in _alts for g in groups if _same(g, alt)), None)
+            if _held is None and len(_alts) > 1:
+                if wider is None:
+                    wider = _members(wider_rows, drawing)
+                _held = next((g for alt in _alts[1:] for g in wider if _same(g, alt)), None)
+                if _held is None and lookup:
+                    _held = next((alt for alt in _alts[1:]
+                                  if any(not _archive_path(f[0]) for f in lookup(alt))), None)
+            if _held is not None:
+                x = _held
+            if any(_same(x, alt) for alt in spellings(a)) or any(_same(x, alt) for alt in spellings(drawing)):
                 continue
             all_refs.add(x)
             parent_of.setdefault(x, a)

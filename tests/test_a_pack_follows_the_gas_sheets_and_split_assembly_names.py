@@ -104,8 +104,23 @@ def test_the_lower_body_the_ga_calls_for_is_gathered_with_its_parts():
 
 def test_a_glued_assembly_word_in_a_parts_list_is_the_same_reference():
     got = pr.read_drawing(Path("x.pdf"), "12773-01-GA", lambda p: "12773-02GA LOWER\n12773-03 SA UPPER\n2400-1200 SHEET")
-    assert "12773-02-GA" in got["references"] and "12773-03-SA" in got["references"]
-    assert "12773-02GA" not in got["references"]
+    assert "12773-02GA" in got["references"] and "12773-03-SA" in got["references"]
+    assert pr.spellings("12773-02GA") == ["12773-02GA", "12773-02-GA"]
+    assert pr.spellings("12674-01-101-SA") == ["12674-01-101-SA", "12674-01-101SA"]
+    assert pr.spellings("12674-01-01J") == ["12674-01-01J"]
+
+
+def test_a_glued_assembly_file_is_not_a_missing_reference():
+    """12674-01-GA on the real share, 12 Nov 2026: "INCOMPLETE: 12674-01-101-SA not found" while
+    12674-01-101SA.SLDASM sat in the pack."""
+    tech = SHARE / "M&S" / "12674 - Table" / "12674-Technical" / "12674-01 Single"
+    rows = [(tech, [_f(tech, "0359829_12674-01-GA_Table_revB.PDF"), _f(tech, "12674-01-GA.SLDASM"),
+                    _f(tech, "12674-01-101SA.SLDASM"), _f(tech, "12674-01-01J.SLDPRT")], False)]
+    for printed in ("12674-01-101SA", "12674-01-101 SA", "12674-01-101-SA"):
+        read = _texts({"0359829": f"12674-01-GA REV B\n1 {printed} BASE ASSY 1\n2 12674-01-01J TOP 1"})
+        m = pr.resolve("12674-01-GA", rows, client="M&S", read_text=read)
+        assert m["missing"] == [], (printed, m["missing"])
+        assert "12674-01-101SA" in {x["drawing"] for x in m["members"]}, printed
 
 
 def test_sheets_that_say_so_are_one_drawing_and_others_are_asked_about():
