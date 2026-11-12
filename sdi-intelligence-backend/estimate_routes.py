@@ -1576,57 +1576,6 @@ def grid_rerun(req: GridRerunRequest, x_sdi_key: Optional[str] = Header(default=
         raise HTTPException(400, str(exc))
 
 
-@router.post("/{run_id}/rerun")
-def rerun(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
-    """Queue a finished job again (see above). Returns how it was queued."""
-    _check_key(x_sdi_key)
-    with _LOCK:
-        run = _RUNS.get(run_id)
-        if run is None:
-            raise HTTPException(404, "That run is not on this service.")
-        if run.status in ("queued", "running"):
-            raise HTTPException(409, f"{run.drawing_number} is still {run.status}: stop it first, or let it finish.")
-        client, drawing, source = run.client, run.drawing_number, str(run.source or "")
-        folder = Path(str(run.job_folder or ""))
-        units, breaks = int(run.units), list(run.quantity_breaks or [])
-        method, email = _rerun_method(run), ", ".join(run.email_to or []) or None
-        bom_routes = bool(run.bom_routes_only)
-    if source == "Self-Running":
-        try:
-            out = self_running_switch.rerun(drawing, client, by="Grid Control")
-        except ValueError as exc:
-            raise HTTPException(400, str(exc))
-        return {"ok": True, "how": "self_running", "drawing": drawing,
-                "said": f"{drawing} handed back to Self-Running: it reads the Live Enquiry sheet and "
-                        f"gathers the pack again on its next beat", "self_running": out}
-    if not folder.is_dir():
-        raise HTTPException(409, f"The inputs {drawing} ran from are no longer at {folder}: start it "
-                                 f"again from the estimating page.")
-    import shutil
-    hold = _held_dir("rerun") / f"{safe_segment(drawing)[:40]}_{uuid.uuid4().hex[:6]}"
-    copied = 0
-    for p in sorted(folder.rglob("*")):
-        if p.is_file() and not _STAGE_MARKER.fullmatch(p.name):
-            dest = hold / p.relative_to(folder)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(p, dest)
-            copied += 1
-    brief_path = folder / _BRIEF_FILENAME
-    brief = brief_path.read_text(encoding="utf-8", errors="replace") if brief_path.is_file() else ""
-    if not copied and not brief.strip():
-        raise HTTPException(409, f"{drawing}'s staged inputs are empty: start it again from the estimating page.")
-    req = EstimateRequest(client=client, drawing_number=drawing, units=units, quantity_breaks=breaks,
-                          job_folder=str(hold) if copied else None, method=method,
-                          enquiry_brief=brief or None, email_to=email, bom_routes_only=bom_routes,
-                          source=(source + " re-run").strip() if source else "Re-run")
-    started = start(req, x_sdi_key=x_sdi_key)
-    note = (" A TTI row re-run here does not write the tracker: run the pricer with --rows N "
-            "--replace-costs for that." if source == "TTI batch" else "")
-    return {"ok": True, "how": "queued", "drawing": drawing, "run_id": (started or {}).get("run_id"),
-            "said": f"{drawing} queued again with the {copied} input file(s) its last run read, "
-                    f"{units} off, method {method}.{note}"}
-
-
 @router.post("/grid/stop")
 def grid_stop(req: GridStopRequest, x_sdi_key: Optional[str] = Header(default=None)):
     """Stop a job that is on ANOTHER service of the grid, from this one's Grid Control. The
@@ -2783,6 +2732,63 @@ def self_running_heartbeat(report: Dict[str, Any], request: Request,
     if home:
         return _self_running_at_home(home, "POST", "/heartbeat", report or {})
     return self_running_switch.heartbeat(report or {})
+
+
+
+# A RE-RUN BY RUN ID IS DECLARED AFTER EVERY ROUTE WITH A FIXED NAME IN ITS PLACE (JG and the
+# reviewer, 12 Nov 2026: "Could not ask for a re-run: That run is not on this service"). It sat
+# above /self-running/rerun, so the Self-Running button's request was read as a re-run of a run
+# called "self-running", found none, and was refused; nothing was queued. A test walks every
+# route of this router and fails if a pattern can swallow a fixed path declared after it.
+@router.post("/{run_id}/rerun")
+def rerun(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """Queue a finished job again (see above). Returns how it was queued."""
+    _check_key(x_sdi_key)
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        if run is None:
+            raise HTTPException(404, "That run is not on this service.")
+        if run.status in ("queued", "running"):
+            raise HTTPException(409, f"{run.drawing_number} is still {run.status}: stop it first, or let it finish.")
+        client, drawing, source = run.client, run.drawing_number, str(run.source or "")
+        folder = Path(str(run.job_folder or ""))
+        units, breaks = int(run.units), list(run.quantity_breaks or [])
+        method, email = _rerun_method(run), ", ".join(run.email_to or []) or None
+        bom_routes = bool(run.bom_routes_only)
+    if source == "Self-Running":
+        try:
+            out = self_running_switch.rerun(drawing, client, by="Grid Control")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        return {"ok": True, "how": "self_running", "drawing": drawing,
+                "said": f"{drawing} handed back to Self-Running: it reads the Live Enquiry sheet and "
+                        f"gathers the pack again on its next beat", "self_running": out}
+    if not folder.is_dir():
+        raise HTTPException(409, f"The inputs {drawing} ran from are no longer at {folder}: start it "
+                                 f"again from the estimating page.")
+    import shutil
+    hold = _held_dir("rerun") / f"{safe_segment(drawing)[:40]}_{uuid.uuid4().hex[:6]}"
+    copied = 0
+    for p in sorted(folder.rglob("*")):
+        if p.is_file() and not _STAGE_MARKER.fullmatch(p.name):
+            dest = hold / p.relative_to(folder)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, dest)
+            copied += 1
+    brief_path = folder / _BRIEF_FILENAME
+    brief = brief_path.read_text(encoding="utf-8", errors="replace") if brief_path.is_file() else ""
+    if not copied and not brief.strip():
+        raise HTTPException(409, f"{drawing}'s staged inputs are empty: start it again from the estimating page.")
+    req = EstimateRequest(client=client, drawing_number=drawing, units=units, quantity_breaks=breaks,
+                          job_folder=str(hold) if copied else None, method=method,
+                          enquiry_brief=brief or None, email_to=email, bom_routes_only=bom_routes,
+                          source=(source + " re-run").strip() if source else "Re-run")
+    started = start(req, x_sdi_key=x_sdi_key)
+    note = (" A TTI row re-run here does not write the tracker: run the pricer with --rows N "
+            "--replace-costs for that." if source == "TTI batch" else "")
+    return {"ok": True, "how": "queued", "drawing": drawing, "run_id": (started or {}).get("run_id"),
+            "said": f"{drawing} queued again with the {copied} input file(s) its last run read, "
+                    f"{units} off, method {method}.{note}"}
 
 
 @router.get("/recipients")
