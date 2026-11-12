@@ -129,3 +129,125 @@ def test_the_audit_checks_a_ledger_cost_against_its_run_and_says_if_it_was_writt
     assert rows["17|12424-02-GA|500"]["verdict"] == "ok"
     assert rows["18|12424-02-GA|500"]["verdict"] == "MISMATCH" and "WRITTEN" in rows["18|12424-02-GA|500"]["why"]
     assert rows["19|X|1"]["verdict"] == "not checked"
+
+
+# ── two runs at once, one output folder (reviewer, 12 Nov 2026) ─────────────────────────────
+import os
+import time
+
+import price_correct  # noqa: E402
+
+
+def _engine_writes(root: Path, job: str, stamp: str, unit: float):
+    est = root / "output" / "estimates"
+    est.mkdir(parents=True, exist_ok=True)
+    made = _run_files(est, job, stamp, unit)
+    for suffix in ("_covering_email.html", "_covering_email.txt", "_walkthrough.txt", "_walkthrough.wav"):
+        f = est / f"{job}_{stamp}{suffix}"
+        f.write_text("<!-- subject: x -->" if suffix.endswith(".html") else "x", encoding="utf-8")
+        made.append({"name": f.name, "path": str(f)})
+    return made
+
+
+def test_two_runs_at_once_in_one_output_folder_do_not_exchange_results(tmp_path):
+    root = tmp_path / "engine"
+    (root / "output" / "estimates").mkdir(parents=True)
+    now = time.time()
+    stamp_a = time.strftime("%Y%m%d_%H%M%S", time.localtime(now))
+    stamp_b = time.strftime("%Y%m%d_%H%M%S", time.localtime(now + 1))
+    before_a = runner.snapshot(root)          # runner A starts 12674-01-GA
+    before_b = runner.snapshot(root)          # runner B starts 6364-01 while A is running
+    _engine_writes(root, "12674-01-GA", stamp_a, 1034.37)
+    _engine_writes(root, "6364-01", stamp_b, 1383.58)
+    log_a, log_b = [], []
+    filed_a = runner.collect(root, tmp_path / "share_a", before_a, log_a, "12674-01-GA", started_at=now - 5)
+    filed_b = runner.collect(root, tmp_path / "share_b", before_b, log_b, "6364-01", started_at=now - 5)
+    names_a = {f["name"] for f in filed_a}
+    names_b = {f["name"] for f in filed_b}
+    assert not any(n.startswith("6364-01_") for n in names_a)
+    assert not any(n.startswith("12674-01-GA_") for n in names_b)
+    assert f"12674-01-GA_{stamp_a}.xlsx" in names_a and f"6364-01_{stamp_b}.xlsx" in names_b
+    assert f"6364-01_{stamp_b}_record.json" in names_b and f"6364-01_{stamp_b}_covering_email.html" in names_b
+    assert any("left behind" in line and "12674-01-GA" in line for line in log_b)
+    assert runner._unit_cost_from_deliverables(filed_a, "12674-01-GA", now - 5) == 1034.37
+    assert runner._unit_cost_from_deliverables(filed_b, "6364-01", now - 5) == 1383.58
+
+
+def test_the_service_does_not_take_another_jobs_files_from_an_older_runner(tmp_path):
+    sys.path.insert(0, str(ROOT / "sdi-intelligence-backend"))
+    import estimate_routes as er
+    theirs = _engine_writes(tmp_path / "a", "12674-01-GA", "20261111_141715", 1034.37)
+    own = _engine_writes(tmp_path / "b", "6364-01", "20261111_143000", 1383.58)
+
+    class _Run:
+        drawing_number, started_at, said = "6364-01", _at("20261111_141000"), []
+        def line(self, text):
+            self.said.append(text)
+    run = _Run()
+    kept = er._only_this_runs_files(run, theirs + own)
+    assert {f["name"] for f in kept} == {f["name"] for f in own}
+    assert any("named for another job" in t for t in run.said)
+    import estimate_email
+    assert "6364-01" in Path(next(f["path"] for f in kept if f["name"].endswith("_covering_email.html"))).name
+    assert estimate_email.engine_note(kept) is not None
+
+
+# ── the correction shows its changes first and keeps the original ───────────────────────────
+def _saved_run_file(runs: Path, run: dict) -> Path:
+    runs.mkdir(exist_ok=True)
+    p = runs / f"{run['run_id']}.json"
+    p.write_text(json.dumps(run), encoding="utf-8")
+    return p
+
+
+def test_the_correction_proposes_first_and_changes_nothing(tmp_path, capsys):
+    late = _engine_writes(tmp_path / "a", "12674-01-GA", "20261111_141715", 1034.37)
+    own = _run_files(tmp_path, "6364-01", "20261111_143000", 1383.58, {1: 1383.58, 5: 974.39})
+    run = _saved("b45095", "6364-01", 1034.37, late + own, {1: 1034.37, 5: 769.03})
+    run["email_result"] = {"sent": True, "recipients": ["a@x", "b@x"],
+                           "attached": [f["name"] for f in late + own if not f["name"].endswith("_covering_email.html")]}
+    path = _saved_run_file(tmp_path / "runs", run)
+    was = path.read_text()
+    assert price_correct.main(["--runs", str(tmp_path / "runs")]) == 0
+    out = capsys.readouterr().out
+    assert "1034.37  ->  1383.58" in out and "5: 974.39" in out
+    assert "12674-01-GA_20261111_141715.xlsx" in out and "left on disk" in out
+    assert "ANOTHER JOB'S NOTE" in out and "sent to 2 recipient(s)" in out
+    assert "Nothing was changed" in out
+    assert path.read_text() == was and not (tmp_path / "runs" / "corrections").exists()
+
+
+def test_applying_keeps_the_original_and_deletes_no_file(tmp_path, capsys):
+    late = _engine_writes(tmp_path / "a", "12674-01-GA", "20261111_141715", 1034.37)
+    own = _run_files(tmp_path, "6364-01", "20261111_143000", 1383.58, {1: 1383.58, 5: 974.39})
+    run = _saved("b45095", "6364-01", 1034.37, late + own, {1: 1034.37, 5: 769.03})
+    path = _saved_run_file(tmp_path / "runs", run)
+    ok = _saved_run_file(tmp_path / "runs", _saved("fine", "6364-01", 1383.58, own, {1: 1383.58, 5: 974.39}))
+    ok_was = ok.read_text()
+    price_correct.main(["--runs", str(tmp_path / "runs"), "--apply"])
+    now = json.loads(path.read_text())
+    assert now["engine_price_gbp"] == 1383.58
+    assert now["quantity_prices"] == [{"quantity": 1, "unit_gbp": 1383.58}, {"quantity": 5, "unit_gbp": 974.39}]
+    assert {d["name"] for d in now["deliverables"]} == {f["name"] for f in own}
+    assert {d["name"] for d in now["set_aside_files"]} == {f["name"] for f in late}
+    assert all(Path(f["path"]).is_file() for f in late + own), "no file is deleted or moved"
+    kept = list((tmp_path / "runs" / "corrections").glob("b45095.*.before.json"))
+    assert len(kept) == 1 and json.loads(kept[0].read_text())["engine_price_gbp"] == 1034.37
+    assert ok.read_text() == ok_was
+    assert price_audit.check_run(now)["verdict"] == "ok"
+    # a second pass has nothing left to do, and the service's own loader ignores the copies
+    capsys.readouterr()
+    price_correct.main(["--runs", str(tmp_path / "runs")])
+    assert "0 saved run(s) would change" in capsys.readouterr().out
+    assert sorted(p.name for p in (tmp_path / "runs").glob("*.json")) == ["b45095.json", "fine.json"]
+
+
+def test_a_record_filed_with_another_run_is_located_and_checked(tmp_path):
+    a = _run_files(tmp_path, "12674-01-GA", "20261111_141715", 1034.37)
+    b = _run_files(tmp_path, "6364-01", "20261111_143000", 1383.58)
+    runs = tmp_path / "runs"
+    _saved_run_file(runs, _saved("c2623d", "12674-01-GA", 1034.37, a[:1]))        # its record went elsewhere
+    _saved_run_file(runs, _saved("b45095", "6364-01", 1034.37, a + b))
+    rows = {r["run_id"]: r for r in price_audit.check_runs(runs)}
+    assert rows["c2623d"]["verdict"] == "ok" and "filed with run b45095" in rows["c2623d"]["record_found"]
+    assert rows["b45095"]["verdict"] == "MISMATCH"

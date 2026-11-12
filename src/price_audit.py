@@ -67,6 +67,51 @@ def quantity_prices_from(summary: Any) -> Dict[int, float]:
     return out
 
 
+_NOTE = ("_covering_email.html", "_covering_note.html")
+
+
+def email_evidence(run: Dict[str, Any], files: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """What the service recorded about this run's e-mail: whether it went, to how many, the
+    attachment names it listed, and which covering note was the message. The service takes
+    the FIRST note among the run's files as the message, so another job's note filed with
+    the run can be the e-mail itself. This is the service's record, not the mailbox."""
+    res = run.get("email_result") or {}
+    drawing, started = str(run.get("drawing_number") or ""), float(run.get("started_at") or 0.0)
+    theirs = set(orc.other_jobs_files(files, drawing, started))
+    attached = [str(a) for a in (res.get("attached") or [])]
+    note = next((str(f.get("name")) for f in files
+                 if any(m in str(f.get("path") or "").lower() for m in _NOTE)), None)
+    return {"sent": bool(res.get("sent")), "recipients": len(res.get("recipients") or []),
+            "attached": attached,
+            "attached_from_another_job": sorted(a for a in attached if a in theirs),
+            "message_note": note, "message_was_another_jobs": bool(note and note in theirs)}
+
+
+def find_record(row: Dict[str, Any], runs: List[Dict[str, Any]],
+                saved: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, str]]:
+    """A run's pinned record that was not filed with it: filed with another run, or still
+    beside its workbook. {"path", "where"} or None."""
+    run = saved.get(str(row.get("run_id"))) or {}
+    files = [d for d in (run.get("deliverables") or []) if isinstance(d, dict)]
+    book, _why = orc.own_book(files, str(run.get("drawing_number") or ""),
+                              float(run.get("started_at") or 0.0))
+    if not book:
+        return None
+    wanted = (book[:-len(".xlsx")] + "_record.json").lower()
+    for other_id, other in saved.items():
+        for d in (other.get("deliverables") or []):
+            if isinstance(d, dict) and str(d.get("name") or "").lower() == wanted \
+                    and Path(str(d.get("path") or "")).is_file():
+                return {"path": str(d.get("path")),
+                        "where": f"filed with run {other_id} ({other.get('drawing_number')})"}
+    for d in files:
+        if str(d.get("name") or "") == book:
+            beside = Path(str(d.get("path") or "")).with_name(book[:-len(".xlsx")] + "_record.json")
+            if beside.is_file():
+                return {"path": str(beside), "where": "beside its workbook, not listed with the run"}
+    return None
+
+
 def check_run(run: Dict[str, Any]) -> Dict[str, Any]:
     """One saved run against its own pinned record."""
     out: Dict[str, Any] = {"run_id": run.get("run_id"), "drawing": run.get("drawing_number"),
@@ -81,6 +126,7 @@ def check_run(run: Dict[str, Any]) -> Dict[str, Any]:
     item, why = orc.own_record(files, str(run.get("drawing_number") or ""),
                                float(run.get("started_at") or 0.0))
     out["record_rule"] = why
+    out["email"] = email_evidence(run, files)
     out["other_jobs_files"] = orc.other_jobs_files(files, str(run.get("drawing_number") or ""),
                                                    float(run.get("started_at") or 0.0))
     if not item:
@@ -90,7 +136,7 @@ def check_run(run: Dict[str, Any]) -> Dict[str, Any]:
     except (OSError, ValueError, TypeError) as exc:
         return dict(out, verdict="not checked", why=f"{item.get('name')} could not be read: {exc}")
     own, own_q = unit_cost_from(record), quantity_prices_from(record)
-    out.update(record=item.get("name"), own=own, own_by_quantity=own_q)
+    out.update(record=item.get("name"), record_path=str(item.get("path")), own=own, own_by_quantity=own_q)
     wrong = []
     if out["shown"] is not None and own is not None and abs(float(out["shown"]) - own) > 0.005:
         wrong.append(f"shows {out['shown']} at one off, its record says {own}")
@@ -108,6 +154,7 @@ def check_run(run: Dict[str, Any]) -> Dict[str, Any]:
 
 def check_runs(folder: Path) -> List[Dict[str, Any]]:
     rows = []
+    saved: Dict[str, Dict[str, Any]] = {}
     for path in sorted(folder.glob("*.json")):
         try:
             run = json.loads(path.read_text(encoding="utf-8"))
@@ -115,7 +162,24 @@ def check_runs(folder: Path) -> List[Dict[str, Any]]:
             rows.append({"run_id": path.stem, "verdict": "not checked", "why": "saved run could not be read"})
             continue
         if isinstance(run, dict):
+            saved[str(run.get("run_id") or path.stem)] = run
             rows.append(check_run(run))
+    # A RECORD FILED ELSEWHERE IS STILL THE RUN'S (reviewer, 12 Nov 2026: "11 not checked
+    # results are not passes. Their missing pinned records need locating and reconciling").
+    for i, row in enumerate(rows):
+        if row.get("verdict") != "not checked" or "no pinned record" not in str(row.get("why")):
+            continue
+        found = find_record(row, rows, saved)
+        if not found:
+            continue
+        run = dict(saved[str(row["run_id"])])
+        run["deliverables"] = list(run.get("deliverables") or []) + [
+            {"name": Path(found["path"]).name, "path": found["path"]}]
+        again = check_run(run)
+        again["record_found"] = found["where"]
+        again["other_jobs_files"] = row.get("other_jobs_files") or []
+        again["email"] = row.get("email")
+        rows[i] = again
     return rows
 
 
@@ -175,6 +239,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         if r.get("other_jobs_files"):
             print(f"  FILED WITH ANOTHER JOB'S FILES {r.get('drawing')} run {r.get('run_id')}: "
                   + ", ".join(r["other_jobs_files"][:6]))
+    for r in runs:
+        if r.get("record_found"):
+            print(f"  record located {r.get('drawing')} run {r.get('run_id')}: {r['record_found']} -> {r['verdict']}")
+        e = r.get("email") or {}
+        if e.get("sent") and (e.get("attached_from_another_job") or e.get("message_was_another_jobs")):
+            print(f"  E-MAILED WITH ANOTHER JOB'S CONTENT {r.get('drawing')} run {r.get('run_id')} "
+                  f"to {e.get('recipients')} recipient(s): "
+                  + ("the message itself was " + str(e.get("message_note")) + "; "
+                     if e.get("message_was_another_jobs") else "")
+                  + "attached " + (", ".join(e.get("attached_from_another_job")) or "none of the other job's files"))
     for r in runs:
         if r["verdict"] == "not checked":
             print(f"  not checked {r.get('drawing')} run {r.get('run_id')}: {r.get('why')}")

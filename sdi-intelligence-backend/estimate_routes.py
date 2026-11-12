@@ -2346,7 +2346,7 @@ def complete(run_id: str, req: CompleteRequest,
                                             "unit_gbp": round(float(_qp.get("unit_gbp")), 2)})
             except (AttributeError, TypeError, ValueError):
                 continue
-        run.deliverables = list(req.deliverables)
+        run.deliverables = _only_this_runs_files(run, list(req.deliverables))
         run.finished_at = now
         run.lease_until = 0.0
         # THE WALKTHROUGH PAGE, ON DISK (D-610): the e-mail links to a record that outlives a
@@ -2407,6 +2407,29 @@ def complete(run_id: str, req: CompleteRequest,
                        f" — NOT SENT: {_result.get('reason')}"))
                 _keep(_live)
     return {"ok": True}
+
+
+def _only_this_runs_files(run: "Run", files: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """The run's files without any named for another job's workbook (12 Nov 2026).
+
+    Two runners wrote into one output folder and each filed what appeared during its run, so
+    6364-01 was filed, and its e-mail composed, with 12674-01-GA's workbook and covering note
+    beside its own. The runner now leaves those behind; this is the same rule at the door, so
+    a runner on an older build cannot hand another job's note to the e-mail. Nothing is
+    deleted: the names are written on the run's log."""
+    try:
+        src = Path(__file__).resolve().parent.parent / "src"
+        if str(src) not in sys.path:
+            sys.path.append(str(src))
+        import own_record  # noqa: PLC0415
+        theirs = set(own_record.other_jobs_files(files, run.drawing_number or "",
+                                                 float(run.started_at or 0.0)))
+    except Exception:                                      # noqa: BLE001
+        return files
+    if not theirs:
+        return files
+    run.line(f"Not taken as this run's files, named for another job: {', '.join(sorted(theirs)[:8])}")
+    return [f for f in files if str((f or {}).get("name") or "") not in theirs]
 
 
 # The runner's own line naming the completed AI briefs folder it copied the files to (D-617).
