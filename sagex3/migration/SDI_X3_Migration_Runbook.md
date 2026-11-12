@@ -2210,3 +2210,69 @@ Part of the need may be standard. LO-01 (the sit-down) decides the rest.
 2. LO-01 sit-down and the X3 standard demo.
 3. Once the API client exists: estimating stage 2 and a first Live Orders board (material status + work-centre load).
 4. Each one proved against today's spreadsheets before anyone relies on it.
+
+### 21.5 Estimating import, stage 1 – built (12 Nov) – EST-10 / SCRUM-210, 242–244
+
+**`sagex3/estimating/est_to_x3.py <estimate.xls|xlsx> <out> --products <current ZSDIITM file> [--parent IMPORT] [--category FGML] [--rev-in-code]`**
+
+It reads one estimate in Dave Wright's IMPORT layout (old .xls is converted with LibreOffice, keeping the calculated values) and writes the **same X3 load files as the migration kit**: identical columns, `;`, cp850 and CRLF, checked line against line.
+
+**What it reads (the yellow cells):**
+- **Parent:** E5 (drawing), H5 (revision), E4 (description).
+- **BOM, by block:**
+  - **Standard materials:** rows 11–25. Code I, link quantity L, scrap M.
+  - **Wire:** rows 28–35. Code B (from the gauge → WIRE table), link quantity C (kg).
+  - **Sheet steel:** rows 38–48. Code B, link quantity C (= quantity / parts per sheet).
+  - **Other sheet material:** rows 51–58. Code B, link quantity C.
+- **Route:** labour rows 63–100.
+  - One operation for each line with a quantity and a rate.
+  - **The X3 work centre is already in column R** (the sheet maps Access dept → X3).
+  - Run time = column Q (minutes per unit); set-up = column M (minutes).
+  - Description = column E, or the labour type (column D) when E is the placeholder "Description of labour n".
+  - Operations numbered 5, 10, 15.
+
+**What it writes:**
+- `<code>_ZSDIITM` (only if the parent is new): category FGML, code = drawing number, "Rev B" in Description 2.
+- `<code>_YA00408BOM`: BOM code 10, use status 2, sequence 10, 20 ….
+- `<code>_ZSDIROU2`: route 10, site S01A, use status 1, time unit 2, mode 4.
+- `<code>_CHECKS.xlsx` with these tabs:
+  - **Checks:** each one STOP / WARN / INFO, with its cell;
+  - **BOM read** and **Route read:** what was read, with the X3 category and description of each component.
+  - The front tab says READY TO LOAD or NOT READY.
+
+**Checks it makes:**
+- Component exists in X3.
+- Component's X3 description isn't "DONT USE".
+- Work centre is a valid X3 code (from `work_centres.csv`).
+- Quantity > 0.
+- Parent new or existing.
+- Labour lines naming a different parent.
+- No more than 150 operations.
+- Scrap % noted as not carried.
+
+**Run on Dave's IMPORT.xls (10 Nov copy), 11290-00-73-GA rev B, estimate quantity 900, unit cost £466.98:** a new parent, 14 BOM lines and 30 operations. **NOT READY:**
+- **STOP:** `SHEET METAL 10 / 11 / 12` are not products in X3. The sheet-steel block has no gauge → code table, unlike wire.
+- **WARN:** FIXING49's X3 description is "DONT USE".
+- **WARN:** the labour lines' parent (column C) says IMPORT, not the drawing.
+- **INFO:**
+  - scrap 4% on wire / sheet is not carried, because the X3 BOM template has no scrap column;
+  - all 30 operation descriptions are placeholders, so the labour type is used.
+
+`--parent IMPORT` builds the same files for Dave's test part in X3.
+
+**Questions for Dave (rule 1d):**
+1. What is the X3 product code for each sheet-steel gauge? Add a gauge → code table, as wire has, or type the real code in B38:B48.
+2. What replaces FIXING49 ("DONT USE")?
+3. Confirm the parent code is the drawing number, without the revision (as the migration), and that the category is FGML.
+4. Will column E carry real operation descriptions?
+5. Column C (labour parent) should follow E5 – a formula.
+6. Scrap: build it into the link quantity, or ask Acuity to add the scrap column to YA00408BOM?
+7. Confirm run time (Q) and set-up (M) are minutes.
+
+The Material Price Break tab shows #VALUE!, so prices / costs (YITC) are not part of stage 1.
+
+**Next:**
+1. Dave's answers.
+2. Load into TEST against the IMPORT part.
+3. Compare in X3 with the estimate.
+4. Stage 2 (API) when the API client exists.
