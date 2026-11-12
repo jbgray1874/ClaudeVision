@@ -18,7 +18,9 @@ What changed from BICX / BISX (James, 28 Oct):
     Two cases still take a suffix, listed on the "Lines" tab: the same Access number on a second
     supplier (or currency / terms), and a Document that is not an Access number (Access number
     blank, so the supplier reference stood in; with SDI Finance to explain, 11 Nov).
-    LINES=0 keeps the old one-row-per-document file.
+    Off by default since 12 Nov (LINES=1 turns it on): the 5xxxxxx number turned out to be the
+    Access PURCHASE ORDER number (PT_ORDER_NUMBER), so rows sharing it are separate supplier
+    invoices against one PO, not lines of one invoice. Runbook 19.12.
 Everything else is the BICX / BISX file exactly as built (populate_guides.py): same rows,
 same values, same order. The build reads every data row back and checks that.
 
@@ -42,7 +44,7 @@ SRC = os.environ.get("SRC_DIR", f"{BASE}/out_mapped")
 OUT = os.environ.get("OUT_DIR", f"{BASE}/out_mapped")
 COMPANY = os.environ.get("COMPANY", "C01")
 SWAP = os.environ.get("SWAP", "1") != "0"
-LINES = os.environ.get("LINES", "1") != "0"
+LINES = os.environ.get("LINES", "0") == "1"   # off (12 Nov): the 5xxxxxx number is the PO number, not the invoice - see runbook 19.12
 ONLY = os.environ.get("ONLY")             # e.g. ONLY=YA004BISY rebuilds just that file
 ACCESS_DOC = re.compile(r"5\d{6}")      # an Access purchase document number: 5 and six digits
 TYPE, BP, CUR, AMT_GBP, AMT, TERMS, LINE, LINE_AMT = 1, 3, 7, 8, 9, 13, 18, 24   # 1-based columns

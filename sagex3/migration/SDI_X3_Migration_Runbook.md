@@ -218,7 +218,7 @@ Document, Supplier, **Company**, Site, Accounting Date, Currency, GBP Amount, ..
 - Company in column D, as BICY (C01). Document and Source Document swapped as BICY: 454 repeated
   values take -2, -3. The blanks Acuity filled with BLANK are already filled from the document
   reference (the 317 above), so none reach X3 blank.
-- **Lines, not suffixes (Ethan / Jim, 11 Nov, Run 4) – supersedes the -2, -3 above for BISY.**
+- **Lines, not suffixes (Ethan / Jim, 11 Nov, Run 4). ON HOLD 12 Nov, `LINES=1` only: see 19.12. The 5xxxxxx number is the PO number.**
   Document (B) is the Access document number (5 and six digits), never one we made up. Rows that
   share an Access number (same supplier, currency, terms, type) are lines 1, 2, 3 of that one
   document (Line, column R), written next to each other; header GBP Amount and Transaction Amount
@@ -1684,3 +1684,30 @@ Not data migration, but tracked here so nothing is forgotten. Everything is in J
 - **Header amount.** We assumed it is the document total on every line. Is that right?
 
 **Open:** Claire's answer on the 259; then James to run the SQL above, then a decision with Jim on their numbers.
+
+### 19.12 What the BISY "document number" really is (12 Nov – James ran the check SQL)
+
+**Result** (`check_bisy_document_numbers.sql` on live data, 12 Nov) for the open items with no 5xxxxxx number:
+- PT_HEADER_REF2 is NULL on every row and PT_ORDER_NUMBER is blank.
+- PT_HEADER_REF holds the supplier's own invoice reference, or text like "DD", "FP", "BACS", "SO", "FF", "PO 5027482 DEP", "DEPOSIT", "CORRECTION" or "SAVINGS".
+- Every row has its own PT_PRIMARY (a transaction number, e.g. 58807–70522).
+
+**What that proves.** The view's Source Document is `COALESCE(PT_HEADER_REF2, PT_ORDER_NUMBER, PT_HEADER_REF)`. REF2 is NULL, so the 5xxxxxx number in BISY column B is **PT_ORDER_NUMBER, the Access purchase order number**. The deposits read "PO 5029719 DEP", and Access PO numbers are 50xxxxx. It is not an invoice document number. So:
+- **Ethan's issue 2 rests on a wrong premise.** Rows sharing 5028370 are 6 separate DIR500 supplier invoices (refs 173789 … 174454, 6 Aug – 21 Sep, two due dates) against **one PO**. They aren't 6 lines of one invoice. Merging them into one X3 document loses five supplier refs and their due dates, and breaks matching payments to supplier invoices. The lines build is therefore **off by default** (`LINES=1` to turn it on). The file in `Ethan_fixes_2026-11-11_BISY` should not be loaded; tell Ethan.
+- **Issue 1 isn't missing data.** The 259 are items not raised against a PO:
+  - overhead invoices keyed straight to the ledger (FUK01, WOS01, OPT01, HAR07, WCL02 …);
+  - payments on account (DD, FP, BACS, SO, FF);
+  - deposits against POs (XIG01, EDC02, EGT01, XYS01, YGE01);
+  - two credits, a correction, and the CAP500 (COT02) "SAVINGS" ADR journal.
+  Claire need only confirm. There is no document number to find.
+- **Access's real unique key is PT_PRIMARY.** Every open item has one. It isn't in the extract yet.
+- **Lead on the missing BRW500 invoice 1209156 (£1,772.40):** it's one of the 259 (BJL01, PT_PRIMARY 70265, dated 2 Nov). Document = supplier ref. Check whether X3 rejected it as a duplicate document number.
+
+**Options for Ethan and Jim (SDI's recommendation is (a)):**
+- (a) Document = PT_PRIMARY: unique, in Access, never made up. Source Document = supplier ref; PO number in a comment.
+- (b) Document = supplier invoice ref (the Run 2 layout): not unique across suppliers.
+- (c) Document = PO number with lines: Ethan's ask, but it loses data as above.
+
+Adding PT_PRIMARY needs one column added to the BISX extract, `extract_transactions.sql` / `vw_BISX_V2`. Do it only once (a) is agreed.
+
+**Lesson:** before restructuring on someone's description of a field ("the Access document number"), check what the field actually is in Access. Find the column it comes from and look at a sample.
