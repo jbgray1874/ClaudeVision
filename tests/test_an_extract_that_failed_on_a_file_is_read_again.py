@@ -69,3 +69,13 @@ def test_the_extract_says_which_reader_wrote_it_and_when():
     assert '"written_at":' in text and '"reader_build": reader_build()' in text
     conn = (ROOT / "src/source_connectors/solidworks.py").read_text(encoding="utf-8")
     assert 'job.meta["extract_reader_build"]' in conn and 'job.meta["extract_written_at"]' in conn
+
+
+def test_a_file_the_document_manager_read_in_its_place_is_not_asked_for_again(tmp_path):
+    extract = _pack(tmp_path, failed=True)
+    (tmp_path / S.DOCMGR_TOPUP_FILENAME).write_text(json.dumps({
+        "schema_version": 99, "_manifest": {"schema_version": 99},
+        "records": [{"path": str(tmp_path / "A-02.SLDPRT"), "title": "A-02", "errors": []}]}),
+        encoding="utf-8")
+    assert S.files_the_extract_left_unread(extract) == 0
+    assert S._should_run(extract, tmp_path) is False

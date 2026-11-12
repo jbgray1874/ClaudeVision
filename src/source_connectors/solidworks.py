@@ -1172,8 +1172,21 @@ def files_the_extract_left_unread(extract_path: str | Path) -> int:
         n = int(man.get("files_failed") or 0)
     except (TypeError, ValueError):
         n = 0
-    errs = man.get("errors")
-    return max(n, len(errs) if isinstance(errs, list) else 0)
+    errs = man.get("errors") if isinstance(man.get("errors"), list) else []
+    # A FILE THE DOCUMENT MANAGER READ IN ITS PLACE IS READ. The top-up beside the extract
+    # holds those files; only what neither reader opened is still owed.
+    filled: set = set()
+    try:
+        tp = Path(extract_path).parent / DOCMGR_TOPUP_FILENAME
+        if tp.exists() and Path(extract_path).name != DOCMGR_TOPUP_FILENAME:
+            filled = {_path_key(r.get("path")) for r in load_native_extract(tp)
+                      if isinstance(r, dict) and r.get("title") and not r.get("errors")}
+    except Exception:                                            # noqa: BLE001
+        filled = set()
+    if filled and errs:
+        owed = [e for e in errs if not (isinstance(e, dict) and _path_key(e.get("path")) in filled)]
+        return len(owed) if len(errs) >= n else max(len(owed), n - len(filled))
+    return max(n, len(errs))
 
 
 def _should_run(extract_path: Path, folder: str | Path) -> bool:
