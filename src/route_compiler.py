@@ -219,6 +219,33 @@ def _record_by_squashed_key(records: Mapping[str, Any], target_id: Any):
 _MODEL_FILE_TAIL = re.compile(r"(?<=[A-Z0-9])\.(?:SLDPRT|SLDASM|SLDDRW)\d*$")
 
 
+def name_parts_by_their_code(parts: Any) -> List[Dict[str, str]]:
+    """Give each part the code its model file is named for (12773-01-GA, 12 Nov 2026).
+
+    The bill printed "12773-03-203.SLDPRT1" and the costed record kept that spelling, so the
+    workbook row, the catalogue lookup and the DXF match all used a file name. The extension
+    and SolidWorks' copy number are dropped from the part's own number; what was printed is
+    kept beside it. Two parts are never made one here: when another part already holds the
+    code, this one keeps its printed spelling and is reported.
+    """
+    rows = [p for p in (parts or []) if isinstance(p, dict)]
+    held = {str(p.get("part_number") or "").strip().upper() for p in rows}
+    out: List[Dict[str, str]] = []
+    for part in rows:
+        printed = str(part.get("part_number") or "").strip()
+        code = _MODEL_FILE_TAIL.sub("", printed.upper())
+        if not printed or code == printed.upper():
+            continue
+        if code in held:
+            out.append({"printed": printed, "code": code, "renamed": "no: another part holds the code"})
+            continue
+        part["part_number_as_printed"] = printed
+        part["part_number"] = code
+        held.add(code)
+        out.append({"printed": printed, "code": code, "renamed": "yes"})
+    return out
+
+
 def clean_part_number(value: Any) -> str:
     """The canonical spelling of a part number, or "" when the code names no part.
 

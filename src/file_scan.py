@@ -4138,6 +4138,17 @@ def _finalize_scan_summary(
     except Exception:
         pass
 
+    # A part is named by its code, not by its model file (12773-01-GA).
+    try:
+        from route_compiler import name_parts_by_their_code
+        _named = name_parts_by_their_code((summary.get("manufacturing_writeup") or {}).get("parts"))
+        if _named:
+            summary.setdefault("ai_inference", {})["part_codes_from_file_names"] = _named
+            print("   [identity] " + "; ".join(f"{r['printed']} -> {r['code']} ({r['renamed']})"
+                                              for r in _named[:8]), flush=True)
+    except Exception as _e:                                          # noqa: BLE001
+        print(f"   [identity] file-name codes not normalised: {_e}", flush=True)
+
     # SDI Intelligence — infer dimensions for BOM parts with no DXF, so they
     # cost provisionally instead of £0. Every value is flagged as inferred.
     try:
