@@ -168,3 +168,27 @@ def test_the_sheet_tool_lists_current_staff_and_keeps_what_was_typed(tmp_path, m
     assert rows[0] == list(hr_managers.HEADERS)
     assert sorted((r[2], r[4], r[0]) for r in rows[1:]) == [
         ("Jo Office", "Max Boss", "Joinery"), ("New Starter", "", "Welding and fabrication")]
+
+
+def test_a_sheet_open_in_excel_is_left_alone_and_says_so(tmp_path, monkeypatch, capsys):
+    """12 November: run a second time while the sheet was open, the tool
+    stopped on Access is denied and left a ".writing" copy in HR's folder."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    import hr_managers_sheet as tool
+    monkeypatch.setattr(cfg, "HR_MANAGER_FIELD", "")
+    sheet = tmp_path / "HR managers.xlsx"
+    write_sheet(sheet, [["Joinery", "Bench Joiner", "Jo Office", "", "Max Boss", "BH-1"]])
+    before = sheet.read_bytes()
+    monkeypatch.setattr(bh, "get_access_token", lambda: "t")
+    monkeypatch.setattr(bh, "fetch_employees", lambda token: [
+        {"id": "BH-1", "name": {"givenName": "Jo", "familyName": "Office"},
+         "employment": {"jobTitle": "Bench Joiner"}, "_metadata": {"isTerminated": False}}])
+    monkeypatch.setattr(sys, "argv", ["x", str(sheet)])
+
+    def in_use(self, target):
+        raise PermissionError(5, "Access is denied")
+    monkeypatch.setattr(Path, "replace", in_use)
+    assert tool.main() == 2
+    assert sheet.read_bytes() == before
+    assert [f.name for f in tmp_path.iterdir()] == ["HR managers.xlsx"]
+    assert "probably open in Excel" in capsys.readouterr().out

@@ -65,7 +65,15 @@ def main() -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.stem + ".writing.xlsx")
     book.save(tmp)
-    tmp.replace(target)
+    try:
+        tmp.replace(target)
+    except PermissionError:
+        # Open in Excel (or being read at that moment): Windows will not
+        # replace a file in use. Leave the sheet as it was, and no stray copy.
+        tmp.unlink(missing_ok=True)
+        print(f"{shown} is in use - probably open in Excel. Close it everywhere and run this again. "
+              f"Nothing was changed.")
+        return 2
     filled = sum(1 for r in rows if r[4])
     print(f"Wrote {shown}: {len(rows)} current staff, {filled} with a manager already, "
           f"{len(rows) - filled} to fill in.")
