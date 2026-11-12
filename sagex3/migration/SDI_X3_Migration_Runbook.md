@@ -1841,3 +1841,31 @@ SWAP_BISY=1 python3 scripts/run_transactions.py <scratch>/runs/test-accdate --st
   --routes <scratch>/Ethan_fixes_2026-11-05/ZSDIROU2_routes_MAPPED.xlsx
 ```
 `SWAP_BISY=1` was only because it was the old extract. **Next live run: no SWAP_BISY.** BOMs and routes are rebuilt by `rebuild/run.py` first, and their outputs are passed here (rule 1e).
+
+### 20.1 Rebate rolling report (12 Nov) – recreate from Access SupplyChain, then in X3
+
+James sent `Rebate_rolling.pdf` (November 2026 copy) and asked for it to be recreated from Access. The register has it as **REP-22**, with no Jira issue yet.
+
+**What the report is (read from the PDF):**
+- One row per customer order line for the Morrisons goalpost / branded-bay parts. Columns: customer code and name, part code, description, Price per, then a value in the month it falls in. The months are a rolling 12, December to November.
+- Parts: the `10932-00-GA1 <brand>` variants (HAR, M&M, HVL, KEN, B/B, BEL, CAD, TOB, BRU, NES, ROW, GOU, VOL, SH, TET, QW, COM, HEI), `HHA-INSTALL M&M`, `LRS01-RIBENA`, `LRS01-LUCOZADE` and `WMM01-GOALPOST`. The customers are brand owners (HHA01, HVL01, JDE01, LRS01, MUL01, NES03, NTL01, PFG01, TCP01, TOH01, UUL01, DPP01) plus Morrisons, WMM01.
+- **Value = quantity × Price per.** E.g. 19,080 = 72 × £265.00, and 32,771 = 172 × £190.53. A credit shows as a negative (HHA-INSTALL, -9,720).
+- Monthly totals, then **a rebate of 6% of each month's total**: 90,472.95 → 5,428.38; 231,854.20 → 13,911.25; 52,750.00 → 3,165.00; 174,134.16 → 10,448.05.
+- Grand total £549,211.31 and rebate total £32,952.68 (6%).
+- Some lines show no value in any month. These are probably ordered but not yet invoiced or delivered in the window: to confirm.
+
+**Unknowns, to settle before building:**
+1. Which date puts a line in a month: invoice, delivery or order date?
+2. How the parts are selected: a list, a code pattern, a flag, or Morrisons as the end customer.
+3. Who the 6% is paid to, and whether it's always 6%.
+
+**Asked of James (rule 1d):**
+- (a) In the Access SupplyChain front end, open the report in Design view → Property Sheet → Record Source. Copy the query, or the query name, and its SQL view. That's the exact definition.
+- (b) Run `sql/rebate_discovery.sql` (read-only, two short queries). It finds anything named "rebate" in SDILive, and shows every column of up to 60 order lines for these parts. Save the results as `rebate_discovery.txt`.
+
+**Then:**
+1. Write `sql/rebate_rolling.sql`, read-only, with the rolling window from the run date.
+2. Build an SDI-branded workbook with the same layout, monthly totals and the 6% row.
+3. Prove it against this PDF: the same lines, the month totals, £549,211.31 and £32,952.68.
+
+The X3 version goes to Acuity with the reports list (SCRUM-212).
