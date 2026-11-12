@@ -216,7 +216,8 @@
   <h3>Roll call</h3>
   <p>Everyone who should be in the building, each with a tick box. It combines <b>everyone InVentry shows on
   site</b> (including people signed in at reception) with <b>everyone clocked in on BrightHR</b> at the last
-  check. Each name says where it comes from, for example <span class="msg">clocked in 08:05 · not on InVentry</span>.</p>
+  check. Each name says where it comes from, for example <span class="msg">clocked in 08:05 · not on InVentry</span>. Where InVentry knows someone by a different name, such as Rob for Robert, it shows in brackets, for
+  example <span class="msg">InVentry (as Rob Lane)</span>: they are one person, matched by their email.</p>
   <ul>
     <li><b>Ticks are shared</b>: every phone with the app open sees every tick within a few seconds, with who
     ticked and when. The bar under the heading fills as people are accounted for, and turns green when
@@ -281,7 +282,10 @@
     after clocking out, forgotten clock-outs, and whether InVentry has been updated in the last day;</li>
     <li><b>the roll calls since the last email</b>, each with how many were present and absent, and who was
     absent.</li>
-  </ul>
+      <li><b>whether InVentry is being updated automatically</b>, every 5 minutes, and when it last was. While
+    it is, anyone who clocked in or out in the last few minutes is listed under <b>For information</b> rather
+    than as a problem: the next update handles them;</li>
+</ul>
   <p>The check changes nothing. It shows in History as <span class="msg">Morning summary (scheduled)</span>.
   If the email says people are missing from InVentry's list, press <span class="btnname">Update InVentry</span>.
   The <b>roll call</b> link in the email opens the Roll call tab straight away.</p>

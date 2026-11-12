@@ -32,6 +32,8 @@ FRESH_MINUTES = 10           # a check this recent is used as it is, not run aga
 BUSY_RETRIES = 20            # a check already running is waited for, up to 10 minutes
 BUSY_WAIT_SECONDS = 30
 STALE_UPDATE_HOURS = 24
+AUTO_MINUTES = 15            # an update this recent means the 5-minute update is running
+JUST_MINUTES = 10            # clocked in or out this recently: the next update handles them
 MAX_NAMES = 20               # past this the email gives the count and points to the app
 
 
@@ -132,6 +134,17 @@ def gather(update=False, now=None, sleep=time.sleep) -> dict:
     # With InVentry not answering there is nothing to compare: everyone would
     # look missing from it.
     compared = [] if on_site is None else people
+    # With the 5-minute update running, someone who clocked in or out in the
+    # last few minutes is not a problem: the next update handles them. Only
+    # those it has had time to sign in, and has not, need looking at.
+    lt = _parse((last_update or {}).get("time"))
+    automatic = bool(lt) and (now - lt).total_seconds() <= AUTO_MINUTES * 60
+    missing = [p for p in compared if p.get("brighthr") and not p.get("inventry")]
+
+    def just_in(p):
+        t = _parse((p.get("brighthr") or {}).get("since"))
+        return automatic and t is not None and (now - t).total_seconds() < JUST_MINUTES * 60
+    left = [p["name"] for p in compared if (p.get("inventry") or {}).get("by") == "sync" and not p.get("brighthr")]
     # Who is clocked in, by name. A clocking open past the limit is a forgotten
     # clock-out, listed on its own, not someone in the building.
     clocked = []
@@ -148,9 +161,11 @@ def gather(update=False, now=None, sleep=time.sleep) -> dict:
         "inventry_problem": inventry_problem,
         "on_inventry": None if on_site is None else len(on_site),
         "at_reception": sum(1 for p in on_site or [] if p.get("by") == "reception"),
-        "not_on_inventry": [p["name"] for p in compared if p.get("brighthr") and not p.get("inventry")],
-        "not_clocked_in": [p["name"] for p in compared
-                           if (p.get("inventry") or {}).get("by") == "sync" and not p.get("brighthr")],
+        "automatic": automatic,
+        "not_on_inventry": [p["name"] for p in missing if not just_in(p)],
+        "just_arrived": [p["name"] for p in missing if just_in(p)],
+        "not_clocked_in": [] if automatic else left,
+        "just_left": left if automatic else [],
         "forgotten": forgotten_clockouts.forgotten(snap or {}, now=now),
         "roll_calls": calls, "since": since.isoformat(), "last_update": last_update,
     }
@@ -175,6 +190,10 @@ def attention(d: dict) -> list:
                     "Clocked in on BrightHR, but not matched to an InVentry record, so the update could not "
                     "sign them in. The Roll call in the app includes them. See Data issues in the app."
                     if push and push.get("status") == "ok" else
+                    f"Clocked in on BrightHR more than {JUST_MINUTES} minutes ago, but still not on InVentry's "
+                    "list, although it updates every 5 minutes. Their InVentry record most likely needs fixing: "
+                    "the Data issues tab in the app says what's wrong. The Roll call in the app includes them."
+                    if d.get("automatic") else
                     "Clocked in on BrightHR, but not signed in on InVentry, so InVentry's own list (the one "
                     "reception would use in a fire) does not include them. The Roll call in the app does. "
                     "To fix it, press Update InVentry in the app: it signs them in.",
@@ -201,8 +220,23 @@ def attention(d: dict) -> list:
     return out
 
 
+def information(d: dict) -> list:
+    """What the next 5-minute update will handle: worth knowing, not a problem."""
+    out = []
+    if d.get("just_arrived"):
+        out.append((f"Just clocked in: {_people(len(d['just_arrived']))}",
+                    f"Clocked in within the last {JUST_MINUTES} minutes. The next automatic update, within 5 "
+                    "minutes, signs them in on InVentry.", d["just_arrived"]))
+    if d.get("just_left"):
+        out.append((f"Just clocked out: {_people(len(d['just_left']))}",
+                    "Clocked out since the last update. The next automatic update, within 5 minutes, signs them "
+                    "out of InVentry.", d["just_left"]))
+    return out
+
+
 def compose(d: dict, link: str) -> tuple:
     todo = attention(d)
+    info = information(d)
     push = d.get("push")
     things = sum(1 for h, _, _ in todo if h != "Note")
     subject = (f"HR morning summary: {d['clocked_in'] if d['clocked_in'] is not None else '?'} clocked in, "
@@ -215,13 +249,19 @@ def compose(d: dict, link: str) -> tuple:
     if d["on_inventry"] is not None and d["clocked_in"]:
         # The evidence the two are in step: of everyone clocked in, how many
         # InVentry's list has.
-        both = max(0, d["clocked_in"] - len(d["not_on_inventry"]))
+        both = max(0, d["clocked_in"] - len(d["not_on_inventry"]) - len(d.get("just_arrived") or []))
         figures.append(("In step", f"{both} of {d['clocked_in']} clocked in are on InVentry's list "
                                    f"({round(both / d['clocked_in'] * 100)}%)"))
+    last = d.get("last_update")
+    figures.append(("InVentry updates",
+                    f"automatic, every 5 minutes (last at {_local(last['time'], '%H:%M')})" if d.get("automatic")
+                    else f"not automatic: last update {_local(last['time'])}" if last
+                    else "not automatic: no update recorded"))
     if push and push.get("status") == "ok":
         figures.append(("InVentry updated", f"{len(push.get('signed_in_names') or [])} signed in, "
                                              f"{len(push.get('signed_out_names') or [])} signed out"))
-    head = f"Checked {_local(d['checked'])}."
+    head = (f"Checked {_local(d['checked'])}."
+            + (" InVentry is updated from BrightHR automatically every 5 minutes." if d.get("automatic") else ""))
 
     text = [head, ""] + [f"{k}: {v}" for k, v in figures] + [""]
     page = [f"<p>{html.escape(head)}</p><table cellpadding='4' cellspacing='0'>"
@@ -231,6 +271,16 @@ def compose(d: dict, link: str) -> tuple:
     text.append("NEEDS ATTENTION" if todo else "Nothing needs attention.")
     page.append("<h3>Needs attention</h3>" if todo else "<p><b>Nothing needs attention.</b></p>")
     for heading, why, names in todo:
+        more = len(names) - MAX_NAMES
+        names = names[:MAX_NAMES] + ([f"and {more} more: see the app"] if more > 0 else [])
+        text += [f"- {heading}", f"  {why}"] + [f"    {n}" for n in names]
+        page.append(f"<p><b>{html.escape(heading)}</b><br>{html.escape(why)}"
+                    + (f"<br>{html.escape(', '.join(names))}" if names else "") + "</p>")
+
+    if info:
+        text += ["", "FOR INFORMATION"]
+        page.append("<h3>For information</h3>")
+    for heading, why, names in info:
         more = len(names) - MAX_NAMES
         names = names[:MAX_NAMES] + ([f"and {more} more: see the app"] if more > 0 else [])
         text += [f"- {heading}", f"  {why}"] + [f"    {n}" for n in names]

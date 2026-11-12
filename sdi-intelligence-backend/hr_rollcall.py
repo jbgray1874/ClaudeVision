@@ -48,17 +48,26 @@ def inventry_on_site():
         return None, f"InVentry did not answer ({exc}), so this list is from BrightHR only."
     return [{"name": f"{api._field(r, 'FirstName')} {api._field(r, 'Surname')}".strip() or "?",
              "since": str(api._field(r, "LastActivityDate") or ""),
-             "by": "sync" if api.signed_in_by_us(r) else "reception"}
+             "by": "sync" if api.signed_in_by_us(r) else "reception",
+             # For joining one person's two names (below); never shown.
+             "email": str(api._field(r, "EmailAddress") or "").strip().lower(),
+             "first": str(api._field(r, "FirstName") or "").strip().lower(),
+             "surname": str(api._field(r, "Surname") or "").strip().lower()}
             for r in people if api.is_on_site(r)], None
 
 
 def build(inventry_on_site, snapshot, now=None, max_age_hours=None):
-    """The roll call entries, one per person, merged by name.
+    """The roll call entries, one per person.
 
-    inventry_on_site: [{"name", "since", "by"}] or None when InVentry is down.
-    snapshot: the latest BrightHR check (blip_latest.json) or None.
+    inventry_on_site: [{"name", "since", "by", "email", "first", "surname"}] or
+    None when InVentry is down. snapshot: the latest BrightHR check
+    (blip_latest.json) or None.
 
-    Two people with the same name stay two entries: the n-th of a name in one
+    One person can have two names: "Rob Lane" on InVentry, "Robert Lane" on
+    BrightHR. They are joined by email first, as the 5-minute update matches
+    them - and only when the first name or surname also agrees, so a shared or
+    mistyped email never joins two different people. Otherwise by name, where
+    two people with the same name stay two entries: the n-th of a name in one
     source pairs with the n-th in the other, so a namesake is never merged away.
     """
     now = now or _now()
@@ -74,10 +83,21 @@ def build(inventry_on_site, snapshot, now=None, max_age_hours=None):
         return e
 
     managers = (snapshot or {}).get("managers") or {}
+    by_email = {}
     for p in inventry_on_site or []:
         e = slot(p["name"], "inventry")
         e["inventry"] = {"since": p.get("since", ""), "by": p.get("by", "")}
         e.setdefault("manager", managers.get(" ".join(p["name"].lower().split()), ""))
+        if p.get("email"):
+            by_email.setdefault(p["email"], []).append((e, p.get("first", ""), p.get("surname", "")))
+
+    def same_person(r):
+        first = str(r.get("first_name") or "").strip().lower()
+        last = str(r.get("surname") or "").strip().lower()
+        for e, i_first, i_last in by_email.get(str(r.get("email") or "").strip().lower(), []):
+            if "brighthr" not in e and ((first and first == i_first) or (last and last == i_last)):
+                return e
+        return None
 
     forgotten = 0
     for r in (snapshot or {}).get("on_site") or []:
@@ -87,7 +107,11 @@ def build(inventry_on_site, snapshot, now=None, max_age_hours=None):
         if limit and t is not None and (now - t).total_seconds() / 3600 > limit:
             forgotten += 1
             continue
-        e = slot(name, "brighthr")
+        e = same_person(r)
+        if e is not None and e["name"] != name:
+            # BrightHR's name, HR's record, leads; InVentry's is kept beside it.
+            e["inventry"]["name"], e["name"] = e["name"], name
+        e = e or slot(name, "brighthr")
         e["brighthr"] = {"since": start}
         if r.get("manager"):
             e["manager"] = r["manager"]
@@ -258,15 +282,7 @@ def folder() -> str:
 
 
 def _server_path(path: str) -> str:
-    """A mapped letter as the share it stands for: a service has no K:."""
-    import config
-    p = str(path).strip()
-    unc = (getattr(config, "DRIVE_MAP", {}) or {}).get(p[0].upper()) \
-        if len(p) >= 2 and p[1] == ":" else None
-    if not unc:
-        return p
-    rest = p[2:].lstrip("\\/")
-    return unc + ("\\" + rest if rest else "")
+    return cfg.server_path(path)
 
 
 def _local(iso) -> str:
