@@ -483,6 +483,29 @@ def compose(run: Dict[str, Any], deliverables: List[Dict[str, str]],
     unit = run.get("engine_price_gbp")
 
     subject = f"SDI Intelligence estimate. {_money(unit)}/unit at {units} off. {drawing}"
+    # A RUN THAT FILED NO COVERING NOTE IS NOT A FINISHED ESTIMATE, AND SAYS SO (JG, 12 Nov
+    # 2026). A job went out headed "not reported/unit at 1 off" over a list of fourteen files,
+    # with no note, no record, no report and no walkthrough: the engine had stopped after the
+    # workbook. It read like an estimate. The note, the drawing pack section, the walkthrough
+    # and the price at each quantity all come from the engine's last stage; where that stage
+    # filed nothing, this message leads with it and names what is missing.
+    names = [Path(str(d.get("path") or "")).name.lower() for d in deliverables or [] if isinstance(d, dict)]
+    lacking = [what for what, has in (
+        ("the covering note", any(m in n for n in names for m in _NOTE_MARKERS)),
+        ("the run's pinned record", any(n.endswith("_record.json") for n in names)),
+        ("the report", any(n.endswith("_report.html") for n in names)),
+        ("the spoken walkthrough", any(n.endswith("_walkthrough.wav") for n in names)),
+        ("a unit price", unit is not None)) if not has]
+    incomplete = ""
+    # Only where there is no price either: a run that reported its price and filed no note
+    # keeps the short form it has always had.
+    if "the covering note" in lacking and unit is None:
+        subject = (f"{drawing}: INCOMPLETE RUN, not an estimate to use. The engine filed no "
+                   f"covering note. Missing: {', '.join(lacking)}")
+        incomplete = (f"INCOMPLETE RUN. This is not an estimate to use or forward. The engine did "
+                      f"not finish its last stage, so these were not filed: {', '.join(lacking)}. "
+                      f"The files it did file are listed below; the run log among them says where "
+                      f"it stopped. Run the job again once that is fixed.")
 
     files = [d for d in deliverables if isinstance(d, dict) and d.get("path")]
     rows = "".join(
@@ -493,6 +516,7 @@ def compose(run: Dict[str, Any], deliverables: List[Dict[str, str]],
     lead = "The quote is attached."
 
     html = f"""<div style="{_STYLE}">
+{('<p style="margin:0 0 14px;padding:10px 12px;border:2px solid #8a1f11;color:#8a1f11;font-weight:bold">' + _esc(incomplete) + '</p>') if incomplete else ''}
 <p>{_esc(drawing)}{' &middot; ' + _esc(client) if client else ''} &middot; {units} off.</p>
 <p style="font-size:22px;margin:14px 0"><b>{_money(unit)}</b>
    <span style="color:#5b6b7d;font-size:14px">per unit, ex VAT</span></p>
@@ -505,7 +529,8 @@ def compose(run: Dict[str, Any], deliverables: List[Dict[str, str]],
 </div>"""
 
     text_files = "\n".join(f"  {Path(str(d['path'])).name}" for d in files)
-    text = (f"{drawing}{' - ' + client if client else ''} - {units} off\n\n"
+    text = ((incomplete + "\n\n" if incomplete else "")
+            + f"{drawing}{' - ' + client if client else ''} - {units} off\n\n"
             f"{_money(unit)} per unit, ex VAT\n\n{lead} Every figure is read from the "
             f"workbook's own calculated cells. The AI Explanation tab, and section 14 of the "
             f"report, give every row with the drawing page it came from, which reader decided "
