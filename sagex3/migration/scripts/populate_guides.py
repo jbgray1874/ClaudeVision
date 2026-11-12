@@ -130,7 +130,13 @@ X3_TEXT = {"YA004SMR": [4], "YA004SOH": [6, 12, 15, 19], "YA004POH": [5, 8, 14],
 X3_REF = {"YA004SMR": [15, 16], "YA004BICX": [1, 12], "YA004BISX": [1, 13]}   # customer PO keeps its spaces
 OUTNAME = {"YA004SOH": "YA004SOHPJ"}
 SOH_NEW = ["D02", "P00003"]           # Dim Code, Dimension - inserted before Line (col N)
-ACCOUNTING_DATE, OLDEST_DATE = "20261031", "20250101"
+# Accounting date (BICX / BISX column F): the EXTRACT date, never a fixed day (James, 12 Nov). X3
+# rejects an item whose source date (J) is after it - BRW500 1209156, dated 2 Nov, failed against
+# a fixed 31/10 on the 4 Nov extract. run_transactions.py passes the extract's "as at" date.
+ACCOUNTING_DATE = os.environ.get("ACCOUNTING_DATE", "20261031")
+assert len(ACCOUNTING_DATE) == 8 and ACCOUNTING_DATE.isdigit(), ACCOUNTING_DATE
+OLDEST_DATE = "20250101"
+SOH_OLD_DATE_TO = "20261031"   # SOH ship / delivery dates before 2025 move here - unchanged on 12 Nov (ledgers only)
 # Stock is posted on the day it is loaded (James, 28 Oct): set STOCK_DATE to the load day on
 # every run. A fixed value, not the system date, so a rebuild gives the same file.
 STOCK_DATE = os.environ.get("STOCK_DATE", "20261028")
@@ -266,10 +272,10 @@ for tmpl, rows in DATA.items():
             hit = False
             for c in (5, 8):
                 if x[c] < OLDEST_DATE:
-                    x[c], hit = ACCOUNTING_DATE, True
+                    x[c], hit = SOH_OLD_DATE_TO, True
             moved += hit
         if moved:
-            fixes[f"lines with a ship or delivery date before 2025 moved to {ACCOUNTING_DATE}"] = moved
+            fixes[f"lines with a ship or delivery date before 2025 moved to {SOH_OLD_DATE_TO}"] = moved
         # A ship date before the order date is a typing error in Access (BOO101: ordered
         # 20260819, due 20261218, ship 20250620). Ship on the requested delivery date instead.
         early = 0
@@ -282,6 +288,15 @@ for tmpl, rows in DATA.items():
     # BISX Source Document: the view falls back supplier ref -> order number -> document, but a
     # blank order number in Access is '' not NULL, so the fallback stopped short (317 items,
     # 28 Oct). Finish it here: a blank takes the document reference.
+    if tmpl in ("YA004BICX", "YA004BISX"):   # column F = the accounting date; no item dated after it
+        for r in good:
+            r[4] = ACCOUNTING_DATE
+        src = 8 if tmpl == "YA004BICX" else 9      # Source Date: BISX has CURLED before it
+        assert all(len(r[src].strip()) == 8 and r[src].strip().isdigit() for r in good), tmpl
+        late = [r[1] for r in good if r[src].strip() > ACCOUNTING_DATE]
+        assert not late, f"{tmpl}: {len(late)} items dated after the accounting date {ACCOUNTING_DATE}: {late[:5]}"
+        fixes[f"accounting date (column F) = {ACCOUNTING_DATE}, the extract date"] = len(good)
+
     if tmpl == "YA004BISX":
         filled = 0
         for r in good:

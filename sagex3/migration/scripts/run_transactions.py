@@ -91,7 +91,8 @@ def x3_rules(path, sheet, first, cats, required, order_floor="20240101", order_t
         if stem == "YA004SOHPJ":     # customer, order date (as in Access), customer ref, line, product, qty
             who = [r[3], r[4], r[6], r[15], r[16], r[19]]
         else:                        # supplier, order date (as in Access), -, line, product, qty
-            who = [r[3], r[2], "", r[6], r[7], r[11]]
+            # SMR / MFG rows are shorter and have no dates to move (12 Nov fix: this indexed past them)
+            who = [r[3], r[2], "", r[6], r[7], r[11]] if stem == "YA004POH" else [""] * 6
 
         def move(col, name, new):
             redated.append(who + [name, int(r[col]), int(new)])
@@ -161,6 +162,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("run_dir")
     ap.add_argument("--stock-date", default="20261031", help="SMR Posted Date (Run 3: 20261031; go-live 20261231)")
+    ap.add_argument("--accounting-date", help="BICY / BISY Accounting Date (column F). Default: the extract's "
+                    "'as at' date (James, 12 Nov) - go-live 20261231")
     ap.add_argument("--company", default="C01")
     ap.add_argument("--customers", default=str(BASE / "out_run3" / "YA004BPC_customers_MAPPED.txt"))
     ap.add_argument("--suppliers", default=str(BASE / "out_run3" / "YA004BPS_suppliers_MAPPED.txt"))
@@ -227,7 +230,16 @@ def main():
     n_products, n_codes = references(run, work, Path(a.bom), Path(a.routes))
 
     # ---- the chain ------------------------------------------------------------------------------
+    if not a.accounting_date:
+        if a.legacy_views:
+            raise SystemExit("--accounting-date is needed with --legacy-views")
+        asat = [r for r in g["CHECK"] if len(r) > 1 and r[0].strip() == "as at"]
+        if not asat:
+            raise SystemExit("extract_transactions.txt: no 'as at' line - give --accounting-date")
+        a.accounting_date = asat[0][1].strip()[:10].replace("-", "")
+    summary.append(f"Accounting date (BICY / BISY column F): {a.accounting_date}")
     env = dict(os.environ, MIG_BASE=str(work), STOCK_DATE=a.stock_date, COMPANY=a.company,
+               ACCOUNTING_DATE=a.accounting_date,
                CUSTOMER_FILE=a.customers, SUPPLIER_FILE=a.suppliers)
     env.pop("OUT_DIR", None)
     if a.extra:

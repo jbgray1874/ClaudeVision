@@ -1779,10 +1779,8 @@ Both have 2,056 rows and GBP £6,813,472.18.
   - BISY: 1 item (this one) is dated after F;
   - BICY: **59 items (£763,936.91) are dated 2–4 Nov**, because the extract was taken on 4 Nov with F fixed at 31/10. Ethan reported no date errors on BICY; asked him to check.
 - **Cause:** the accounting date (31/10, hard-coded as `'20261031'` in the views and `ACCOUNTING_DATE` in `populate_guides.py`) is earlier than the extract date (4 Nov).
-- **Fix to decide (James):**
-  - (a) Accounting date = extract date. Recommended: it's the go-live rule (31 Dec / 31 Dec), and it matches the open items to the day.
-  - (b) Keep 31/10 and drop or hold items dated after it. That leaves the ledgers incomplete against Access.
-- **Not changed yet.**
+- **DECIDED (James, 12 Nov): accounting date = the extract date.** It's the go-live rule (31 Dec / 31 Dec) and nothing is lost.
+  Aged reports are compared as at that day. **Done, see 19.14.**
 
 **3. Customer accounting code (ACCCOD), YA004BPC.**
 - All 303 customers were loaded STD, so every customer debit posted to one control account. There should be three:
@@ -1812,3 +1810,34 @@ Both have 2,056 rows and GBP £6,813,472.18.
 Every file, every run (rule 1e).
 
 **Lesson:** a fixed accounting date in a view goes stale the moment the extract is taken on a later day. Every date set in the build must follow the run date.
+
+### 19.14 Accounting date = extract date (James, 12 Nov) – built and proved
+
+**Code:**
+- `scripts/run_transactions.py`:
+  - new `--accounting-date`. The default is the extract's own "as at" line (CHECK grid), e.g. 2026-11-04 18:39:59 → 20261104. Go-live gives 20261231 by itself.
+  - The value is written into RUN_SUMMARY and passed to the chain as `ACCOUNTING_DATE`.
+  - The run stops if the extract has no "as at" line.
+- `scripts/populate_guides.py`:
+  - BICX / BISX column F = `ACCOUNTING_DATE`.
+  - The build **stops** if any item's Source Date (BICX index 8, BISX index 9; BISX has CURLED before it) is after it. That's the BRW500 failure, now caught before Ethan sees it.
+  - The SOH rule "ship / delivery date before 2025 → 31/10" keeps its own constant, `SOH_OLD_DATE_TO = 20261031`, so only the ledgers change, as James asked. A first test moved 1,305 SOHPJ ship dates; that was caught and fixed.
+- **Bug fixed on the way:** `x3_rules` (11 Nov) crashed on SMR / MFG rows (`IndexError`, r[11]). It had only ever been run on POH / SOHPJ, so the next full run would have failed. Fixed: the "who" columns are only read for POH.
+
+**Proof:** a full `run_transactions.py` run on the 4 Nov extract (`runs/test-accdate`), compared with the Run 4 files:
+- **BICY 814 / BISY 2,056:** only column F differs (20261031 → 20261104).
+- **POH, SOHPJ, SMR, MFG:** identical.
+
+**Trap found in the test – pass the run's own inputs, never the defaults.** The defaults point at old sets:
+- `--bins` must be the run's `extract/bins.txt`. The default `bins/out.txt` moved 97 stock lots to A001.
+- `--bom` must be the current BOM set, the 7,189 BOMs in `Current_mapped_set_2026-11-04-pm`. `runs/2026-11-04-pm/out` has 7,174, and 8 works orders were held back as "no BOM".
+- `--routes`: the current routes file (`Ethan_fixes_2026-11-05/ZSDIROU2_routes_MAPPED.xlsx`).
+
+Command used:
+```
+SWAP_BISY=1 python3 scripts/run_transactions.py <scratch>/runs/test-accdate --stock-date 20261031 \
+  --required-date 20261130 --bins <run>/extract/bins.txt \
+  --bom <scratch>/Current_mapped_set_2026-11-04-pm/YA00408BOM_boms_MAPPED.xlsx \
+  --routes <scratch>/Ethan_fixes_2026-11-05/ZSDIROU2_routes_MAPPED.xlsx
+```
+`SWAP_BISY=1` was only because it was the old extract. **Next live run: no SWAP_BISY.** BOMs and routes are rebuilt by `rebuild/run.py` first, and their outputs are passed here (rule 1e).
