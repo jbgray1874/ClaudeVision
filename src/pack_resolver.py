@@ -268,8 +268,14 @@ def _joined_assembly_words(text: str) -> str:
 def sheets_of(assembly: str, ids: Iterable[str]) -> List[str]:
     """The members that are numbered SHEETS of an assembly drawing: 11896-04-00-GA-01, -02, -03
     are the three sheets of 11896-04-00-GA."""
+    # THE TOP DRAWING NUMBERED ALL ZEROS IS THE ASSEMBLY'S OWN DRAWING (12 Nov 2026): a job asked
+    # for as "NNNN-02" keeps its general assembly as "NNNN-02-000 <title>_revW.pdf", with its
+    # parts numbered -001, -002 after it. The pack gathered 34 drawings, read 0 PDFs and was
+    # classed "incorrect pack: the GA's parts list was not read". Zeros of any length are the
+    # top sheet; -001 and on stay parts.
     pre = assembly.upper() + "-"
-    return sorted(d for d in ids if d.upper().startswith(pre) and re.fullmatch(r"\d{1,2}", d[len(pre):]))
+    return sorted(d for d in ids if d.upper().startswith(pre)
+                  and (re.fullmatch(r"\d{1,2}", d[len(pre):]) or re.fullmatch(r"0{3,4}", d[len(pre):])))
 
 
 # ── fingerprints ─────────────────────────────────────────────────────────────────────────

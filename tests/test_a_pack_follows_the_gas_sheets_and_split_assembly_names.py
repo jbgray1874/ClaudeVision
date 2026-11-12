@@ -174,3 +174,25 @@ def test_a_title_block_that_prints_the_number_across_boxes_still_confirms_it():
         assert got["carries_number"], printed
     assert not pr.read_drawing(Path("x.pdf"), "12674-01-GA", lambda p: "12674-02-GA REV B")["carries_number"]
     assert not pr.read_drawing(Path("x.pdf"), "12674-01-GA", lambda p: "")["carries_number"]
+
+
+def _voting_unit():
+    tech = SHARE / "A Customer" / "6000 - Equipment" / "6000-Technical" / "6000-02 Small Unit"
+    return [(tech, [_f(tech, "6000-02.SLDASM"), _f(tech, "6000-02-000 Small Unit_revW.pdf"),
+                    _f(tech, "6000-02-001-LEFT END_2mm.DXF"), _f(tech, "6000-02-001.pdf"),
+                    _f(tech, "6000-02-002.pdf")], False)]
+
+
+def test_the_top_drawing_numbered_all_zeros_is_the_assemblys_own_drawing():
+    """A job asked for as NNNN-02 whose general assembly is filed NNNN-02-000 (12 Nov 2026:
+    34 drawings gathered, 0 PDFs read, "the GA's parts list was not read")."""
+    read = _texts({"6000-02-000": "6000-02-000  REV W\n1  6000-02-001  LEFT END  1\n2  6000-02-002  LID  1\n3  6000-02-009  FOOT  4"})
+    m = pr.resolve("6000-02", _voting_unit(), read_text=read)
+    assert m["references_read"] and m["sheets_read"] == ["6000-02-000"]
+    assert m["missing"] == ["6000-02-009"], m["missing"]
+    ids = {x["drawing"] for x in m["members"]}
+    assert {"6000-02-001", "6000-02-002"} <= ids
+
+
+def test_a_part_numbered_001_is_a_part_not_a_sheet():
+    assert pr.sheets_of("6000-02", ["6000-02-000", "6000-02-001", "6000-02-010", "6000-02-01"]) == ["6000-02-000", "6000-02-01"]
