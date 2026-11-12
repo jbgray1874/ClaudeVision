@@ -171,13 +171,8 @@ def build_bought_in_payload(rec: Dict, sql_summary_id: Optional[int] = None) -> 
 def _get_sql_id_map(workbooks: List[str]) -> Dict[str, int]:
     """Fetch existing SQL summary IDs for faster linkage."""
     try:
-        import pyodbc
-        conn = pyodbc.connect(
-            "DRIVER={ODBC Driver 18 for SQL Server};"
-            "SERVER=10.0.0.200;DATABASE=SDILive;"
-            "UID=AIBot;PWD=AIAgentPW2026;"
-            "Encrypt=yes;TrustServerCertificate=yes;"
-        )
+        import config
+        conn = config.get_connection()
         cur = conn.cursor()
         placeholders = ",".join("?" * len(workbooks))
         cur.execute(

@@ -40,28 +40,50 @@ import re
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
+# This module started life as a standalone script and exited the process when a
+# reader would not import. It is now imported by the live pipeline, where that
+# call would take the whole estimate down over a missing optional dependency —
+# so an import failure is recorded and reported instead. main() still refuses to
+# run without both readers; the difference is that only main() may end the process.
+PATH_A_IMPORT_ERROR: Optional[str] = None
+PATH_B_IMPORT_ERROR: Optional[str] = None
+
 # ---- import Path A (deterministic reader) ----
 try:
     import _bom_words_reader as pathA
-except Exception as exc:
-    print(f"Could not import _bom_words_reader (Path A): {exc}")
-    print("Run this from C:\\ClaudeVision\\src where _bom_words_reader.py lives.")
-    sys.exit(1)
+except Exception as exc:  # pragma: no cover - environment-dependent
+    pathA = None  # type: ignore[assignment]
+    PATH_A_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 # ---- import Path B (vision reader + cache) ----
 try:
     import _bom_vision_reader as pathB
-except Exception as exc:
-    print(f"Could not import _bom_vision_reader (Path B): {exc}")
-    print("Run this from C:\\ClaudeVision\\src where _bom_vision_reader.py lives.")
-    sys.exit(1)
+except Exception as exc:  # pragma: no cover - environment-dependent
+    pathB = None  # type: ignore[assignment]
+    PATH_B_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 
 # ---------------------------------------------------------------------------
 # Shared normalisation (bare code = uppercase, all separators stripped), reused
 # from Path B so A and B codes compare identically.
 # ---------------------------------------------------------------------------
-_bare = pathB._bare_code  # '3886-GA-' / '1450 - GA' / '1455-C GA' -> '3886GA' / '1450GA' / '1455CGA'
+# '3886-GA-' / '1450 - GA' / '1455-C GA' -> '3886GA' / '1450GA' / '1455CGA'.
+# Taken from part_code_conventions, not from Path B: reconciliation must still be able to
+# compare codes on a machine where the vision reader will not import.
+from part_code_conventions import bare_code as _bare
+
+# WHAT READ EACH PATH, in the vocabulary precedence arbitrates with. Path A reads a parts
+# table off the PDF's own text layer, which is what `bom_tree` means; Path B transcribes a
+# rendered image, which is `llm_extract` and ranks below it. Naming them any other way
+# would let a vision reading displace a deterministic one on rank alone.
+PATH_A_SOURCE = "bom_tree"
+PATH_B_SOURCE = "llm_extract"
+
+try:
+    from record_merge import merge_records as _merge_records
+except Exception:                                                  # pragma: no cover
+    def _merge_records(winner, loser, **_kw):                       # type: ignore[misc]
+        return []
 
 
 def _parent_key(parent: Optional[str], pdf_name: str, page_index: int) -> str:
@@ -89,6 +111,149 @@ def _rows_by_item(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return {str(r["item_number"]): r for r in rows}
 
 
+_DESC_NOISE = {"THE", "AND", "WITH", "FOR", "TYPE", "EACH", "OFF", "SDI", "FIXING", "FIXINGS"}
+
+
+def _desc_words(row: Dict[str, Any]) -> set:
+    """The words that name an article: whole alphabetic tokens of three letters or more.
+
+    A SUPPLIER REFERENCE IS NOT A WORD. The letter-run regex this used pulled "RSB" out of
+    "[G10-RSB350-12-00C]" and nothing out of the vision reader's "IG10-RS8350-12-00C", so the
+    same grommet row read two ways failed the exact-words test and was costed twice, at x3
+    each (12567-02-GA, D-268). A token that carries a digit is a size, a length or a
+    reference — sizes are compared by the thread rule, the rest is not identity.
+    """
+    out = set()
+    for tok in re.split(r"[^A-Z0-9]+", str(row.get("description") or "").upper()):
+        if not tok or any(ch.isdigit() for ch in tok):
+            continue
+        if len(tok) >= 3 and tok not in _DESC_NOISE:
+            out.add(tok)
+    return out
+
+
+def _is_mirror(code: Any) -> bool:
+    """The other hand of a part is a different part: 06M-H never agrees with 06M."""
+    try:
+        from part_code_conventions import is_mirror_code
+        return bool(is_mirror_code(str(code or "")))
+    except Exception:                                                 # pragma: no cover
+        return False
+
+
+_CATEGORY_CODES = {"FIXING", "FIXINGS", "FIXINGTBC", "STDPART", "HARDWARE"}
+
+
+def _carry_section_length(row: Dict[str, Any], other: Dict[str, Any]) -> None:
+    """A piece's length printed in one reader's line is not lost because the other reader's
+    line left it out (D-573).
+
+    401918-01-07M's cut list prints "50.00 x 20.00 x 2.00mm TUBE 703 1 / 154 2". The text
+    layer read the length into the line; vision transcribed the profile alone. The row
+    contest settled the code and the quantity, the field merge kept the winner's description
+    because it was not empty, and the length went with the loser's words: the frame's two
+    pieces reached the cut-list rule with no length, so it attached nothing, and the frame
+    went on the book with no tube and no saw. A length is a field of its own: where the kept
+    line has none and the other line prints one for the same section, it is carried under
+    the name the cut-list rule reads, and the row says where it came from."""
+    if any(_row_length_value(row.get(k)) for k in ("cut_length_mm", "length_mm", "length")):
+        return
+    try:
+        from bom_pipeline import _row_length_value as _lv
+        from section_profile import detect_section_stock
+    except Exception:                                                 # pragma: no cover
+        return
+    mine = detect_section_stock(str(row.get("description") or ""))
+    if not mine or mine.get("length_mm"):
+        return
+    theirs = detect_section_stock(str(other.get("description") or ""))
+    length = float((theirs or {}).get("length_mm") or 0) or next(
+        (_lv(other.get(k)) for k in ("cut_length_mm", "length_mm", "length") if _lv(other.get(k))), 0.0)
+    if not length or not theirs:
+        return
+    same = all(abs(float(mine.get(k) or 0) - float(theirs.get(k) or 0)) < 0.05 for k in ("a", "b", "t"))
+    if not same:
+        return
+    row["cut_length_mm"] = length
+    row["cut_length_mm_source"] = str(other.get("source") or "the other reader")
+    row["flag"] = (str(row.get("flag") or "") + ("; " if row.get("flag") else "")
+                   + f"length {length:g} mm carried from the other reader's line")
+
+
+def _row_length_value(v: Any) -> float:
+    try:
+        from bom_pipeline import _row_length_value as _lv
+        return float(_lv(v) or 0.0)
+    except Exception:                                                 # pragma: no cover
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+
+def _identity(code: Any) -> str:
+    """A code that names one article. "FIXING", "STD PART", "P/P", "-", "TBC" name a category
+    or nothing — the minter's own rule — so rows carrying them are told apart by their words.
+
+    THE CATEGORY LIST IS THE SHARED ONE. This function kept a private set of five words, and
+    "P/P" — SDI's shorthand for a purchased part with no code of its own — was not in it. On
+    12567-02-GA twelve rows print P/P (a driver, three grommets, two Velcro strips, two EPDM
+    tapes, four cables). Read as an identity, every P/P row on the vision reader's table
+    matched every P/P row on the deterministic one: the grommets' quantity landed on the JST
+    lead, and _read_elsewhere then found each remaining A-row "already read" under the same
+    code, so the grommets, the Velcro and the tapes left the bill without a word (D-262).
+    """
+    try:
+        from part_identity import is_placeholder_identity
+        if is_placeholder_identity(code):
+            return ""
+    except Exception:                                                 # pragma: no cover
+        pass
+    try:
+        from part_code_conventions import is_category_not_a_code
+        if is_category_not_a_code(code):
+            return ""
+    except Exception:                                                 # pragma: no cover
+        pass
+    c = _bare(code or "")
+    return "" if c in _CATEGORY_CODES else c
+
+
+def _threads(row: Dict[str, Any]) -> set:
+    from part_identity import thread_sizes
+    return set(thread_sizes(row.get("description")))
+
+
+def _same_article(a: Dict[str, Any], b: Dict[str, Any], exact: bool = False) -> bool:
+    """Could these two readings be the same line? Unknown (a blank description) counts as yes.
+
+    `exact` is for rows with no code: the words are then the whole identity, so "M6 WASHER"
+    and "M6 STAR WASHER" are two lines, not one read twice.
+    """
+    wa, wb = _desc_words(a), _desc_words(b)
+    if not wa or not wb:
+        return True
+    ta, tb = _threads(a), _threads(b)
+    if ta and tb and ta != tb:
+        return False
+    return wa == wb if exact else bool(wa & wb)
+
+
+def _read_elsewhere(row: Dict[str, Any], others: List[Dict[str, Any]]) -> bool:
+    """Is this row's article on the other reader's table under some item number?"""
+    code = _identity(row.get("part_ref", ""))
+    words = _desc_words(row)
+    for o in others:
+        oc = _identity(o.get("part_ref", ""))
+        if code and oc:
+            if code == oc:
+                return True
+            continue
+        if words and _same_article(row, o, exact=True):
+            return True
+    return False
+
+
 def reconcile_page(a_bom: Optional[Dict[str, Any]], b_bom: Optional[Dict[str, Any]],
                    parent_label: str) -> Tuple[List[Dict[str, Any]], List[str]]:
     """Reconcile one parent's A-rows and B-rows. Returns (merged_rows, findings)."""
@@ -108,15 +273,89 @@ def reconcile_page(a_bom: Optional[Dict[str, Any]], b_bom: Optional[Dict[str, An
             a_code, b_code = _bare(a.get("part_ref", "")), _bare(b.get("part_ref", ""))
             a_qty, b_qty = int(a["quantity"]), int(b["quantity"])
             code_agree = (a_code == b_code) or (a_code == "" and b_code == "") \
-                or (a_code and b_code and (a_code in b_code or b_code in a_code))
+                or (a_code and b_code and (a_code in b_code or b_code in a_code)
+                    and _is_mirror(a.get("part_ref")) == _is_mirror(b.get("part_ref")))
             qty_agree = (a_qty == b_qty)
-            if code_agree and qty_agree:
-                row = dict(a); row["source"] = "BOTH"; row["confidence"] = "HIGH"; row["flag"] = ""
+            # A code that only names a category (FIXING) settles nothing, so the words decide.
+            two_lines = (not code_agree and not _same_article(a, b)) or (
+                not (_identity(a_code) or _identity(b_code))
+                and not _same_article(a, b, exact=True))
+            # THE ROW CONTEST SETTLES THE CODE AND THE QUANTITY. It does not settle the
+            # rest of the line, and taking the winner wholesale threw away every column
+            # the loser read and the winner did not — a description vision transcribed
+            # off a page whose text layer clipped it arrived, agreed, and was discarded
+            # unflagged, because nothing about it disagreed. The two fields the rule
+            # below arbitrates stay arbitrated by it; every other field is merged under
+            # precedence, so gaps fill and genuine conflicts are recorded.
+            _decided = ("part_ref", "quantity")
+            # A WORD IS NOT A CODE, AND AN EMPTY CELL IS NOT A DISAGREEMENT (D-586). The
+            # deterministic reader now refuses to mint a code from a bare standard prefix
+            # ("DIN" cut from "DIN 7980 - 8", D-584 fifth tranche), so a fastener row
+            # arrives from Path A with its description and NO code. Vision's full
+            # designation FILLS that cell; reading the fill as an override flagged every
+            # fastener "possible drawing inconsistency" when the two readers in fact agree
+            # on the article. The row keeps A's columns, takes B's designation, and says so.
+            if a_code == "" and b_code and qty_agree and _same_article(a, b):
+                row = dict(a); row["part_ref"] = b.get("part_ref", "")
+                row["source"] = "BOTH"; row["confidence"] = "HIGH"
+                row["flag"] = ""
+                _notes = _merge_records(row, b, winner_source=PATH_B_SOURCE,
+                                        loser_source=PATH_A_SOURCE, decided=_decided,
+                                        label=f"[{parent_label}] item {item}")
+                findings.extend(_notes)
+                _carry_section_length(row, b)
                 merged.append(row)
+                findings.append(f"[{parent_label}] item {item}: the deterministic reader "
+                                f"kept this commodity row by its description and vision "
+                                f"supplied the designation '{b.get('part_ref','')}' — the "
+                                f"readers agree on the article")
+                continue
+            if code_agree and qty_agree and not two_lines:
+                row = dict(a); row["source"] = "BOTH"; row["confidence"] = "HIGH"; row["flag"] = ""
+                _notes = _merge_records(row, b, winner_source=PATH_A_SOURCE,
+                                        loser_source=PATH_B_SOURCE, decided=_decided,
+                                        label=f"[{parent_label}] item {item}")
+                findings.extend(_notes)
+                _carry_section_length(row, b)
+                merged.append(row)
+            elif two_lines:
+                # TWO READINGS OF TWO LINES. The readers numbered the table differently (an
+                # unnumbered FIXING row, a skipped item), so item N is a different article on
+                # each. Merging them put one line's code on the other's description — 12312-01
+                # shipped "M6 WASHER" on the 06M side bracket and lost the washers. Each row
+                # stays whole; the deterministic one is kept as its own line unless vision
+                # read that article at another item number.
+                row = dict(b); row["source"] = "B_OVERRIDE"; row["confidence"] = "LOW"
+                row["flag"] = (f"item {item} read as different lines — vision "
+                               f"'{b.get('part_ref','')}' {b.get('description','')!r}, deterministic "
+                               f"'{a.get('part_ref','')}' {a.get('description','')!r}; not merged")
+                merged.append(row)
+                findings.append(f"[{parent_label}] item {item}: {row['flag']}")
+                if not _read_elsewhere(a, b_rows):
+                    keep = dict(a); keep["source"] = "A_ONLY"; keep["confidence"] = "MED"
+                    keep["flag"] = (f"A-only — item {item} read by vision as a different line "
+                                    f"('{b.get('description','')}') — review")
+                    merged.append(keep)
+                    findings.append(f"[{parent_label}] item {item}: deterministic line "
+                                    f"'{a.get('part_ref','')}' {a.get('description','')!r} kept "
+                                    f"as its own line — vision did not read it elsewhere")
             else:
                 # conflict -> Grok wins (your Q1), flag override + drawing-inconsistency
                 row = dict(b)
+                # The description goes with the code that won. The text layer's description
+                # names ITS code, so ranking it over vision's would label one part with
+                # another's words (12312-01: "SIDE BRACKET" on the 06M-H hand).
+                _decided_here = _decided + (("description",) if not code_agree else ())
+                _notes = _merge_records(row, a, winner_source=PATH_B_SOURCE,
+                                        loser_source=PATH_A_SOURCE, decided=_decided_here,
+                                        label=f"[{parent_label}] item {item}")
+                findings.extend(_notes)
                 row["source"] = "B_OVERRIDE"; row["confidence"] = "LOW"
+                # Either reader's line may be the one that printed the length: the text
+                # layer's words outrank vision's in the merge, so vision's own line is
+                # consulted too, as it was before the merge replaced its description.
+                _carry_section_length(row, a)
+                _carry_section_length(row, b)
                 diff = []
                 if not code_agree:
                     diff.append(f"code A='{a.get('part_ref','')}' vs B='{b.get('part_ref','')}'")
@@ -172,26 +411,297 @@ def code_quality_findings(parent_label: str, rows: List[Dict[str, Any]]) -> List
 # ---------------------------------------------------------------------------
 # Run both readers over a job.
 # ---------------------------------------------------------------------------
-def run_path_a(pdf_paths: List[str]) -> List[Dict[str, Any]]:
+# ---------------------------------------------------------------------------
+# Which pages are worth paying to look at.
+# ---------------------------------------------------------------------------
+# A vision call is charged mostly on image size, so the expensive pattern is every page
+# of every pack on every run. The cheap pattern is the one that is actually wanted: the
+# pages that carry a bill of materials, and the pages that look like they should carry
+# one but came back empty.
+#
+# Two pages therefore earn a call:
+#
+#   the deterministic reader FOUND a table here   -> corroborate it. This is where the
+#       money is, and a row only one reader saw is the whole reason to read twice.
+#   the page TALKS like a parts list and the deterministic reader found nothing ->
+#       this is the coverage gap. A whole parent BOM absent from a job lives here, and
+#       it is invisible in the output because what is wrong with it is what is not in it.
+#
+# Everything else — detail sheets, sections, revision pages — is read from cache if it
+# happens to be there and otherwise not read at all. Skipping is recorded, not silent:
+# a page nobody looked at is not a page with no BOM on it.
+def merge_pages_into_parents(pages: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Gather every page's rows under the drawing that owns them.
+
+    A parts list is not confined to the GA. It continues onto a second sheet, it is
+    repeated as a fixings table on a detail, and a sub-assembly states its own on the
+    page that details it. Reading page by page and stopping there gives one BOM per
+    SHEET, so a parent whose list spans two sheets arrives as two half-BOMs and a
+    fixings table repeated for the fitter's convenience arrives as double the fixings.
+
+    WHAT MAKES TWO ROWS ONE LINE. Within a single parent's bill of materials the item
+    number is unique — that is what an item number is for. So:
+
+        same parent, same item, same code      one line, seen on two sheets
+        same parent, different item            two lines (a continuation sheet)
+        same parent, same item, DIFFERENT code the sheets disagree; both are emitted
+                                               and flagged, because dropping either
+                                               loses a real part to tidy up a conflict
+
+    Rows under DIFFERENT parents are never folded together. One code legitimately
+    appears in several assemblies, and collapsing those is how a part used twice
+    becomes a part used once — the global part-number deduplication this system has
+    already been bitten by.
+    """
+    by_parent: Dict[str, Dict[str, Any]] = {}
+    findings: List[str] = []
+    for pg in pages:
+        label = pg.get("label") or ""
+        key = _bare(label) or label
+        entry = by_parent.setdefault(key, {
+            "label": label, "parent_known": bool(pg.get("parent_known")),
+            "sheets": [], "rows": [], "_by_item": {},
+        })
+        if pg.get("parent_known") and not entry["parent_known"]:
+            # A page that knows its drawing names the group; a page-identity placeholder
+            # never overrides a real title block.
+            entry["label"] = label
+            entry["parent_known"] = True
+        _sheet = pg.get("sheet") or label
+        if _sheet not in entry["sheets"]:
+            entry["sheets"].append(_sheet)
+        for row in pg.get("rows", []):
+            item = str(row.get("item_number") or "").strip()
+            code = _bare(row.get("part_number") or row.get("part_ref") or "")
+            if not item:
+                entry["rows"].append(dict(row, sheet=_sheet))
+                continue
+            prior = entry["_by_item"].get(item)
+            if prior is None:
+                _r = dict(row, sheet=_sheet)
+                entry["_by_item"][item] = _r
+                entry["rows"].append(_r)
+                continue
+            prior_code = _bare(prior.get("part_number") or prior.get("part_ref") or "")
+            if not _identity(prior_code) and not _identity(code) \
+                    and not _same_article(prior, row, exact=True):
+                # Two code-less lines under one item number (an unnumbered FIXING row the
+                # readers numbered differently). The description is their only identity.
+                entry["rows"].append(dict(row, sheet=_sheet))
+                continue
+            if prior_code == code:
+                # The same line on a second sheet. Record where it was seen; do not
+                # count it twice — and READ IT. Noting the sheet and nothing else meant
+                # a column the first sheet clipped and the second sheet printed in full
+                # was never taken, on a row we had positively identified as the same
+                # line. Both readings come off a parts table, so they rank equally:
+                # the second fills what the first left blank and can displace nothing.
+                _seen = prior.setdefault("also_on_sheets", [])
+                if _sheet not in _seen and _sheet != prior.get("sheet"):
+                    _seen.append(_sheet)
+                findings.extend(_merge_records(
+                    prior, row, winner_source=PATH_A_SOURCE, loser_source=PATH_A_SOURCE,
+                    decided=("item_number",),
+                    label=f"[{entry['label']}] item {item} on {_sheet}"))
+                continue
+            _r = dict(row, sheet=_sheet)
+            _r["flag"] = ((_r.get("flag") or "") + "; " if _r.get("flag") else "") + (
+                f"item {item} is '{prior.get('part_ref') or prior_code}' on "
+                f"{prior.get('sheet')} and '{row.get('part_ref') or code}' on {_sheet} — "
+                f"the sheets disagree; both are costed until someone says which is right")
+            entry["rows"].append(_r)
+            findings.append(f"[{entry['label']}] {_r['flag']}")
+
+    out = []
+    for entry in by_parent.values():
+        entry.pop("_by_item", None)
+        if len(entry["sheets"]) > 1:
+            findings.append(f"[{entry['label']}] parts list read from {len(entry['sheets'])} "
+                            f"sheets: {', '.join(str(s) for s in entry['sheets'])}")
+        out.append(entry)
+    return out, findings
+
+
+def page_needs_vision(verdict: Dict[str, Any]) -> Tuple[bool, str]:
+    """Decide from what the deterministic reader SAW, not from a guess about the page.
+
+    The first version of this asked whether the page's text contained parts-list words,
+    against a word list written here. That was wrong twice over. It kept a private copy
+    of a vocabulary the reader already owns — so the two could drift, and only one of
+    them would ever be corrected. And more fundamentally it decided whether text
+    extraction could be trusted by consulting the text extraction, which is circular on
+    precisely the pages that matter.
+
+    The reader's own verdict does not have that problem. It knows the difference between
+    a page it read, a page it could not read, and a page with nothing on it.
+    """
+    if not verdict.get("has_text"):
+        return True, "no text layer — a scanned or raster sheet is what vision is for"
+    if verdict.get("header_found") and verdict.get("rows_parsed"):
+        return True, "a parts list was read here; corroborate the rows that carry cost"
+    if verdict.get("header_found"):
+        return True, ("a parts-list header was found and no rows parsed under it — "
+                      "a table this reader could see and could not read")
+    if verdict.get("header_words"):
+        return True, ("parts-list column words are on this page but no header row "
+                      "qualified — the layout defeated the row clustering")
+    return False, "no parts-list structure or vocabulary on this page"
+
+
+# A page neither reader could look at is a page whose BOM cannot be missing-or-present:
+# it is simply unknown, and that is the one state this module must never report as clean.
+# Both runners therefore append to `unread`, and reconcile_job carries those out to the
+# caller as findings. Prints alone were how a whole job ran vision-blind in silence.
+def grid_bom_fallback(page) -> Optional[Dict[str, Any]]:
+    """The extract_tables() read of a page the words reader could not parse.
+
+    THE EXTRACT THAT SUCCEEDED MUST REACH THE AUTHORITATIVE BOM. On 0359342,
+    extract_tables() returned every table and the header-mapped grid reader parses
+    them — but this reconciliation's Path A consulted only the words reader, so a
+    successful Layer 1 extraction still left the job to vision recovery (the review
+    probe's third finding). Consulted ONLY where the words reader found no rows on
+    the page, so every page it already reads is untouched; the parent comes from the
+    same title-block rule the words reader uses."""
+    try:
+        import bom_table_extractor as _bte
+        rows = _bte.extract_bom_table_rows(page)
+    except Exception:                                            # noqa: BLE001
+        return None
+    if not rows:
+        return None
+    parent = None
+    try:
+        words = page.extract_words(x_tolerance=1.5, y_tolerance=1.5) or []
+        parent = pathA._title_block_dwg_no(words) if pathA is not None else None
+    except Exception:                                            # noqa: BLE001
+        pass
+    return {"parent": parent, "rows": rows, "grid_mapped": True}
+
+
+def prefer_grid_read(words_bom: Optional[Dict[str, Any]],
+                     grid_bom: Optional[Dict[str, Any]]) -> bool:
+    """Should the ruled-cell grid read replace the words read for one page?
+
+    THE WORDS READER SAYS WHEN IT IS GUESSING, AND A GUESS LOSES TO A RULING LINE.
+    On 0359342 the region parser flagged nearly every row segmentation_uncertain and
+    the flags were right: wrapped description tails glued into the part cell
+    ('55Kg - RM08362', 'Outside JAE830') and the SHEET column's tokens into material
+    ('1 MDF, 18mm') — which split R35571 into two identities and silently halved a
+    dual-owner sum. extract_tables() on the same pages returns the ruled cells
+    cleanly. So: a words read that is MAJORITY uncertain yields to a HEADER-MAPPED
+    grid read carrying at least as many rows. An SDI page never swaps — its ordered
+    parser sets no uncertainty flags, and its collapsed-blob grids fail the
+    header-mapped test."""
+    w_rows = (words_bom or {}).get("rows") or []
+    g_rows = (grid_bom or {}).get("rows") or []
+    if not w_rows or not g_rows:
+        return False
+    uncertain = sum(1 for r in w_rows if r.get("segmentation_uncertain"))
+    return (uncertain * 2 > len(w_rows)
+            and len(g_rows) >= len(w_rows)
+            and any(r.get("header_mapped") for r in g_rows))
+
+
+def run_path_a(pdf_paths: List[str], unread: Optional[List[Dict[str, Any]]] = None,
+               survey: Optional[Dict[Tuple[str, int], bool]] = None) -> List[Dict[str, Any]]:
+    """Read every page deterministically, and — since the page is already open — note
+    whether it talks like a parts list, into `survey` keyed by (pdf_name, page_index).
+    That survey is what lets Path B spend only where a BOM plausibly is."""
     import pdfplumber
     out: List[Dict[str, Any]] = []
+    if pathA is None:
+        if unread is not None:
+            unread.append({"path": "A", "scope": "job", "pdf": "", "page": None,
+                           "detail": f"deterministic BOM reader unavailable ({PATH_A_IMPORT_ERROR})"})
+        return out
     for p in pdf_paths:
         try:
             with pdfplumber.open(p) as pdf:
                 for pi, page in enumerate(pdf.pages):
+                    if survey is not None:
+                        try:
+                            _v = pathA.survey_page(page)
+                        except Exception:
+                            # A page this reader cannot even survey is exactly a page
+                            # vision should see. Unknown is not "no".
+                            _v = {"has_text": False}
+                        survey[(os.path.basename(p), pi)] = page_needs_vision(_v)
                     bom = pathA.read_bom_from_page(page)
+                    if not bom or not bom.get("rows"):
+                        _grid = grid_bom_fallback(page)
+                        if _grid:
+                            print(f"  [Path A] {os.path.basename(p)} p{pi + 1}: the "
+                                  f"words reader parsed no rows; the header-mapped "
+                                  f"grid read recovered {len(_grid['rows'])} row(s)",
+                                  flush=True)
+                            bom = _grid
+                    else:
+                        _grid = grid_bom_fallback(page)
+                        if prefer_grid_read(bom, _grid):
+                            print(f"  [Path A] {os.path.basename(p)} p{pi + 1}: the "
+                                  f"words read is majority segmentation-uncertain; "
+                                  f"the ruled-cell grid read ({len(_grid['rows'])} "
+                                  f"row(s)) replaces it", flush=True)
+                            # the words reader's title-block parent survives when the
+                            # grid path could not name one — same fact, best reader
+                            if bom.get("parent") and not _grid.get("parent"):
+                                _grid["parent"] = bom["parent"]
+                            bom = _grid
                     if bom:
                         bom["page_index"] = pi
                         bom["pdf_name"] = os.path.basename(p)
                         out.append(bom)
         except Exception as exc:
             print(f"  [Path A skip] {os.path.basename(p)}: {exc}")
+            if unread is not None:
+                unread.append({"path": "A", "scope": "file", "pdf": os.path.basename(p), "page": None,
+                               "detail": f"{type(exc).__name__}: {exc}"})
     return out
 
 
-def run_path_b(pdf_paths: List[str], args) -> List[Dict[str, Any]]:
+def run_path_b(pdf_paths: List[str], args, unread: Optional[List[Dict[str, Any]]] = None,
+               worth_paying_for: Optional[Dict[Tuple[str, int], bool]] = None,
+               spend: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
+    """Read pages with the vision model. `worth_paying_for` maps (pdf_name, page_index)
+    to whether this page earns a paid call; a page not in it, or mapped False, is read
+    from cache if present and otherwise left unread and recorded. None means the caller
+    did not select, and every page is paid for — the standalone tool's behaviour."""
     out: List[Dict[str, Any]] = []
+    if pathB is None:
+        if unread is not None:
+            unread.append({"path": "B", "scope": "job", "pdf": "", "page": None,
+                           "detail": f"vision BOM reader unavailable ({PATH_B_IMPORT_ERROR})"})
+        return out
     force_all = args.refresh or args.force_llm
+
+    # ── EVERY PAGE AT ONCE, BECAUSE EVERY PAGE IS A SEPARATE ROUND TRIP ──────────────
+    #
+    # This read the pages one at a time. On 10575-02 that was NINETEEN sequential calls
+    # to the vision model, each one a network round trip of several seconds, and it is
+    # the largest single block in a run -- the estimator watching it has no way to tell
+    # a slow model from a stuck one.
+    #
+    # Nothing made it sequential. Each page is independent, the cache is keyed per page,
+    # and the results are collected rather than accumulated into shared state. The work
+    # is entirely WAITING on an API, so threads are the right tool: the GIL is released
+    # for the whole of it, and processes would pay to pickle a PNG per page.
+    #
+    # ORDER IS PRESERVED DELIBERATELY. Results used to arrive in page order and something
+    # downstream may lean on that without saying so; a reordering that only shows up on a
+    # pack with two GAs is not a debugging session anybody wants. So the work is indexed
+    # and the output rebuilt in the original sequence.
+    #
+    # SDI_VISION_WORKERS bounds it. Default 6: enough to turn minutes into tens of
+    # seconds, low enough not to trip a rate limit on the shared xAI key and turn a slow
+    # run into a failed one. 1 restores exactly the old behaviour, which is the first
+    # thing to try if the model starts refusing.
+    try:
+        _workers = int(os.environ.get("SDI_VISION_WORKERS", "6"))
+    except ValueError:
+        _workers = 6
+    _workers = max(1, min(_workers, 16))
+
+    jobs: List[Tuple[str, str, int, bool, bool]] = []
     for p in pdf_paths:
         this_refresh = force_all or (
             args.refresh_file is not None and args.refresh_file.lower() in os.path.basename(p).lower()
@@ -200,27 +710,85 @@ def run_path_b(pdf_paths: List[str], args) -> List[Dict[str, Any]]:
             n = pathB.count_pages(p)
         except Exception as exc:
             print(f"  [Path B skip] {os.path.basename(p)}: {exc}")
+            if unread is not None:
+                unread.append({"path": "B", "scope": "file", "pdf": os.path.basename(p), "page": None,
+                               "detail": f"{type(exc).__name__}: {exc}"})
             continue
         for pi in range(n):
-            try:
-                png = pathB.render_page_to_png(p, pi, dpi=args.dpi, max_side=args.max_side)
-                res = pathB.get_vision_bom_cached(
-                    png, model=args.model, pdf_name=os.path.basename(p), page_index=pi,
-                    cache_dir=args.cache_dir, use_cache=not args.no_cache, refresh=this_refresh,
-                )
-            except Exception as exc:
-                print(f"  [Path B error] {os.path.basename(p)} p{pi}: {exc}")
-                continue
-            parsed = res["parsed"]
-            if parsed and parsed.get("rows"):
-                parsed["page_index"] = pi
-                parsed["pdf_name"] = os.path.basename(p)
-                out.append(parsed)
+            _name = os.path.basename(p)
+            _pay = force_all or worth_paying_for is None or worth_paying_for.get((_name, pi), False)
+            jobs.append((p, _name, pi, _pay, this_refresh))
+
+    def _one(job: Tuple[str, str, int, bool, bool]) -> Dict[str, Any]:
+        p, _name, pi, _pay, this_refresh = job
+        try:
+            png = pathB.render_page_to_png(p, pi, dpi=args.dpi, max_side=args.max_side)
+            res = pathB.get_vision_bom_cached(
+                png, model=args.model, pdf_name=_name, page_index=pi,
+                cache_dir=args.cache_dir, use_cache=not args.no_cache, refresh=this_refresh,
+                cache_only=not _pay,
+            )
+            return {"name": _name, "page": pi, "res": res}
+        except Exception as exc:                                 # noqa: BLE001
+            # RETURNED, NOT RAISED. One page the model refuses must not take the other
+            # eighteen with it -- the sequential version continued, and so does this.
+            return {"name": _name, "page": pi, "error": f"{type(exc).__name__}: {exc}"}
+
+    results: List[Optional[Dict[str, Any]]] = [None] * len(jobs)
+    if jobs:
+        import concurrent.futures as _futures                    # noqa: PLC0415
+        with _futures.ThreadPoolExecutor(max_workers=_workers) as ex:
+            for idx, out_one in zip(range(len(jobs)), ex.map(_one, jobs)):
+                results[idx] = out_one
+
+    # The bookkeeping stays on ONE thread, in page order. Counters incremented from six
+    # threads is how a "paid" total quietly stops matching the bill.
+    for entry in results:
+        if entry is None:
+            continue
+        _name, pi = entry["name"], entry["page"]
+        if "error" in entry:
+            print(f"  [Path B error] {_name} p{pi}: {entry['error']}")
+            if unread is not None:
+                unread.append({"path": "B", "scope": "page", "pdf": _name, "page": pi,
+                               "detail": entry["error"]})
+            continue
+        res = entry["res"]
+        if spend is not None:
+            if res.get("skipped"):
+                spend["skipped"] = spend.get("skipped", 0) + 1
+            elif res.get("cache_hit"):
+                spend["cached"] = spend.get("cached", 0) + 1
+            else:
+                spend["paid"] = spend.get("paid", 0) + 1
+        if res.get("skipped"):
+            # Not an error and not an empty page — a page nobody looked at. Recorded
+            # so "no BOM here" is never inferred from a call that was never made.
+            if unread is not None:
+                unread.append({"path": "B", "scope": "page", "pdf": _name, "page": pi,
+                               "detail": "not read by the vision model: the page does not "
+                                         "talk like a parts list and the deterministic "
+                                         "reader found no table on it",
+                               "reason": "not_selected"})
+            continue
+        parsed = res["parsed"]
+        if parsed and parsed.get("rows"):
+            parsed["page_index"] = pi
+            parsed["pdf_name"] = _name
+            out.append(parsed)
     return out
 
 
 def find_pdfs(pdf_dir: str) -> List[str]:
-    return pathB.find_pdfs(pdf_dir)  # reuse the deduped finder
+    if pathB is not None:
+        return pathB.find_pdfs(pdf_dir)  # reuse the deduped finder
+    # Same contract as the deduped finder: case-insensitive, one entry per real file.
+    # Finding the job's PDFs must not depend on the vision reader importing.
+    seen: Dict[str, str] = {}
+    for name in sorted(os.listdir(pdf_dir)):
+        if name.lower().endswith(".pdf"):
+            seen.setdefault(name.lower(), os.path.join(pdf_dir, name))
+    return list(seen.values())
 
 
 def reconcile_job(
@@ -231,10 +799,12 @@ def reconcile_job(
     model=None,
     cache_dir=None,
     no_cache=False,
-    refresh=False,
+    refresh=None,
     force_llm=False,
     refresh_file=None,
     verbose=False,
+    select_pages=True,
+    llm_only=None,
 ):
     """Dual-path BOM reconcile for a set of PDFs (library entry point).
 
@@ -249,21 +819,99 @@ def reconcile_job(
     if model is None:
         model = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
     if cache_dir is None:
-        cache_dir = pathB.DEFAULT_CACHE_DIR
+        cache_dir = pathB.DEFAULT_CACHE_DIR if pathB is not None else ""
+    # BOTH RESOLVED BEFORE _args IS BUILT, and that ordering is the whole of it. `refresh`
+    # is read out of this Namespace by run_path_b; resolving it four lines LOWER puts None in
+    # there, which is falsy, so --fresh-read would set the variable, the variable would be
+    # read, and every page would still come from cache. Nothing would fail — the run would
+    # simply go on answering the question it was asked last week, which is the one thing the
+    # flag exists to stop.
+    #
+    # DEFAULTED FROM THE ENVIRONMENT so the flags do not have to be threaded through
+    # file_scan's signature and bom_pipeline's **opts to reach here. SDI_SW_FLATTEN and
+    # SDI_SW_EXTRACT already work this way, and main.py sets both of these for the process.
+    # An explicit argument still wins, so a caller that knows what it wants is not
+    # second-guessed by a variable somebody left set in a shell.
+    if llm_only is None:
+        llm_only = os.environ.get("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes"}
+    if refresh is None:
+        refresh = os.environ.get("SDI_VISION_REFRESH", "").strip().lower() in {"1", "true",
+                                                                              "yes", "on"}
     _args = argparse.Namespace(
         pdf=None, pdf_dir=None, dpi=dpi, max_side=max_side, model=model,
         cache_dir=cache_dir, no_cache=no_cache, refresh=refresh,
         force_llm=force_llm, refresh_file=refresh_file,
     )
+    unread: List[Dict[str, Any]] = []
+    survey: Dict[Tuple[str, int], bool] = {}
+
+    spend: Dict[str, int] = {"paid": 0, "cached": 0, "skipped": 0}
+
+    # ── llm_only: THE MODEL ON ITS OWN, WITH NOTHING TO CORROBORATE IT ──────────────
+    #
+    # Path A is the deterministic reader and the auditable base; Path B is the coverage
+    # net. The whole design is that they check each other, and reconcile_page records
+    # which of them saw a row. Turning A off deliberately breaks that — every row becomes
+    # B_ONLY and nothing disputes it.
+    #
+    # WHICH IS THE POINT, and only for measuring. "What does Grok make of this pack by
+    # itself" cannot be answered while a deterministic reader is quietly supplying half
+    # the rows and correcting the other half. It is a diagnostic, never a way to estimate:
+    # an LLM-only read is exactly the thing this engine's source waterfall exists to rank
+    # LAST, at confidence 0.68 and capped.
+    #
+    # The survey is still built, because page selection reads it — and with A off, every
+    # page it would have skipped now has no other reader, so all of them are paid for.
+    if llm_only:
+        a_boms: List[Dict[str, Any]] = []
+        if unread is not None:
+            unread.append({"path": "A", "scope": "job", "pdf": "", "page": None,
+                           "detail": "deterministic BOM reader DISABLED by --llm-only: this "
+                                     "read is the vision model alone and nothing corroborates "
+                                     "it"})
+        if verbose:
+            print("  Path A SKIPPED (--llm-only): the model is on its own.")
+    else:
+        if verbose:
+            print("\nRunning Path A (deterministic extract_words)...")
+        a_boms = run_path_a(pdf_paths, unread, survey)
+        if verbose:
+            print(f"  Path A found {len(a_boms)} BOM table(s).")
+
+    # A page earns a paid vision call when Path A found a table on it (corroborate the
+    # money) or when the page's own words name parts-list columns and Path A found
+    # nothing (the coverage gap). `select_pages=False` restores every-page behaviour.
+    if llm_only:
+        # EVERY PAGE, PAID FOR. Selection exists to spend the model's time only where the
+        # deterministic reader left a gap. With A off the whole document is a gap, and a
+        # page skipped here would look in the output like a page with no BOM on it.
+        worth = None  # type: ignore[assignment]
+        why = {}
+    elif select_pages:
+        worth: Dict[Tuple[str, int], bool] = {k: v[0] for k, v in survey.items()}
+        why: Dict[Tuple[str, int], str] = {k: v[1] for k, v in survey.items()}
+        # Belt and braces. survey_page already returns True for a page it read a table
+        # on, but a page reaching a_boms without a survey entry — a reader that answered
+        # one call and not the other — must not lose its corroboration to a missing key.
+        for bom in a_boms:
+            _k = (bom.get("pdf_name", ""), bom.get("page_index", -1))
+            if not worth.get(_k):
+                worth[_k] = True
+                why[_k] = "a parts list was read here; corroborate the rows that carry cost"
+    else:
+        worth = None  # type: ignore[assignment]
+        why = {}
     if verbose:
-        print("\nRunning Path A (deterministic extract_words)...")
-    a_boms = run_path_a(pdf_paths)
+        print(f"Running Path B (Grok vision, cached) on "
+              f"{sum(1 for v in worth.values() if v) if worth is not None else 'all'} "
+              f"selected page(s)...")
+        for (pdf_name, pi), sel in sorted((worth or {}).items()):
+            print(f"    {'read ' if sel else 'skip '} {pdf_name} p{pi + 1}: {why.get((pdf_name, pi), '')}")
+    b_boms = run_path_b(pdf_paths, _args, unread, worth, spend)
     if verbose:
-        print(f"  Path A found {len(a_boms)} BOM table(s).")
-        print("Running Path B (Grok vision, cached)...")
-    b_boms = run_path_b(pdf_paths, _args)
-    if verbose:
-        print(f"  Path B found {len(b_boms)} BOM table(s).")
+        print(f"  Path B found {len(b_boms)} BOM table(s). "
+              f"Vision calls: {spend['paid']} paid, {spend['cached']} from cache, "
+              f"{spend['skipped']} pages not selected.")
 
     b_index = _index_by_keys(b_boms)
     a_index = _index_by_keys(a_boms)
@@ -279,11 +927,22 @@ def reconcile_job(
         fkey = f"F:{fp}"
         a_bom = a_index.get(fkey)
         b_bom = b_index.get(fkey)
-        label = (b_bom or {}).get("parent") or (a_bom or {}).get("parent") or fp
+        # A page whose title block named no drawing falls back to its own file+page
+        # identity. That groups the page's rows, which is right, but "12392-04-GA.pdf#1"
+        # is not a drawing number and nothing downstream may build a hierarchy on it as
+        # though it were. Say which it is rather than leaving it to be guessed from the
+        # shape of a string.
+        _named = (b_bom or {}).get("parent") or (a_bom or {}).get("parent") or ""
+        label = _named or fp
         merged, findings = reconcile_page(a_bom, b_bom, label)
         if not merged:
             continue
         page_findings = list(findings) + code_quality_findings(label, merged)
+        if not _named:
+            page_findings.append(
+                f"[{fp}] this sheet's title block names no drawing number, so its "
+                f"{len(merged)} BOM row(s) are grouped by the page they were read from "
+                f"and cannot be placed under a parent assembly")
         total_findings.extend(page_findings)
         for r in merged:
             s = r["source"]
@@ -296,14 +955,42 @@ def reconcile_job(
             elif s == "A_ONLY":
                 counts["a_only"] += 1
         pages.append({"label": label, "a_bom": a_bom, "b_bom": b_bom,
+                      "parent_known": bool(_named), "sheet": fp,
                       "rows": merged, "findings": page_findings})
+    # A job where one path never ran is not a reconciled job — it is a single-reader read
+    # wearing a reconciled job's shape, and every "BOTH ... HIGH confidence" it cannot
+    # produce is a corroboration that silently did not happen. Say so out loud.
+    if pdf_paths and not any(u.get("path") == "B" and u.get("scope") == "job" for u in unread):
+        if not b_boms:
+            unread.append({"path": "B", "scope": "job", "pdf": "", "page": None,
+                           "detail": "vision reader returned no BOM table on any page of this job"})
+    if pdf_paths and pathA is not None and not a_boms:
+        unread.append({"path": "A", "scope": "job", "pdf": "", "page": None,
+                       "detail": "deterministic reader found no BOM table on any page of this job"})
+    # Pages carry one BOM per SHEET. Parents carry one BOM per DRAWING, which is what a
+    # bill of materials is: a continuation sheet finishes a list rather than starting a
+    # second one, and a fixings table repeated on a detail is the same fixings.
+    parents, parent_findings = merge_pages_into_parents(pages)
+    total_findings.extend(parent_findings)
     return {
-        "pages": pages, "findings": total_findings, "counts": counts,
+        "pages": pages, "parents": parents,
+        "findings": total_findings, "counts": counts,
         "pdf_paths": list(pdf_paths), "a_count": len(a_boms), "b_count": len(b_boms),
+        "unread": unread, "vision_calls": dict(spend),
     }
 
 
 def main():
+    # Only the command line may end the process. Run standalone, this tool exists to
+    # compare two readers, so one missing reader makes it pointless and it should say so
+    # loudly. Imported, the same condition is a degraded read the caller must be told
+    # about — never a reason to take an estimate down.
+    for _label, _mod, _err in (("A (_bom_words_reader)", pathA, PATH_A_IMPORT_ERROR),
+                               ("B (_bom_vision_reader)", pathB, PATH_B_IMPORT_ERROR)):
+        if _mod is None:
+            print(f"Could not import Path {_label}: {_err}")
+            print("Run this from the src/ directory, with the project's virtualenv active.")
+            sys.exit(1)
     ap = argparse.ArgumentParser()
     ap.add_argument("--pdf-dir", default=None)
     ap.add_argument("--pdf", default=None)

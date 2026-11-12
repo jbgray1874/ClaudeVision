@@ -1,0 +1,126 @@
+# Every rule this engine has had to learn the hard way, checked on every push.
+#
+# These are not unit tests in the usual sense. Each one is a defect that reached a real
+# estimate — a quote promising powder coating on a timber crate, labour costs joined to the
+# wrong parts, material rows 43p short of the sheet's own total. They exist so that a change
+# which reintroduces one of them cannot be merged quietly.
+#
+# Red here is merge-blocking. A rule that only warns is a rule the next deadline overrides.
+name: estimating rules
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# The rules suite must never reach a live service. It was opening a connection to the
+# production SQL server just by importing a module for its pure functions, which makes every
+# fixture depend on a machine being reachable and cannot work in CI at all. The suite sets
+# this itself; setting it here too means a runner cannot accidentally have credentials.
+env:
+  SDI_OFFLINE: "1"
+
+jobs:
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      # The suite began as pure functions on ezdxf alone, and grew workbook checks that read
+      # what the .xlsx pipeline actually writes — so it needs openpyxl now, and was failing on
+      # every run without it (12 ModuleNotFoundError, reported green by nobody because CI only
+      # ever ran this one file). This is the set the suite genuinely uses: still no SolidWorks,
+      # no SQL and no drawings, but the readers it exercises must be importable.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest openpyxl xlrd ezdxf shapely pdfplumber python-dotenv requests Pillow fastapi
+
+      - name: Regression fixtures
+        run: python -m pytest tests/test_estimating_rules.py -q
+
+      # A green run proves nothing if the suite reaches a live service by accident. The
+      # check is on CONNECTING, not on importing a driver: source_connectors imports pyodbc
+      # at module load and opens nothing, whereas learning_engine was dialling the production
+      # SQL server just to be imported. Every outbound socket is blocked here, so a fixture
+      # that talks to anything fails the build rather than passing quietly on a machine that
+      # happens to have credentials.
+      - name: Suite performs no live SQL or network access
+        run: |
+          python - <<'PY'
+          import os, sys, socket
+          os.environ["SDI_OFFLINE"] = "1"
+          def _no_net(*a, **k):
+              raise AssertionError("the rules suite attempted a network connection")
+          socket.socket.connect = _no_net
+          socket.socket.connect_ex = _no_net
+          socket.create_connection = _no_net
+          sys.argv = ["test_estimating_rules.py"]
+          sys.path.insert(0, "tests")
+          import test_estimating_rules as t
+          sys.exit(t.main())
+          PY
+
+      # The same suite through its own runner. The two disagreed once — the helpers only
+      # appended failures to a list, so pytest reported green over every mutation the plain
+      # runner caught — and a suite that can pass in one mode and fail in the other is not
+      # protecting anything.
+      - name: Regression fixtures (standalone runner)
+        run: python tests/test_estimating_rules.py
+
+      - name: Modules import cleanly
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "src")
+          import invariants, geometry_arbitration, costed_facts, source_precedence
+          import dxf_reader, drawing_job_merge, wb_populate, wep_readback_from_xlsx
+          print("ok")
+          PY
+
+  # THE WHOLE tests/ TREE, NOT ONE FILE OF IT. The rules job above guards the regression
+  # fixtures; everything else — the mirror rules, the handed-pair arbitration, the enquiry
+  # reader, the palletising counts, the writer registry — was gated by nobody, so a change that
+  # broke one of them merged green. This job runs the entire suite so that stops being true.
+  #
+  # IT INSTALLS WHAT THE SUITE ACTUALLY EXERCISES, not requirements.txt. The full runtime pulls
+  # pyodbc (needs a system ODBC driver), PyMuPDF and pandas — none of which the tests import,
+  # because a test that needs a live SQL server or a rendered PDF is written to mock or skip it.
+  # So this is the light set the suite runs green against offline, and the run proves that.
+  #
+  # SERIAL, ON PURPOSE. The suite has a known order-dependence — two config.py modules (src and
+  # the backend) share the top-level name `config`, so a reordering lets one shadow the other —
+  # which pytest-xdist and pytest-randomly both expose. Parallelism is the obvious speed-up, but
+  # turning it on before that isolation is fixed would make this gate red and block every merge,
+  # which is the opposite of what a gate is for. It runs in default collection order, which is
+  # stable and green.
+  full-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # WHAT THE SUITE EXERCISES, not requirements.txt. It leaves out pyodbc (a system ODBC
+      # driver), PyMuPDF, pandas and openai — no test imports them unguarded, so tests needing
+      # them SKIP cleanly rather than fail. fastapi is here because the run-stop tests import
+      # the estimate_routes app directly and error without it (they do not skip); everything
+      # else the suite touches is a reader it can import offline.
+      - name: Install the dependencies the suite exercises
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest openpyxl xlrd ezdxf shapely pdfplumber python-dotenv requests Pillow fastapi
+
+      - name: Full test suite
+        run: python -m pytest tests/ -q

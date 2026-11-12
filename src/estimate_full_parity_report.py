@@ -1522,12 +1522,94 @@ _OUT_OF_SCOPE_RE = re.compile(
 )
 
 
-def _classify_manual_only(description: str) -> Dict[str, str]:
-    """Decide whether a manual-only line is a genuine miss or out-of-scope logistics."""
-    if _OUT_OF_SCOPE_RE.search(str(description or "")):
+# COSTED BY THE ENGINE, BUT NOT AS A LINE WITH THIS CODE.
+#
+# The manual estimate buys powder as a catalogue item — one row, "Powder - MN250F 610 Matt Black",
+# coded 20KGMOQ to record the 20 kg minimum order. The engine never emits that row: it prices
+# powder BY MASS inside each part -- area x coverage x config.POWDER_COST_PER_KG, written into
+# powder_material_gbp by wb_populate -- and rolls it up. Same money, different shape.
+#
+# THIS USED TO NAME sheet_steel_costing.powder_total_cost, WHICH NOTHING CALLS. That module is
+# not imported at runtime by anything in src/, and its POWDER_PRICE_GBP_PER_KG = 12.50 is dead
+# with it. The live rate is config.POWDER_COST_PER_KG = 9.73, set from Tim's manual sheets on
+# jobs 1303A and 1304, which both priced powder at that figure.
+#
+# The two constants were read as a live disagreement more than once -- including in this
+# session, twice -- and each time somebody went looking for which one fires. Neither did any
+# harm; the cost was entirely in the chasing. A pointer to dead code inside an explanation is
+# worse than no pointer, because it reads as the answer.
+#
+# Before this existed the code match failed and the line fell through to genuine_miss, telling the
+# estimator "the engine should have produced this. Investigate." On 10575-02 that sent us looking
+# for £12.50 of powder that is already in the total — and had anyone closed the gap by adding the
+# line, every coated job would have been charged twice.
+#
+# A confident wrong classification is worse than none. Each entry names the engine field to compare
+# against, because "it is somewhere else" is only useful with the somewhere.
+_COSTED_ELSEWHERE: Tuple[Tuple[Any, str, Tuple[str, ...]], ...] = (
+    (re.compile(r"\bPOWDER\b|\bKGMOQ\b", re.IGNORECASE),
+     "The engine costs powder by mass per part rather than as a catalogue line, so no line "
+     "carries this code.",
+     ("powder_material_gbp", "powder_total_gbp")),
+)
+
+
+def _engine_carries(summary: Any, *keys: str) -> float:
+    """The largest value the engine recorded under any of `keys`, anywhere in its output.
+
+    Walked rather than looked up by path, because the rollup moved once already and a
+    classification that silently reads None is exactly how a zero gets called "costed elsewhere".
+    """
+    best = 0.0
+    stack = [summary]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k in keys:
+                    try:
+                        best = max(best, abs(float(v)))
+                    except (TypeError, ValueError):
+                        pass
+                elif isinstance(v, (dict, list)):
+                    stack.append(v)
+        elif isinstance(node, list):
+            stack.extend(x for x in node if isinstance(x, (dict, list)))
+    return best
+
+
+def _classify_manual_only(description: str, summary: Any = None) -> Dict[str, str]:
+    """Decide whether a manual-only line is a genuine miss, out-of-scope logistics, or a cost the
+    engine carries in a different shape.
+
+    THE THIRD CATEGORY HAS TO BE EARNED, NOT ASSUMED. It was first written to check only the
+    DESCRIPTION — powder is costed by mass, therefore any powder line is costed elsewhere — and on
+    10575-02 that turned a real fault into a reassuring sentence. The engine's powder came to
+    £0.00 on a powder-coated job, and "the engine carries this as powder_material_gbp" was
+    printed over the top of it.
+
+    A false alarm wastes an hour. A false all-clear ships a wrong estimate. So the claim is now
+    checked: if the engine's own total for that cost is zero, the line is a genuine miss and says
+    so, however it is spelled.
+    """
+    text = str(description or "")
+    if _OUT_OF_SCOPE_RE.search(text):
         return {
             "category": "out_of_scope",
             "issue": "Logistics / packaging — added by the estimator, not derivable from the drawing. Not an engine fault.",
+        }
+    for pattern, issue, keys in _COSTED_ELSEWHERE:
+        if not pattern.search(text):
+            continue
+        carried = _engine_carries(summary, *keys) if summary is not None else 0.0
+        if carried > 0:
+            return {"category": "costed_elsewhere",
+                    "issue": f"{issue} The engine carries £{carried:,.2f} there on this job."}
+        return {
+            "category": "genuine_miss",
+            "issue": (f"The engine costs this by mass rather than as a catalogue line, and on "
+                      f"this job it came to ZERO ({' / '.join(keys)} are all 0.00). The manual "
+                      f"estimate charged for it. This is a real gap, not a naming difference."),
         }
     return {
         "category": "genuine_miss",
@@ -1603,7 +1685,7 @@ def build_bom_set_reconciliation(
             })
             continue
         m = manual_by_code[code]
-        _cls = _classify_manual_only(m.get("description"))
+        _cls = _classify_manual_only(m.get("description"), summary)
         manual_only.append({
             "code": code,
             "description": m.get("description"),

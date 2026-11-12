@@ -1,0 +1,1311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDI Intelligence Programme Status</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap">
+
+<style>
+/* ─────────────────────────────────────────────────────────────────────────
+   Palette borrowed from the thing itself: a drawing sheet. Pale blueprint
+   grey-blue ground, ink that is not quite black, hairline rules, and SDI's
+   amber used only where something needs pointing at.
+   ───────────────────────────────────────────────────────────────────────── */
+:root{
+  --paper:#eceff2; --sheet:#f7f9fa; --panel:#e3e8ec;
+  --ink:#14191d; --ink-2:#3f4a53; --ink-3:#6b7883;
+  --rule:#c2ccd4; --rule-soft:#d6dee4;
+  --blue:#1f4e79; --amber:#c47d12; --amber-wash:rgba(196,125,18,.10);
+  --good:#2c7a52; --good-wash:rgba(44,122,82,.10);
+  --warn:#9a5f05; --warn-wash:rgba(154,95,5,.11);
+  --crit:#a33232; --crit-wash:rgba(163,50,50,.10);
+  --violet:#6b4fa8; --violet-wash:rgba(107,79,168,.10);
+  --shadow:0 1px 2px rgba(20,25,29,.06),0 8px 28px rgba(20,25,29,.07);
+  --disp:"Barlow Condensed",-apple-system,"Segoe UI",sans-serif;
+  --body:"Source Sans 3",-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#12171b; --sheet:#1a2026; --panel:#222a31;
+    --ink:#e6ecf1; --ink-2:#aab8c3; --ink-3:#7d8b97;
+    --rule:#333f49; --rule-soft:#2a343d;
+    --blue:#7fb0dd; --amber:#e8a33d; --amber-wash:rgba(232,163,61,.12);
+    --good:#5cc98a; --good-wash:rgba(92,201,138,.12);
+    --warn:#dfa03a; --warn-wash:rgba(223,160,58,.13);
+    --crit:#e07272; --crit-wash:rgba(224,114,114,.12);
+    --violet:#a78bfa; --violet-wash:rgba(167,139,250,.12);
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 34px rgba(0,0,0,.34);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#12171b; --sheet:#1a2026; --panel:#222a31;
+  --ink:#e6ecf1; --ink-2:#aab8c3; --ink-3:#7d8b97;
+  --rule:#333f49; --rule-soft:#2a343d;
+  --blue:#7fb0dd; --amber:#e8a33d; --amber-wash:rgba(232,163,61,.12);
+  --good:#5cc98a; --good-wash:rgba(92,201,138,.12);
+  --warn:#dfa03a; --warn-wash:rgba(223,160,58,.13);
+  --crit:#e07272; --crit-wash:rgba(224,114,114,.12);
+  --violet:#a78bfa; --violet-wash:rgba(167,139,250,.12);
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 34px rgba(0,0,0,.34);
+}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);
+     font-size:16.5px;line-height:1.62;-webkit-font-smoothing:antialiased}
+.wrap{max-width:940px;margin:0 auto;padding:34px 22px 90px}
+
+.sheet{background:var(--sheet);border:1.5px solid var(--rule);box-shadow:var(--shadow)}
+.titleblock{display:grid;grid-template-columns:1fr auto;gap:26px;align-items:end;
+            padding:26px 28px 20px;border-bottom:1.5px solid var(--rule)}
+.eyebrow{font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.16em;
+         text-transform:uppercase;color:var(--amber);margin-bottom:9px}
+h1{font-family:var(--disp);font-weight:700;font-size:clamp(34px,6.2vw,52px);line-height:1.02;
+   letter-spacing:-.005em;margin:0;text-wrap:balance}
+h1 span{display:block;color:var(--ink-3);font-weight:600;font-size:.52em;letter-spacing:.02em;margin-top:7px}
+.stamp{font-family:var(--mono);font-size:11.5px;line-height:1.85;color:var(--ink-2);
+       text-align:right;white-space:nowrap}
+.stamp b{color:var(--ink);font-weight:600}
+.lede{padding:20px 28px 24px;border-bottom:1.5px solid var(--rule);font-size:17.5px;
+      color:var(--ink-2);max-width:68ch}
+.lede b{color:var(--ink);font-weight:600}
+
+.tablewrap{overflow-x:auto}
+table.rev{width:100%;border-collapse:collapse;font-size:14.5px;font-variant-numeric:tabular-nums}
+table.rev th{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.13em;
+             text-transform:uppercase;color:var(--ink-3);text-align:left;padding:11px 16px;
+             border-bottom:1.5px solid var(--rule);background:var(--panel);white-space:nowrap}
+table.rev td{padding:11px 16px;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+table.rev tr:last-child td{border-bottom:none}
+table.rev td.ref{font-family:var(--mono);font-size:12.5px;color:var(--ink-3);white-space:nowrap}
+table.rev td.who{color:var(--ink-2);white-space:nowrap}
+table.rev.phases td{font-size:14.5px}
+table.rev.phases td.bold{color:var(--ink);font-weight:600;font-size:13px}
+
+section{margin-top:40px}
+h2{font-family:var(--disp);font-weight:700;font-size:29px;line-height:1.12;letter-spacing:.004em;
+   margin:0 0 4px;padding-bottom:9px;border-bottom:1.5px solid var(--rule);display:flex;
+   align-items:baseline;gap:12px;text-wrap:balance}
+h2 .n{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.1em;
+      color:var(--amber);flex-shrink:0}
+.subhead{color:var(--ink-3);font-size:15px;margin:10px 0 20px;max-width:70ch}
+
+.item{background:var(--sheet);border:1px solid var(--rule-soft);border-left:3px solid var(--rule);
+      padding:16px 20px;margin-bottom:12px}
+.item.hi{border-left-color:var(--amber)}
+.item.ok{border-left-color:var(--good)}
+.item h3{font-family:var(--body);font-weight:700;font-size:16.5px;margin:0 0 5px;color:var(--ink);
+         text-wrap:balance}
+.item p{margin:0;color:var(--ink-2);font-size:15.5px}
+.item p+p{margin-top:9px}
+.item .why{margin-top:10px;padding-top:9px;border-top:1px dashed var(--rule-soft);
+           font-size:14.5px;color:var(--ink-3)}
+.item .why b{color:var(--ink-2);font-weight:600}
+
+code{font-family:var(--mono);font-size:.87em;background:var(--panel);padding:1px 5px;
+     border-radius:2px;color:var(--ink)}
+
+.pill{display:inline-block;font-family:var(--mono);font-size:10px;font-weight:600;
+      letter-spacing:.1em;text-transform:uppercase;padding:2.5px 8px;border-radius:2px;
+      vertical-align:2px;margin-left:8px;white-space:nowrap}
+.p-new{background:var(--amber-wash);color:var(--amber);border:1px solid var(--amber)}
+.p-fix{background:var(--good-wash);color:var(--good);border:1px solid var(--good)}
+.p-open{background:var(--warn-wash);color:var(--warn);border:1px solid var(--warn)}
+.p-stop{background:var(--crit-wash);color:var(--crit);border:1px solid var(--crit)}
+.p-prog{background:var(--amber-wash);color:var(--amber);border:1px solid var(--amber);margin-left:0}
+.p-plan{background:var(--panel);color:var(--ink-3);border:1px solid var(--rule);margin-left:0}
+.p-done{background:var(--good-wash);color:var(--good);border:1px solid var(--good);margin-left:0}
+.item h3 .pill,.callout h3 .pill{vertical-align:2px}
+
+.callout{border:1px solid var(--rule);border-left:3px solid var(--amber);background:var(--amber-wash);
+         padding:16px 20px;margin:20px 0}
+.callout.warnbox{border-left-color:var(--warn);background:var(--warn-wash)}
+.callout.goodbox{border-left-color:var(--good);background:var(--good-wash)}
+.callout.plainbox{border-left-color:var(--ink-3);background:var(--panel)}
+.callout h3{font-family:var(--body);font-weight:700;font-size:16px;margin:0 0 6px}
+.callout p{margin:0;color:var(--ink-2);font-size:15.5px}
+.callout p+p{margin-top:9px}
+
+ul.plain{margin:10px 0 0;padding-left:20px;color:var(--ink-2);font-size:15.5px}
+ul.plain li{margin:5px 0}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.dim{color:var(--ink-3);font-size:13px}
+.minihead{font-family:var(--disp);font-weight:600;font-size:21px;letter-spacing:.01em;
+          margin:30px 0 12px;padding-bottom:7px;border-bottom:1px solid var(--rule-soft);color:var(--ink-2)}
+
+/* ── Workstream banner ────────────────────────────────────────────────── */
+.wsband{display:flex;align-items:center;gap:22px;flex-wrap:wrap;background:var(--panel);
+        border:1px solid var(--rule);border-left:4px solid var(--blue);padding:13px 18px;margin:22px 0 18px}
+.wsband.w2{border-left-color:var(--amber)}
+.wsband.w3{border-left-color:var(--violet)}
+.wsband .k{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.15em;
+           text-transform:uppercase;color:var(--ink-3)}
+.wsband .v{font-family:var(--disp);font-weight:700;font-size:21px;line-height:1.1}
+.wsband .r{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--ink-2);text-align:right}
+.wsband .r b{color:var(--ink)}
+
+.contents{display:flex;flex-direction:column;gap:1px;background:var(--rule-soft);
+          border:1.5px solid var(--rule);margin-top:26px}
+.ctitle{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.13em;
+        text-transform:uppercase;color:var(--ink-3);background:var(--panel);padding:11px 18px}
+.contents a{display:flex;align-items:baseline;gap:12px;background:var(--sheet);padding:11px 18px;
+            color:var(--ink-2);text-decoration:none;font-size:15.5px}
+.contents a b{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.1em;
+              color:var(--ink-3);flex-shrink:0}
+.contents a:hover{background:var(--panel);color:var(--ink)}
+.contents a.feature{color:var(--ink);font-weight:600;box-shadow:inset 3px 0 0 var(--amber)}
+.contents a.feature b{color:var(--amber)}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+
+/* ── Gantt ────────────────────────────────────────────────────────────── */
+.gantt-frame{background:var(--sheet);border:1.5px solid var(--rule);padding:20px 22px 16px;margin:22px 0}
+.gantt-title{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.13em;
+             text-transform:uppercase;color:var(--ink-3);margin-bottom:20px}
+.gantt-scroll{overflow-x:auto}
+.gantt{position:relative;min-width:600px;padding-top:20px;padding-bottom:20px}
+.months{position:absolute;top:0;left:186px;right:44px;height:16px}
+.months span{position:absolute;font-family:var(--mono);font-size:10px;font-weight:600;
+             letter-spacing:.1em;color:var(--ink-3);transform:translateX(-2px)}
+.gridlines{position:absolute;top:18px;bottom:6px;left:186px;right:44px}
+.gridlines i{position:absolute;top:0;bottom:0;width:1px;background:var(--rule-soft)}
+.leaveband{position:absolute;top:0;bottom:0;
+  background:repeating-linear-gradient(45deg,var(--panel),var(--panel) 4px,transparent 4px,transparent 8px);
+  border-left:1px dashed var(--rule);border-right:1px dashed var(--rule)}
+.today{position:absolute;top:0;bottom:0;width:2px;background:var(--amber);z-index:3}
+.today span{position:absolute;bottom:-17px;left:50%;transform:translateX(-50%);font-family:var(--mono);
+            font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--amber);white-space:nowrap;
+            background:var(--sheet);padding:0 4px}
+.row{display:grid;grid-template-columns:186px 1fr 44px;align-items:center;height:32px;
+     position:relative;z-index:2}
+.lbl{font-size:12.5px;color:var(--ink-2);padding-right:14px;white-space:nowrap;overflow:hidden;
+     text-overflow:ellipsis}
+.lbl b{color:var(--ink);font-weight:600}
+.track{position:relative;height:100%}
+.bar{position:absolute;top:8px;height:16px;background:var(--blue);opacity:.55;border-radius:2px}
+.bar.pdm{background:var(--ink-3);opacity:.45}
+.bar.prog{background:var(--amber);opacity:.85}
+.bar.done{background:var(--good);opacity:.6}
+.bar.creative{background:var(--violet);opacity:.6}
+.bar.pend{background:transparent;border:1px solid var(--rule);opacity:1}
+.mile{position:absolute;top:9px;width:13px;height:13px;margin-left:-6.5px;background:var(--amber);
+      transform:rotate(45deg);border-radius:2px;z-index:4}
+.mile.creative{background:var(--violet)}
+.rowend{font-family:var(--mono);font-size:10px;font-weight:600;color:var(--ink-3);
+        text-align:right;white-space:nowrap}
+.gsep{grid-column:1/-1;height:auto;display:block;font-family:var(--mono);font-size:9.5px;
+      font-weight:600;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-3);
+      padding:14px 0 5px;position:relative;z-index:4}
+.gantt-key{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:16px;padding-top:13px;
+           border-top:1px solid var(--rule-soft);font-family:var(--mono);font-size:10px;
+           letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.gantt-key span{display:flex;align-items:center;gap:6px}
+.gantt-key i{width:16px;height:9px;border-radius:2px;flex-shrink:0}
+.k-prog{background:var(--amber);opacity:.85}
+.k-done{background:var(--good);opacity:.6}
+.k-dm{background:var(--blue);opacity:.55}
+.k-pdm{background:var(--ink-3);opacity:.45}
+.k-creative{background:var(--violet);opacity:.6}
+.k-pend{background:transparent;border:1px solid var(--rule)}
+.k-mile{background:var(--amber);width:9px;height:9px;transform:rotate(45deg);border-radius:1px}
+.k-leave{background:repeating-linear-gradient(45deg,var(--panel),var(--panel) 3px,transparent 3px,transparent 6px);
+         border:1px dashed var(--rule)}
+
+footer{margin-top:52px;padding-top:20px;border-top:1.5px solid var(--rule);font-family:var(--mono);
+       font-size:11.5px;line-height:1.9;color:var(--ink-3)}
+a{color:var(--blue);text-decoration-thickness:1px;text-underline-offset:2px}
+a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
+
+@media (max-width:620px){
+  .titleblock{grid-template-columns:1fr;align-items:start;gap:16px}
+  .stamp{text-align:left}
+  .wrap{padding:22px 15px 60px}
+  .wsband .r{margin-left:0;text-align:left}
+}
+@media print{
+  body{background:#fff}
+  .wrap{max-width:none;padding:0}
+  section{break-inside:auto;page-break-inside:auto}
+  .item,.callout,.gantt-frame{break-inside:avoid;page-break-inside:avoid}
+  .contents{display:none}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div id="sdi-dlbar" style="font:500 13px/1.4 ui-sans-serif,-apple-system,'Segoe UI',sans-serif;
+     display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+     max-width:940px;margin:0 auto;padding:10px 22px 0;color:inherit">
+  <a id="sdi-dlbar-pdf" href="" target="_blank" rel="noopener"
+     style="text-decoration:none;color:inherit;border:1px solid currentColor;border-radius:5px;
+            padding:5px 11px;opacity:.75">PDF version</a>
+  <button type="button" id="sdi-dlbar-save"
+     style="font:inherit;color:inherit;background:transparent;border:1px solid currentColor;
+            border-radius:5px;padding:5px 11px;opacity:.75;cursor:pointer">Save this page</button>
+  <span id="sdi-dlbar-note" style="opacity:.6"></span>
+</div>
+<script>
+(function () {
+  var bar = document.getElementById("sdi-dlbar");
+  if (!bar) return;
+  var link = document.getElementById("sdi-dlbar-pdf");
+  var save = document.getElementById("sdi-dlbar-save");
+  var note = document.getElementById("sdi-dlbar-note");
+
+  // WHERE THE PDF IS, WHICH DEPENDS ENTIRELY ON HOW THIS PAGE WAS OPENED.
+  var here = String(location.href).split("#")[0];
+  var name = (here.split("/").pop() || "").split("?")[0];
+  if (/[?&]path=/.test(here)) {
+    // The portal: /api/file?path=<dir>/<name>.html -> swap the extension inside the query.
+    link.href = here.replace(/(\.html?)(?=($|&))/i, ".pdf");
+  } else if (/\.html?$/i.test(name)) {
+    link.href = name.replace(/\.html?$/i, ".pdf");   // sibling file, on disk or on K:
+  } else {
+    link.hidden = true;                              // cannot work it out: offer nothing broken
+  }
+
+  save.addEventListener("click", function () {
+    try {
+      bar.hidden = true;                             // the saved copy carries the report, not the bar
+      var html = "<!doctype html>\n" + document.documentElement.outerHTML;
+      bar.hidden = false;
+      var url = URL.createObjectURL(new Blob([html], {type: "text/html;charset=utf-8"}));
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = (name && /\.html?$/i.test(name)) ? name : "sdi-status-report.html";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    } catch (e) {
+      note.textContent = "Saving is blocked here — use the browser's own Save Page As.";
+    }
+  });
+})();
+</script>
+<style>@media print { #sdi-dlbar { display:none !important; } }</style>
+
+
+<div class="wrap">
+
+  <div class="sheet">
+    <div class="titleblock">
+      <div>
+        <div class="eyebrow">Combined status report &middot; issue 5</div>
+        <h1>SDI Intelligence Programme Status<span>The server ordered for 2 November · twenty-five packs in the wave · Sage X3 loads estimating this week</span></h1>
+      </div>
+      <div class="stamp">
+        <div>ISSUED &nbsp;<b>6 OCT 2026</b></div>
+        <div>SUPERSEDES &nbsp;<b>29 SEP 2026</b></div>
+        <div>OWNERS &nbsp;<b>J. GRAY</b> &nbsp;·&nbsp; <b>Y. KUMAR</b> &nbsp;·&nbsp; <b>M. YAZIR</b></div>
+        <div>COMPILED BY &nbsp;<b>J. GRAY</b></div>
+      </div>
+    </div>
+
+    <div class="lede">
+      Status across <b>SDI Estimating Intelligence</b>, <b>SDI Technical Design Intelligence</b>
+      and <b>SDI Creative Design Intelligence</b>, a week on from the fourth combined report, with
+      the <b>Sage X3 data migration</b> and the <b>SDI Intelligence server</b> alongside them, and
+      <b>a reply to each of Matt's four priorities of 30 September</b> in section 07.
+      <b>The server is ordered</b>: a Scan 3XS Threadripper PRO build on a fourteen-day lead time,
+      on site on 19 October, built by Jack Calow and James Gray, and <b>live for the estimators and
+      the studio on Monday 2 November</b> with a week in hand &mdash; a few days later than the end
+      of October promised last time. AI estimating, Production Design Extraction and Drawing Search
+      go live on it together, confirmed by testing and sign-off rather than by the date. The
+      estimating wave stands at <b>twenty-five packs and twelve reviews</b>; four more packs went
+      out this week, each checked against a brief written from its drawings before the first run.
+      Yogesh's <b>Design Vault now handles the hard cases</b> Ian asked to see proven. Muhammad's
+      <b>Client Briefing tool was demonstrated to Matt</b>, tested with Jonathan on real briefs and
+      is connected to WhatsApp; a lighter <b>Brief Lite</b> for account managers is the new
+      direction from that meeting. <b>Sage X3 loads the estimating tables this week</b>, with
+      customers and suppliers beside them.
+    </div>
+
+    <div class="tablewrap">
+      <table class="rev">
+        <thead>
+          <tr><th>Workstream</th><th>What it delivers</th><th>Owner</th><th>Next date</th><th>State</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="ref">1 · ESTIMATING</td>
+            <td><b>SDI Estimating Intelligence</b><br><span class="dim">Drawings in; costed workbook, BOMs and Routes out</span></td>
+            <td class="who">J. Gray</td>
+            <td class="ref bold" style="white-space:normal">2 Nov 26 · with the server</td>
+            <td><span class="pill p-prog">25 out · 12 back</span></td>
+          </tr>
+          <tr>
+            <td class="ref">2 · TECH DESIGN</td>
+            <td><b>SDI Technical Design Intelligence</b><br><span class="dim">Document Manager tools, then the SDI Design Vault</span></td>
+            <td class="who">Y. Kumar</td>
+            <td class="ref bold" style="white-space:normal">2 Nov · P2 live · Vault go/no-go end Oct</td>
+            <td><span class="pill p-prog">Vault: hard cases proven</span> <span class="pill p-stop">UAT waits</span></td>
+          </tr>
+          <tr>
+            <td class="ref">3 · CREATIVE</td>
+            <td><b>SDI Creative Design Intelligence</b><br><span class="dim">Drawing search on trial · Client Briefing in testing · Brief Lite</span></td>
+            <td class="who">M. Yazir</td>
+            <td class="ref bold" style="white-space:normal">Studio demo w/c 12 Oct · live 2 Nov</td>
+            <td><span class="pill p-done">On trial</span> <span class="pill p-prog">In testing</span></td>
+          </tr>
+          <tr>
+            <td class="ref">SHARED</td>
+            <td><b>SDI Intelligence server</b><br><span class="dim">Hosts all three · Threadripper PRO 9975WX · Scan 3XS</span></td>
+            <td class="who" style="white-space:normal">J. Gray · J. Calow</td>
+            <td class="ref bold" style="white-space:normal">On site 19 Oct · live 2 Nov</td>
+            <td><span class="pill p-done">Ordered</span></td>
+          </tr>
+          <tr>
+            <td class="ref">ERP</td>
+            <td><b>SDI Sage X3 Data Migration</b><br><span class="dim">Load and UAT together, area by area</span></td>
+            <td class="who" style="white-space:normal">J. Gray · Acuity</td>
+            <td class="ref bold" style="white-space:normal">w/c 5 Oct · estimating loading</td>
+            <td><span class="pill p-prog">Tested by 30 Oct</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <nav class="contents" aria-label="Contents">
+    <span class="ctitle">In this report</span>
+    <a href="#programme" class="feature"><b>01</b> The programme on one axis &mdash; what moved</a>
+    <a href="#w1"><b>02</b> Workstream 1 &mdash; SDI Estimating Intelligence</a>
+    <a href="#w2"><b>03</b> Workstream 2 &mdash; SDI Technical Design Intelligence</a>
+    <a href="#w3"><b>04</b> Workstream 3 &mdash; SDI Creative Design Intelligence</a>
+    <a href="#server"><b>05</b> The SDI Intelligence server &mdash; ordered, live 2 November</a>
+    <a href="#x3"><b>06</b> Sage X3 data migration &mdash; estimating loads this week</a>
+    <a href="#open"><b>07</b> Matt's four priorities, answered &mdash; and what is open</a>
+  </nav>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       01 — ONE AXIS. Bar positions computed from the tracker dates against
+       a 1 Jul 26 – 28 Feb 27 span (242 days). Today = 6 Oct = day 97.
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2 id="programme"><span class="n">01</span> The programme on one axis</h2>
+    <p class="subhead">Three workstreams, the server they share and the Sage X3 migration on one
+    calendar. Re-drawn from Yogesh Kumar's tracker and status of 2 October, Muhammad Yazir's update
+    of this week, the estimating test log of 5 October, the server build plan of 5 October and the
+    Sage X3 plan.</p>
+
+    <div class="gantt-frame">
+      <div class="gantt-title">All workstreams · 1 Jul 2026 → 28 Feb 2027</div>
+      <div class="gantt-scroll">
+        <div class="gantt">
+          <div class="months" aria-hidden="true">
+            <span style="left:0%">JUL</span><span style="left:12.81%">AUG</span>
+            <span style="left:25.62%">SEP</span><span style="left:38.02%">OCT</span>
+            <span style="left:50.83%">NOV</span><span style="left:63.22%">DEC</span>
+            <span style="left:76.03%">JAN</span><span style="left:88.84%">FEB</span>
+          </div>
+          <div class="gridlines" aria-hidden="true">
+            <i style="left:12.81%"></i><i style="left:25.62%"></i><i style="left:38.02%"></i>
+            <i style="left:50.83%"></i><i style="left:63.22%"></i><i style="left:76.03%"></i>
+            <i style="left:88.84%"></i>
+            <div class="leaveband" style="left:66.94%;width:10.33%"></div>
+            <div class="today" style="left:40.08%"><span>TODAY</span></div>
+          </div>
+
+          <div class="gsep" style="color:var(--blue)">Workstream 1 · Estimating · J. Gray</div>
+          <div class="row"><div class="lbl"><b>Parallel run</b> · 25 packs</div>
+            <div class="track"><div class="bar prog" style="left:0%;width:51.24%"></div>
+              <div class="mile" style="left:51.24%"></div></div>
+            <div class="rowend">2 NOV</div></div>
+
+          <div class="gsep" style="color:var(--amber)">Workstream 2 · Technical Design · Y. Kumar</div>
+          <div class="row"><div class="lbl">P1 &middot; Design files extraction</div>
+            <div class="track"><div class="bar prog" style="left:2.07%;width:38.01%"></div></div>
+            <div class="rowend">15 SEP ?</div></div>
+          <div class="row"><div class="lbl">P2 &middot; Production Design Extraction</div>
+            <div class="track"><div class="bar prog" style="left:22.73%;width:17.35%"></div>
+              <div class="bar pend" style="left:40.08%;width:11.16%"></div>
+              <div class="mile" style="left:51.24%"></div></div>
+            <div class="rowend">2 NOV</div></div>
+          <div class="row"><div class="lbl">P3.1 &middot; Design Vault &mdash; MVP</div>
+            <div class="track"><div class="bar prog" style="left:29.75%;width:23.14%;opacity:.55"></div></div>
+            <div class="rowend">6 NOV</div></div>
+          <div class="row"><div class="lbl">Design Vault go / no-go</div>
+            <div class="track"><div class="mile" style="left:50.00%"></div></div>
+            <div class="rowend">END OCT</div></div>
+          <div class="row"><div class="lbl">Drawing / ASM-PRT automations</div>
+            <div class="track"><div class="bar prog" style="left:37.19%;width:8%;opacity:.55"></div>
+              <div class="bar pend" style="left:76.03%;width:12.81%"></div></div>
+            <div class="rowend">FWD</div></div>
+          <div class="row"><div class="lbl">P3.2 &middot; Vault &mdash; CAD-aware</div>
+            <div class="track"><div class="bar pdm" style="left:42.98%;width:19.83%"></div></div>
+            <div class="rowend">30 NOV</div></div>
+          <div class="row"><div class="lbl">P3.3 &middot; Vault &mdash; revisions</div>
+            <div class="track"><div class="bar pdm" style="left:55.37%;width:28.10%"></div></div>
+            <div class="rowend">19 JAN</div></div>
+          <div class="row"><div class="lbl">P3.4 &middot; Vault &mdash; release flows</div>
+            <div class="track"><div class="bar pdm" style="left:66.12%;width:22.72%"></div></div>
+            <div class="rowend">1 FEB</div></div>
+
+          <div class="gsep" style="color:var(--violet)">Workstream 3 · Creative Design · M. Yazir</div>
+          <div class="row"><div class="lbl"><b>Drawing Search</b> &middot; studio trial</div>
+            <div class="track"><div class="bar done" style="left:0%;width:31.82%"></div>
+              <div class="bar creative" style="left:31.82%;width:8.26%"></div>
+              <div class="bar pend" style="left:40.08%;width:11.16%"></div>
+              <div class="mile creative" style="left:51.24%"></div></div>
+            <div class="rowend">2 NOV</div></div>
+          <div class="row"><div class="lbl"><b>Client Briefing</b> &middot; v2 in testing</div>
+            <div class="track"><div class="bar pend" style="left:12.40%;width:14.46%"></div>
+              <div class="bar creative" style="left:31.82%;width:8.26%"></div>
+              <div class="bar pend" style="left:40.08%;width:4.13%"></div></div>
+            <div class="rowend">STUDIO DEMO</div></div>
+          <div class="row"><div class="lbl"><b>Brief Lite</b> &middot; new direction</div>
+            <div class="track"><div class="bar creative" style="left:37.60%;width:2.48%"></div>
+              <div class="bar pend" style="left:40.08%;width:8%"></div></div>
+            <div class="rowend">CREDITS</div></div>
+          <div class="row"><div class="lbl">Image Upscaler &middot; print studio</div>
+            <div class="track"><div class="bar done" style="left:0%;width:20.66%"></div></div>
+            <div class="rowend">PAUSED</div></div>
+
+          <div class="gsep" style="color:var(--ink-3)">Shared · SDI Intelligence server · J. Gray · J. Calow</div>
+          <div class="row"><div class="lbl">Order &rarr; delivery &middot; 14 days</div>
+            <div class="track"><div class="bar prog" style="left:39.67%;width:5.78%"></div></div>
+            <div class="rowend">19 OCT</div></div>
+          <div class="row"><div class="lbl">Build, install, prove &middot; 2 weeks</div>
+            <div class="track"><div class="bar pend" style="left:45.45%;width:4.55%"></div>
+              <div class="mile" style="left:51.24%"></div></div>
+            <div class="rowend">2 NOV</div></div>
+
+          <div class="gsep" style="color:var(--blue)">ERP · Sage X3 data migration · J. Gray · Acuity</div>
+          <div class="row"><div class="lbl">Load + UAT, estimating first</div>
+            <div class="track"><div class="bar prog" style="left:37.19%;width:12.81%"></div>
+              <div class="mile" style="left:50.00%"></div></div>
+            <div class="rowend">30 OCT</div></div>
+          <div class="row"><div class="lbl">Dress rehearsal &amp; cutover</div>
+            <div class="track"><div class="bar pend" style="left:50.83%;width:12.39%"></div></div>
+            <div class="rowend">NOV ?</div></div>
+          <div class="row"><div class="lbl">ERP go-live</div>
+            <div class="track"><div class="mile" style="left:77.27%"></div></div>
+            <div class="rowend">4 JAN</div></div>
+        </div>
+      </div>
+      <div class="gantt-key">
+        <span><i class="k-prog"></i>In progress</span>
+        <span><i class="k-done"></i>Delivered</span>
+        <span><i class="k-pdm"></i>Design Vault</span>
+        <span><i class="k-creative"></i>Creative design</span>
+        <span><i class="k-pend"></i>Waiting or to be confirmed</span>
+        <span><i class="k-mile"></i>Milestone</span>
+        <span><i class="k-leave"></i>Developer leave · 10 Dec – 4 Jan</span>
+      </div>
+    </div>
+
+    <div class="callout">
+      <h3>What moved since 29 September</h3>
+      <p><b>The server is ordered, and the go-live date is Monday 2 November.</b> Jack Calow and
+      James Gray placed the order with Scan 3XS this week on a fourteen-day lead time. The machine
+      is on site on Monday 19 October; Jack builds the host and its two virtual machines in the
+      week of 19 October, James installs the services in the week of 26 October, known jobs are
+      re-run against the laptop on 29 and 30 October, and it is live for the estimators and the
+      studio on <b>2 November with a week in hand</b>. That is a few days later than the "end of
+      October" in the last report, and it is a date with a plan behind it: section 05 carries the
+      design, the build order, the costs beyond the hardware and the one decision still open with
+      the supplier. AI estimating, Production Design Extraction and Drawing Search go live on it
+      together.</p>
+      <p><b>Matt set four priorities on 30 September</b>: the server's full installed cost and
+      dates, review dates agreed with Dave, named owners and dates for the pricing gaps, and
+      delivery focus on closing studio feedback and getting three services safely into use. Each
+      is answered in section 07 with an owner and a date.</p>
+      <p><b>The estimating wave is twenty-five packs and twelve reviews.</b> Four packs went out
+      this week to Tim, Dave and Tony, and for the first time each was checked against a brief
+      written from its drawings <i>before</i> the engine ran, so the book's faults were found in the
+      engine and fixed there before anyone saw them. Seventy more numbered rules landed in the week,
+      and the suite stands at 7,731 tests. Tim's and Dave's reviews of 30 September came back; Tim's
+      on the lit header kit is the sixth AI-against-manual comparison, and one line, a printed side
+      graphic priced from the market at £95, is two-thirds of the gap.</p>
+      <p><b>Technical Design proved the hard cases.</b> The Design Vault now handles an administrator
+      cancelling another user's checkout, cross-project and library referencing, WIP-to-Released
+      workflow states with automatic revisioning, and a browser-only check-out and check-in for
+      laptops with no desktop install. The PDM handover meeting of 30 September confirmed that
+      PDM Standard's metadata sits in SQL that SDI may read, which de-risks a later migration either
+      way. A wider decision on how far to take the in-house Vault against PDM Standard is now put to
+      Matt in section 07.</p>
+      <p><b>Client Briefing went in front of Matt and Jonathan.</b> Matt saw it and gave new
+      directions, one of them <b>Brief Lite</b>: a lighter tool for account and project managers that
+      turns a described brief into a full pack, concept visuals and a one-page client sheet, drawn
+      from the SDI work already indexed. Jonathan ran it on real briefs and was happy with the
+      structure. WhatsApp is connected on a test number. Drawing Search has a new requirement from
+      Dave: search by UPC or drawing number on the K: drive as well as W:.</p>
+      <p><b>Sage X3 is loading the estimating tables this week</b>: BOMs, routes and products, with
+      customers and suppliers beside them, and estimating, customer services, finance and the
+      warehouse as the first user groups once the first pass is in test. The 30 October target for
+      every area loaded and tested holds.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       02 — WORKSTREAM 1
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2 id="w1"><span class="n">02</span> Workstream 1 &mdash; SDI Estimating Intelligence</h2>
+
+    <div class="wsband">
+      <div><div class="k">Status</div><div class="v">Parallel run</div></div>
+      <div><div class="k">Owner</div><div class="v">J. Gray</div></div>
+      <div><div class="k">With</div><div class="v">James Ryan · Dave's estimators</div></div>
+      <div class="r">GO-LIVE<br><b>MONDAY 2 NOVEMBER 2026 · WITH THE SERVER</b><br>
+        <span class="dim">confirmed by testing and the estimators' sign-off, not by the date</span></div>
+    </div>
+
+    <p class="subhead">A deterministic cost-estimating engine. A drawing pack goes in, and out come
+    a costed workbook on the estimators' own template, a job report, a covering e-mail, a customer
+    quote and the <b>BOMs and Routes</b> pair. Every priced line names its source. Since the
+    29 September report there have been 93 commits and 70 numbered decisions (D-329 to D-398), the
+    register stands at 384 rows, and the suite at 7,731 passing.</p>
+
+    <div class="gantt-frame" style="padding:18px 22px 14px">
+      <div class="gantt-title">The September wave, counted on 5 October</div>
+      <div class="grid2">
+        <div class="item ok" style="margin-bottom:0"><h3>25 packs in the wave <span class="dim">&middot; 24 issued, one held back</span></h3></div>
+        <div class="item ok" style="margin-bottom:0"><h3>43 packs since May <span class="dim">&middot; every one on the test log</span></h3></div>
+        <div class="item ok" style="margin-bottom:0"><h3>12 reviews back <span class="dim">&middot; Howard, Tim, Dave, Tony</span></h3></div>
+        <div class="item ok" style="margin-bottom:0"><h3>6 parity comparisons <span class="dim">&middot; AI against the manual sheet</span></h3></div>
+        <div class="item" style="margin-bottom:0"><h3>70 decisions this week <span class="dim">&middot; D-329 to D-398, each with source and proof</span></h3></div>
+        <div class="item" style="margin-bottom:0"><h3>7,731 tests passing <span class="dim">&middot; executing the engine</span></h3></div>
+        <div class="item" style="margin-bottom:0;border-left-color:var(--warn)"><h3>8 packs awaiting review <span class="dim">&middot; plus the M&amp;S re-runs with Dave</span></h3></div>
+        <div class="item" style="margin-bottom:0;border-left-color:var(--crit)"><h3>0 of 3 supplier price lists loaded <span class="dim">&middot; contacts now in hand</span></h3></div>
+      </div>
+    </div>
+
+    <h3 class="minihead">What went out since 29 September</h3>
+    <div class="tablewrap">
+      <table class="rev">
+        <thead>
+          <tr><th>Job</th><th>What it is</th><th>What it taught the engine</th><th>Position</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="ref"><b>M&amp;S concept</b></td>
+            <td>Clothes recycling unit, re-run from Dave's brief<br><span class="dim">350 off · plywood and mild-steel options</span></td>
+            <td>Dave's brief of 30 September was typed into a new <b>Enquiry brief</b> box on the
+                portal and read as stated facts, so a render-only run now prices what the estimator
+                knows, not what the picture suggests. Thirteen rules came out of the three books:
+                a customer named on a run brings its commercial terms, print is always its own line,
+                a lid brings its hinges, a blank that fits no sheet is costed turned.</td>
+            <td><span class="pill p-open">With Dave</span></td>
+          </tr>
+          <tr>
+            <td class="ref"><b>12527-22-GA</b></td>
+            <td>M&amp;S TSE footwear hero riser<br><span class="dim">72 off · sent 4 Oct to Tim, cc Dave</span></td>
+            <td>Weld symbols are read off each sheet's own vectors (ISO 2553 and AWS: spot, seam,
+                fillet). A part whose sheet shows only spot welds is spot welded, with arc welding
+                and dressing ruled out on it and its members. Powder time now follows coated area,
+                so a 0.17 m&sup2; riser no longer carries a line-capacity charge.</td>
+            <td><span class="pill p-open">Awaiting review</span></td>
+          </tr>
+          <tr>
+            <td class="ref"><b>12173-02-GA</b></td>
+            <td>M&amp;S card spinner, prototype<br><span class="dim">1 to 500 off · sent 4 Oct to Tim</span></td>
+            <td>The first pack with a <b>brief written from the drawings before the first run</b>,
+                scored by a checker: 150 of 155 facts hold on the fifth book. Thirteen rules: a weld
+                needs the part's own evidence and the pack's "ALL WELDS TIG" is how, not that; a
+                stated coat needs something to coat; a drawing's product code is asked of SDI Live
+                before the material word; a section prices from the catalogue's stock length.</td>
+            <td><span class="pill p-open">Awaiting review</span></td>
+          </tr>
+          <tr>
+            <td class="ref"><b>12696-01-GA</b></td>
+            <td>M&amp;S bag pricing hook<br><span class="dim">1 to 2,500 off · sent 5 Oct to Tim and Dave</span></td>
+            <td>Three books in an afternoon against the brief. A weld symbol is read on either line
+                of its callout; a tolerance is not a gauge; a printed line is read whole where the
+                reader had interleaved two; the weld row names the pack's process (TIG) beside the
+                rate it is charged at; and the quantity-break sheet now says <b>what the fall from
+                one off is made of</b>: packaging, delivery and set-up per unit, and the unit cost
+                with the spread money taken off.</td>
+            <td><span class="pill p-open">Awaiting review</span></td>
+          </tr>
+          <tr>
+            <td class="ref"><b>9439-01-04-GA</b></td>
+            <td>Harrods table-standing POS holder<br><span class="dim">1 to 100 off · sent 5 Oct to Tony and Dave</span></td>
+            <td>Two books in an hour. One joint on one assembly is one event; a weld note on the
+                sheet ("WELD &amp; DRESS") is the drawing's statement of the weld; a ring's outline is
+                its rim, not its hole; a non-metal sheet with a detail sheet of its own is cut here,
+                never bought; and the job's own numbering names the job at any level, which is what
+                the portal refused on the first attempt.</td>
+            <td><span class="pill p-open">Awaiting review</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="minihead">Reviews back since 29 September</h3>
+    <div class="grid2">
+      <div class="item hi">
+        <h3>Tim, 30 September &middot; 12567-01 lit header kit<span class="pill p-open">Next changes</span></h3>
+        <p>The AI estimate came out <b>about &pound;240 a unit above his manual figure</b> at 163 off.
+        The side graphic was priced at &pound;95 each from the market against Motion's &pound;13.19,
+        two per unit, which is about two-thirds of the gap. His other points: the LCD player is
+        supplied by the client and should not be on the drawing; the weld and dress rate is very
+        high, so can the engine allow for spot welding (it now does, from 12527-22); and only a
+        small price is carried for packaging and delivery. Tim also reviewed 12614-01.</p>
+      </div>
+      <div class="item ok">
+        <h3>Dave, 30 September &middot; M&amp;S concept and 12645<span class="pill p-fix">Integrated</span></h3>
+        <p>On the render-priced recycling unit: <i>&ldquo;a good estimate for a non-SDI drawing pack,
+        and it helps with the overall estimate&rdquo;</i>, followed by a brief for the 350-off re-run
+        in plywood and in steel. 12645, the DRS shelter, is deprioritised as a pack and closed
+        without review; the ten rules it produced stay in the engine.</p>
+      </div>
+    </div>
+
+    <h3 class="minihead">Parity &mdash; the go-live KPI</h3>
+    <p class="subhead" style="margin-top:-4px">Each job is shown as a variance and a direction. By
+    the pricing policy, no figure from a manual estimate appears in this report. Six comparisons now,
+    with Tim's 12567-01 added.</p>
+
+    <div class="tablewrap">
+      <table class="rev">
+        <thead><tr><th>Job &middot; estimator</th><th>At</th><th>Variance</th><th>Key cause</th><th>Estimator intervention</th></tr></thead>
+        <tbody>
+          <tr><td class="ref" style="white-space:normal"><b>7332-01</b><br>Howard</td><td class="ref">6 off</td><td class="ref bold">&minus;24.8%<br><span class="dim">under</span></td>
+            <td>Plating and the freight to the plater carry no price</td><td>A 12-point review; department times and rates adopted</td></tr>
+          <tr><td class="ref" style="white-space:normal"><b>12349-02</b><br>Tim</td><td class="ref">7 off</td><td class="ref bold">&minus;22.9%<br><span class="dim">under</span></td>
+            <td>Packaging, delivery and two fixings unpriced on that book</td><td>14 points; nine confirmed fixed</td></tr>
+          <tr><td class="ref" style="white-space:normal"><b>10975-02</b><br>Howard</td><td class="ref">10 off</td><td class="ref bold">+12.9%<br><span class="dim">material +0.4%</span></td>
+            <td>Material essentially exact; one labour line with Howard</td><td>Material agrees to within a penny</td></tr>
+          <tr><td class="ref" style="white-space:normal"><b>11908-21</b><br>Tony</td><td class="ref">50 off</td><td class="ref bold">about +6%<br><span class="dim">over</span></td>
+            <td>The joinery route was missing and has been added</td><td>One review</td></tr>
+          <tr><td class="ref" style="white-space:normal"><b>1176-02</b><br>Howard</td><td class="ref">10 off</td><td class="ref bold">about +33%<br><span class="dim">over</span></td>
+            <td><b>One line:</b> the vinyl graphic the customer had already priced. Without it about 17% under</td><td>One line</td></tr>
+          <tr><td class="ref" style="white-space:normal"><b>12567-01</b><br>Tim</td><td class="ref">163 off</td><td class="ref bold">about +&pound;240 a unit<br><span class="dim">over</span></td>
+            <td><b>One line:</b> the side graphic, a market figure of &pound;95 each against the supplier's &pound;13.19. Two-thirds of the gap</td><td>Four points; spot welding now read from the sheet</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warnbox">
+      <h3>The same lesson twice: a price somebody already has</h3>
+      <p>On 1176-02 the customer's own vinyl price, and on 12567-01 the supplier's graphic price,
+      each outweighed the whole of the rest of the variance. Nothing in a drawing pack tells the
+      engine those prices exist. Two things follow and both are in section 07 with owners and dates:
+      the <b>supplier price lists</b>, for which estimating's contact spreadsheet is now in hand, and
+      <b>a place on the run page for a quoted price</b>, so a figure the account manager already
+      holds is entered once and reaches the estimate, the quote and the price history.</p>
+    </div>
+
+    <h3 class="minihead">What landed in the engine</h3>
+
+    <div class="item hi">
+      <h3>A brief before the first run<span class="pill p-new">New &middot; method</span></h3>
+      <p>For 12173-02, 12696-01 and 9439-01-04 the drawings were read first and the right book
+      written down as facts: the parts, the joints and whether they are symbols or notes, the
+      coats, what is supplied by others, the quantity breaks. A checker scores every book against
+      that file. A book that fails a fact is fixed in the engine and re-run; nothing is edited by
+      hand. On 9439-01-04 a reading error in the DXF of a thin ring was found and fixed <i>before</i>
+      the first run.</p>
+    </div>
+
+    <div class="item hi">
+      <h3>A weld needs the part's own evidence<span class="pill p-new">New &middot; Tim, Dave</span></h3>
+      <p>Weld symbols are read off each sheet's vectors; a note on the sheet is the drawing's
+      statement; a member stated WELDED under a welded assembly is that assembly's joint, charged
+      once; the border legend's "ALL WELDS TO BE TIG" is how a weld is made, not that one exists,
+      and is named on the weld row beside the rate charged. A part with no evidence of its own is
+      asked at &pound;0, not charged. This answers Tim's spot-welding point and Dave's standing rule
+      that nothing is priced on a near match.</p>
+    </div>
+
+    <div class="item hi">
+      <h3>The estimator's brief, typed on the portal<span class="pill p-new">New &middot; Dave</span></h3>
+      <p>A render-only enquiry now takes a brief in a box on the run page: quantity, materials,
+      sizes, finish, the customer. It is filed with the pack, confirmed by the service, read as
+      stated facts, and a run whose brief was not filed is stopped. The customer named brings its
+      commercial terms.</p>
+    </div>
+
+    <div class="item hi">
+      <h3>The break table says what the fall is made of<span class="pill p-new">New &middot; 12696-01</span></h3>
+      <p>Under every quantity break the sheet now shows packaging and delivery per unit, labour
+      set-up per unit, run labour, and the unit cost with the spread money taken off, through the
+      unit cell's own arithmetic. An estimator can see at a glance that the fall from one off is
+      set-up and freight dividing, not the work changing.</p>
+    </div>
+
+    <div class="item ok">
+      <h3>The portal and the runner<span class="pill p-fix">Done</span></h3>
+      <p>One machine runs one portal and the page warns of a second; a restarted runner releases its
+      job and will not restart mid-job; a job folder's sub-folders are never read; a job's own
+      numbering is accepted as the product at any level; a busy Excel is retried and the refusal
+      note names the real cause.</p>
+    </div>
+
+    <div class="item">
+      <h3>Run time<span class="pill p-prog">Next</span></h3>
+      <p>Each run now writes a timing table. The work to read it and re-run only what a change
+      affects starts when the four packs out this week have been reviewed. The server is the other
+      half of the answer, and it is not a substitute for this.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       03 — WORKSTREAM 2. From Yogesh Kumar's status of 2 October and
+       SDI_Project_Plan_Tracker_YK_Week02Oct2026.
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2 id="w2"><span class="n">03</span> Workstream 2 &mdash; SDI Technical Design Intelligence</h2>
+
+    <div class="wsband w2">
+      <div><div class="k">Status</div><div class="v">Vault: hard cases proven · P2 UAT waiting</div></div>
+      <div><div class="k">Owner</div><div class="v">Y. Kumar</div></div>
+      <div><div class="k">Resource</div><div class="v">Sole developer</div></div>
+      <div class="r">DECISION POINT<br><b>END OF OCTOBER 2026</b><br>
+        <span class="dim">SDI Design Vault go / no-go · Standard vs in-house</span></div>
+    </div>
+
+    <p class="subhead">Two threads. The <b>Document Manager tools</b> read SolidWorks project data
+    without a SolidWorks seat and pull the right drawing pack into the estimating app (P1) and the
+    shop-floor Production folder (P2). Then the <b>SDI Design Vault</b>, an in-house PDM on GitLab
+    and LFS with an API that the estimating tools, Sage X3, QC and AI can reach.</p>
+
+    <h3 class="minihead">The week to 2 October, in Yogesh's report</h3>
+
+    <div class="item hi">
+      <h3>The Design Vault handles the hard scenarios<span class="pill p-prog">Proven</span></h3>
+      <p>Not just the core loop. In the week: <b>an administrator cancelling another user's
+      checkout</b> for holiday cover, with the lock holder told and blocked from overwriting with a
+      stale copy until they Get Latest; <b>cross-project and library referencing</b>, where Check Out
+      lists the assembly and its referenced parts including those in other projects, pulls
+      references read-only without locking, and "save a copy for this project" creates a new file
+      rather than editing the shared source; <b>workflow states</b> separate from the lock (WIP and
+      Released, with Revise returning a file to WIP and advancing the revision letter, and Publish
+      Production recording the released revision); and a <b>browser-only check-out and check-in</b>
+      by zip download with a small local agent, so laptops need no desktop install. Users and
+      designer/admin roles are in Postgres; Add Files is simplified to customer and project number.</p>
+      <div class="why"><b>These are the "complex" cases Ian asked to see proven before Phase 3.</b>
+      The deciding feature for the go/no-go, cross-project and library referencing, is now built
+      and is demonstrated next, to be tested on Ian's K-drive dummy projects.</div>
+    </div>
+
+    <div class="item ok">
+      <h3>PDM handover: the migration path is clear<span class="pill p-fix">30 Sep</span></h3>
+      <p>The handover meeting with Ian, Steve, James and Yogesh confirmed that PDM Standard stores
+      its metadata in SQL with the files as an archive on disk, that SQL access is permitted, that
+      PDM and SolidWorks versions must stay matched, and that a handover document follows. Standard
+      has no API, but its SQL can be linked to the archive files, which de-risks a future PDM to
+      Vault migration whichever way the October decision goes.</p>
+    </div>
+
+    <div class="item ok">
+      <h3>The extraction endpoint, hardened on live projects<span class="pill p-fix">610 tests</span></h3>
+      <p>Verified against the W: share on 10875, 11676, 12173, 12432 and 12527. A redundant-folder
+      revision bug on 10875-01-GA (stale Rev A to E being pulled instead of Rev G) is fixed by
+      recognising archive markers such as Redundant, superseded and obsolete, configurable. The
+      ambiguous-token response now carries a ranked list of candidates, with an opt-in rule to
+      auto-select a single unrivalled master. 11676-18's missing PDF and STEP were traced to a
+      missing native drawing and an unlinked STEP, and a tightly gated same-folder PDF fallback was
+      shipped. A live-verification script deleted a configuration file, recovered from local
+      history; a safeguard rule is in place.</p>
+    </div>
+
+    <div class="item">
+      <h3>Requirements from the design working session, 1 October<span class="pill p-open">Captured</span></h3>
+      <ul class="plain">
+        <li>Library get-latest-only with path remapping; "select all, single checkout" (assembly
+        locked, references get-latest); a BOM and linked-file listing at checkout time.</li>
+        <li>E-mail and in-tool notifications: checkout cancelled, status changes, change requests.</li>
+        <li>Workflow states; the Production Extraction tool embedded as a launch button; a limited
+        QC/ECR login; cross-project referencing.</li>
+        <li><b>Where AI adds most value:</b> reference intelligence and cross-reference impact analysis
+        over the Vault's structured data &mdash; not CAD generation. SolidWorks' own AI drawing tools
+        were rated poor and unused.</li>
+      </ul>
+    </div>
+
+    <div class="item">
+      <h3>Also in Yogesh's week<span class="pill p-fix">Done</span></h3>
+      <ul class="plain">
+        <li>A false "connection closed" check-in failure fixed, and toolbox-only parts confirmed to
+        resolve once checked in.</li>
+        <li>Jira: a company-managed project with a project &rarr; phase &rarr; task hierarchy and
+        tracked timelines, being configured.</li>
+        <li>Direction from the daily meetings: carry on with the Vault's complex functionality, and
+        <b>begin drawing and assembly/part automation in parallel</b>, because Brief Lite (section 04)
+        is likely to need it.</li>
+      </ul>
+    </div>
+
+    <h3 class="minihead">The plan, as the 2 October tracker states it</h3>
+    <div class="tablewrap">
+      <table class="rev phases">
+        <thead>
+          <tr><th>Ref</th><th>Phase</th><th>Where it stands</th><th>Date</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="ref">P1</td>
+            <td><b>Design files extraction</b><br><span class="dim">Document Manager API</span></td>
+            <td>Endpoint hardened across five live projects; deployment still not confirmed.</td>
+            <td class="ref bold">15 Sep 26</td><td><span class="pill p-open">Not confirmed live</span></td></tr>
+          <tr><td class="ref">P2</td>
+            <td><b>Production Design Extraction</b><br><span class="dim">Document Manager API</span></td>
+            <td>Development complete. The feature branch merges to main next week, then a ten-phase
+                review of the repository. User testing with Ed and Ian needs the server, so it
+                <b>goes live with the server on 2 November</b>.</td>
+            <td class="ref bold">2 Nov 26<br><span class="dim">was end Oct</span></td><td><span class="pill p-prog">Live with server</span></td></tr>
+          <tr><td class="ref">P3.1</td>
+            <td><b>Design Vault &mdash; MVP</b><br><span class="dim">In-house, phase 1</span></td>
+            <td>The hard scenarios proven. Designers' testing needs the test server, which is the
+                Linux side of the new machine from 2 November.</td>
+            <td class="ref bold">6 Nov 26</td><td><span class="pill p-prog">In progress</span></td></tr>
+          <tr><td class="ref">C1, C3</td>
+            <td><b>SolidWorks drawing and ASM/PRT automations</b></td>
+            <td>POC done. Now started in parallel for Brief Lite.</td>
+            <td class="ref bold">Was Jan/Feb 27</td><td><span class="pill p-prog">Brought forward</span></td></tr>
+          <tr><td class="ref">P3.2</td>
+            <td><b>Design Vault &mdash; CAD-aware</b></td>
+            <td>Where-used and missing references.</td>
+            <td class="ref bold">30 Nov 26</td><td><span class="pill p-plan">Not started</span></td></tr>
+          <tr><td class="ref">P3.3</td>
+            <td><b>Design Vault &mdash; engineering revisions</b></td>
+            <td>Approval workflow. Revise and auto-revisioning already exist in the POC.</td>
+            <td class="ref bold">19 Jan 27</td><td><span class="pill p-plan">Not started</span></td></tr>
+          <tr><td class="ref">P3.4</td>
+            <td><b>Design Vault &mdash; release workflows</b></td>
+            <td>WIP, prototype and production release routes.</td>
+            <td class="ref bold">1 Feb 27</td><td><span class="pill p-plan">Not started</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warnbox">
+      <h3>Watch-points</h3>
+      <ul class="plain">
+        <li><b>The test server.</b> Yogesh's report has it "still being ordered, 1 to 2 weeks". It is
+        ordered: on site 19 October, the Linux virtual machine built in the week of 19 October,
+        Technical Design's services installed by 29 October. Designers can test from 2 November.
+        The go/no-go at the end of October therefore rests on Yogesh's demonstrations, run in
+        parallel with PDM, and the designers' hands-on testing follows it.</li>
+        <li><b>A decision for Matt, not the developer.</b> How far to take the in-house Vault against
+        PDM Standard, given that a two to three month build delivers the core workflow but not every
+        PDM feature. Section 07.</li>
+        <li><b>One developer, more in parallel.</b> P2's go-live, the Vault's demonstrations, the
+        ASM/PRT automation for Brief Lite and Jira now run through one person, with leave from
+        10 December inside the plan.</li>
+      </ul>
+      <p style="margin-top:10px"><b>Next week:</b> merge the extraction branch into main and run the
+      ten-phase review; continue the Vault and demonstrate the requested features (cross-project
+      referencing, notifications, select-all checkout); begin ASM/PRT automation; keep Jira
+      current.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       04 — WORKSTREAM 3. From Muhammad Yazir's update of this week.
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2 id="w3"><span class="n">04</span> Workstream 3 &mdash; SDI Creative Design Intelligence</h2>
+
+    <div class="wsband w3">
+      <div><div class="k">Status</div><div class="v">Search on trial · Briefing in testing · Brief Lite</div></div>
+      <div><div class="k">Owner</div><div class="v">M. Yazir</div></div>
+      <div><div class="k">Projects</div><div class="v">3 active · 1 paused</div></div>
+      <div class="r">NEXT<br><b>STUDIO DEMO AND REVIEWS · W/C 12 OCTOBER</b><br>
+        <span class="dim">LMC presentation the main focus</span></div>
+    </div>
+
+    <div class="tablewrap">
+      <table class="rev">
+        <thead>
+          <tr><th>Service name</th><th>Tracker name</th><th>For</th><th>Position</th><th>Blocker</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><b>SDI Drawing Search Intelligence</b></td><td class="ref">Fixture Library</td>
+            <td class="who" style="white-space:normal">Design and technical teams</td><td><span class="pill p-done">Studio trial running</span></td>
+            <td class="ref" style="white-space:normal">The server &mdash; live on it 2 Nov</td></tr>
+          <tr><td><b>SDI Client Briefing Intelligence</b></td><td class="ref">Client Briefing</td>
+            <td class="who" style="white-space:normal">Jonathan · the studio teams</td><td><span class="pill p-prog">Working, in testing</span></td>
+            <td class="ref" style="white-space:normal">&mdash; (WhatsApp on a test number)</td></tr>
+          <tr><td><b>Brief Lite</b></td><td class="ref">New &middot; from Matt</td>
+            <td class="who" style="white-space:normal">Account and project managers</td><td><span class="pill p-new">New direction</span></td>
+            <td class="ref" style="white-space:normal">OpenAI API credits for the visuals</td></tr>
+          <tr><td><b>Image Upscaler</b></td><td class="ref">Image Upscaler</td>
+            <td class="who">Sarah, Dean</td><td><span class="pill p-plan">Paused Aug 26</span></td>
+            <td class="ref">&mdash;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="item hi">
+      <h3>Client Briefing: demonstrated to Matt, tested with Jonathan, on WhatsApp<span class="pill p-new">In testing</span></h3>
+      <ul class="plain">
+        <li><b>Demo to Matt.</b> He liked it and gave new directions, including Brief Lite below.</li>
+        <li><b>Testing with Jonathan on real briefs.</b> Most briefs were assigned to the right team,
+        and the correct details were pulled from his e-mails and calendar. He was happy with the
+        overall structure.</li>
+        <li><b>WhatsApp connected.</b> Anyone set up on it can ask about any brief by voice note or
+        text &mdash; "What's the deadline for the Boots job?", "Who's booked on it?" &mdash; and it
+        understands follow-up questions. It runs on a test number for now.</li>
+      </ul>
+      <div class="why"><b>Status: working and in testing.</b> Next: show the full web tool to the
+      studio team next week and gather their reviews; test WhatsApp further.</div>
+    </div>
+
+    <div class="item hi">
+      <h3>Brief Lite: a lighter tool for account and project managers<span class="pill p-new">New &middot; Matt</span></h3>
+      <p>They describe the client's brief after a meeting, and it produces the full pack, including
+      new concept visuals, so something can go to the client for approval straight away. It finds
+      the closest past SDI work for that client from the jobs, renders and estimates already indexed,
+      so the visuals are based on what SDI has actually built rather than generic AI images. It
+      draws a concept GA at the exact size the client asked for, and puts everything into a one-page
+      client sheet and a full internal brief PDF.</p>
+      <div class="why"><b>Blocker:</b> generating the 3D visuals needs OpenAI API credits, which
+      Muhammad arranges next week. <b>It also needs the SolidWorks assembly and part automation</b>,
+      which is why Yogesh has started that in parallel (section 03).</div>
+    </div>
+
+    <div class="item">
+      <h3>Drawing Search: the trial runs on, and a new requirement from Dave<span class="pill p-prog">Trial</span></h3>
+      <p>The design and technical teams' trial is still running, with their feedback expected next
+      week. Dave has raised a new requirement: the team often search by UPC or drawing number on the
+      <b>K: drive</b>, and the tool searches the W: drive only. <b>Next:</b> extend the search to K:
+      so that anything there comes up just as quickly. It goes live on the server on 2 November.</p>
+    </div>
+
+    <div class="item">
+      <h3>KTP reporting<span class="pill p-fix">Done</span></h3>
+      <p>Muhammad has put together the Impact Log, Benefits Log and Risk Register covering the whole
+      year since he joined the KTP. They feed straight into the LMC presentation, which is his main
+      focus next week.</p>
+    </div>
+
+    <div class="callout plainbox">
+      <h3>Image Upscaler<span class="pill p-plan">Paused Aug 26 · 56%</span></h3>
+      <p>Unchanged. Paused on studio priorities, not on any failure; its CMYK conversion stays in
+      daily use.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       05 — THE SDI INTELLIGENCE SERVER. From the build plan of 5 Oct 2026
+       (docs/SDI_Intelligence_Server_Build_Who_Does_What) and the summaries
+       for Jack and James and for the MD and FD of the same date.
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2 id="server"><span class="n">05</span> The SDI Intelligence server &mdash; ordered, live 2 November</h2>
+    <p class="subhead">One machine for all three workstreams, replacing the estimating laptop as the
+    production machine. Ordered this week from Scan 3XS on a fourteen-day lead time. James Gray
+    leads the software design; Jack Calow, SDI's hardware advisor, builds the machine; the Technical
+    Design team installs its own services.</p>
+
+    <div class="wsband" style="border-left-color:var(--good)">
+      <div><div class="k">Order</div><div class="v">3XS Custom Evolve WRX90E</div></div>
+      <div><div class="k">Hardware</div><div class="v">£10,963 ex VAT</div></div>
+      <div><div class="k">On site</div><div class="v">Mon 19 Oct</div></div>
+      <div class="r">LIVE FOR ESTIMATORS AND STUDIO<br><b>MONDAY 2 NOVEMBER 2026</b><br><span class="dim">with a week in hand</span></div>
+    </div>
+
+    <h3 class="minihead">What it carries, and how it is set up</h3>
+    <p class="subhead" style="margin-top:-4px">The machine runs <b>Windows Server 2025</b> on the
+    metal with Hyper-V. Everything people use runs inside one <b>Windows 11 Pro virtual machine</b>
+    that owns the graphics card; a second <b>Linux virtual machine</b> carries Technical Design's
+    server side. Jack and James log in from their desks without interrupting an estimate. No third
+    virtual machine.</p>
+    <div class="tablewrap">
+      <table class="rev phases">
+        <thead><tr><th style="width:36%">What</th><th style="width:20%">Where</th><th>Why there</th></tr></thead>
+        <tbody>
+          <tr><td>Estimating engine and runner, the portal and queue, Excel, SOLIDWORKS, the RTX 4000 Ada</td><td class="ref">VM 1 · Windows 11</td><td>COM needs a logged-in desktop; the card is here; SOLIDWORKS does not run on Windows Server</td></tr>
+          <tr><td>Client Briefing Intelligence; Drawing Search including the image search</td><td class="ref">VM 1 · Windows 11</td><td>Moves as it is; the image search uses the card</td></tr>
+          <tr><td>SOLIDWORKS Document Manager API, CAD Validator, COM tools</td><td class="ref">VM 1 · Windows 11</td><td>SOLIDWORKS libraries, Windows only; exposed to the Linux VM over HTTPS on one port</td></tr>
+          <tr><td>Document Manager intelligence layer, Production Design Extraction (FastAPI); SDI Design Vault (GitLab with LFS, PostgreSQL)</td><td class="ref">VM 2 · Linux</td><td>Linux-native; its own large disk; the designers' test server</td></tr>
+          <tr><td>Hyper-V, the SolidNetWork licence manager, Remote Desktop for Jack and James</td><td class="ref">Host</td><td>Two administrator sessions at once; nothing a person uses runs here</td></tr>
+          <tr><td>Estimating shares and W:</td><td class="ref">The file server</td><td>This machine is not a file server</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warnbox">
+      <h3>The one decision still open with the supplier</h3>
+      <p>Windows 11 Pro, the operating system Scan supplies, cannot give a graphics card to a
+      virtual machine. Scan has said the board in the quoted build does not support Windows Server
+      2025, so the order asks for the same build on a board that does, at the same lead time. If
+      Scan cannot, the quoted workstation is built on <b>Proxmox</b>, a Linux hypervisor: the card
+      still passes through to the Windows virtual machine and nothing in the licence table below is
+      spent on Windows Server. What that route gives up is Dassault's formal support statement for
+      the virtual environment. Either way the hardware order stands and the dates hold; day one on
+      the delivered machine is a check with the free evaluation edition, not a meeting.</p>
+    </div>
+
+    <h3 class="minihead">The full installed cost &mdash; for Matt</h3>
+    <p class="subhead" style="margin-top:-4px">Matt asked for the full installed cost with Jack and
+    the increase over the original approval. Indicative, ex VAT, to be confirmed by the suppliers'
+    quotes.</p>
+    <div class="tablewrap">
+      <table class="rev phases">
+        <thead><tr><th style="width:44%">Item</th><th style="width:20%">Ex VAT</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td><b>Hardware</b>, as quoted by Scan 3XS: Threadripper PRO 9975WX (32 cores), ASUS WRX90E-SAGE SE, 128 GB DDR5 ECC, RTX 4000 Ada 20 GB, 2 &times; 2 TB NVMe, 3-year warranty</td><td class="ref bold">&pound;10,963</td><td>&pound;13,155.28 inc VAT. <b>About &pound;5,963 above the roughly &pound;5,000 workstation approved in September</b>, because it carries three services and the Vault side by side</td></tr>
+          <tr><td>Windows Server 2025 Standard, two 16-core packs, plus client access licences at about &pound;40 each</td><td class="ref bold">about &pound;2,000 + CALs</td><td><b>Only if Scan supplies a Server-listed board</b> and it installs cleanly; nothing on Proxmox. Bought only after the operating system has installed on the delivered machine</td></tr>
+          <tr><td>Windows 11 Pro licence for the virtual machine</td><td class="ref bold">about &pound;200</td><td>The free copy with the workstation licenses the machine itself, not a virtual machine</td></tr>
+          <tr><td>Microsoft Office for the virtual machine</td><td class="ref bold">per existing agreement</td><td>Excel is what the estimate books run in</td></tr>
+          <tr><td>Linux virtual machine; Proxmox if that route</td><td class="ref bold">nothing</td><td>Both are free</td></tr>
+          <tr><td>SOLIDWORKS: a possible change of licence if unattended automated use needs one</td><td class="ref bold">unknown until settled</td><td>SDI's own licence agreement is being read this fortnight; the reseller is asked only where it is silent. Any cost comes back to Matt with the figure before it is committed</td></tr>
+          <tr><td><b>Indicative total installed</b></td><td class="ref bold">about &pound;13,200 + CALs</td><td>Hardware, Server and Windows 11 licences; before any SOLIDWORKS change, and &pound;2,000 less on Proxmox</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="minihead">The build, week by week</h3>
+    <div class="tablewrap">
+      <table class="rev phases">
+        <thead><tr><th style="width:22%">When</th><th>What happens</th><th>Who</th></tr></thead>
+        <tbody>
+          <tr><td class="ref bold" style="white-space:normal">w/c 5 Oct</td><td>Order placed with Scan on a fourteen-day lead time; Scan's answer on a Windows Server board. The SOLIDWORKS licence position read; accounts, fixed IPs, firewall rules, installers and Linux build scripts prepared</td><td class="who" style="white-space:normal">Jack Calow · James Gray · Technical Design</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">Mon 19 Oct</td><td>Hardware on site. Windows Server 2025 evaluation installed and every device proved driven, or the Proxmox fallback; the Server licence bought only on a clean result</td><td class="who">Jack Calow</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">20&ndash;23 Oct</td><td>The host, the Windows virtual machine with the card, the Linux virtual machine; domain join, remote access, firewall, backups; handover checks</td><td class="who">Jack Calow</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">23&ndash;29 Oct</td><td>The estimating services, portal, Client Briefing, Drawing Search, the Document Manager tools and SOLIDWORKS installed on the Windows side; GitLab, PostgreSQL and FastAPI on the Linux side</td><td class="who" style="white-space:normal">James Gray · Technical Design</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">29&ndash;30 Oct</td><td>Proving: known jobs re-run and compared with the laptop; a full restart; the remote in-and-out test during a running job</td><td class="who">James Gray</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">Mon 2 Nov</td><td><b>Live for the estimators and the studio; the laptop stood down as the production machine.</b> AI estimating, Production Design Extraction and Drawing Search on it; Design Vault testing can start</td><td class="who">All three workstreams</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid2" style="margin-top:14px">
+      <div class="item ok">
+        <h3>Security and configuration actions<span class="pill p-fix">Closed in the plan</span></h3>
+        <ul class="plain">
+          <li>Remote access: Remote Desktop to the host only, two administrator sessions; the
+          Windows VM reached through the Hyper-V console, or as the runner account alone with a
+          hand-back script; never another user while a job runs.</li>
+          <li>Firewall: the portal, Drawing Search and Client Briefing ports from the office network;
+          the COM tools' port from the Linux VM only; PostgreSQL from the Windows VM only.</li>
+          <li>Backups of the host and both VMs plus GitLab's own, with one restore of each tested
+          before go-live. Mirrored storage asked for in the order.</li>
+          <li>Updates: host and the Windows VM on different nights, James told first; Ubuntu
+          security updates unattended with reboots announced. A UPS, power-on after a cut, both VMs
+          auto-start.</li>
+          <li>Accounts: a service account for the portal and a runner account, on the domain with
+          fixed IPs and names.</li>
+        </ul>
+      </div>
+      <div class="item" style="border-left-color:var(--warn)">
+        <h3>Still open<span class="pill p-open">Open</span></h3>
+        <ul class="plain">
+          <li>Scan's answer on a Windows Server board, which decides route 1 or Proxmox.</li>
+          <li>The SOLIDWORKS licence position on activation in a virtual machine and on unattended
+          automated use: SDI's own agreement first, the reseller only where it is silent.</li>
+          <li>Microsoft sign-in with MFA in front of the portal for use from outside the office,
+          which is a go-live gate for remote starting of jobs, not for the office.</li>
+          <li>A second graphics card, only if Technical Design later runs models on the Linux side;
+          the board has the slot and the power lead is asked for.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout plainbox">
+      <h3>What could go wrong, and what is done about it</h3>
+      <p><b>Delivery slips:</b> every later date moves with it and go-live holds in the week of
+      2 November with a week in hand; Jack has Scan's date in writing. <b>Windows Server will not
+      install cleanly:</b> found on day one with the evaluation edition before the licence is bought;
+      Proxmox instead, nothing wasted. <b>The licence does not permit automated use:</b> established
+      before SOLIDWORKS automation goes live; the right licence at its price, or another way of
+      reading models. <b>One estimate at a time:</b> one runner as today; a second Windows VM with a
+      runner is designed for and not built. <b>A Windows update mid-estimate:</b> scheduled out of
+      hours, James told first. <b>Run time:</b> the server is faster but does not fix the engine's
+      own minutes; the timing table does, separately.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       06 — SAGE X3. The plan of record from issue 4, with this week's load.
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2 id="x3"><span class="n">06</span> Sage X3 data migration</h2>
+
+    <div class="wsband" style="border-left-color:var(--blue)">
+      <div><div class="k">Status</div><div class="v">Loading estimating this week</div></div>
+      <div><div class="k">Owner</div><div class="v">J. Gray</div></div>
+      <div><div class="k">With</div><div class="v">Acuity &middot; Dave's team &middot; the data owners</div></div>
+      <div class="r">ALL AREAS LOADED AND USER-TESTED<br><b>FRIDAY 30 OCTOBER 2026</b><br>
+        <span class="dim">dress rehearsal and cutover in November, to be confirmed</span></div>
+    </div>
+
+    <p class="subhead">The Access Supply Chain database behind SDI Live moves to <b>Sage X3</b>.
+    Loading and user acceptance testing are one cycle, area by area, on real SDI data: each area is
+    loaded into test, tested by its own users, fixed, then kept current by incremental updates.</p>
+
+    <div class="callout goodbox">
+      <h3>This week: the estimating tables, with customers and suppliers</h3>
+      <p>The first-pass test load this week is the <b>estimating tables &mdash; BOMs, routes and
+      products &mdash; and customers and suppliers</b> beside them. Once the estimating data is in
+      test on this first pass, user testing opens to <b>estimating, customer services, finance and
+      warehouse and manufacturing</b> in that order, each on its own loaded area. Dave's team uploads
+      sample estimates and runs the standard reports, including how the estimating engine's BOMs
+      and Routes output connects. The engine's output is an estimate's BOM and route in a structured
+      form, which is the shape an X3 upload takes.</p>
+    </div>
+
+    <div class="gantt-frame" style="padding:18px 22px 14px">
+      <div class="gantt-title">The plan of record, unchanged from 29 September</div>
+      <div class="grid2">
+        <div class="item ok" style="margin-bottom:0"><h3>813 source tables classified <span class="dim">&middot; 21 carry the migration</span></h3></div>
+        <div class="item ok" style="margin-bottom:0"><h3>8 of 13 load templates <span class="dim">&middot; every record with a status and a reason</span></h3></div>
+        <div class="item" style="margin-bottom:0"><h3>207 fields mapped <span class="dim">&middot; 16 Acuity templates; 22 waiting on Acuity</span></h3></div>
+        <div class="item" style="margin-bottom:0;border-left-color:var(--warn)"><h3>Routes template <span class="dim">&middot; still asked of Acuity</span></h3></div>
+      </div>
+    </div>
+
+    <div class="tablewrap">
+      <table class="rev phases">
+        <thead><tr><th style="width:16%">Week</th><th>What happens</th></tr></thead>
+        <tbody>
+          <tr><td class="ref bold" style="white-space:normal">w/c 5 Oct</td><td><b>Loading the estimating tables</b> (BOMs, routes, products) and customers and suppliers into test; UAT on estimates starts as soon as the first pass is in</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">w/c 12 Oct</td><td>Estimating signed off. First incremental update. Customer services and finance begin on customers, suppliers and open items</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">w/c 19 Oct</td><td>Manufacturing actuals; stock, open orders, AR and AP, GL balances, with UAT; the warehouse and manufacturing on their areas</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">w/c 26 Oct</td><td>Works orders. <b>All areas loaded and user-tested by Friday 30 October</b></td></tr>
+          <tr><td class="ref bold" style="white-space:normal">November</td><td>Dress rehearsal and cutover, dates to be confirmed</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">4 Jan 27</td><td>ERP go-live. From it the estimating engine reads material and supplier prices from X3, with dual-running across the changeover</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warnbox">
+      <h3>Still needed from Acuity</h3>
+      <p>The four critical configuration answers (site, company, product category and
+      unit-of-measure codes), the route template and the pre-populate list with templates, the
+      BICX, BISX and GAS templates, work centres as a master load or not, mandatory-field rules,
+      test environment refresh and the cutover method, and the reporting approach that decides which
+      of the 18 custom-field tables matter. The detail of the classification, the data-quality
+      buckets and the field mapping is in issue 4 and is unchanged.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2 id="open"><span class="n">07</span> Matt's four priorities, answered &mdash; and what is open</h2>
+    <p class="subhead">Matt, 30 September: <i>&ldquo;Please confirm the agreed actions and dates by
+    Friday, and flag anything needing my decision immediately. Go-live must remain driven by testing
+    and user sign-off.&rdquo;</i> Each priority below has an owner and a date. Dates marked
+    <b>proposed</b> are confirmed with the people named by Friday 9 October.</p>
+
+    <div class="tablewrap">
+      <table class="rev">
+        <thead><tr><th style="width:17%">Priority</th><th>Action</th><th style="width:17%">Owner</th><th style="width:15%">Date</th></tr></thead>
+        <tbody>
+          <tr><td class="ref bold" style="white-space:normal">1 · Server</td>
+            <td><b>Full installed cost with Jack</b>: hardware &pound;10,963 ex VAT; Windows Server about &pound;2,000 plus CALs only on route 1; Windows 11 about &pound;200; Office per agreement; a SOLIDWORKS licence change unknown until settled. <b>Increase over the September approval: about &pound;5,963 ex VAT</b> on the hardware, for confirmation. <b>Order status:</b> placed this week, fourteen-day lead time, on site 19 October, built 19&ndash;30 October, <b>live 2 November</b>. <b>Security and configuration:</b> remote access, firewall, backups, updates, accounts and UPS are decided in the build plan; open are Scan's board answer, the SOLIDWORKS licence position and MFA for use from outside the office.</td>
+            <td class="who" style="white-space:normal">James Gray · Jack Calow</td><td class="ref bold" style="white-space:normal">Cost confirmed now · live 2 Nov</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">2 · Testing</td>
+            <td><b>James Ryan agrees dates with Dave</b> for the eight outstanding reviews (12552, 12312-01, 12633-10, 12633-00, 12527-22, 12173-02, 12696-01, 9439-01-04) and for the manual comparison sheets that grow the parity KPI, protecting that time alongside the Sage estimating UAT in the same weeks. Tim's and Dave's reviews of 30 September are in hand. <b>Proposed:</b> dates agreed by Friday 9 October; reviews and sheets back by Friday 23 October, so that go-live on 2 November rests on them.</td>
+            <td class="who" style="white-space:normal">James Ryan · Dave Wright · James Gray</td><td class="ref bold" style="white-space:normal">Dates 9 Oct · returns 23 Oct (proposed)</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">3 · Pricing gaps</td>
+            <td><b>Supplier price lists:</b> estimating has given James a spreadsheet of supplier contacts, and estimating and James are reaching out to them this week for a comprehensive digital catalogue or price list of generic items; Purchasing is coordinated through James Ryan. The loader is built and tested; each list is loaded as it arrives. <b>Customer-specific quoted prices:</b> a quoted-price entry on the run page, filed with the pack and carried to the estimate, the quote and the price history, so a price the account manager already holds is entered once. <b>Proposed:</b> requests out by 9 October, first lists loaded by 23 October; the quoted-price entry in the engine by 16 October.</td>
+            <td class="who" style="white-space:normal">James Gray · James Ryan · Purchasing</td><td class="ref bold" style="white-space:normal">Requests 9 Oct · loads 23 Oct · entry 16 Oct (proposed)</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">4 · Delivery focus</td>
+            <td><b>Studio feedback:</b> Drawing Search feedback expected next week, with the K: drive search as the first change; Client Briefing shown to the full studio team next week for their reviews. <b>Into use:</b> AI estimating, drawing-pack extraction and Drawing Search go live on the server on 2 November, driven by testing and the estimators' and studio's sign-off, each with its runbook and the portal's guides.</td>
+            <td class="who" style="white-space:normal">James Gray · Muhammad Yazir · Yogesh Kumar</td><td class="ref bold" style="white-space:normal">Feedback w/c 12 Oct · live 2 Nov</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warnbox">
+      <h3>For Matt's decision</h3>
+      <ul class="plain">
+        <li><b>The server's cost.</b> Confirm the increase of about &pound;5,963 ex VAT over the
+        September approval, and approve in principle the Windows Server licence of about &pound;2,000
+        plus CALs, spent only if Scan supplies a Server-listed board and it installs cleanly.</li>
+        <li><b>The SOLIDWORKS licence.</b> Agreement in principle that if unattended automated use
+        carries a cost, it comes back with the figure before anything is committed.</li>
+        <li><b>The Design Vault's direction.</b> Yogesh asks how far to take the in-house Vault
+        against PDM Standard, given that a two to three month build delivers the core workflow but
+        not every PDM feature. The go/no-go at the end of October is a company direction; the evidence
+        is the hard-case demonstrations, and the designers' hands-on testing follows on the server.</li>
+        <li><b>A date for the estimators and the studio:</b> Monday 2 November.</li>
+      </ul>
+    </div>
+
+    <div class="item" style="border-left-color:var(--crit)">
+      <h3>Reviews and manual sheets back by 23 October<span class="pill p-stop">Act</span></h3>
+      <p>Eight packs await review and the M&amp;S re-runs are with Dave. Every returned review has
+      become rules, and the parity count grows only with a manual sheet for the same job at the same
+      quantity. This is the evidence that confirms 2 November.</p>
+      <div class="why"><b>Workstream 1.</b> James Ryan with Dave's team.</div>
+    </div>
+
+    <div class="item" style="border-left-color:var(--crit)">
+      <h3>Supplier price lists and the quoted-price entry<span class="pill p-stop">Act</span></h3>
+      <p>Two reviews in a row were decided by a price somebody already had. The contact spreadsheet
+      is in hand and the requests go out this week; the quoted-price entry is the engine's next
+      piece of work.</p>
+      <div class="why"><b>Workstream 1.</b> James Gray, James Ryan, Purchasing.</div>
+    </div>
+
+    <div class="item" style="border-left-color:var(--crit)">
+      <h3>Sage X3: the estimating load<span class="pill p-stop">Act</span></h3>
+      <p>BOMs, routes, products, customers and suppliers into test this week. From Acuity, the four
+      critical configuration answers and the route template.</p>
+      <div class="why"><b>Sage X3.</b> James Gray with Acuity.</div>
+    </div>
+
+    <div class="item">
+      <h3>Scan's answer on the board<span class="pill p-open">This week</span></h3>
+      <p>Decides Windows Server or Proxmox on the metal, and whether the &pound;2,000 licence line is
+      spent. The hardware order and the dates do not depend on it.</p>
+      <div class="why"><b>Server.</b> Jack Calow.</div>
+    </div>
+
+    <div class="item">
+      <h3>Brief Lite's credits and automation<span class="pill p-open">Next week</span></h3>
+      <p>OpenAI API credits for the concept visuals (Muhammad, next week), and the SolidWorks
+      assembly and part automation that Yogesh has started in parallel.</p>
+      <div class="why"><b>Workstreams 2 and 3.</b></div>
+    </div>
+
+    <div class="item">
+      <h3>Drawing Search on the K: drive<span class="pill p-open">Next</span></h3>
+      <p>Dave's requirement: search by UPC or drawing number on K: as on W:.</p>
+      <div class="why"><b>Workstream 3.</b> Muhammad Yazir.</div>
+    </div>
+
+    <div class="item">
+      <h3>Run time on large packs<span class="pill p-open">Next</span></h3>
+      <p>Read the timing table and re-run only what a change affects, once this week's packs are
+      reviewed.</p>
+      <div class="why"><b>Workstream 1.</b></div>
+    </div>
+
+    <div class="item">
+      <h3>Carried, with no change reported<span class="pill p-open">Carried</span></h3>
+      <ul class="plain">
+        <li><b>The BrightHR client secret has never been rotated.</b></li>
+        <li><b>SDI-APP01</b> still needs the rotated database password and its build configuration.</li>
+        <li><b>Two price sources wired to empty tables</b> (rung 3 of the price chain).</li>
+        <li><b>Three configured rates with no live source</b> (board sheet, zinc plating, section stock), awaiting a ruling.</li>
+        <li><b>The W: drive and the Vault</b>: syncing W: on released status is a design decision for P3.1.</li>
+        <li><b>P1 not confirmed live</b>, its deployment step still not started.</li>
+      </ul>
+    </div>
+
+    <div class="item ok">
+      <h3>Closed since 29 September<span class="pill p-fix">Closed</span></h3>
+      <ul class="plain">
+        <li><b>The server: ordered</b>, with a build plan, a cost table and a go-live date.</li>
+        <li><b>Operating system and licensing, RAID and backup, UPS and network placement</b> are
+        decided in the build plan rather than left to the build week.</li>
+        <li><b>Which machines get a SolidWorks seat:</b> the server's Windows virtual machine, with
+        the licence manager on the host.</li>
+        <li><b>A secure connection for the WhatsApp test:</b> WhatsApp is connected on a test number.</li>
+        <li><b>P3.1's user-testing dates:</b> from 2 November, on the server's Linux side.</li>
+        <li><b>12645</b> closed as a pack by Dave; its rules stay.</li>
+        <li><b>Spot welding</b> (Tim, 30 September): read from the sheet's symbols from 12527-22.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    SDI INTELLIGENCE PROGRAMME STATUS · COMBINED REPORT · ISSUE 5 · ISSUED 6 OCTOBER 2026 · SUPERSEDES 29 SEPTEMBER 2026<br>
+    SOURCES · SDI INTELLIGENCE COMMIT HISTORY 29 SEP – 5 OCT AND CHANGE REGISTER D-329 TO D-398 · SDI INTELLIGENCE ESTIMATING TEST LOG AND TESTING STATUS, 5 OCT · ESTIMATOR REVIEWS FROM TIM WILKES AND DAVE WRIGHT, 30 SEP · YOGESH KUMAR STATUS AND PROJECT PLAN TRACKER 2 OCT · MUHAMMAD YAZIR WEEKLY UPDATE · MATT EVANS 30 SEP · SERVER BUILD PLAN AND SUMMARIES 5 OCT · SAGE X3 PLAN OF 29 SEP AND THIS WEEK'S LOAD<br>
+    ESTIMATING GO-LIVE · MONDAY 2 NOVEMBER 2026, WITH THE SERVER — CONFIRMED BY TESTING AND SIGN-OFF, NOT BY THE DATE<br>
+    SDI DISPLAYS · LOUGHBOROUGH · WE.ARE.SDI
+  </footer>
+
+</div>
+</body>
+</html>

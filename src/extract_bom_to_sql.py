@@ -27,12 +27,14 @@ import pdfplumber
 import pyodbc
 
 # ========================== DB CONFIG (override with BOM_SQL_* env vars) ==========================
+import config
+
 DB_CONFIG = {
-    "driver": "ODBC Driver 18 for SQL Server",
-    "server": "10.0.0.200",
-    "database": "SDILive",
-    "username": "AIBot",
-    "password": "AIAgentPW2026",
+    "driver": config.DB_DRIVER,
+    "server": config.DB_SERVER,
+    "database": config.DB_NAME,
+    "username": config.DB_USER,
+    "password": config.DB_PASSWORD,
 }
 
 TABLE_NAME = "dbo.drawing_bom_items"

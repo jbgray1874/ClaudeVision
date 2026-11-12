@@ -1,0 +1,777 @@
+"""The two questions that come before a price: what parts, and what work.
+
+The estimate answers "what does it cost". Before anybody can trust that, these have to be
+answerable on their own — and they were not reachable without opening a costed workbook.
+
+THE DEFECT FOUND WHILE BUILDING THIS. source_drawing_data.operation_rows read the route from
+`estimate_summary.canonical_route` only. Every real run writes it to `canonical_route_shadow` —
+v0013 of 7332-01 carries 27 decisions there — so the Operations sheet of the extraction audit
+came back EMPTY on every real job and read as "this pack states no operations". That is the worst
+way for a route to be missing: indistinguishable from a pack that genuinely has none.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+import bom_and_route_extract as bre                                      # noqa: E402
+import source_drawing_data as sdd                                        # noqa: E402
+
+
+def _record(route_key: str = "canonical_route_shadow", nested: bool = True,
+            costed: bool = True) -> dict:
+    """A 7332-01-shaped record. COSTED BY DEFAULT, because the real one was: a full estimate
+    ran, the workbook was read back, and the route was projected onto priced rows. The tests
+    below that talk about a `charged` column are testing that case, and it only exists when a
+    price does. Pass costed=False for the pack-read case the new buttons produce."""
+    decisions = [
+        {"decision_id": "d1", "target_id": "7332-01-002", "operation": "tubebend",
+         "status": "required", "scope": "part", "participants": ["7332-01-002"],
+         "reason": "the leg is bent from tube"},
+        {"decision_id": "d2", "target_id": "7332-01-002", "operation": "folding",
+         "status": "not_applicable", "scope": "part", "participants": ["7332-01-002"],
+         "reason": "not possible on stock form 'tube'"},
+        {"decision_id": "d3", "target_id": "7332-01", "operation": "welding",
+         "status": "required", "scope": "assembly",
+         "participants": ["7332-01-002", "7332-01-007"], "reason": "a welded frame"},
+    ]
+    route = {route_key: {"decisions": decisions}}
+    record = {
+        "job_number": "7332-01",
+        "document_analysis": {"bom_rows": [
+            {"part_number": "7332-01-002", "description": "Leg, tube", "quantity": 2,
+             "material_text": "Steel, Mild Tube 25x25x2", "source_page": 3,
+             "source": "bom_table"},
+            {"part_number": "7332-01-002", "description": "Leg, tube", "quantity": 2,
+             "material_text": "MS TUBE", "source_page": 7, "source": "vision"},
+            {"part_number": "7332-01-007", "description": "Lens", "quantity": 1,
+             "material_text": "Acrylic 3mm", "source_page": 4, "source": "solidworks_api"}]},
+    }
+    if nested:
+        record["estimate_summary"] = dict(route)
+    else:
+        record.update(route)
+    if costed:
+        _es = record.setdefault("estimate_summary", {})
+        _es["final_estimate"] = {"totals": {"unit_gbp": 80.34, "material_gbp": 40.89,
+                                            "labour_gbp": 33.83}}
+    return record
+
+
+# ── the route is found wherever it is written ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize("key", ["canonical_route_shadow", "canonical_route"])
+@pytest.mark.parametrize("nested", [True, False])
+def test_the_route_is_read_under_either_spelling_and_either_nesting(key, nested):
+    """Reading one was a silent hole: the audit's Operations sheet was empty on every real job."""
+    rows = bre.route_sheet(_record(key, nested))
+    assert len(rows) == 3, f"{key} nested={nested}"
+
+
+def test_the_audit_operations_sheet_is_no_longer_empty_on_a_real_shaped_record():
+    """THE REGRESSION THIS CLOSES, asserted on the audit itself and not only on the new module."""
+    assert len(sdd.operation_rows(_record("canonical_route_shadow"))) == 3
+
+
+def test_one_decision_found_under_both_spellings_is_not_duplicated():
+    record = _record("canonical_route_shadow")
+    record["canonical_route"] = record["estimate_summary"]["canonical_route_shadow"]
+    assert len(bre.route_sheet(record)) == 3
+
+
+def test_an_absent_route_gives_no_rows_rather_than_raising():
+    assert bre.route_sheet({"job_number": "x"}) == []
+    assert bre.bom_sheet({"job_number": "x"}) == []
+
+
+# ── what the sheets say, and what they refuse to say ──────────────────────────────────
+
+
+def test_only_a_required_decision_is_marked_charged():
+    rows = {(r["part_or_assembly"], r["operation"]): r for r in bre.route_sheet(_record())}
+    assert rows[("7332-01-002", "tubebend")]["charged"] == "yes"
+    assert rows[("7332-01-002", "folding")]["charged"] == "no"
+    assert "not possible on stock form" in rows[("7332-01-002", "folding")]["why"]
+
+
+def test_every_status_carries_its_meaning_in_words():
+    """"unverified" is neither charged nor ruled out, and a sheet that prints the bare word
+    leaves the reader to guess which."""
+    for row in bre.route_sheet(_record()):
+        assert row["what_that_status_means"], row
+    assert "a person should rule on it" in bre.STATUS_MEANING["unverified"]
+    assert "NOT charged" in bre.STATUS_MEANING["unverified"]
+
+
+def test_an_unrecognised_status_is_not_silently_treated_as_charged():
+    record = _record()
+    record["estimate_summary"]["canonical_route_shadow"]["decisions"][0]["status"] = "peculiar"
+    # route_sheet SORTS, so index 0 is not the row just edited — find it by identity.
+    row = [r for r in bre.route_sheet(record) if r["operation"] == "tubebend"][0]
+    assert row["status"] == "peculiar"
+    assert row["charged"] == "no", "only `required` is charged; anything else is not"
+    assert "not recognised" in row["what_that_status_means"]
+
+
+def test_an_assembly_decision_names_every_part_it_covers():
+    """A weld is not three welds because three parts meet. Dividing a setup between its
+    participants is what makes one setup look like three."""
+    row = [r for r in bre.route_sheet(_record()) if r["operation"] == "welding"][0]
+    assert row["scope"] == "assembly"
+    assert "7332-01-002" in row["covers_parts"] and "7332-01-007" in row["covers_parts"]
+
+
+def test_a_duplicated_part_number_is_flagged_and_never_merged():
+    """Most SDI parts appear on several sheets of one pack. Merging here would hide the very
+    question an estimator has to rule on, and adding the quantities would be worse."""
+    rows = bre.bom_sheet(_record())
+    legs = [r for r in rows if r["part_number"] == "7332-01-002"]
+    assert len(legs) == 2, "both rows survive"
+    assert all(r["appears_on_n_rows"] == 2 for r in legs)
+    assert "NOT a quantity to add up" in legs[0]["duplicate_note"]
+    single = [r for r in rows if r["part_number"] == "7332-01-007"][0]
+    assert single["duplicate_note"] == ""
+
+
+def test_each_bom_row_says_which_reader_produced_it_and_what_that_means():
+    rows = {r["read_by"]: r for r in bre.bom_sheet(_record())}
+    assert "table parser" in rows["bom_table"]["what_that_reader_is"]
+    assert "IMAGE" in rows["vision"]["what_that_reader_is"]
+    assert "designer's structure" in rows["solidworks_api"]["what_that_reader_is"]
+
+
+def test_an_unknown_reader_is_reported_as_itself_not_mapped_to_a_guess():
+    record = _record()
+    record["document_analysis"]["bom_rows"][0]["source"] = "some_new_reader"
+    row = bre.bom_sheet(record)[0]
+    assert "some_new_reader" in row["what_that_reader_is"]
+
+
+def test_the_material_is_carried_as_printed_never_normalised():
+    rows = bre.bom_sheet(_record())
+    assert rows[0]["material_as_printed"] == "Steel, Mild Tube 25x25x2"
+    assert rows[1]["material_as_printed"] == "MS TUBE", "the second reader's wording is kept too"
+
+
+# ── the derivation sheet ──────────────────────────────────────────────────────────────
+
+
+def test_every_derivation_row_says_what_the_value_does_NOT_mean():
+    """The column that earns its place. Every figure on a sheet like this gets quoted eventually,
+    and the quickest way to be misquoted is to publish a number with no statement of its limits."""
+    rows = bre.derivation_sheet(_record())
+    assert rows
+    for row in rows:
+        assert row["what_it_does_not_mean"], row
+        assert row["derived_from"], row
+
+
+def test_the_quantity_derivation_warns_it_is_not_rolled_through_the_assembly():
+    row = [r for r in bre.derivation_sheet(_record()) if r["column"] == "quantity"][0]
+    assert "NOT the job quantity" in row["what_it_does_not_mean"]
+    assert "12 parts" in row["what_it_does_not_mean"], "with the arithmetic spelled out"
+
+
+def test_the_derivation_names_where_the_route_was_actually_found():
+    row = [r for r in bre.derivation_sheet(_record()) if r["column"] == "operation"][0]
+    assert "canonical_route_shadow" in row["derived_from"]
+
+
+# ── the three buttons, one builder ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("want,expect", [
+    ("boms", {"BOMs"}), ("routes", {"Routes"}), ("both", {"BOMs", "Routes"})])
+def test_each_button_builds_only_its_own_subject(want, expect):
+    tables = bre.build_tables(_record(), want)
+    assert expect <= set(tables)
+    assert "How these were derived" in tables, "every extract explains itself"
+    assert (set(tables) - {"How these were derived"}) == expect
+
+
+def test_the_derivation_sheet_is_filtered_to_the_subject_asked_for():
+    boms = bre.build_tables(_record(), "boms")["How these were derived"]
+    assert {r["sheet"] for r in boms} == {"BOMs"}
+
+
+# ── the files ─────────────────────────────────────────────────────────────────────────
+
+
+def test_both_outputs_are_written_from_one_snapshot(tmp_path):
+    """So the sheet estimating works from and the page everyone else reads cannot disagree."""
+    result = bre.write_both(_record(), tmp_path, "7332-01", "both")
+    assert result["xlsx"] and Path(result["xlsx"]).is_file()
+    assert result["html"] and Path(result["html"]).is_file()
+    assert result["boms"] == 3 and result["routes"] == 3
+
+
+def test_the_workbook_has_one_sheet_per_subject(tmp_path):
+    import openpyxl
+    path = bre.write_workbook(_record(), tmp_path, "7332-01", "both")
+    book = openpyxl.load_workbook(path)
+    assert book.sheetnames == ["BOMs", "Routes", "How these were derived"]
+    assert book["Routes"].freeze_panes == "A2", "headers stay visible while scrolling"
+
+
+def test_the_filename_says_which_extract_it_is(tmp_path):
+    for want, suffix in (("boms", "_boms"), ("routes", "_routes"),
+                         ("both", "_boms_and_routes")):
+        path = bre.write_workbook(_record(), tmp_path, "7332-01", want)
+        assert path.name == f"7332-01{suffix}.xlsx"
+
+
+def test_the_page_escapes_everything_it_prints(tmp_path):
+    """Every value here came out of a drawing. A description containing markup must render as
+    text, whether or not today's packs happen to contain any."""
+    record = _record()
+    record["document_analysis"]["bom_rows"][0]["description"] = "<script>alert(1)</script>"
+    path = bre.write_html(record, tmp_path, "7332-01", "boms")
+    text = path.read_text(encoding="utf-8")
+    assert "<script>alert(1)</script>" not in text
+    assert "&lt;script&gt;" in text
+
+
+def test_the_page_marks_charged_and_uncharged_differently(tmp_path):
+    path = bre.write_html(_record(), tmp_path, "7332-01", "routes")
+    text = path.read_text(encoding="utf-8")
+    assert "class='yes'>yes" in text
+    assert "class='no'>no" in text
+
+
+def test_an_empty_record_still_produces_both_files_saying_so(tmp_path):
+    """An extract that writes nothing when a pack yielded nothing is indistinguishable from an
+    extract that failed."""
+    result = bre.write_both({"job_number": "empty"}, tmp_path, "empty", "both")
+    assert result["xlsx"] and result["html"]
+    text = Path(result["html"]).read_text(encoding="utf-8")
+    assert "Nothing in this record" in text
+    assert "a fact about the record, not about the pack" in text
+
+
+@pytest.mark.parametrize("broken", [None, [], "not a record", 7, {"pages": "wrong type"}])
+def test_a_malformed_record_never_raises_into_the_page(broken, tmp_path):
+    """It is launched from the estimating page; it must never be the reason that page errors."""
+    try:
+        bre.write_both(broken if isinstance(broken, dict) else {}, tmp_path, "x", "both")
+    except Exception as err:                                             # noqa: BLE001
+        pytest.fail(f"raised into the caller: {type(err).__name__}: {err}")
+
+
+def test_the_page_states_that_it_prices_nothing(tmp_path):
+    """So a figure from it is never quoted as a cost."""
+    path = bre.write_html(_record(), tmp_path, "7332-01", "both")
+    text = path.read_text(encoding="utf-8")
+    assert "prices nothing" in text
+    assert "no figure on this page is a cost" in text
+
+
+# ── which read produced this, and the column that must not lie about it ───────────────
+#
+# THE ASK THAT MADE THIS NECESSARY. The estimating team want BOMs and routes out of a pack
+# WITHOUT a costed run, so the same extract now has three possible sources: a costed run's
+# saved record, a full read of the drawings with no pricing, and a vision-model-only first
+# look. They produce the same shaped tables and they are not interchangeable, and the trap is
+# one column: "charged". On a pack nobody priced, a column of "charged: no" against every row
+# reads as "this pack needs no work" — the opposite of what the route actually decided.
+
+
+def test_a_costed_record_says_so_and_its_charged_column_means_money():
+    d = bre.source_declaration(_record())
+    assert d["source"] == "costed_run"
+    assert d["charged_is_meaningful"] is True
+    assert d["operation_column"] == "charged"
+    row = [r for r in bre.route_sheet(_record()) if r["operation"] == "tubebend"][0]
+    assert row["charged"] == "yes"
+
+
+def test_an_uncosted_pack_read_never_offers_a_charged_column():
+    """The column is RENAMED, not blanked. A blank would be a missing fact; the fact is real
+    and is about the route, not about money."""
+    record = _record(costed=False)
+    d = bre.source_declaration(record)
+    assert d["source"] == "pack_read"
+    assert d["charged_is_meaningful"] is False
+    assert d["operation_column"] == "required by the route"
+    row = [r for r in bre.route_sheet(record) if r["operation"] == "tubebend"][0]
+    assert "charged" not in row, "the word must not appear as a column on an uncosted read"
+    assert row["required by the route"] == "yes"
+    assert "Nothing here is charged" in row["what_that_status_means"]
+    assert "was not costed" in row["what_that_status_means"]
+
+
+def test_a_vision_only_read_is_its_own_source_and_says_it_is_uncorroborated():
+    record = _record(costed=False)
+    record["llm_only"] = True
+    d = bre.source_declaration(record)
+    assert d["source"] == "fast_read"
+    assert d["charged_is_meaningful"] is False
+    assert "VISION MODEL ALONE" in d["meaning"]
+    assert "not a basis for quoting" in d["meaning"]
+
+
+def test_llm_only_beats_costed_because_the_weaker_read_is_the_honest_one():
+    """A record can carry both marks — an --llm-only run still writes totals. The reader has
+    to be told the BOM came from one source, which is the fact that limits everything else."""
+    record = _record(costed=True)
+    record["llm_only"] = True
+    assert bre.source_declaration(record)["source"] == "fast_read"
+
+
+def test_the_source_is_derived_from_the_record_not_passed_in():
+    """A caller that labels its own output can label it wrongly, and 'this was costed' is the
+    mislabel a hurried caller reaches for."""
+    import inspect
+    sig = inspect.signature(bre.source_declaration)
+    assert list(sig.parameters) == ["summary"], "no source parameter to get wrong"
+
+
+def test_an_archived_record_with_totals_but_no_money_provenance_is_still_costed():
+    """money_provenance is newer than the archive. Absence of the block is not evidence the
+    run was never costed, and downgrading those records would misreport twenty-three of them."""
+    record = _record(costed=True)
+    record.pop("money_provenance", None)
+    assert bre.source_declaration(record)["source"] == "costed_run"
+
+
+def test_the_yes_no_column_keeps_its_colour_under_either_name(tmp_path):
+    """Styling was keyed on the literal string "charged", so the colour vanished on exactly
+    the outputs the new buttons produce — where telling a required operation from a ruled-out
+    one at a glance is the point of the sheet."""
+    path = bre.write_html(_record(costed=False), tmp_path, "7332-01", "routes")
+    text = path.read_text(encoding="utf-8")
+    assert "class='yes'>yes" in text
+    assert "class='no'>no" in text
+
+
+def test_a_workbook_labour_row_is_proof_the_pack_was_costed():
+    """SHIPPED WRONG, AND CAUGHT ON THE OUTPUT. 7332-01's 14:17 run priced at GBP 80.34 a unit,
+    and its BOMs & Routes tab said of every operation: "Nothing here is charged — this pack was
+    not costed."
+
+    A TIMING BOUNDARY, not a logic error. wb_populate writes that tab WHILE it builds the
+    estimate workbook. final_estimate.totals is written back afterwards, once Excel has
+    calculated — so at the moment the tab is written the totals do not exist yet, and asking for
+    them can only ever answer no.
+
+    workbook_labour.rows DOES exist at that moment: the same tab reads it to fill the "sheet
+    row" column, and on that run it resolved decisions to rows 96 to 107. A workbook labour row
+    is not a hint that costing might happen — it is a line the workbook charges, carrying its
+    own row number.
+    """
+    mid_run = {
+        "job_number": "7332-01",
+        "workbook_labour": {"rows": [{"workbook_row": 103, "part_numbers": ["7332-01-002"],
+                                      "decision_ids": ["dC"], "wb_operation": "Tubebend"}]},
+        "estimate_summary": {"canonical_route_shadow": {"decisions": [
+            {"decision_id": "dC", "target_id": "7332-01-002", "operation": "tubebend",
+             "status": "required", "scope": "part", "participants": ["7332-01-002"]}]}},
+    }
+    assert "final_estimate" not in mid_run["estimate_summary"], \
+        "the point of this fixture is that the read-back has NOT happened yet"
+    declared = bre.source_declaration(mid_run)
+    assert declared["source"] == "costed_run"
+    assert declared["operation_column"] == "charged"
+    row = bre.route_sheet(mid_run)[0]
+    assert row["charged"] == "yes"
+    assert "not costed" not in row["what_that_status_means"], \
+        "the sentence that shipped on a costed pack"
+
+
+def test_a_pack_with_no_workbook_rows_is_still_a_pack_read():
+    """The guard on the guard. If any record at all counted as costed, the distinction the
+    whole source declaration exists for would be gone."""
+    pack = {"estimate_summary": {"canonical_route_shadow": {"decisions": [
+        {"decision_id": "d1", "target_id": "X", "operation": "folding", "status": "required"}]}}}
+    assert bre.source_declaration(pack)["source"] == "pack_read"
+    for empty in ({}, {"rows": []}, {"rows": None}):
+        assert bre.source_declaration(dict(pack, workbook_labour=empty))["source"] == "pack_read"
+
+
+# ── nothing is lost between the read and the sheet ────────────────────────────────────
+#
+# "we should retain the data in the required list that is kept in memory. we shouldn't be losing
+#  key data at any point ... we need to retain all the information that is needed start to finish
+#  to eliminate errors."
+
+
+def _merged(second: dict) -> dict:
+    """One line read by the table parser, then read again by another reader."""
+    import file_scan as fs
+    from extractor_patterns import extract_bom_rows
+    table = extract_bom_rows("1 7332-01-002 LEG 2\n", source_page=3)[0]
+    other = dict(table)
+    other.update(second)
+    winner = dict(table)
+    fs._merge_bom_rows(winner, other)
+    return winner
+
+
+def test_every_reading_survives_the_merge_whole():
+    """Not the winner plus a note. The generic record merge keeps the winner's value and turns
+    the loser's into prose, so a row read twice came out looking read once and a contradicted
+    quantity survived only as a sentence nothing could act on."""
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    readings = row["readings"]
+    assert len(readings) == 2
+    assert {r["source"] for r in readings} == {"bom_table", "vision"}
+    assert sorted(r["quantity"] for r in readings) == [2, 4], "both values are still there"
+    assert {r["source_page"] for r in readings} == {3, 7}
+
+
+def test_the_arbitrated_value_still_stands_on_the_row():
+    """Precedence is unchanged — every existing consumer reads the row, not the readings. The
+    readings are additional evidence, not a replacement for the decision."""
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    assert row["quantity"] == 2, "the winner's reading is still the row's value"
+    assert row["source"] == "bom_table"
+
+
+def test_a_disagreement_is_reported_reader_by_reader():
+    """The most valuable fact the pipeline produces: if the table read 2 and vision read 4, one
+    is wrong and an estimator settles it in seconds FROM THE DRAWING — but only if told."""
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    assert "quantity" in said["readers_disagree_on"]
+    assert "bom_table read '2'" in said["readers_disagree_on"]
+    assert "vision read '4'" in said["readers_disagree_on"]
+    assert said["times_read"] == 2
+
+
+def test_agreement_says_nothing():
+    """A column that speaks on every row is one nobody reads."""
+    row = _merged({"source": "vision", "source_page": 7})
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    assert said["readers_disagree_on"] == ""
+    assert said["times_read"] == 2, "still corroborated, just not contested"
+
+
+def test_a_third_reader_joins_the_same_list_rather_than_replacing_it():
+    """Readings accumulate across successive merges — a line on three sheets is three readings,
+    not the last two."""
+    import file_scan as fs
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    fs._merge_bom_rows(row, {"part_number": "7332-01-002", "description": "LEG",
+                             "quantity": 2, "source": "solidworks_api", "source_page": 11})
+    assert len(row["readings"]) == 3
+    assert {r["source"] for r in row["readings"]} == {"bom_table", "vision", "solidworks_api"}
+
+
+def test_a_reading_never_contains_the_merge_s_own_bookkeeping():
+    """Otherwise one reader's audit trail is reported as another's, and readings nest inside
+    readings the next time the row is merged."""
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    for reading in row["readings"]:
+        for own in ("readings", "also_read_by", "also_on_pages", "merge_notes"):
+            assert own not in reading
+
+
+# ── observations per FACT, with rank, through the merge ───────────────────────────────
+#
+# "Every fact keeps a list of observations: {value, source, page/file, rank}. Arbitration picks
+#  one value for costing. The extract prints the winner AND what it beat. Nothing is discarded
+#  because it lost."
+
+
+def test_the_two_readers_that_produce_bom_rows_have_a_rank_at_all():
+    """THE GAP THIS FOUND. source_precedence is well developed and neither bom_table nor vision
+    was in it — rank() returned 0 for both, below `inference` at 20. So the arbiter that decides
+    which reading of a part wins could not rank the rows it was merging, and any BOM reading
+    lost to anything, including a category default."""
+    from source_precedence import rank
+    assert rank("bom_table") > rank("inference")
+    assert rank("bom_table") >= rank("bom_tree"), \
+        "a parts table the drawing office typed beats a tree the engine built"
+    assert rank("vision") == rank("llm_extract"), \
+        "a model transcribing an image is a machine transcription, which already has a rank"
+    assert rank("vision") < rank("bom_table"), \
+        "the image read must never silently displace the deterministic read of the same table"
+
+
+def test_every_observation_of_a_fact_survives_with_its_rank():
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    facts = bre.fact_observations(row)
+    quantities = facts["quantity"]
+    assert {o["value"] for o in quantities} == {2, 4}
+    # `file` as well as `page`: a pack is twenty-odd drawings and "page 3" is page 3 of which
+    # one? An observation that cannot name its file cannot be checked against the pack, which
+    # is the only check that settles a disagreement.
+    assert all(set(o) == {"value", "source", "page", "file", "rank"} for o in quantities)
+    assert quantities[0]["rank"] >= quantities[1]["rank"], "best first"
+
+
+def test_the_title_block_joins_the_row_as_its_own_observation_not_a_fake_column():
+    """The SDI parts table has no material column; inventing one would be a lie. The title
+    block is a SEPARATE observation of the same fact, at its own rank, joined to the row by the
+    page stamp — which is only possible because the row now carries its page."""
+    row = _merged({"source": "vision", "source_page": 7})
+    summary = {"document_analysis": {"bom_rows": [row]},
+               "pages": [{"page_number": 3, "page_analysis": {"title_block":
+                          {"materials": ["MILD STEEL"], "thicknesses_mm": ["1.2"]}}}]}
+    materials = bre.fact_observations(row, summary)["material_text"]
+    assert any(o["source"] == "title_block" and o["page"] == 3 for o in materials)
+
+
+def test_the_winner_and_what_it_beat_are_both_printed():
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    beat = said["what_the_winner_beat"]
+    assert "costing 2" in beat and "bom_table" in beat
+    assert "vision p7 said 4" in beat
+    assert "rank" in beat, "the rank it was judged on, or the decision is unauditable"
+
+
+def test_agreement_is_not_reported_as_a_contest():
+    row = _merged({"source": "vision", "source_page": 7})
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    assert said["what_the_winner_beat"] == ""
+
+
+def test_gauge_ties_go_to_the_dxf_because_the_cut_file_is_the_issued_flat():
+    """THE ONE I GOT WRONG, AND IT WOULD HAVE CONTRADICTED THE SHEET IT SITS ON.
+
+    SOURCE_TIEBREAK says that where a DXF filename and a title block disagree, "the printed
+    drawing is the one that was issued". That is written for a filename against a DIMENSION ON
+    THAT PART'S OWN SHEET. Applied to gauge it inverts 7332-01: its details are cut at 2.5
+    (003, 004), 5 (001), 1.5 (005), 0.9 (008) and 2 (007), and every one of those figures is the
+    DXF name. The 1.2 is a GA/title note repeated across five detail sheets.
+
+    The engine's COSTING path already had this right — drawing_job_merge applies the filename
+    gauge as the authority, which is why the accepted sheet cut 2.5. Only the extract's reported
+    precedence disagreed, so this would have printed "costing 1.2" on the same workbook whose
+    sheet cut 2.5. A provenance column that contradicts the sheet it sits in is worse than none.
+    """
+    import file_scan as fs
+    from extractor_patterns import extract_bom_rows
+    row = extract_bom_rows("3 7332-01-003 STRAP 2\n", source_page=5)[0]
+    row.update({"source": "dxf_filename", "thickness_mm": 2.5,
+                "source_pdf": "7332-01-003_2.5mm MS_revK.DXF"})
+    fs._merge_bom_rows(row, dict(row, source="bom_table", source_page=5, thickness_mm=None))
+    summary = {"document_analysis": {"bom_rows": [row]},
+               "pages": [{"page_number": 5, "page_analysis": {"title_block":
+                          {"thicknesses_mm": ["1.2"]}}}]}
+    said = bre.bom_sheet(summary)[0]
+    assert said["thickness_mm"] == 2.5, "the gauge the laser actually runs"
+    beat = said["what_the_winner_beat"]
+    assert "costing 2.5 from dxf_filename" in beat
+    assert "title_block p5 said 1.2" in beat, "and the title block is still stored and shown"
+
+
+def test_the_general_tiebreak_is_untouched_for_everything_else():
+    """The per-field order overrides ONE fact. A blanket reversal would be the opposite
+    overreach — for a dimension, the printed sheet really is the one that was issued."""
+    from source_precedence import tiebreak_priority
+    assert tiebreak_priority("title_block") > tiebreak_priority("dxf_filename"), \
+        "unchanged where no field is named"
+    assert tiebreak_priority("dxf_filename", "thickness_mm") > \
+        tiebreak_priority("title_block", "thickness_mm"), "reversed for gauge only"
+    for alias in ("normalized_thickness_mm", "gauge_mm"):
+        assert tiebreak_priority("dxf_filename", alias) > tiebreak_priority("title_block", alias), \
+            f"the same fact under {alias} must not disagree with itself"
+
+
+def test_a_measured_flat_still_outranks_the_name_on_the_file():
+    """Within the DXF sources the order is measured first, then the file, then the name on it."""
+    from source_precedence import tiebreak_priority as tb
+    assert tb("dxf_flat_pattern", "thickness_mm") > tb("dxf", "thickness_mm") > \
+        tb("dxf_filename", "thickness_mm")
+
+
+def test_an_observation_names_the_drawing_not_only_the_page():
+    row = _merged({"source": "vision", "source_page": 7, "source_pdf": "7332-01-002_revC.pdf",
+                   "quantity": 4})
+    row["source_pdf"] = "7332-01-GA_revK.pdf"
+    facts = bre.fact_observations(row)
+    files = {o["file"] for o in facts["quantity"]}
+    assert "7332-01-002_revC.pdf" in files
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    assert said["drawing_file"] == "7332-01-GA_revK.pdf"
+    assert "in 7332-01-002_revC.pdf p7" in said["what_the_winner_beat"]
+
+
+def test_the_unit_a_line_belongs_to_is_a_contested_fact():
+    """Which unit a line belongs to decides whether a 2-off is two or twelve. Two drawings
+    disagreeing about a part's parent is a structural error that changes the whole job."""
+    import file_scan as fs
+    from extractor_patterns import extract_bom_rows
+    # Both parents must be READINGS. A value written onto the row after the merge is
+    # arbitration output, not an observation, and correctly has no evidence behind it.
+    table = extract_bom_rows("1 7332-01-002 LEG 2\n", source_page=3)[0]
+    table["bom_parent"] = "7332-01-GA"
+    row = dict(table)
+    fs._merge_bom_rows(row, dict(table, source="vision", source_page=7,
+                                 bom_parent="7332-01-101"))
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    assert said["belongs_to"] == "7332-01-GA"
+    assert "bom parent" in said["what_the_winner_beat"]
+    assert "7332-01-101" in said["what_the_winner_beat"], "the losing parent is still on the sheet"
+
+
+def test_the_model_before_dxf_order_is_held_on_purpose_not_by_accident():
+    """AN OPEN QUESTION, PINNED SO IT CANNOT DRIFT EITHER WAY SILENTLY.
+
+    The table is model-first: solidworks_api 90, dxf 80. The review position is the reverse —
+    "DXF reigns supreme, then the .sld files, then the pdf files" — on the reasoning that the
+    DXF is the file the laser actually runs. Both are defensible: the model is the designer's
+    intent and the structure the shop builds from; the flat is what was issued to the machine.
+
+    Not flipped, for scope rather than doubt. These two ranks arbitrate every geometric fact on
+    every job, so reversing them is a costing change across the whole history and needs a parity
+    run against accepted sheets. This test exists so that flip, when it comes, is deliberate —
+    and so the reasoning is not left in a chat log.
+    """
+    from source_precedence import rank
+    assert rank("solidworks_api") > rank("dxf"), "model-first, as decided on 11 Sep 2026"
+    assert rank("solidworks_flat_pattern") > rank("dxf_flat_pattern")
+    text = (ROOT / "src" / "source_precedence.py").read_text(encoding="utf-8")
+    assert "AN OPEN QUESTION" in text and "DXF reigns supreme" in text, \
+        "the alternative position is recorded beside the ranks, not only in a conversation"
+
+
+def test_gauge_is_settled_separately_and_does_not_depend_on_that_question():
+    """The one geometric fact that IS decided: the DXF beats the title block for thickness,
+    whichever way the model-vs-DXF question later goes."""
+    from source_precedence import tiebreak_priority
+    assert tiebreak_priority("dxf_filename", "thickness_mm") > \
+        tiebreak_priority("title_block", "thickness_mm")
+
+
+def test_the_extract_reads_the_names_the_winning_producer_actually_uses():
+    """FOUND ON THE 15:49 WORKBOOK, and it is the canonical_route mistake again.
+
+    I stamped source/source_page onto extract_bom_rows. file_scan then runs the DUAL-PATH BOM
+    reader (bom_pipeline) and REPLACES document_analysis.bom_rows wholesale — it is, in that
+    module's own words, "the authoritative source of the bom_rows that build_document_writeup
+    consumes". So the stamped rows never reached the sheet and five columns came back blank on a
+    real pack while the synthetic tests passed.
+
+    The dual-path rows carry the same facts under a `bom_` prefix. Reading those names is the
+    fix; a second stamping pass would have been the wrong one.
+    """
+    # bom_sheet is a DRAWING LABEL, not a page number: merge_boms sets it to
+    # `pg.get("sheet") or label`, and label is a title-block drawing number. The 15:49 workbook
+    # showed exactly that — 7332-01-GA and 7332-01-101 in the drawing column.
+    row = {"part_number": "7332-01-003", "description": "STRAP", "quantity": 2,
+           "source_pdf": "7332-01-101", "bom_parent": "7332-01-101",
+           "bom_source": "deterministic", "bom_sheet": "7332-01-101",
+           "bom_also_on_sheets": ["7332-01-GA"]}
+    summary = {"document_analysis": {"bom_rows": [row]},
+               "pages": [{"page_number": 5, "page_analysis": {"title_block":
+                          {"materials": ["MILD STEEL"], "thicknesses_mm": ["2.5"],
+                           "drawing_numbers": ["7332-01-101"]}}}]}
+    said = bre.bom_sheet(summary)[0]
+    assert said["read_by"] == "deterministic"
+    assert said["read_from_sheet"] == "7332-01-101"
+    assert said["read_from_page"] == "", "a label is not a page number and must not print as one"
+    assert said["also_on_sheets"] == "7332-01-GA"
+    assert said["drawing_file"] == "7332-01-101"
+    assert said["belongs_to"] == "7332-01-101"
+    # and the page stamp is what lets the title block join, so these fill too
+    assert said["material_as_printed"] == "MILD STEEL"
+    assert said["thickness_mm"] == 2.5
+
+
+def test_other_sheets_are_not_reported_as_a_second_reader():
+    """bom_also_on_sheets is other SHEETS that restated the line, not other readers. Calling it
+    corroboration by a second reader would overstate exactly what it proves."""
+    row = {"part_number": "X", "quantity": 1, "bom_source": "deterministic",
+           "bom_sheet": "7332-01-101", "bom_also_on_sheets": ["7332-01-GA", "7332-01-002"]}
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    assert said["also_on_sheets"] == "7332-01-GA, 7332-01-002"
+    assert said["also_read_by"] == "", "one reader read it, on three sheets"
+
+
+def test_the_title_block_is_reachable_by_drawing_number_as_well_as_page():
+    """THE JOIN THAT WOULD HAVE FAILED SILENTLY. A dual-path row records where it was read as a
+    SHEET LABEL, so a title-block index keyed only on page numbers can never be joined to it —
+    material and gauge would have stayed blank for a second run while the code looked correct.
+    Keyed on both, the same title block is reachable by whichever identifier the row carries."""
+    row = {"part_number": "X", "quantity": 1, "bom_source": "deterministic",
+           "bom_sheet": "7332-01-101"}
+    summary = {"document_analysis": {"bom_rows": [row]},
+               "pages": [{"page_number": 5, "page_analysis": {"title_block":
+                          {"materials": ["MILD STEEL"], "thicknesses_mm": ["2.5"],
+                           "drawing_numbers": ["7332-01-101"]}}}]}
+    said = bre.bom_sheet(summary)[0]
+    assert said["material_as_printed"] == "MILD STEEL"
+    assert said["thickness_mm"] == 2.5
+    assert "sheet 7332-01-101" in said["material_read_from"], \
+        "and it says SHEET, not page — the two are different claims"
+
+
+def test_a_sheet_label_is_not_reported_as_a_missing_page():
+    """The blank-column notice must not fire on a normal dual-path job. A row that knows its
+    sheet but not its page number has recorded where it was read."""
+    row = {"part_number": "X", "quantity": 1, "description": "STRAP",
+           "bom_source": "deterministic", "bom_sheet": "7332-01-101"}
+    missing = bre.bom_columns_not_recorded({"document_analysis": {"bom_rows": [row]}})
+    assert "read_from_page" not in missing
+    assert "read_by" not in missing
+
+
+# ── the real dual-path row, from the 16:36 workbook ───────────────────────────────────
+
+
+def _real_row(**over) -> dict:
+    """A row exactly as the 16:36 run wrote it. Every field here was read off that workbook,
+    not inferred from source."""
+    row = {"part_number": "7332-01-101", "description": "FRAME WELDMENT", "quantity": 1,
+           "source_pdf": "7332-01-GA", "bom_parent": "7332-01-GA", "bom_source": "BOTH",
+           "bom_sheet": "7332-01-GA A3 Signage Stand_revK.pdf#0"}
+    row.update(over)
+    return row
+
+
+def test_BOTH_is_the_strongest_signal_in_the_bom_not_an_unknown_reader():
+    """The 16:36 sheet said "reader recorded as 'BOTH'" — reported as an unrecognised source
+    when it is the best outcome the pipeline produces. merge_boms sets it where the deterministic
+    parser AND the vision model both produced the line, with confidence HIGH."""
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [_real_row()]}})[0]
+    assert said["read_by"] == "BOTH"
+    assert "reader recorded as" not in said["what_that_reader_is"]
+    assert "BOTH readers produced this line independently" in said["what_that_reader_is"]
+    assert "strongest corroboration" in said["what_that_reader_is"]
+
+
+def test_a_row_only_vision_found_is_not_reported_as_corroborated():
+    said = bre.bom_sheet({"document_analysis": {
+        "bom_rows": [_real_row(bom_source="B_RECOVERED")]}})[0]
+    assert "VISION model found this line and the deterministic parser did not" \
+        in said["what_that_reader_is"]
+    assert "no second reader has confirmed" in said["what_that_reader_is"]
+
+
+def test_the_page_is_split_out_of_the_sheet_id_and_is_one_based():
+    """merge_boms builds the sheet id as f"{pdf_name}#{page_index}" with a ZERO-BASED index.
+    Read whole it is neither a page nor a file and joins to nothing. The off-by-one matters:
+    a row reported on "page 0" sends somebody to a page that does not exist."""
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [_real_row()]}})[0]
+    assert said["read_from_page"] == "1", "#0 is the first page"
+    assert said["drawing_file"] == "7332-01-GA A3 Signage Stand_revK.pdf"
+    assert said["grouped_under"] == "7332-01-GA", \
+        "source_pdf on a dual-path row is the parent LABEL used to group the tree, not the file"
+
+
+def test_splitting_the_sheet_id_is_what_lets_the_title_block_join():
+    """Material and gauge were blank on three consecutive real runs for this one reason."""
+    summary = {"document_analysis": {"bom_rows": [_real_row()]},
+               "pages": [{"page_number": 1, "page_analysis": {"title_block":
+                          {"materials": ["MILD STEEL"], "thicknesses_mm": ["2.5"]}}}]}
+    said = bre.bom_sheet(summary)[0]
+    assert said["material_as_printed"] == "MILD STEEL"
+    assert said["thickness_mm"] == 2.5
+    assert "page 1" in said["material_read_from"]
+
+
+def test_a_sheet_id_that_is_not_file_hash_page_does_not_invent_a_page():
+    """Guessing a page from something that is not one would be worse than leaving it blank."""
+    said = bre.bom_sheet({"document_analysis": {
+        "bom_rows": [_real_row(bom_sheet="7332-01-101")]}})[0]
+    assert said["read_from_page"] == ""
+    assert said["read_from_sheet"] == "7332-01-101"

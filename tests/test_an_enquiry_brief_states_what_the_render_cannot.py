@@ -1,0 +1,234 @@
+"""The enquiry brief: stated facts for an LLM-only read of a render (D-360).
+
+Dave Wright, 30 Sep 2026, on the M&S clothes bin: "350off … Plywood construction with print,
+or mild steel powder coated with print … 600 x 600 x 1200mm bump bin with lid with 1800mm back
+panel." The render alone had been read as a 1,750 mm carcass of 18 mm MFMDF. Nothing may be
+written into the code for one job, so the brief is an input: typed on the portal, filed with the
+pack, put to the model as facts that outrank the picture, and stamped on every figure it gives.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+os.environ.setdefault("SDI_OFFLINE", "1")
+
+import concept_scan as cs  # noqa: E402
+import source_precedence as sp  # noqa: E402
+
+BRIEF = ("600 x 600 x 1200mm bump bin with lid with 1800mm back panel. Plywood construction "
+         "with print, or mild steel powder coated with print. 350 off.")
+
+
+def test_the_brief_is_put_to_the_model_only_when_there_is_one(monkeypatch):
+    seen = {}
+
+    class _Resp:
+        choices = [type("C", (), {"message": type("M", (), {"content": "{}"})()})()]
+
+    class _Client:
+        def __init__(self, **kw):
+            self.chat = type("Ch", (), {"completions": self})()
+
+        def create(self, **kw):
+            seen["text"] = kw["messages"][0]["content"][0]["text"]
+            return _Resp()
+
+    import types
+    monkeypatch.setenv("SDI_OFFLINE", "0")
+    monkeypatch.setenv("XAI_API_KEY", "x")
+    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_Client))
+    cs._call_vision_llm([b"png"], "m", BRIEF)
+    assert "ENQUIRY BRIEF" in seen["text"] and "600 x 600 x 1200mm" in seen["text"]
+    assert "cost ONLY the FIRST one" in seen["text"]
+    cs._call_vision_llm([b"png"], "m", "")
+    assert "ENQUIRY BRIEF" not in seen["text"]
+
+
+def test_a_brief_changes_the_cache_key_and_no_brief_keeps_the_old_one():
+    k0 = cs._cache_key([b"png"], "m")
+    assert cs._cache_key([b"png"], "m", "") == k0
+    k1 = cs._cache_key([b"png"], "m", BRIEF)
+    assert k1 != k0 and cs._cache_key([b"png"], "m", BRIEF + " steel") != k1
+
+
+def test_the_brief_outranks_a_sighting_and_yields_to_a_drawing():
+    r = sp.SOURCE_RANK if hasattr(sp, "SOURCE_RANK") else None
+    rank = (r or {}).get
+    get = rank if r else (lambda k: sp.rank_of(k))
+    assert get("enquiry_brief") > get("vision_concept")
+    assert get("enquiry_brief") < get("bom_tree")
+    assert "enquiry brief" in sp.SOURCE_DISPLAY_NAME["enquiry_brief"]
+
+
+def _answer():
+    return {"product": {"name": "bump bin", "assumed_overall_mm":
+                        {"height": 1200, "width": 600, "depth": 600}},
+            "parts": [
+                {"name": "SIDE PANEL", "kind": "fabricated", "material_guess": "PLYWOOD",
+                 "assumed_blank_mm": {"length": 1200, "width": 600, "thickness": 18},
+                 "quantity": 2, "quantity_basis": "from the brief — two sides",
+                 "operations": ["saw"], "why_size": "from the brief: 600 x 600 x 1200mm",
+                 "from_brief": ["size", "material", "quantity"]},
+                {"name": "CASTOR", "kind": "bought_in", "quantity": 4,
+                 "operations": [], "from_brief": []}],
+            "options_not_costed": ["mild steel powder coated with print"]}
+
+
+def test_brief_figures_are_stamped_as_the_brief_and_sighted_ones_are_not():
+    parts = cs.parts_from_concept(_answer(), "M&S bin")
+    side, castor = parts[0], parts[1]
+    src = lambda p, f: sp.source_of(p, f) if hasattr(sp, "source_of") else None  # noqa: E731
+    assert src(side, "blank_length_mm") == "enquiry_brief"
+    assert src(side, "normalized_material") == "enquiry_brief"
+    assert src(side, "quantity") == "enquiry_brief"
+    assert src(castor, "quantity") == "vision_concept"
+    flags = " ".join(side["review_flags"])
+    assert "size from the enquiry brief" in flags and "size assumed from the render" not in flags
+
+
+def test_the_options_the_brief_did_not_cost_are_named():
+    assert cs.concept_note(_answer())["options_not_costed"] == [
+        "mild steel powder coated with print"]
+
+
+def test_the_brief_is_read_from_the_job_folder(tmp_path):
+    assert cs.read_brief(tmp_path) == ""
+    (tmp_path / cs.BRIEF_FILENAME).write_text("  " + BRIEF + "\n", encoding="utf-8")
+    assert cs.read_brief(tmp_path) == BRIEF
+    assert cs.read_brief(None) == ""
+
+
+@pytest.fixture()
+def routes():
+    sys.path.insert(0, str(ROOT / "sdi-intelligence-backend"))
+    import estimate_routes as m
+    return m
+
+
+def test_the_service_files_this_runs_brief_and_removes_a_stale_one(routes, tmp_path):
+    run = routes.Run(run_id="t", client="M&S", drawing_number="bdab4adf", units=350,
+                     job_folder=str(tmp_path), output_path="o", queued_at=0.0)
+    routes._file_enquiry_brief(run, tmp_path, BRIEF)
+    assert (tmp_path / "ENQUIRY_BRIEF.txt").read_text(encoding="utf-8").strip() == BRIEF
+    routes._file_enquiry_brief(run, tmp_path, "   ")
+    assert not (tmp_path / "ENQUIRY_BRIEF.txt").exists()
+    assert "EstimateRequest" in dir(routes)
+    assert "enquiry_brief" in routes.EstimateRequest.model_fields \
+        if hasattr(routes.EstimateRequest, "model_fields") \
+        else "enquiry_brief" in routes.EstimateRequest.__fields__
+
+
+def test_the_page_sends_the_brief_with_an_llm_read_only():
+    page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text(
+        encoding="utf-8")
+    assert 'id="enquiryBrief"' in page
+    assert page.count('enquiry_brief: ($("enquiryBrief").value') == 1
+    i = page.index('enquiry_brief: ($("enquiryBrief").value')
+    assert 'method: "llm"' in page[i - 200:i]
+
+
+# ── D-361 ──────────────────────────────────────────────────────────────────────────────
+
+def test_a_render_remembers_the_folder_it_was_staged_in(tmp_path, monkeypatch):
+    """13:07: the brief sat beside the PNG and the scan read a copy in the output tree."""
+    pymupdf = pytest.importorskip("pymupdf")
+    import config
+    import file_scan as fs
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "out")
+    job = tmp_path / "M&S" / "bdab4adf"
+    job.mkdir(parents=True)
+    png = job / "bin.png"
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 4, 4), 0)
+    pix.save(str(png))
+    (job / cs.BRIEF_FILENAME).write_text(BRIEF, encoding="utf-8")
+    pdf = fs.image_as_pdf(png)
+    assert pdf.parent != job
+    assert fs._render_source_dir(pdf) == str(job.resolve())
+    text, where = cs.find_brief([None, fs._render_source_dir(pdf)])
+    assert text == BRIEF and where.endswith(cs.BRIEF_FILENAME)
+
+
+def test_the_finished_book_is_not_resaved_after_excel_calculated_it():
+    src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    i = src.index('summary["invariants"] = _inv')
+    assert "_rewrite_estimate_banner(" not in src[i:i + 900]
+
+
+# ── D-362 ──────────────────────────────────────────────────────────────────────────────
+
+def test_the_service_says_what_it_did_with_the_brief(routes, tmp_path):
+    run = routes.Run(run_id="t", client="M&S", drawing_number="bdab4adf", units=350,
+                     job_folder=str(tmp_path), output_path="o", queued_at=0.0)
+    assert routes._file_enquiry_brief(run, tmp_path, "") == "none"
+    assert routes._file_enquiry_brief(run, tmp_path, BRIEF) == "filed"
+    assert routes._file_enquiry_brief(run, tmp_path, None) == "removed"
+    src = (ROOT / "sdi-intelligence-backend" / "estimate_routes.py").read_text(encoding="utf-8")
+    # The start() response must report what became of the brief; since D-464 the
+    # client-document acknowledgement rides in the same reply, so the line no longer
+    # closes the dict.
+    assert '"enquiry_brief": _brief_status' in src
+    assert '"concept_document": bool(req.concept_document)}' in src
+
+
+def test_the_page_stops_a_run_whose_brief_was_not_filed():
+    page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text(
+        encoding="utf-8")
+    i = page.index('if(_typed && started.enquiry_brief !== "filed"){')
+    block = page[i:i + 3000]
+    assert "/abandon" in block and "X-SDI-Commit" in block
+
+
+def test_the_stop_line_names_the_machine_and_port_to_restart():
+    """D-363: "restart the service" was run twice on the wrong machine."""
+    page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text(
+        encoding="utf-8")
+    i = page.index('if(_typed && started.enquiry_brief !== "filed"){')
+    block = page[i:i + 2400]
+    assert "location.hostname" in block and "location.port" in block
+    assert "restart-service.ps1 -Port " in block
+
+
+def test_a_brief_saved_with_a_byte_order_mark_reads_clean(tmp_path):
+    (tmp_path / cs.BRIEF_FILENAME).write_bytes("﻿".encode("utf-8") + BRIEF.encode("utf-8"))
+    assert cs.read_brief(tmp_path) == BRIEF
+
+
+# ── D-473 ──────────────────────────────────────────────────────────────────────────────
+
+def test_an_empty_brief_box_is_asked_out_loud_before_the_run():
+    """D-473: the 11 Oct K-Wellness 20:07 run went out with the brief box empty after a page
+    reload — the service removed the filed brief (D-360, correctly) and the model priced the
+    pack alone, borrowing the excluded reference product's height, with one quiet log line
+    as the only trace. The page asks BEFORE the run starts; an empty box is a decision."""
+    page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text(
+        encoding="utf-8")
+    assert "Run without a brief?" in page
+    i = page.index("Run without a brief?")
+    # In the LLM run's own click handler, before the body that sends the brief.
+    assert page.index('$("bRunLLM").onclick') < i
+    assert i < page.index('enquiry_brief: ($("enquiryBrief").value')
+    assert "confirm(" in page[i - 600:i]
+    assert "removes the brief an earlier run filed" in page[i - 600:i + 200]
+
+
+def test_a_read_with_no_brief_says_so_on_the_book():
+    """The saved record already carried brief_used=false; now the book's own confirm list
+    says it too, on every surface, instead of only a log line nobody re-reads."""
+    flag = cs.missing_brief_flag()
+    assert "NO ENQUIRY BRIEF" in flag
+    assert "Enquiry brief box" in flag
+    assert "removes the brief an earlier run filed" in flag
+    assert "client document" not in flag
+    assert "client document" in cs.missing_brief_flag(True)
+    # Wired where the brief is resolved: the absent case joins review_flags beside the
+    # present case's ENQUIRY BRIEF USED flag.
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    i = src.index("missing_brief_flag")
+    assert 'review_flags' in src[i:i + 300]
+    assert "ENQUIRY BRIEF USED" in src[i - 1500:i]
