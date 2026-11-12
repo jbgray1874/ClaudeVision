@@ -287,10 +287,78 @@ def sweep(cfg: Dict[str, Any], ledger: Dict[str, Any], now: Optional[float] = No
                                "estimated": bool(p.get("job") and p["job"] in est),
                                "listing": listing(Path(p["folder"]))})
     candidates.sort(key=lambda c: c["flagged_at"], reverse=True)
-    return {"schema": SCHEMA, "swept_at": _iso(now), "root": str(cfg["root"]), "every_minutes": cfg["minutes"],
+    jobs = candidate_jobs(candidates)
+    return {"schema": SCHEMA, "jobs": jobs, "swept_at": _iso(now), "root": str(cfg["root"]), "every_minutes": cfg["minutes"],
             "next_at": _iso(now + cfg["minutes"] * 60), "baseline": first, "clients": len(clients),
             "packs": len(found), "candidates": candidates, "errors": errors,
             "baseline_at": _iso(float(ledger["baseline_at"])) if ledger.get("baseline_at") else None}
+
+
+# What a drawing is, for counting. A PDF may be a drawing or a brief; it is counted apart from
+# the CAD files, which can only be drawings, and from everything else (photos, documents).
+_CAD_EXT = DRAWING_EXT - {".pdf"}
+STAGE_AWAITING = "new job folder: awaiting drawings"
+STAGE_DETECTED = "drawings detected: pack not yet checked"
+
+
+def candidate_jobs(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """ONE LINE PER CLIENT AND JOB (JG and the reviewer, 12 Nov 2026: "is this an accurate
+    representation of new design drawing packs?" It was not: job 12781 appeared nine times, once
+    for each of its standard folders, and empty folders read as packs).
+
+    A job's flagged folders are gathered under it. What is counted is said apart: PDFs, CAD
+    files, and other files (photos, documents). The stage is what the files show and no more:
+    a job folder with no PDF or CAD file is awaiting drawings; one with some has drawings
+    detected and its pack NOT YET CHECKED. Nothing here says a pack is complete or ready; that
+    is the pack resolver's to say. When the sweep first saw the folder is kept apart from the
+    date of its newest drawing file. A folder with no job number stays a line of its own."""
+    groups: Dict[tuple, List[Dict[str, Any]]] = {}
+    for c in candidates:
+        key = (str(c.get("client") or ""), str(c.get("job") or "")) if c.get("job") \
+            else (str(c.get("client") or ""), "", str(c.get("folder") or ""))
+        groups.setdefault(key, []).append(c)
+    out: List[Dict[str, Any]] = []
+    for key, rows in groups.items():
+        pdfs = cad = other = 0
+        newest = ""
+        more = 0
+        for c in rows:
+            lst = c.get("listing") or {}
+            more += int(lst.get("more") or 0)
+            for f in lst.get("files") or []:
+                ext = Path(str(f.get("path") or "")).suffix.lower()
+                if ext == ".pdf":
+                    pdfs += 1
+                elif ext in _CAD_EXT:
+                    cad += 1
+                else:
+                    other += 1
+                if ext in DRAWING_EXT and str(f.get("modified") or "") > newest:
+                    newest = str(f.get("modified"))
+        job = rows[0].get("job") or ""
+        # the job's own folder names it ("12790 - Acrylic Z-bends"); its standard sub-folders
+        # ("12781-Technical") do not
+        titled = sorted((c for c in rows if re.match(r"\s*\d{3,}\s+-\s+\S", str(c.get("name") or ""))),
+                        key=lambda c: len(str(c.get("name"))))
+        main = (titled or sorted(rows, key=lambda c: -int(c.get("files") or 0)))[0]
+        out.append({
+            "client": rows[0].get("client"), "job": job,
+            "name": str(main.get("name")) if titled or not job else f"{job} ({len(rows)} folder(s))",
+            "folder": main.get("folder"),
+            "folders": [{"folder": c.get("folder"), "name": c.get("name"), "files": c.get("files")} for c in
+                        sorted(rows, key=lambda c: str(c.get("name")))],
+            "pdfs": pdfs, "cad": cad, "other": other, "not_listed": more,
+            "stage": STAGE_DETECTED if (pdfs or cad) else STAGE_AWAITING,
+            "first_detected": min(str(c.get("first_seen") or c.get("flagged_at") or "") for c in rows),
+            "flagged_at": max(str(c.get("flagged_at") or "") for c in rows),
+            "newest_drawing": newest,
+            "estimate": "an AI estimate is filed" if any(c.get("estimated") for c in rows)
+                        else "no matching AI estimate found",
+        })
+    out.sort(key=lambda j: (j["stage"] != STAGE_DETECTED, j["flagged_at"]), reverse=False)
+    out.sort(key=lambda j: j["flagged_at"], reverse=True)
+    out.sort(key=lambda j: j["stage"] != STAGE_DETECTED)
+    return out
 
 
 def save_ledger(path: Path, ledger: Dict[str, Any]) -> None:

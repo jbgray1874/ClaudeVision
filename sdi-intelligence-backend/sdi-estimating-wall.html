@@ -537,8 +537,8 @@
   <section class="parity" id="designSweep">
     <div class="sechead">
       <div>
-        <h2>NEW DRAWING PACKS <b>//</b> CANDIDATE JOBS FOR DESIGN</h2>
-        <div class="sub" id="dsSub">New or changed pack folders under the design share's client folders</div>
+        <h2>NEW JOB FOLDERS <b>//</b> CANDIDATES TO DISCUSS WITH DESIGN</h2>
+        <div class="sub" id="dsSub">Job folders first seen on the design share, one line per job</div>
       </div>
       <div class="acts"><span class="meta" id="dsRead">waiting for the first sweep…</span></div>
     </div>
@@ -896,9 +896,36 @@ function renderDesignSweep(d){
   const ix = d.index || {};
   const idx = ix.error ? ` · drawing index NOT refreshed: ${ix.error}`
             : ix.folders ? ` · drawing index ${ix.folders} folders, ${ix.drawings} drawings, built ${(ix.built_at || "").slice(11, 16)}` : "";
-  setText("dsRead", `swept ${fmtStamp((d.swept_at || "").replace("T", " ").replace("Z", ""))} · ${d.clients || 0} client folder(s), ${d.packs || 0} pack(s) · next ${(d.next_at || "").slice(11, 16)}${idx}${late}`);
+  // A NEXT SWEEP TIME THAT HAS PASSED IS SAID (12 Nov 2026): the panel read "next 08:26" at 10:28.
+  const due = d.next_at ? new Date(String(d.next_at).replace("Z", "")) : null;
+  const overdue = due && !isNaN(due) && (Date.now() - due.getTime()) > 10 * 60000;
+  const next = overdue ? `next sweep was due ${(d.next_at || "").slice(11, 16)}: OVERDUE` : `next ${(d.next_at || "").slice(11, 16)}`;
+  setText("dsRead", `swept ${fmtStamp((d.swept_at || "").replace("T", " ").replace("Z", ""))} · ${d.clients || 0} client folder(s), ${d.packs || 0} folder(s) looked at · ${next}${idx}${late}`);
   setText("dsSub", d.baseline ? "First sweep: the packs already there are the baseline; new ones are flagged from the next sweep"
                               : `Root ${d.root || ""} · candidates kept until dismissed or two weeks old`);
+  // ONE LINE PER CLIENT AND JOB, AND WHAT THE FILES SHOW, NO MORE (12 Nov 2026): job 12781 was
+  // listed nine times, once per standard folder, and an empty folder read as a pack.
+  const jobs = d.jobs || null;
+  if(jobs){
+    if(!jobs.length){ $("dsList").innerHTML = `<div class="empty">No new job folder since the last look.${(d.errors || []).length ? " Errors: " + esc(d.errors.join("; ")) : ""}</div>`; return; }
+    const day = t => fmtStamp(String(t || "").replace("T", " ").replace("Z", ""));
+    $("dsList").innerHTML = `<div class="sub" style="margin:0 0 8px">A discussion list for Design, not a list of packs ready to estimate. "Not yet checked" means no one has read the GA or followed its parts.</div>`
+      + `<table><tr><th>First detected</th><th>Client</th><th>Job</th><th>Folder(s)</th><th class="n">PDF</th><th class="n">CAD</th><th class="n">Other</th><th>Newest drawing file</th><th>Stage</th><th>AI estimate</th><th></th></tr>`
+      + jobs.map((j, i) => `<tr><td class="t">${day(j.first_detected)}</td><td class="c">${esc(j.client)}</td><td>${esc(j.job || "")}</td>
+          <td class="d" title="${esc((j.folders || []).map(f => f.folder).join("\n"))}">${esc(j.name)}${(j.folders || []).length > 1 ? ` <span style="color:var(--ink-3)">· ${(j.folders || []).length} folders</span>` : ""}</td>
+          <td class="n">${j.pdfs}</td><td class="n">${j.cad}</td><td class="n">${j.other}${j.not_listed ? "+" : ""}</td>
+          <td class="t">${j.newest_drawing ? day(j.newest_drawing) : "-"}</td>
+          <td>${esc(j.stage)}</td><td>${esc(j.estimate)}</td>
+          <td><button class="fsbtn" type="button" data-dsjob="${i}">dismiss</button></td></tr>`).join("") + "</table>";
+    document.querySelectorAll("[data-dsjob]").forEach(b => b.onclick = async () => {
+      const j = jobs[Number(b.dataset.dsjob)];
+      try { let last = null;
+            for(const f of (j.folders || [])) last = await api("/api/estimate/design-sweep/dismiss", {folder: f.folder});
+            if(last) renderDesignSweep(last); }
+      catch(e){ b.textContent = "could not dismiss"; b.title = e.message; }
+    });
+    return;
+  }
   if(!c.length){ $("dsList").innerHTML = `<div class="empty">No new or changed drawing pack since the last look.${(d.errors || []).length ? " Errors: " + esc(d.errors.join("; ")) : ""}</div>`; return; }
   $("dsList").innerHTML = `<table><tr><th>Flagged</th><th>Client</th><th>Pack folder</th><th>Job</th><th class="n">Files</th><th>Status</th><th>Estimated?</th><th></th></tr>`
     + c.map((r, i) => `<tr><td class="t">${fmtStamp((r.flagged_at || "").replace("T", " ").replace("Z", ""))}</td>

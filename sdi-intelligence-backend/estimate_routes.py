@@ -1149,6 +1149,13 @@ def design_sweep_for_wall() -> Dict[str, Any]:
     rep["candidates"] = [{**{k: v for k, v in c.items() if k != "listing"},
                           "listed": len(((c.get("listing") or {}).get("files")) or [])}
                          for c in (rep.get("candidates") or []) if c.get("folder") not in gone]
+    # ONE LINE PER JOB (12 Nov 2026): a job's line goes when every one of its folders is dismissed.
+    _jobs = []
+    for j in rep.get("jobs") or []:
+        left = [f for f in (j.get("folders") or []) if f.get("folder") not in gone]
+        if left:
+            _jobs.append(dict(j, folders=left))
+    rep["jobs"] = _jobs
     rep["dismissed"] = len(gone)
     rep["received_at"] = data.get("received_at")
     try:
