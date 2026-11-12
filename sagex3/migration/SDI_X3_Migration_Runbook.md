@@ -1711,3 +1711,8 @@ Not data migration, but tracked here so nothing is forgotten. Everything is in J
 Adding PT_PRIMARY needs one column added to the BISX extract, `extract_transactions.sql` / `vw_BISX_V2`. Do it only once (a) is agreed.
 
 **Lesson:** before restructuring on someone's description of a field ("the Access document number"), check what the field actually is in Access. Find the column it comes from and look at a sample.
+
+**12 Nov, which BISY is current.** The BISY in X3 is the Run 4 file, from the 4 Nov evening build:
+`Current_mapped_set_2026-11-04-pm/YA004BISY_guide_MAPPED.xlsx` + `.txt`. It has 2,056 rows and the -2 / -3 suffixes, and it **stays in X3 as it is**. It was re-sent to Ethan on 12 Nov for reference.
+
+Ethan was told to disregard **both** files sent on 11 Nov with the lines: `YA004BISY_guide_MAPPED.xlsx` and `.txt`, now in `superseded_12Nov_BISY_lines_DO_NOT_LOAD`. The next BISY will be built with PT_PRIMARY as the Document once Ethan and Jim agree option (a).
