@@ -4651,6 +4651,11 @@ def _model_measured_zero_bends(part: Dict[str, Any]) -> bool:
     mf = part.get("manufacturing_features") or {}
     if not isinstance(mf, dict):
         return False
+    # A SHAPE THAT CANNOT BE FLAT (12 Nov 2026). A part its description names a Z-bar, an
+    # angle or a channel, on a sheet gauge and a sheet metal, is folded: a zero counted off an
+    # export's empty bend layer does not rule that out. The solid measured flat, above, does.
+    if _formed_sheet_shape(part):
+        return False
     # A ZERO FROM A SHORT EXPORT IS NOT A MEASUREMENT OF THE PART. 12614-01-14M's DXF carried
     # no bends; its sheet prints DOWN 40.6° and DOWN 49.4° and its model has two bend
     # features. Where the drawing's own callouts and the model agree on a non-zero count, a
