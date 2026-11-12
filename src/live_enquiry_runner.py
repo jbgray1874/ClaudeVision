@@ -1144,6 +1144,7 @@ def request_body(d: Decision, email_to: Optional[Sequence[str]] = None) -> Dict[
         "job_folder": str(d.located.folder),
         "files": [str(p) for p in (getattr(d.located, "extra_files", None) or [])],
         "pack_manifest": getattr(d.located, "manifest", None),
+        "job_title": str(getattr(d.row, "description", "") or "").strip() or None,
         "deliverables": True,
         "method": "both",
         "email_to": ", ".join(recipients_for(d, email_to)) or None,

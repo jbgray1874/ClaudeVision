@@ -51,6 +51,21 @@ def _manifest_beside(record: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
+def _drop_off_beside(record: Dict[str, Any]) -> Dict[str, Any]:
+    """What became of this job's review copy in the drop-off folder, as the service noted it
+    beside the staged drawings. Empty when the machine keeps no drop-off."""
+    for folder in (record.get("job_folder"), (record.get("cad_inputs") or {}).get("folder")):
+        if not folder:
+            continue
+        try:
+            p = Path(str(folder)) / "PACK_DROPOFF.json"
+            if p.is_file():
+                return json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+    return {}
+
+
 def gather(record: Dict[str, Any], manifest: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Every input file the run recorded, each with what became of it."""
     manifest = manifest if manifest is not None else _manifest_beside(record)
@@ -138,6 +153,9 @@ def section(record: Dict[str, Any], manifest: Optional[Dict[str, Any]] = None) -
         warn.append("The GA's sheets may be alternative configurations: confirm which before relying on the total.")
     if not g["has_manifest"]:
         warn.append("No pack manifest was saved with this job, so missing references are not known here.")
+    kept = _drop_off_beside(record)
+    if kept and not kept.get("saved"):
+        warn.append(str(kept.get("said") or "The review copy of this pack was NOT saved to the drop-off folder."))
     head = (f"{g['read']} file(s) read" + (f", {g['supporting']} supporting" if g["supporting"] else "")
             + (f", {len(g['not_read'])} NOT READ" if g["not_read"] else "")
             + (f"; pack {g['pack_status']}" if g["pack_status"] else ""))
@@ -152,11 +170,14 @@ def section(record: Dict[str, Any], manifest: Optional[Dict[str, Any]] = None) -
         '<p style="margin:0 0 6px;font-weight:bold;font-size:15px">Drawing pack used for this estimate</p>'
         f'<p style="margin:0 0 8px;color:#5b6b7d;font-size:13px">{e(head)}. These are the files this run '
         'was given and what it did with each, as the run recorded them.</p>'
+        + (f'<p style="margin:0 0 6px;color:#5b6b7d;font-size:13px">{e(str(kept.get("said")))}</p>'
+           if kept and kept.get("saved") else "")
         + "".join(f'<p style="margin:0 0 6px;color:#8a1f11;font-size:13px">{e(w)}</p>' for w in warn)
         + '<table style="border-collapse:collapse"><tr>'
         + "".join(f'<th style="{td};text-align:left">{h}</th>' for h in ("File", "Drawing", "Rev", "Used"))
         + f"</tr>{body}</table></div>")
     text = ("DRAWING PACK USED FOR THIS ESTIMATE\n" + head + "\n"
+            + (f"  {kept.get('said')}\n" if kept and kept.get("saved") else "")
             + "".join(f"  ! {w}\n" for w in warn)
             + "".join(f"  {r['file']}  |  {r['drawing'] or '-'}  |  rev {r['revision'] or '-'}  |  "
                       f"{r['state']}{(' - ' + r['why']) if r['why'] else ''}\n" for r in g["rows"]) + "\n")

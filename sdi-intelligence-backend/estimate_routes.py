@@ -779,6 +779,42 @@ def _same_job_key(a: Any, b: Any) -> bool:
 
 
 # ── request models ───────────────────────────────────────────────────────────
+def _run_log_drop_off(run: "Run", folder: Any, client: str, drawing: str, title: str,
+                      sources: List[str]) -> Dict[str, Any]:
+    """Keep the staged pack in the drop-off folder and say so (pack_dropoff.py). Never raises."""
+    import pack_dropoff
+    result: Dict[str, Any] = {"saved": False, "why": "not attempted"}
+    try:
+        where: Dict[str, str] = {}
+        for src in sources:
+            sp = Path(str(src))
+            try:
+                found = [sp] if sp.is_file() else [x for x in sp.iterdir() if x.is_file()]
+            except OSError:
+                found = []
+            for x in found:
+                where.setdefault(x.name.lower(), str(x))
+        try:
+            if str(_REPO_ROOT / "src") not in sys.path:
+                sys.path.insert(0, str(_REPO_ROOT / "src"))
+            from pack_resolver import revision_from_name as _rev
+        except Exception:                                                # noqa: BLE001
+            _rev = None
+        result = pack_dropoff.save(folder, client, drawing, _REPO_ROOT, run_id=run.run_id,
+                                   title=title, sources=where, revision_of=_rev, safe=safe_segment)
+        line = pack_dropoff.said(result)
+        if line:
+            run.line(("Drop-off  " if result.get("saved") else "") + line)
+        note = Path(str(folder)) / pack_dropoff.RESULT_NOTE
+        if line:
+            note.write_text(json.dumps(dict(result, said=line), indent=1), encoding="utf-8")
+        elif note.exists():
+            note.unlink()
+    except Exception as exc:                                             # noqa: BLE001
+        print(f"[drop-off] {drawing}: {type(exc).__name__}: {exc}", flush=True)
+    return result
+
+
 class EstimateRequest(BaseModel):
     client: str
     drawing_number: str
@@ -797,6 +833,8 @@ class EstimateRequest(BaseModel):
     # as pack_manifest.json so the covering note can name what the pack lacks. Absent for a
     # job nobody resolved a pack for; then no file is left from an earlier run either.
     pack_manifest: Optional[Dict[str, Any]] = None
+    # WHAT THE JOB IS CALLED, for the drop-off folder's name: "<drawing> - <title>".
+    job_title: Optional[str] = None
     output_root: Optional[str] = None
     deliverables: bool = True
     # THE MANUAL ESTIMATE, ATTACHED UP FRONT. Optional, and a path on the share rather than an
@@ -3392,13 +3430,6 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             _pack_manifest.unlink()
     except OSError as exc:
         print(f"[staging] the pack manifest of {drawing} was not filed: {exc}", flush=True)
-    # THE PACK IS ALSO KEPT IN THE DROP-OFF FOLDER, <client>\\<drawing> (JG, 12 Nov 2026). It
-    # copies and never deletes, and it never stops the job (pack_dropoff.py).
-    if not _brief_only:
-        import pack_dropoff
-        _dropped = pack_dropoff.save(folder, client, drawing, _REPO_ROOT, safe=safe_segment)
-        if not _dropped["saved"] and "no drop-off folder" not in _dropped["why"]:
-            print(f"[drop-off] the pack of {drawing} was not kept: {_dropped['why']}", flush=True)
     _document_marker = Path(folder) / "CONCEPT_DOCUMENT.json"
     try:
         if req.concept_document:
@@ -3642,6 +3673,11 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         run.line("FRESH READ: both LLM caches bypassed — every page goes to the model again. "
                  "The answer may differ from the last run on the same pack; that difference "
                  "is the measurement.")
+    # THE PACK IS ALSO KEPT IN THE DROP-OFF FOLDER (JG and the reviewer, 12 Nov 2026): the
+    # exact files just staged, under <client>\\<drawing> - <title>. It never stops the job; what
+    # happened goes in this log and beside the staged drawings, where the note reads it.
+    if not _brief_only:
+        _run_log_drop_off(run, folder, client, drawing, str(req.job_title or ""), _sources)
     run.line(f"Staged    {staged['copied_count']} drawing(s) into {job}"
              + (f" (replaced {staged['replaced_count']} from a previous run)"
                 if staged["replaced_count"] else ""))
