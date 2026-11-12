@@ -1716,3 +1716,18 @@ Adding PT_PRIMARY needs one column added to the BISX extract, `extract_transacti
 `Current_mapped_set_2026-11-04-pm/YA004BISY_guide_MAPPED.xlsx` + `.txt`. It has 2,056 rows and the -2 / -3 suffixes, and it **stays in X3 as it is**. It was re-sent to Ethan on 12 Nov for reference.
 
 Ethan was told to disregard **both** files sent on 11 Nov with the lines: `YA004BISY_guide_MAPPED.xlsx` and `.txt`, now in `superseded_12Nov_BISY_lines_DO_NOT_LOAD`. The next BISY will be built with PT_PRIMARY as the Document once Ethan and Jim agree option (a).
+
+**12 Nov: does the Run 4 BISY need changing? Yes, for the next run, but only once the document number is agreed.**
+- Both of Ethan's points apply to the Run 4 file:
+  - **Document (B) is the PO number**, with -2, -3 suffixes on 422 rows.
+  - **259 rows have B = N** (the supplier ref, because there's no PO).
+  - These can't be fixed by editing the file, because the answer depends on which document number is agreed.
+- **If (a) is agreed (PT_PRIMARY):** both points go away together. Every row has its own Access number, so there are no suffixes and no stand-in references.
+- **The steps, in order:**
+  1. Add PT_PRIMARY to the BISX output of `extract_transactions.sql`, plus the live `migration.vw_BISX_V2` on the server (that view differs from `sql/views_v2.sql` in the repo; check it first).
+  2. James re-runs the extract on the day (rule 1, live data).
+  3. Change `build_bicy_bisy.py`: B = PT_PRIMARY, N = supplier ref, PO number in a comment, no suffixes.
+  4. The read-back checks that B is unique, that no B equals N, and that the totals are unchanged.
+- **Until then:** nothing is re-sent; X3 keeps the Run 4 file.
+- **BICY is not affected.**
+- **If Ethan and Jim choose differently:** (b) supplier ref still needs suffixes where it repeats; (c) loses data as described in 19.12.
