@@ -19,8 +19,9 @@ import hr_managers               # noqa: E402
 
 
 def main() -> int:
-    target = Path(sys.argv[1] if len(sys.argv) > 1 else cfg.HR_MANAGERS_FILE or "")
-    if not str(target) or str(target) == ".":
+    shown = sys.argv[1] if len(sys.argv) > 1 else cfg.HR_MANAGERS_FILE or ""
+    target = Path(cfg.server_path(shown))
+    if not shown:
         print("Say where to write it: HR_MANAGERS_FILE in .env, or a path after the command.")
         return 2
     records = bh.fetch_employees(bh.get_access_token())
@@ -66,7 +67,7 @@ def main() -> int:
     book.save(tmp)
     tmp.replace(target)
     filled = sum(1 for r in rows if r[4])
-    print(f"Wrote {target}: {len(rows)} current staff, {filled} with a manager already, "
+    print(f"Wrote {shown}: {len(rows)} current staff, {filled} with a manager already, "
           f"{len(rows) - filled} to fill in.")
     return 0
 

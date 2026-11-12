@@ -398,3 +398,64 @@ def test_from_outside_only_the_app_part_of_hr_is_reachable():
     for internal in ("/api/hr/blip", "/api/hr/blip/push", "/api/hr/blip/load", "/api/hr/sync",
                      "/api/hr/inventry/check", "/api/files"):
         assert not reachable(internal), internal
+
+
+# ── one person, two names ───────────────────────────────────────────────────
+# 12 November: the morning summary listed three people as missing from
+# InVentry, and the same three, under their short names, as on InVentry but not
+# clocked in - BrightHR's "Robert Lane" is InVentry's "Rob Lane". The update had
+# matched them by email; the roll call compared names only, so each appeared
+# twice, and in a drill one of the two entries would have stayed unticked.
+
+def _inv(name, email, by="sync"):
+    first, last = name.lower().split(" ", 1)
+    return {"name": name, "since": "2026-11-12T07:46:00", "by": by, "email": email, "first": first, "surname": last}
+
+
+def _bh(first, surname, email):
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return {"first_name": first, "surname": surname, "email": email, "clocking": {"start": now}}
+
+
+def test_one_person_under_two_names_is_one_entry_joined_by_email():
+    people, _ = hr_rollcall.build([_inv("Rob Lane", "rob.lane@wearesdi.com")],
+                                  {"on_site": [_bh("Robert", "Lane", "Rob.Lane@wearesdi.com")]})
+    assert len(people) == 1
+    p = people[0]
+    assert p["name"] == "Robert Lane" and p["inventry"]["name"] == "Rob Lane"
+    assert "brighthr" in p and "inventry" in p
+
+
+def test_a_shared_email_never_joins_two_different_people():
+    """The update's own rule: an email only counts if a name also agrees."""
+    people, _ = hr_rollcall.build([_inv("Andy One", "team@wearesdi.com")],
+                                  {"on_site": [_bh("Jamie", "Two", "team@wearesdi.com")]})
+    assert sorted(p["name"] for p in people) == ["Andy One", "Jamie Two"]
+
+
+def test_the_roll_call_shows_inventrys_name_beside_brighthrs(app, monkeypatch, tmp_path):
+    import hr_inventry_api as api
+
+    class Nickname(FakeInVentry):
+        def get_personnel(self):
+            return [{"ID": "INV-9", "FirstName": "Rob", "Surname": "Lane", "EmailAddress": "rob.lane@wearesdi.com",
+                     "LastActivity": "IN", "LastActivityDate": "2026-11-12T07:46:00",
+                     "LastEventLocation": "BRIGHTHR SYNC"}]
+    monkeypatch.setattr(cfg, "INVENTRY_ACTION_LOCATION", "BRIGHTHR SYNC")
+    monkeypatch.setattr(api, "InVentryAPI", Nickname)
+    (tmp_path / "blip_latest.json").write_text(json.dumps({"on_site": [_bh("Robert", "Lane", "rob.lane@wearesdi.com")]}),
+                                               encoding="utf-8")
+    people = app.get("/api/hr/app/rollcall").json()["people"]
+    assert [(p["name"], p["inventry"].get("name")) for p in people] == [("Robert Lane", "Rob Lane")]
+    assert "email" not in people[0]["inventry"]                       # matching data stays on the server
+    page = (Path(__file__).resolve().parent.parent / "appportal" / "hr-inventry.html").read_text(encoding="utf-8")
+    assert "' (as '+p.inventry.name+')'" in page
+
+
+def test_the_managers_list_can_be_given_as_k(monkeypatch, tmp_path):
+    """HR knows the folder as K:; the service opens it through the share."""
+    import hr_managers
+    sheet = tmp_path / "managers.csv"
+    sheet.write_text("Name,Email,Manager,BrightHR id\nZoe Test,zoe@wearesdi.com,Jo Manager,BH-1\n", encoding="utf-8")
+    monkeypatch.setattr(cfg, "server_path", lambda p: str(sheet) if p.startswith("K:") else p)
+    assert hr_managers.read(r"K:\IT\HRSystemsOutput\HRInventry managers.csv")["name"]["zoe test"] == "Jo Manager"

@@ -490,7 +490,8 @@ let ROLL=null, rollTimer=null;
 const PENDING={};                    // ticks not yet saved: kept and resent, never dropped
 function whereFrom(p){
   const bits=[];
-  if(p.inventry) bits.push('InVentry since '+(when(p.inventry.since)||'?')+(p.inventry.by==='sync'?'':' (reception)'));
+  if(p.inventry) bits.push('InVentry'+(p.inventry.name?' (as '+p.inventry.name+')':'')+' since '
+    +(when(p.inventry.since)||'?')+(p.inventry.by==='sync'?'':' (reception)'));
   if(p.brighthr) bits.push('clocked in '+(when(p.brighthr.since)||'?'));
   if(p.brighthr && !p.inventry) bits.push('not on InVentry');
   if(p.inventry && !p.brighthr) bits.push('not clocked in on BrightHR');

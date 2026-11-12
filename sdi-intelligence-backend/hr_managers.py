@@ -81,7 +81,7 @@ def _rows(path: Path) -> list:
 
 def read(path=None) -> dict:
     """{"id": {...}, "email": {...}, "name": {...}} -> manager, from the sheet."""
-    path = Path(path or cfg.HR_MANAGERS_FILE)
+    path = Path(cfg.server_path(str(path or cfg.HR_MANAGERS_FILE)))
     rows = _rows(path)
     if not rows:
         return {"id": {}, "email": {}, "name": {}}

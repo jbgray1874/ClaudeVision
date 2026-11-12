@@ -203,9 +203,23 @@ BLIP_MAX_CLOCKIN_AGE_HOURS = float(_opt("BLIP_MAX_CLOCKIN_AGE_HOURS", "20"))
 # dotted path ("lineManager.id") or a comma list is accepted.
 HR_MANAGER_FIELD = _opt("HR_MANAGER_FIELD")
 # BrightHR's API has no manager field (checked 29 Oct 2026), so managers come
-# from a spreadsheet HR keeps: tools/hr_managers_sheet.py writes it. A UNC path
-# the SDIIntelligence service can read, and that HR can edit. Empty = no list.
+# from a spreadsheet HR keeps: tools/hr_managers_sheet.py writes it. Somewhere
+# the SDIIntelligence service can read and HR can edit; K:\ is fine, as
+# server_path() opens it through SDI_DRIVE_MAP. Empty = no list.
 HR_MANAGERS_FILE = _opt("HR_MANAGERS_FILE")
+
+
+def server_path(path: str) -> str:
+    """A mapped letter as the share it stands for: a service has no K:, so
+    K:\\IT\\... is opened as \\\\server\\share\\IT\\... Anything else is unchanged."""
+    import config
+    p = str(path or "").strip()
+    unc = (getattr(config, "DRIVE_MAP", {}) or {}).get(p[0].upper()) \
+        if len(p) >= 2 and p[1] == ":" else None
+    if not unc:
+        return p
+    rest = p[2:].lstrip("\\/")
+    return unc + ("\\" + rest if rest else "")
 
 HR_APP_USERS = {e.strip().lower() for e in _opt("SDI_HR_APP_USERS").split(",") if e.strip()}
 

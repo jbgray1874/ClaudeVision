@@ -279,3 +279,42 @@ def test_the_email_says_how_far_inventry_is_in_step(server):
     InVentry's list. Zoe Test is; New Starter is not."""
     _, _, text = ms.compose(ms.gather(now=NOW), ms.app_url())
     assert "In step: 1 of 2 clocked in are on InVentry's list (50%)" in text
+
+
+# ── with the 5-minute update running ────────────────────────────────────────
+
+def _arrived_just_now(tmp_path):
+    """Add someone to the latest check who clocked in two minutes ago."""
+    snap = json.loads((tmp_path / "blip_latest.json").read_text(encoding="utf-8"))
+    snap["on_site"].append({"first_name": "Just", "surname": "Arrived", "clocking": {"start": _ago(minutes=2)}})
+    (tmp_path / "blip_latest.json").write_text(json.dumps(snap), encoding="utf-8")
+
+
+def test_with_the_update_running_only_people_it_has_missed_need_looking_at(server, tmp_path):
+    """James, 12 November: we run an update every 5 minutes, so say so, and
+    don't flag someone who clocked in or out in the last few minutes."""
+    hr_history.record({"time": _ago(minutes=3), "kind": "update", "by": "scheduled task", "status": "ok"})
+    ms.gather(now=NOW)
+    _arrived_just_now(tmp_path)
+    d = ms.gather(now=NOW)                                   # the check from a moment ago is used as it is
+    assert d["automatic"]
+    assert d["not_on_inventry"] == ["New Starter"]           # clocked in an hour ago: missed
+    assert d["just_arrived"] == ["Just Arrived"]             # the next update signs them in
+    assert d["not_clocked_in"] == [] and d["just_left"] == ["Old Leaver"]
+    subject, _, text = ms.compose(d, ms.app_url())
+    assert "InVentry is updated from BrightHR automatically every 5 minutes." in text
+    assert "InVentry updates: automatic, every 5 minutes (last at" in text
+    assert "Their InVentry record most likely needs fixing" in text
+    assert "FOR INFORMATION" in text and "Just clocked in: 1 person" in text and "Just clocked out: 1 person" in text
+    assert "In step: 1 of 3 clocked in are on InVentry's list (33%)" in text   # the arrival counts against it
+    # New Starter and the forgotten clock-out need looking at; the two the next
+    # update will handle do not.
+    assert subject.endswith("2 to check")
+
+
+def test_without_the_update_running_a_new_arrival_is_still_missing(server, tmp_path):
+    ms.gather(now=NOW)
+    _arrived_just_now(tmp_path)
+    d = ms.gather(now=NOW)
+    assert not d["automatic"] and "Just Arrived" in d["not_on_inventry"] and d["just_arrived"] == []
+    assert d["not_clocked_in"] == ["Old Leaver"]
