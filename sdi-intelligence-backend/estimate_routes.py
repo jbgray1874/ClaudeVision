@@ -2379,8 +2379,8 @@ def complete(run_id: str, req: CompleteRequest,
     # AI briefs area, gain the same two buttons the e-mail carries.
     if _snapshot.get("walkthrough_url"):
         _note_files = _filed_note_copies(_deliverables, _archived)
-        _stamped = estimate_walkthrough.stamp_note_files(_note_files,
-                                                         _snapshot["walkthrough_url"])
+        _stamped = estimate_walkthrough.stamp_note_files(
+            _note_files, _snapshot["walkthrough_url"], estimate_walkthrough.audio_of(_deliverables))
         if _stamped:
             with _LOCK:
                 _live = _RUNS.get(run_id)
@@ -2479,7 +2479,8 @@ def _email_finished_run(snapshot: Dict[str, Any], deliverables: List[Dict[str, s
             deliverables, provisional=provisional, include_quote=include_quote)
         note = estimate_email.compose(snapshot, deliverables, provisional=provisional)
         if snapshot.get("walkthrough_url"):
-            note = estimate_walkthrough.email_button(note, snapshot["walkthrough_url"])
+            note = estimate_walkthrough.email_button(note, snapshot["walkthrough_url"],
+                                                     estimate_walkthrough.audio_of(deliverables))
         result = estimate_email.send(recipients, note["subject"], note["html"],
                                      note["text"], paths)
         if held:
