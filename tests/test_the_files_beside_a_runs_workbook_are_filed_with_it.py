@@ -5,6 +5,7 @@ of files. Their records, covering notes and walkthroughs were on disk beside the
 in the MAIN checkout's estimates folder; the collector looked only in the slot's own tree and
 logged "no pinned record among the files".
 """
+import json
 import os
 import sys
 import time
@@ -79,3 +80,60 @@ def test_the_collector_files_them_from_the_other_tree_and_the_price_is_found(tmp
     assert any("found beside this run's workbook" in line for line in log)
     rec, why = O.own_record(filed, "10000-01-GA", START)
     assert rec and rec["name"] == "10000-01-GA_20261112_171728_record.json", why
+
+
+# ── each checkout its own folder, and the run's own manifest ────────────────────────────
+
+def test_a_checkout_writes_its_workbooks_into_its_own_folder(monkeypatch):
+    import wb_populate as W
+    monkeypatch.delenv("SDI_WB_OUTPUT_DIR", raising=False)
+    assert Path(W.workbook_output_dir()) == ROOT / "output" / "estimates"
+    assert "ClaudeVision\\output\\estimates\"," not in (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8"), \
+        "no one path for every runner"
+    monkeypatch.setenv("SDI_WB_OUTPUT_DIR", "/somewhere/else")
+    assert W.workbook_output_dir() == "/somewhere/else"
+
+
+def test_the_run_lists_its_own_files_and_the_collector_takes_exactly_those(tmp_path):
+    import run_manifest as M
+    import sdi_estimate_runner as R
+    slot, main, book = _two_trees(tmp_path)
+    far = tmp_path / "elsewhere" / "10000-01-GA_extra_sheet.csv"
+    far.parent.mkdir()
+    far.write_text("declared, and in neither tree")
+    summary = {"saved_output_paths": {"estimate_xlsx": str(book), "extra": str(far)},
+               "run_provenance": {"service_run_id": "run9acb83da", "run_id": "10000-01-GA-20261112-171714-abc",
+                                  "runner_id": "DESK-s2", "engine_build": "abc1234",
+                                  "submitted_scope": {"drawing_number": "10000-01-GA"}}}
+    mf = M.write(book, summary, START)
+    doc = M.read(book)
+    assert mf.name == "10000-01-GA_20261112_171728_deliverables.json"
+    assert doc["portal_run_id"] == "run9acb83da" and doc["drawing_number"] == "10000-01-GA"
+    names = {f["name"] for f in doc["files"]}
+    assert "10000-01-GA_20261112_171728_record.json" in names and "10000-01-GA_extra_sheet.csv" in names
+    assert not any(n.startswith("10000-02-GA") or "20261111" in n for n in names)
+    assert next(f["what"] for f in doc["files"] if f["name"].endswith("_covering_email.html")) == "the covering note"
+    (slot / "output" / "json" / "10000-01-GA.json").write_text(json.dumps(summary))
+    os.utime(slot / "output" / "json" / "10000-01-GA.json", (BOOK_AT, BOOK_AT))
+    log = []
+    filed = {f["name"] for f in R.collect(slot, tmp_path / "share", {}, log,
+                                           drawing_number="10000-01-GA", started_at=START)}
+    assert {"10000-01-GA_20261112_171728_deliverables.json", "10000-01-GA_extra_sheet.csv",
+            "10000-01-GA_20261112_171728_record.json"} <= filed
+    assert any("the run's manifest" in line for line in log)
+
+
+def test_a_manifest_for_another_workbook_is_not_this_runs(tmp_path):
+    import run_manifest as M
+    _slot, main, book = _two_trees(tmp_path)
+    M.path_for(book).write_text(json.dumps({"schema": M.SCHEMA, "workbook": "10000-02-GA_20261112_172108.xlsx",
+                                            "files": [{"name": "x", "path": str(main / "10000-02-GA_report.html")}]}))
+    assert M.read(book) == {} and M.listed(book) == []
+
+
+def test_a_listed_file_that_is_gone_is_said(tmp_path):
+    import run_manifest as M
+    _slot, main, book = _two_trees(tmp_path)
+    M.write(book, {}, START)
+    (main / "10000-01-GA_20261112_171728_walkthrough.wav").unlink()
+    assert M.absent(book) == ["10000-01-GA_20261112_171728_walkthrough.wav"]

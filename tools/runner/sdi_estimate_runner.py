@@ -309,7 +309,19 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
             _mine, _why_mine = _orc_b.own_book([{"name": _i.name} for _i in _wanted],
                                                drawing_number, started_at)
             for _bk in [_i for _i in list(_wanted) if _mine and _i.name == _mine]:
-                for _sib in _orc_b.beside_the_book(_bk, started_at):
+                # THE RUN'S OWN MANIFEST FIRST (run_manifest.py): what it says it wrote.
+                _listed: List[Path] = []
+                try:
+                    import run_manifest as _rm_b          # noqa: PLC0415
+                    _listed = _rm_b.listed(_bk)
+                    if _listed:
+                        log.append(f"[collect] the run's manifest {_rm_b.path_for(_bk).name} lists "
+                                   f"{len(_listed) - 1} file(s)")
+                    for _gone in _rm_b.absent(_bk):
+                        log.append(f"[collect] LISTED BY THE RUN BUT NOT ON DISK — {_gone}")
+                except Exception as _exc_m:                # noqa: BLE001
+                    log.append(f"[collect] the run's manifest could not be read: {_exc_m}")
+                for _sib in list(_listed) + list(_orc_b.beside_the_book(_bk, started_at)):
                     if str(_sib).lower() not in _seen:
                         _seen.add(str(_sib).lower())
                         _wanted.append(_sib)

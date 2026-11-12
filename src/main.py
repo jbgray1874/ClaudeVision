@@ -2846,6 +2846,19 @@ def main() -> None:
                       f"the job's latest record and the next run of it will overwrite it.",
                       flush=True)
 
+        # THE RUN SAYS WHICH FILES ARE ITS OWN (reviewer, 12 Nov 2026), after the last of them
+        # is written: <workbook stem>_deliverables.json beside the workbook (run_manifest.py).
+        if xlsx_path:
+            try:
+                import run_manifest as _run_manifest
+                _mf = _run_manifest.write(xlsx_path, summary)
+                if _mf:
+                    print(f"   [deliverables] manifest: {_mf.name} lists "
+                          f"{len(_run_manifest.read(xlsx_path).get('files') or [])} file(s)", flush=True)
+            except Exception as _mf_exc:                             # noqa: BLE001
+                print(f"   [deliverables] manifest NOT written ({_mf_exc}) — the collector "
+                      f"falls back to what lies beside the workbook.", flush=True)
+
         # THE OPEN ITEMS, ONE STRUCTURED LINE (D-739), so the service and the wall monitor can
         # show what still needs a person beside a finished run without ever reading an
         # estimate: missing costing-critical items apart from provisional assumptions.
