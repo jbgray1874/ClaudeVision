@@ -39,12 +39,24 @@ def test_both_totals_are_returned_and_neither_is_declared_correct():
     assert "one unit per carton" in r["basis"], "the assumptions are stated on the line"
 
 
-def test_an_oversize_panel_declines_by_name_never_a_silent_zero():
-    r = box_costing.price_box(2500, 2500, 2500, 10)
-    assert not r["priced"]
-    assert "does not fit" in r["reason"]
+def test_an_oversize_panel_is_built_from_several_sheets_and_says_so():
+    """JG, 12 Nov 2026: "packaging needs to be off the box calculator". A box whose panel does
+    not fit one sheet declined, and the line fell to an AI market figure (12674-02-GA, a 2.4 m
+    table, GBP 28 "per pallet"). It is priced on the same sheet, from as many as it needs."""
+    cfg = dict(box_costing._cfg(None))
+    r = box_costing.price_box(2500, 2500, 2500, 10, cfg)
+    assert r["priced"] and r["oversize"] and len(r["oversize_panels"]) == 3
+    usable = cfg["sheet_length_mm"] * (cfg["sheet_width_mm"] - cfg["sheet_edge_trim_mm"])
+    import math
+    sheets = math.ceil(((2500 + cfg["panel_oversize_mm"]) ** 2) / usable)
+    assert all(p["sheets_per_panel"] == sheets for p in r["panels"])
+    assert abs(r["material_gbp"] - 3 * cfg["sheet_cost_gbp"] * sheets * (1 + cfg["scrap_fraction"]) * 2) < 0.01
+    assert r["basis"].startswith("OVERSIZE CARTON") and "confirm the pack with despatch" in r["basis"]
+    small = box_costing.price_box(300, 200, 100, 10, cfg)
+    assert small["priced"] and not small["oversize"] and "OVERSIZE" not in small["basis"]
+    assert r["unit_gbp"] > small["unit_gbp"]
     bad = box_costing.price_box(0, 100, 100, 10)
-    assert not bad["priced"]
+    assert not bad["priced"], "a box with no size still declines by name"
 
 
 def test_the_harleys_descriptions_parse_including_the_run_together_style():
