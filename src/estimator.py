@@ -598,6 +598,10 @@ def _part_cost_credibility(mfg: Optional[Dict[str, Any]], est_part: Dict[str, An
     # material cost is not derivable. Never let that line pass as a credible £0.
     if mfg.get("native_material_without_geometry"):
         reasons.append("native_material_no_geometry")
+    # The model measured the part's envelope and nothing says how it is built: no blank was
+    # written for it, so whatever its material line shows is not a credible figure.
+    if mfg.get("model_envelope_unresolved"):
+        reasons.append("model_envelope_construction_unstated")
 
     has_dxf = _part_has_part_dxf(mfg)
     gr = _safe_float((est_part.get("process_estimate") or {}).get("geometry_reliability"))

@@ -4154,6 +4154,12 @@ def _finalize_scan_summary(
         # denied a borrowed blank is indistinguishable from one the rule never considered —
         # and it is the borrow being denied that stops a ball bearing arriving with the
         # cross member's flat pattern, a laser op and 269 seconds against it.
+        _env = _inf.get("held_on_envelope") or []
+        if _env:
+            print(f"   [inference] {len(_env)} part(s) measured by their own model were given "
+                  f"no guessed blank; each stays unresolved on its envelope: "
+                  + ", ".join(f"{r.get('part')} {' x '.join(f'{x:g}' for x in r.get('envelope_mm') or [])} mm"
+                              for r in _env[:8]), flush=True)
         _nob = _inf.get("refused_no_blank") or []
         if _nob:
             print(f"   [inference] {len(_nob)} part(s) NOT lent another part's blank — a "
