@@ -229,7 +229,9 @@ def read_drawing(path: Path, drawing: str, read_text: Callable[[Path], str] = re
     if _tb:
         best = max(_tb, key=lambda r: revision_rank(r) or ("", 0))
     refs = sorted({m.upper() for m in _REF.findall(_joined_assembly_words(text.upper()))} - {drawing.upper()})
-    return {"read": bool(text), "carries_number": carries, "revision": best, "references": refs}
+    _sh = re.search(r"\bSHEET\s*(\d{1,2})\s*(?:OF|/)\s*(\d{1,2})\b", up)
+    return {"read": bool(text), "carries_number": carries, "revision": best, "references": refs,
+            "sheet_of": f"{_sh.group(1)} of {_sh.group(2)}" if _sh and int(_sh.group(2)) > 1 else ""}
 
 
 _SPLIT_ASSEMBLY = re.compile(r"(?<![0-9A-Z\-/.:])(\d{3,}[A-Z]?(?:-\d+[A-Z]?)+)[ ]?(GA|SA|ASSY|ASM)(?![0-9A-Z])")
@@ -551,6 +553,8 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     done: set = set()
     read_any: set = set()                  # assemblies whose own drawing, or a sheet of it, was read
     sheets_read: Dict[str, List[str]] = {}
+    sheet_refs: Dict[str, Dict[str, List[str]]] = {}
+    sheet_says: Dict[str, Dict[str, str]] = {}
     if best.get("pdf_read"):
         read_any.add(drawing)
     while queue:
@@ -577,6 +581,10 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             if got["read"]:
                 read_any.add(a)
                 sheets_read.setdefault(a, []).append(sheet)
+                sheet_refs.setdefault(a, {})[sheet] = sorted(
+                    x for x in got["references"] if _looks_drawing(x) and not x.upper().startswith(a.upper() + "-0"))
+                if got.get("sheet_of"):
+                    sheet_says.setdefault(a, {})[sheet] = got["sheet_of"]
             refs_of[a] |= {x for x in got["references"] if not x.upper().startswith(a.upper() + "-")
                            or not re.fullmatch(r"\d{1,2}", x[len(a) + 1:])}
         for x in sorted(refs_of[a]):
@@ -657,6 +665,23 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         manifest["sheets_read"] = sheets_read.get(drawing, [])
         manifest["unread_assemblies"] = sorted(a for a in done if a not in read_any and not _same(a, drawing))
         manifest["complete"] = not manifest["missing"] and manifest["references_read"]
+        # SHEETS OF ONE ASSEMBLY, OR ALTERNATIVE CONFIGURATIONS? (reviewer, 12 Nov 2026:
+        # "distinguishing alternative configurations from cumulative assemblies"). -GA-01, -02
+        # and -03 that each say "sheet n of m" are one drawing. Where they do not, and they call
+        # for different parts, they may be three versions of the product: every part is still
+        # gathered, each sheet's own list is kept, and the question is asked, because adding
+        # three alternatives together prices the product three times.
+        manifest["sheet_references"] = sheet_refs.get(drawing, {})
+        _sets = {tuple(v) for v in manifest["sheet_references"].values()}
+        _says = sheet_says.get(drawing, {})
+        if len(manifest["sheet_references"]) > 1 and len(_sets) > 1 \
+                and len(_says) < len(manifest["sheet_references"]):
+            manifest["configurations_unconfirmed"] = True
+            manifest["assumptions"].append(
+                ", ".join(sorted(manifest["sheet_references"])) + " call for different parts and do "
+                "not all say they are sheets of one drawing: they may be alternative configurations, "
+                "not one assembly. Every part is gathered; confirm which the enquiry is for before "
+                "the parts are added together")
         if not manifest["references_read"]:
             manifest["assumptions"].append(
                 "the GA's parts list was NOT READ (no readable PDF of the GA or of its sheets), so "
@@ -844,6 +869,8 @@ def main(argv: Optional[List[str]] = None) -> int:
               + (f"; parts list read from sheet(s) {', '.join(m['sheets_read'])}" if m.get("sheets_read") else "")
               + (f"; {len(m['bought_in_unmatched'])} bought-in item(s) to price"
                  if m.get("bought_in_unmatched") else ""))
+    for sheet, called in sorted((m.get("sheet_references") or {}).items()):
+        print(f"  sheet   {sheet} calls for {len(called)}: {', '.join(called[:10])}{' ...' if len(called) > 10 else ''}")
     for x in m["members"]:
         if len(x.get("parents") or []) > 1:
             print(f"  shared  {x['drawing']} is called for by {', '.join(x['parents'])}")

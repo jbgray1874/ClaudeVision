@@ -96,6 +96,10 @@ def compare(folder: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
             "found_by_both": len(both), "missed": sorted(set(have) - set(got)),
             "added": sorted(set(got) - set(have)), "different_copy": different,
             "resolver_status": manifest.get("status"), "resolver_missing": list(manifest.get("missing") or []),
+            "parts_list_read": bool(manifest.get("references_read")),
+            "pdfs_read": manifest.get("pdfs_read"),
+            "unread_assemblies": list(manifest.get("unread_assemblies") or []),
+            "configurations_unconfirmed": bool(manifest.get("configurations_unconfirmed")),
             "selected_folder": manifest.get("selected_folder"), "question": manifest.get("question") or ""}
 
 
@@ -168,7 +172,17 @@ def verdict(row: Dict[str, Any]) -> str:
         return f"now finds {len(row['added'])} more than this folder was given"
     if row["missed"]:
         return f"{len(row['missed'])} file(s) here not found now"
-    return "matches"
+    # THE SAME FILES IS NOT A COMPLETE PACK (reviewer, 12 Nov 2026): 11896-04-00-GA "matched" the
+    # folder an earlier run of the resolver had made, on zero drawings read. Agreement with our
+    # own earlier pack proves nothing, and neither folder is complete unless the GA's parts
+    # list was read and nothing it calls for is missing.
+    if not row.get("parts_list_read"):
+        return "same files; COMPLETENESS NOT PROVED: the GA's parts list was not read"
+    if row.get("resolver_missing"):
+        return f"same files; INCOMPLETE: {len(row['resolver_missing'])} referenced drawing(s) not found"
+    if row["made_by"] == "resolver":
+        return "same files as the earlier resolver pack; parts list read, nothing missing"
+    return "matches the estimator's pack; parts list read, nothing missing"
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
@@ -193,6 +207,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             if names:
                 more = f" ... +{len(names) - a.list} more" if len(names) > a.list else ""
                 print(f"  {label}: " + ", ".join(names[:a.list]) + more)
+        if r.get("unread_assemblies"):
+            print("  sub-assemblies with no readable drawing: " + ", ".join(r["unread_assemblies"][:a.list]))
+        if r.get("configurations_unconfirmed"):
+            print("  its sheets may be alternative configurations: confirm before parts are added together")
         if r.get("resolver_missing"):
             print("  referenced, no drawing anywhere: " + ", ".join(r["resolver_missing"][:a.list]))
         if r.get("question"):

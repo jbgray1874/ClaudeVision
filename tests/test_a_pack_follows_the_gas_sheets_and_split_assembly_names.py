@@ -106,3 +106,20 @@ def test_a_glued_assembly_word_in_a_parts_list_is_the_same_reference():
     got = pr.read_drawing(Path("x.pdf"), "12773-01-GA", lambda p: "12773-02GA LOWER\n12773-03 SA UPPER\n2400-1200 SHEET")
     assert "12773-02-GA" in got["references"] and "12773-03-SA" in got["references"]
     assert "12773-02GA" not in got["references"]
+
+
+def test_sheets_that_say_so_are_one_drawing_and_others_are_asked_about():
+    one = _texts({"11896-04-00-GA-01": "SHEET 1 OF 2 11896-04-00-GA\n11896-04-01-01M",
+                  "11896-04-00-GA-02": "SHEET 2 OF 2 11896-04-00-GA\n11896-04-01-02M",
+                  "11896-04-00-GA-03": "SHEET 2 OF 2 11896-04-00-GA\n11896-04-01-02M"})
+    m = pr.resolve("11896-04-00-GA", _wall_bay(), client="TTI", read_text=one)
+    assert not m.get("configurations_unconfirmed")
+    assert m["sheet_references"]["11896-04-00-GA-01"] == ["11896-04-01-01M"]
+
+    variants = _texts({"11896-04-00-GA-01": "WALL BAY TYPE A 11896-04-00-GA\n11896-04-01-01M",
+                       "11896-04-00-GA-02": "WALL BAY TYPE B 11896-04-00-GA\n11896-04-01-02M",
+                       "11896-04-00-GA-03": "WALL BAY TYPE C 11896-04-00-GA\n11896-04-01-01M\n11896-04-01-02M"})
+    m = pr.resolve("11896-04-00-GA", _wall_bay(), client="TTI", read_text=variants)
+    assert m["configurations_unconfirmed"] is True and m["status"] == "provisional"
+    assert any("alternative configurations" in a for a in m["assumptions"])
+    assert {"11896-04-01-01M", "11896-04-01-02M"} <= {x["drawing"] for x in m["members"]}

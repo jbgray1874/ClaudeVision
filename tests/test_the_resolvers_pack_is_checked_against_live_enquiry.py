@@ -86,3 +86,13 @@ def test_a_pack_copied_in_yesterday_counts_as_yesterdays_whatever_its_files_date
     os.utime(f, (old, old))                                     # the date it had on W:
     rows = pc.run(tmp_path, since=datetime(2026, 11, 10), resolve=lambda d, c: _manifest())
     assert [r["drawing"] for r in rows] == ["12773-01-GA"]
+
+
+def test_the_same_files_is_not_called_a_match_when_the_parts_list_was_never_read():
+    """11896-04-00-GA "matched" its own earlier pack on zero drawings read (12 Nov 2026)."""
+    import pack_compare as pc
+    base = {"made_by": "resolver", "missed": [], "added": [], "resolver_status": "provisional"}
+    assert "NOT PROVED" in pc.verdict(dict(base, parts_list_read=False, resolver_missing=[]))
+    assert "INCOMPLETE" in pc.verdict(dict(base, parts_list_read=True, resolver_missing=["X-01-01M"]))
+    assert pc.verdict(dict(base, parts_list_read=True, resolver_missing=[])).startswith("same files as the earlier")
+    assert pc.verdict(dict(base, made_by="person", parts_list_read=True, resolver_missing=[])).startswith("matches")
