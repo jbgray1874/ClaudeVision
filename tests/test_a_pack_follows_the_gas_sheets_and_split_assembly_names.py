@@ -123,3 +123,31 @@ def test_sheets_that_say_so_are_one_drawing_and_others_are_asked_about():
     assert m["configurations_unconfirmed"] is True and m["status"] == "provisional"
     assert any("alternative configurations" in a for a in m["assumptions"])
     assert {"11896-04-01-01M", "11896-04-01-02M"} <= {x["drawing"] for x in m["members"]}
+
+
+def test_a_file_with_no_drawing_number_in_its_name_is_assigned_by_its_text_or_listed():
+    tech = SHARE / "TTi" / "11896 - Training Centre" / "11896-Technical" / "11896-04 - Generic Wall Bay"
+    gas = tech / "11896-04-00 - GAs"
+    parts = tech / "11896-04-01 - Back Panel"
+    rows = [
+        (gas, [_f(gas, "11896-04-00-GA_RevA.pdf"), _f(gas, "11896-04-00-GA.SLDASM")], False),
+        (parts, [_f(parts, "11896-04-01-01M_RevB.SLDPRT"),
+                 _f(parts, "Back panel flat pattern.pdf", 222),
+                 _f(parts, "Back panel flat.DXF", 333),
+                 _f(parts, "Supplier leaflet.pdf", 444),
+                 _f(parts, "11999-01-02M_other job.pdf", 555)], False),
+        (parts / "ARCHIVE", [_f(parts / "ARCHIVE", "Old back panel.pdf", 666)], True),
+    ]
+    read = _texts({"11896-04-00-GA": "11896-04-00-GA REV A\n1 11896-04-01-01M BACK PANEL 2",
+                   "Back panel flat pattern": "FLAT PATTERN  DRG No 11896-04-01-01M  1.2 MS\nUSED ON 11896-04-00-GA",
+                   "Supplier leaflet": "CASTORS AND FEET CATALOGUE"})
+    m = pr.resolve("11896-04-00-GA", rows, client="TTI", read_text=read)
+    back = next(x for x in m["members"] if x["drawing"] == "11896-04-01-01M")
+    assert {Path(f["path"]).name for f in back["files"]} == {"11896-04-01-01M_RevB.SLDPRT", "Back panel flat pattern.pdf"}
+    assert [Path(a["path"]).name for a in m["assigned_by_text"]] == ["Back panel flat pattern.pdf"]
+    un = {Path(u["path"]).name for u in m["unassigned_files"]}
+    assert un == {"Back panel flat.DXF", "Supplier leaflet.pdf"}
+    assert [o["drawing"] for o in m["other_drawings_in_folders"]] == ["11999-01-02M"]
+    assert "11999-01-02M" not in {x["drawing"] for x in m["members"]}
+    assert not any("Old back panel" in str(v) for v in (m["unassigned_files"], m["assigned_by_text"]))
+    assert any("NOT in the pack" in a for a in m["assumptions"])

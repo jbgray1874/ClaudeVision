@@ -620,6 +620,65 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                 queue.append(x)
     refs = all_refs
 
+    # FILES IN THE PACK'S FOLDERS WHOSE NAMES CARRY NO DRAWING NUMBER (JG and the reviewer,
+    # 12 Nov 2026: "Inspect files in the associated folder even when their filenames do not
+    # contain XXXX-03 ... establish what each file belongs to before costing it"). A detail
+    # saved as "Back panel flat.pdf" beside 11896-04-01-01M was invisible: the pack is built
+    # from names. Every drawing-format file in the chosen folder's tree and in the folders the
+    # members came from is looked at. A PDF whose own text names a member is that member's
+    # file. Anything else is LISTED with its folder, never dropped and never priced as a part
+    # on the strength of where it sits: another job's copy or an old alternative can sit there.
+    member_folders = {root} | {f[0].parent for fs in groups.values() for f in fs}
+    held = {str(f[0]).lower() for fs in groups.values() for f in fs}
+    pool: List[FileRow] = list(near) + [f for folder, files, archive in folders
+                                        if not archive and folder in member_folders for f in files]
+    by_key = {re.sub(r"[\s_]", "", d).upper(): d for d in groups}
+    unassigned: List[Dict[str, str]] = []
+    other_numbers: List[Dict[str, str]] = []
+    assigned_by_text: List[Dict[str, str]] = []
+    _seen_paths: set = set()
+    _text_reads = 0
+    for f in sorted(pool):
+        path = f[0]
+        if str(path).lower() in held or str(path).lower() in _seen_paths \
+                or path.suffix.lower() not in DRAWING_EXT or _archive_path(path):
+            continue
+        _seen_paths.add(str(path).lower())
+        did = drawing_id(path.name)
+        if did and re.sub(r"[\s_]", "", did).upper() in by_key:
+            continue                                 # a member's superseded or duplicate file
+        if did and "-" in did:
+            other_numbers.append({"path": str(path), "drawing": did})
+            continue
+        owner = ""
+        if path.suffix.lower() == ".pdf" and _text_reads < 40:
+            _text_reads += 1
+            flat = re.sub(r"[\s_]", "", read_text(path) or "").upper()
+            named = sorted((k for k in by_key if k in flat), key=len, reverse=True)
+            # the longest number wins: a part's sheet names its assembly too
+            owner = by_key[named[0]] if named else ""
+        if owner:
+            groups[owner] = list(groups[owner]) + [f]
+            held.add(str(path).lower())
+            assigned_by_text.append({"path": str(path), "drawing": owner})
+        else:
+            unassigned.append({"path": str(path), "why": (
+                "its name carries no drawing number and its text names no drawing in this pack"
+                if path.suffix.lower() == ".pdf" else
+                "its name carries no drawing number; a model or flat cannot be assigned by name")})
+    manifest["assigned_by_text"] = assigned_by_text
+    manifest["unassigned_files"] = unassigned
+    manifest["other_drawings_in_folders"] = other_numbers
+    if assigned_by_text:
+        manifest["assumptions"].append(
+            f"{len(assigned_by_text)} file(s) with no drawing number in the name were assigned by "
+            "their own text: " + ", ".join(f"{Path(a['path']).name} -> {a['drawing']}" for a in assigned_by_text[:6]))
+    if unassigned:
+        manifest["assumptions"].append(
+            f"{len(unassigned)} drawing file(s) in the pack's folders belong to no drawing by name or "
+            "text and are NOT in the pack: " + ", ".join(Path(u["path"]).name for u in unassigned[:6])
+            + ". Say which part each is, or that it is not needed")
+
     ids = set(groups)
     for did in sorted(ids):
         chosen, rev, superseded, notes = _pick_revision(groups[did])
@@ -869,6 +928,14 @@ def main(argv: Optional[List[str]] = None) -> int:
               + (f"; parts list read from sheet(s) {', '.join(m['sheets_read'])}" if m.get("sheets_read") else "")
               + (f"; {len(m['bought_in_unmatched'])} bought-in item(s) to price"
                  if m.get("bought_in_unmatched") else ""))
+    for x in m.get("assigned_by_text") or []:
+        print(f"  by text {Path(x['path']).name} is {x['drawing']}")
+    for x in m.get("unassigned_files") or []:
+        print(f"  UNASSIGNED  {x['path']}  ({x['why']})")
+    if m.get("other_drawings_in_folders"):
+        _o = sorted({x['drawing'] for x in m['other_drawings_in_folders']})
+        print(f"  other drawings in the pack's folders, not called for and not included: "
+              f"{', '.join(_o[:12])}{' ...' if len(_o) > 12 else ''}")
     for sheet, called in sorted((m.get("sheet_references") or {}).items()):
         print(f"  sheet   {sheet} calls for {len(called)}: {', '.join(called[:10])}{' ...' if len(called) > 10 else ''}")
     for x in m["members"]:
