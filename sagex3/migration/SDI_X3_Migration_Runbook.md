@@ -2005,3 +2005,36 @@ The X3 version goes to Acuity with the reports list (SCRUM-212).
   - James to choose the machine and the SQL login (read-only).
   - Optionally a Windows scheduled task to start it at boot.
   - Re-run when Claire answers.
+
+## 21. Building our own reports, imports and integrations in Sage X3 – what to find out first (12 Nov)
+
+James has an X3 admin login. **Work in the test folder only.** Production rules apply as for Access: no change to live X3 data or set-up without sign-off. Build in test, prove it, then move it to live as a patch.
+
+**1. Find out first (ask Acuity: Marc / Jim / Sergio), because everything else depends on it:**
+- **Hosting:**
+  - Sage-hosted cloud (SaaS): no database access; APIs only.
+  - Acuity / partner-hosted, or on-premises: database access possible.
+- **Version and patch level:** the "?" (help) menu → About. GraphQL / REST APIs depend on it.
+- **Folders and endpoints:** which folder is LIVE, which is TEST / UAT, and which one we may develop in.
+- **Database:** type (SQL Server or Oracle), server, database name, and the schema, which is the folder name. Is a **read-only** login possible, or a reporting replica?
+- **APIs for wiring in:** SOAP web services, REST, or GraphQL? Is there a "connected application" (OAuth client) for us? Are licences used per call or per user?
+- **Reporting tools licensed:**
+  - Crystal Reports (designer on our PC plus the X3 print server);
+  - requests / inquiries to Excel;
+  - Sage Enterprise Intelligence (BI), if licensed.
+- **Development rights:** can SDI create specific objects (the Y/Z naming, activity codes)? Who moves patches from test to live?
+- **Import templates:** the YA004… templates are Acuity's. May we copy them, and add our own (Y prefix)?
+
+**2. Where to look in X3 with the admin login** (menus vary by version; the function codes are stable):
+- **About** ("?" menu): version, patch level, current folder.
+- **Administration → Administration → Endpoints / Solutions:** folders, application server, database server and name (on-premises or hosted only).
+- **Administration → Users (GESAUS):** our own and any API user.
+- **Import / export templates (GESAOE):** every field, separator and structure of each YA004 template. Templates are run from Usage → Imports/exports.
+- **Report dictionary (GESARP):** where Jim's YINVLIST lives; one Crystal report per entry.
+- **Web services:** classic SOAP pools and published web services (GESAWE). Connected applications for REST / GraphQL.
+- **Development → scripts and dictionary:** the specific (Y/Z) objects already built for SDI.
+
+**3. How we work, the same discipline as the migration:**
+- Every report and import is first proved against the Access equivalent, to the penny. Rebate REP-22 is the pattern.
+- Build and prove it in TEST. A patch takes it to LIVE.
+- Write up each one here and in the register / Jira.
