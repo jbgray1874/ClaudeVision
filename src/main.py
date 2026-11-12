@@ -2798,11 +2798,8 @@ def main() -> None:
                         provisional=_provisional,
                         quantity_sweep=summary.get("quantity_sweep"),
                     )
-                try:                                 # the files this run was given (pack_used)
-                    from pack_used import into_note as _pack_into_note
-                    _note = _pack_into_note(_note, summary)
-                except Exception as _pu_exc:                         # noqa: BLE001
-                    print(f"   [covering-note] no drawing pack section ({_pu_exc})", flush=True)
+                from pack_used import into_note_safely as _pack_note
+                _note = _pack_note(_note, summary)   # the files this run was given
                 _note_path = Path(xlsx_path).with_name(
                     f"{Path(xlsx_path).stem}_covering_email.html")
                 _note_path.write_text(

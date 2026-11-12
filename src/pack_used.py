@@ -174,3 +174,13 @@ def into_note(note: Dict[str, str], record: Dict[str, Any],
     m = re.search(r"<div[^>]*>", html)
     at = m.end() if m else 0
     return dict(note, html=html[:at] + s["html"] + html[at:], text=s["text"] + str(note.get("text") or ""))
+
+
+def into_note_safely(note: Dict[str, str], record: Dict[str, Any]) -> Dict[str, str]:
+    """into_note that never stops a note being written: on any failure the note goes out as
+    it was, and the console says the section is missing."""
+    try:
+        return into_note(note, record)
+    except Exception as exc:                                         # noqa: BLE001
+        print(f"   [covering-note] no drawing pack section ({exc})", flush=True)
+        return note

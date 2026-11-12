@@ -69,3 +69,11 @@ def test_it_goes_near_the_top_of_the_note_once_and_leaves_the_subject_first():
 def test_a_run_that_recorded_no_inputs_adds_nothing():
     note = {"html": "<div>x</div>", "text": "x"}
     assert pu.into_note(note, {}, {}) == note
+
+
+def test_a_failure_in_the_section_never_stops_the_note(capsys):
+    note = {"html": "<div>x</div>", "text": "x"}
+    assert pu.into_note_safely(note, {"cad_inputs": "not a dict"}) == note
+    assert "no drawing pack section" in capsys.readouterr().out
+    src = (Path(__file__).resolve().parents[1] / "src" / "main.py").read_text(encoding="utf-8")
+    assert "into_note_safely" in src
