@@ -1926,3 +1926,31 @@ The X3 version goes to Acuity with the reports list (SCRUM-212).
 5. Then the X3 version with Acuity.
 
 **Lesson:** when recreating a report, rebuild the sample from the reference copy and prove the totals to the penny **before** wiring the live feed. The layout and the arithmetic are then settled separately from the data source.
+
+**12 Nov, later – Access's invoiced-sales view (James ran `rebate_source_check.sql`).** `dbo.UDEF_INVOICED_SALES`:
+- **Joins:**
+  - `TBI_TBL` (invoice lines: TBI_OUR order, TBI_SUB, TBI_CUS, TBI_PART_ONLY / REV, TBI_QTY, TBI_INVOICE_NO, TBI_INVOICE_DATE);
+  - to `COR_TBL` on part + rev + order + sub (COR_PRICE_PER, COR_QTY_ORDERED / DELIVERED, COR_CUSTOMER_DUE, COR_PROJECT);
+  - to `SL_ACCOUNTS2` on CUCODE2 = TBI_CUS (collation LATIN1_GENERAL_BIN).
+- **Values:**
+  - Inv Value = COR_PRICE_PER × TBI_QTY;
+  - **Rebate Val = Inv Value × CU_USRNUM1 / 100**, so Access holds a **per-customer rebate %** on the customer account (TIE02E: 3%);
+  - Value = Inv Value − Rebate Val.
+- Dates come out as text dd/mm/yyyy.
+- **Consequences:**
+  1. The report is built on **invoice lines**. Two identical TBI rows (TIE-1455/1M, 25 + 25 of 50) are two real part-invoices of one order line, not a duplicate.
+  2. The Morrisons report's flat 6% is **not** the per-customer % in Access. Assumption 2 now asks Finance to confirm it is a separate Morrisons agreement.
+  3. There's no delivery date on the invoice line. The order line's customer due date (COR_CUSTOMER_DUE) is carried instead, so `--basis` is now `invoice|due|order`.
+- **Built:**
+  - `sagex3/reports/rebate/rebate_rolling.sql` (read-only):
+    - the view's joins, on real dates;
+    - from the first of the month 12 months back, so 13 months: the Access report also lists the month before the window;
+    - the 22 parts;
+    - customer name from SL_ACCOUNTS.CUNAME, description from PMA_TBL.PMA_DESC_1 (OUTER APPLY TOP 1, so it never duplicates a line);
+    - plus project_no and customer_rebate_pct.
+    - Output: tab-delimited with headers → `build_rebate_report.py`.
+  - Builder: due date, project and the Access customer rebate % are on the Lines tab.
+  - **Tests:**
+    - a feed in the SQL's exact layout gives £549,211.31 / £32,952.68;
+    - `--basis order` on the sample gives 0, correct because the sample has no order dates.
+- **Next:** James runs `rebate_rolling.sql` (save as `rebate_lines.txt`), then I build the live report and compare it with the November PDF line by line.

@@ -5,14 +5,16 @@ rebate_parts.csv, and writes an SDI-branded HTML report and Excel workbook:
   * one row per invoiced line: customer, part, description, price per, value in its month
   * a rolling 12 months ending with --end (default: the month of the run date)
   * monthly totals, a rebate of --rate (default 6%) on each month's total, grand totals
-  * invoice, delivery and order dates are carried on every line; --basis picks which one
-    puts a line in a month (default invoice)
+  * invoice, due and order dates are carried on every line; --basis picks which one puts a line in
+    a month (default invoice). Source: rebate_rolling.sql - Access's own invoiced-sales joins
+    (TBI_TBL invoice lines -> COR_TBL order lines -> SL_ACCOUNTS2), as in dbo.UDEF_INVOICED_SALES
 
 Usage:
     python build_rebate_report.py <lines.csv|.txt> <out_dir> [--end 2026-11] [--rate 0.06]
-        [--basis invoice|delivery|order] [--parts rebate_parts.csv] [--sample]
+        [--basis invoice|due|order] [--parts rebate_parts.csv] [--sample]
 Input columns (header row, any order): customer_code, customer_name, part_code, description,
-price_per, quantity, invoice_no, invoice_date, delivery_date, order_no, order_date
+price_per, quantity, invoice_no, invoice_date, due_date, order_no, order_date
+(optional: project_no, customer_rebate_pct)
 (value = quantity x price_per; dates as YYYY-MM-DD or YYYYMMDD).
 """
 import argparse
@@ -77,7 +79,7 @@ def build(lines_path, out_dir, end=None, rate="0.06", basis="invoice", parts_pat
             skipped += 1
             continue
         price, qty = Decimal(r["price_per"] or "0"), Decimal(r["quantity"] or "0")
-        d = {"invoice": day(r.get("invoice_date")), "delivery": day(r.get("delivery_date")),
+        d = {"invoice": day(r.get("invoice_date")), "due": day(r.get("due_date") or r.get("delivery_date")),
              "order": day(r.get("order_date"))}
         when = d[basis]
         r.update(price=price, qty=qty, value=money(price * qty), dates=d,
@@ -258,7 +260,8 @@ def write_xlsx(path, rows, window, labels, mt, mr, grand, rebate, by_cust, by_pa
     # ---- Lines (every date, for checking)
     ln = wb.create_sheet("Lines")
     lh = ["Customer", "Name", "Part code", "Description", "Price per", "Quantity", "Value £", "Invoice no",
-          "Invoice date", "Delivery date", "Order no", "Order date", f"Month ({meta['basis']})", "In period"]
+          "Invoice date", "Due date", "Order no", "Order date", f"Month ({meta['basis']})", "In period",
+          "Project no", "Customer rebate % in Access"]
     banner(ln, "Invoiced lines – every date", len(lh))
     head(ln, 5, lh)
     for i, r in enumerate(rows):
@@ -266,18 +269,19 @@ def write_xlsx(path, rows, window, labels, mt, mr, grand, rebate, by_cust, by_pa
         d = r["dates"]
         when = d[meta["basis"]]
         vals = [r["customer_code"], r["customer_name"], r["part_code"], r["description"], float(r["price"]),
-                float(r["qty"]), float(r["value"]), r.get("invoice_no", ""), d["invoice"], d["delivery"],
-                r.get("order_no", ""), d["order"], when.strftime("%b %Y") if when else "", "Yes" if r["col"] is not None else "No"]
+                float(r["qty"]), float(r["value"]), r.get("invoice_no", ""), d["invoice"], d["due"],
+                r.get("order_no", ""), d["order"], when.strftime("%b %Y") if when else "", "Yes" if r["col"] is not None else "No",
+                r.get("project_no", ""), float(r["customer_rebate_pct"]) if r.get("customer_rebate_pct") else None]
         for c, v in enumerate(vals, 1):
             ln.cell(rr, c, v)
         for c in (5, 7):
             ln.cell(rr, c).number_format = gbp
         for c in (9, 10, 12):
             ln.cell(rr, c).number_format = "dd/mm/yyyy"
-    for col, w in zip(range(1, 15), [10, 30, 18, 46, 11, 9, 12, 13, 12, 12, 13, 12, 12, 9]):
+    for col, w in zip(range(1, 17), [10, 30, 18, 46, 11, 9, 12, 13, 12, 12, 13, 12, 12, 9, 12, 14]):
         ln.column_dimensions[get_column_letter(col)].width = w
     ln.freeze_panes = "E6"
-    ln.auto_filter.ref = f"A5:N{5 + len(rows)}"
+    ln.auto_filter.ref = f"A5:P{5 + len(rows)}"
 
     # ---- By part
     bp = wb.create_sheet("By part")
@@ -309,13 +313,14 @@ def notes(meta):
     return [
         "Rebate rolling report – how it is built (REP-22, Jira SCRUM-275)",
         "",
-        "Source: Access SupplyChain (SDILive), read-only (rebate_rolling.sql). Run on any day and the 12 months roll with it.",
+        "Source: Access SupplyChain (SDILive), read-only (rebate_rolling.sql): invoice lines (TBI_TBL) joined to their order "
+        "lines (COR_TBL) for the price, as Access's own invoiced-sales view does. Run on any day and the 12 months roll with it.",
         f"Period: {meta['period']} – the 12 months ending with the month of the run.",
         f"Selection: by part code only, any customer – the {len(meta['parts'])} codes in rebate_parts.csv (the codes on the "
         "November 2026 report). Add or remove a code there; no code change is needed.",
         "Value = quantity x price per, to the penny; a credit note is a negative line.",
-        f"Month: by {meta['basis']} date. Invoice, delivery and order dates are all on the Lines tab, and the report can be "
-        "re-run by delivery or order date.",
+        f"Month: by {meta['basis']} date. Invoice, due and order dates are all on the Lines tab, and the report can be "
+        "re-run by due or order date.",
         f"Rebate: {meta['rate'] * 100:.0f}% of each month's total, rounded to the penny per month; the rebate total is the sum "
         "of the twelve. The rate is one cell (Summary!B5) – change it and every rebate follows.",
         "Lines with no value in any month were invoiced outside the 12 months (on the November report: November 2025). "
@@ -324,7 +329,8 @@ def notes(meta):
         "",
         "Assumptions to confirm (Finance):",
         "1. The rebate is due on invoiced value (not ordered or delivered).",
-        "2. The rate is 6% on every part and customer, and is paid to Morrisons.",
+        "2. The rate is a flat 6% on every part and customer, paid to Morrisons - not the per-customer rebate % that Access "
+        "holds on the customer account (used by Access's invoiced-sales view; shown on the Lines tab).",
         "3. Lines invoiced before the window are listed but not counted, as on the Access report.",
         "4. The part list is complete – other 10932-00-GA variants (e.g. PEP, DOV, CCE, REG) are sold but are not on the report.",
     ] + (["", "THIS IS A SAMPLE: lines, quantities and prices rebuilt from the November 2026 PDF; dates are the month only "
@@ -447,7 +453,7 @@ if __name__ == "__main__":
     ap.add_argument("out_dir")
     ap.add_argument("--end", help="last month of the 12, YYYY-MM (default: this month)")
     ap.add_argument("--rate", default="0.06")
-    ap.add_argument("--basis", default="invoice", choices=["invoice", "delivery", "order"])
+    ap.add_argument("--basis", default="invoice", choices=["invoice", "due", "order"])
     ap.add_argument("--parts")
     ap.add_argument("--sample", action="store_true", help="label the output as a sample")
     a = ap.parse_args()
