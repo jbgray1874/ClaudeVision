@@ -3392,6 +3392,13 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             _pack_manifest.unlink()
     except OSError as exc:
         print(f"[staging] the pack manifest of {drawing} was not filed: {exc}", flush=True)
+    # THE PACK IS ALSO KEPT IN THE DROP-OFF FOLDER, <client>\\<drawing> (JG, 12 Nov 2026). It
+    # copies and never deletes, and it never stops the job (pack_dropoff.py).
+    if not _brief_only:
+        import pack_dropoff
+        _dropped = pack_dropoff.save(folder, client, drawing, _REPO_ROOT, safe=safe_segment)
+        if not _dropped["saved"] and "no drop-off folder" not in _dropped["why"]:
+            print(f"[drop-off] the pack of {drawing} was not kept: {_dropped['why']}", flush=True)
     _document_marker = Path(folder) / "CONCEPT_DOCUMENT.json"
     try:
         if req.concept_document:

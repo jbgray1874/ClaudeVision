@@ -28,3 +28,6 @@ import pytest  # noqa: E402
 @pytest.fixture(autouse=True)
 def _private_state_folder(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("SDI_STATE_DIR", str(tmp_path_factory.mktemp("sdi-state")))
+    # NO TEST DROPS A PACK INTO THE CHECKOUT'S OWN chatgptdropoff (12 Nov 2026). A test that
+    # wants the drop-off sets SDI_PACK_DROPOFF_DIR to its own folder.
+    monkeypatch.setenv("SDI_PACK_DROPOFF_DIR", "off")
