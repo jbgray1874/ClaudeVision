@@ -1869,3 +1869,60 @@ James sent `Rebate_rolling.pdf` (November 2026 copy) and asked for it to be recr
 3. Prove it against this PDF: the same lines, the month totals, £549,211.31 and £32,952.68.
 
 The X3 version goes to Acuity with the reports list (SCRUM-212).
+
+### 20.2 Rebate rolling report – built as a repeatable sample (12 Nov) – REP-22, Jira **SCRUM-275** (under SCRUM-212)
+
+**James's decisions (12 Nov):**
+- **Dates:** carry all three (invoice, delivery, order). Months go by invoice date by default; `--basis delivery|order` switches.
+- **Selection:** by part code only, any customer – the 22 codes on the November report.
+- **Empty lines:** explained as an assumption in the covering e-mail.
+
+**Discovery results (12 Nov, `sql/rebate_discovery.sql`):**
+- Rebate fields exist:
+  - `UDEF_INVOICED_SALES` (view) "Rebate Val";
+  - `vw_SalesLedgerDetailed` / `vw_SalesLedgerFull` "Rebate Value";
+  - `UDEF_Customer_DSR_DATA` / `UDEF_DSR_DETAIL` "Rebate %";
+  - supplier side: `SUP_REBATE`, `SUP_REBATE_TURNOVER` on `SUP_TBL`, `ASC_SUP_TBL`, `ASC_PL_ACCOUNTS`.
+- `ASC_COR_TBL` sample: order lines for many more `10932-00-GA*` variants than the report shows (PEP, DOV, CCE, REG, SB, MOR, PRI, KK, CGA …). So the report uses a **fixed part list**, not a pattern.
+
+**What the Access report is (proved against the PDF):**
+- One row per **invoiced** line, not per order line. WMM01 HEI's order for 200 shows as 125 + 75. HHA-INSTALL has a credit of -72.
+- Value = quantity × price per, to the penny.
+- Rebate = 6% of each month's total, rounded per month; the rebate total is the sum of the twelve.
+- Lines with no value are invoices from the month before the window (November 2025: DPP01 HAR, MUL01 x9, NES03 GOU, NTL01 VOL, TOH01 x3). They're listed but not counted.
+
+**Built (repo `sagex3/reports/rebate/`):**
+- `rebate_parts.csv`: the 22 part codes. Change the list here; no code change needed.
+- `build_rebate_report.py <lines.csv|.txt> <out> [--end YYYY-MM] [--rate 0.06] [--basis invoice] [--sample]` writes `SDI_Rebate_Rolling_<YYYY-MM>.html` and `.xlsx`.
+  - **HTML:** KPI tiles; a sales-by-month chart with hover; month and customer tables; the full report matrix (credits in red, out-of-period lines grey); how it's built; assumptions.
+  - **Excel:**
+    - Summary: tiles, chart, month and customer tables, and **one rebate-rate cell (named `RebateRate`) that every rebate follows**.
+    - Rebate report: the PDF layout with live formulas, totals and a rebate row; frozen panes, filter, print setup.
+    - Lines: every date and the invoice number.
+    - By part.
+    - Notes & assumptions.
+- `rebate_source_check.sql` (read-only): the definition and five rows of `UDEF_INVOICED_SALES`, so `rebate_rolling.sql` can read it. **James to run it.**
+
+**Sample (scratchpad `rebate/`, not in git – it names customers):**
+- `sample_lines_from_Nov2026_pdf.csv`: 39 lines rebuilt from the PDF, quantity = value ÷ price.
+- `out/SDI_Rebate_Rolling_2026-11_SAMPLE.html` and `.xlsx`.
+- **Proof:**
+  - total £549,211.31 and rebate £32,952.68;
+  - every month: Dec 90,472.95, Jul 231,854.20, Aug 52,750.00, Sep 174,134.16;
+  - the same again in Excel after a LibreOffice recalculation of the formulas.
+  - Checked at desktop and phone width with no sideways page scroll.
+
+**Assumptions sent to Finance:**
+1. The rebate is on invoiced value.
+2. It's 6% on every part and customer, paid to Morrisons.
+3. Lines invoiced before the window are listed but not counted.
+4. The part list is complete.
+
+**Next steps:**
+1. `rebate_source_check.txt` from James.
+2. Write `rebate_rolling.sql` (read-only, from the run date back 13 months, the 22 parts) into the builder's columns.
+3. Prove it against the PDF.
+4. Schedule or document the monthly run.
+5. Then the X3 version with Acuity.
+
+**Lesson:** when recreating a report, rebuild the sample from the reference copy and prove the totals to the penny **before** wiring the live feed. The layout and the arithmetic are then settled separately from the data source.
