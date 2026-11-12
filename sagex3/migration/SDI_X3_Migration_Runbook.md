@@ -1675,10 +1675,7 @@ Not data migration, but tracked here so nothing is forgotten. Everything is in J
   tabs Read me, Examples (8, the largest per supplier), All items (yellow fill-in column), By
   supplier. The biggest suppliers: WHT500 28, OPT500 20, FED503 18. The sheet names suppliers, so
   it stays inside SDI.
-- `rebuild/sql/check_bisy_document_numbers.sql` (read-only) for James: query 1 should return about 259
-  rows of PL_TRANSACTIONS with every column; query 2 should return the 6 rows of 5028370.
-
-**Asked of Ethan / Jim:**
+- `rebuild/sql/check_bisy_document_numbers.sql` (read-only, one short SELECT, 12 Nov: cut down from a two-query `SELECT *` version) for James: about 259 rows, nine columns, should come back.
 - **Lost header detail.** On a multi-line document X3 keeps line 1's supplier ref, source date and due date.
   Should each line's supplier ref go in the line comment (column W)? Or should a document split where due
   dates differ?
