@@ -447,6 +447,24 @@ class Located:
     # with the folder (the service stages both into the run's one folder). Never copied into the
     # estimator's own folder.
     extra_files: List[Path] = field(default_factory=list)
+    # WHAT THE RESOLVER FOUND, SENT WITH THE JOB (12 Nov 2026). Every run's job folder had
+    # "manifest False": the pack was resolved here, its findings were used to choose files and
+    # then dropped, so the covering note could only say "No pack manifest was saved with this
+    # job". The service files this beside the staged drawings as pack_manifest.json.
+    manifest: Optional[Dict[str, Any]] = None
+
+
+def carried_manifest(m: Dict[str, Any], staged_from: str, held: Sequence[str] = ()) -> Dict[str, Any]:
+    """The resolver's manifest as it travels with a job: plain JSON, saying where the staged
+    files came from. A reference the design share lacks but the estimator's folder holds is
+    not missing from the job."""
+    out = json.loads(json.dumps(m, default=str))
+    have = {re.sub(r"[\s_]", "", str(h)).upper() for h in held}
+    if have:
+        out["missing"] = [x for x in out.get("missing") or []
+                          if re.sub(r"[\s_]", "", str(x)).upper() not in have]
+    out["staged_from"] = staged_from
+    return out
 
 
 class LiveEnquiryShare:
@@ -571,7 +589,8 @@ class DesignShare:
         folder = Path(kept["folder"])
         return Located("found", f"{m['status']} pack from the design share: {len(m['members'])} drawing(s), "
                                 f"revision {m.get('revision') or 'not read'}; {kept['state']} in {folder.name}",
-                       folder=folder, client_folder_name=client, files=pack_files(folder), source=self.name)
+                       folder=folder, client_folder_name=client, files=pack_files(folder), source=self.name,
+                       manifest=carried_manifest(m, "the pack gathered from the design share"))
 
 
     def _with_what_the_ga_calls_for(self, row: EnquiryRow, share: Located) -> Optional[Located]:
@@ -606,12 +625,19 @@ class DesignShare:
                 extra += files
                 added.append(did)
         if not extra:
-            return None             # the folder already holds everything its GA calls for
+            # the folder already holds everything its GA calls for: it goes as the share found
+            # it, with what the resolver read about it
+            return Located("found", share.reason, folder=share.folder,
+                           client_folder_name=share.client_folder_name, files=list(share.files),
+                           source=share.source,
+                           manifest=carried_manifest(m, "the estimator's Live Enquiry folder", held))
         return Located("found", f"{share.reason}; the GA also calls for {', '.join(added)}, not in the "
                                 f"folder: found on the design share and sent with it",
                        folder=share.folder, client_folder_name=share.client_folder_name,
                        files=list(share.files), source=f"{share.source} + design share",
-                       extra_files=extra)
+                       extra_files=extra,
+                       manifest=carried_manifest(m, "the estimator's Live Enquiry folder, with the "
+                                                    "drawings its GA calls for from the design share", held))
 
 
 class DesignArea:
@@ -1117,6 +1143,7 @@ def request_body(d: Decision, email_to: Optional[Sequence[str]] = None) -> Dict[
         "quantity_breaks": d.quantities[1:],
         "job_folder": str(d.located.folder),
         "files": [str(p) for p in (getattr(d.located, "extra_files", None) or [])],
+        "pack_manifest": getattr(d.located, "manifest", None),
         "deliverables": True,
         "method": "both",
         "email_to": ", ".join(recipients_for(d, email_to)) or None,

@@ -793,6 +793,10 @@ class EstimateRequest(BaseModel):
     quantity_breaks: List[int] = []
     job_folder: Optional[str] = None
     files: List[str] = []
+    # WHAT THE PACK RESOLVER FOUND FOR THIS JOB (12 Nov 2026), filed beside the staged drawings
+    # as pack_manifest.json so the covering note can name what the pack lacks. Absent for a
+    # job nobody resolved a pack for; then no file is left from an earlier run either.
+    pack_manifest: Optional[Dict[str, Any]] = None
     output_root: Optional[str] = None
     deliverables: bool = True
     # THE MANUAL ESTIMATE, ATTACHED UP FRONT. Optional, and a path on the share rather than an
@@ -3378,7 +3382,16 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             502, f"The drawings could not be staged to {staging.staging_root()} "
                  f"({type(exc).__name__}: {exc}). Check the share is reachable and writable.")
     folder = staged["folder"]
-    # An explicit input, reset for every submission. Never infer this mode from a job code.
+    # The pack manifest, reset for every submission like the markers below. A manifest that
+    # cannot be written does not stop the estimate: the note then says none was saved.
+    _pack_manifest = Path(folder) / "pack_manifest.json"
+    try:
+        if req.pack_manifest:
+            _pack_manifest.write_text(json.dumps(req.pack_manifest, indent=1), encoding="utf-8")
+        elif _pack_manifest.exists():
+            _pack_manifest.unlink()
+    except OSError as exc:
+        print(f"[staging] the pack manifest of {drawing} was not filed: {exc}", flush=True)
     _document_marker = Path(folder) / "CONCEPT_DOCUMENT.json"
     try:
         if req.concept_document:

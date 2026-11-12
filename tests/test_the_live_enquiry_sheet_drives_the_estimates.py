@@ -594,6 +594,9 @@ def test_what_the_ga_calls_for_that_the_estimators_folder_lacks_is_sent_with_it(
     assert "12674-01-02J, 12674-01-03J" in got.located.reason
     body = L.request_body(got)
     assert body["job_folder"] == str(root / "M&S" / "12674-02-GA") and body["files"] == [str(side), str(back)]
+    # what the resolver found goes with the job (12 Nov 2026: every job folder had no manifest)
+    assert body["pack_manifest"]["drawing"] == "12674-02-GA"
+    assert "estimator's Live Enquiry folder" in body["pack_manifest"]["staged_from"]
     assert sorted(p.name for p in (root / "M&S" / "12674-02-GA").iterdir()) == [
         "0359829_12674-02-GA_revA.pdf", "12674-02-01J_revA.pdf"], "the estimator's folder is not touched"
 
@@ -611,3 +614,25 @@ def test_a_design_pack_with_no_drawing_is_held_not_filed(root, ledger, monkeypat
     got = {d.row.drawing: d for d in L.plan(rows, [src, L.LiveEnquiryShare(root)], ledger)}["12424-02-GA"]
     assert got.status == "held" and "no PDF drawing, only .dxf" in got.reason
     assert not (root / "M&S").exists() or not any((root / "M&S").iterdir()), "nothing filed"
+
+
+def test_a_folder_that_lacks_nothing_still_carries_what_the_resolver_read(root, ledger, monkeypatch, tmp_path):
+    """The estimator's folder holds all its GA calls for: nothing is added, the folder goes as the
+    share found it, and the resolver's reading still travels so the note can speak of the pack."""
+    import pack_resolver as pr
+    _pack(root, "M&S", "12674-02-GA", "12674-02-GA_revA.pdf", "12674-02-01J_revA.pdf")
+    w = tmp_path / "W"
+    w.mkdir()
+    monkeypatch.setattr(pr, "resolve", lambda *a, **k: {
+        "status": "provisional", "price_ok": True, "drawing": "12674-02-GA", "question": "",
+        "references_read": True, "missing": ["12674-02-01J", "12674-02-07J"],
+        "members": [{"drawing": "12674-02-01J", "referenced_by_ga": True, "files": [{"path": "x/12674-02-01J.pdf"}]}]})
+    rows = L.rows_from_table(_table(_line("M&S", "12674-02-GA", "1 off")))
+    src = L.DesignShare(root, folders=lambda: [(w, [], False)])
+    got = {d.row.drawing: d for d in L.plan(rows, [src, L.LiveEnquiryShare(root)], ledger)}["12674-02-GA"]
+    assert got.status == "ready" and not got.located.extra_files
+    assert got.located.folder == root / "M&S" / "12674-02-GA"
+    m = L.request_body(got)["pack_manifest"]
+    assert m["missing"] == ["12674-02-07J"], "the folder holds 01J, so only 07J is missing from the job"
+    assert sorted(p.name for p in (root / "M&S" / "12674-02-GA").iterdir()) == [
+        "12674-02-01J_revA.pdf", "12674-02-GA_revA.pdf"], "the estimator's folder is not touched"
