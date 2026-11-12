@@ -133,3 +133,34 @@ def test_a_family_part_outside_the_jobs_folders_is_looked_up_across_the_index():
     assert "11896-04-01-01M" in by and not m["missing"]
     assert [f["path"] for f in by["11896-04-01-01M"]["files"]] == [str(part[0])], "never an archive copy"
     assert "11896-04-01-01M" not in m["library"], "the job's own part is not a library part"
+
+
+# ── a part's NAMED pieces are not rival copies (the real share, 12 Nov 2026) ─────────────────
+def test_named_pieces_of_one_part_are_pieces_not_rival_copies():
+    tech = SHARE / "TTi" / "11896 - Training Centre" / "11896-Technical" / "11896-02-01 Speakers"
+    files = [_f(tech, "11896-02-01-GA_REV F.pdf"), _f(tech, "11896-02-01-03J_REV F.pdf")]
+    files += [_f(tech, f"11896-02-01-03J_{n}_MDF_18.0mm_REV F.DXF", 200 + i)
+              for i, n in enumerate(("BASE", "LHS", "REAR", "RHS", "RIB", "TOP"))]
+    m = pr.resolve("11896-02-01-GA", [(tech, files, False)], client="TTI",
+                   read_text=_read("11896-02-01-GA", ["11896-02-01-03J"]))
+    assert not m["conflicts"], m["conflicts"]
+    part = next(x for x in m["members"] if x["drawing"] == "11896-02-01-03J")
+    assert sum(1 for f in part["files"] if f["format"] == "dxf") == 6
+
+
+def test_pieces_named_with_a_space_or_a_longer_name_are_still_pieces():
+    assert pr.piece_key("6364-01-004-LOCK COVER_3mm PETG_revR.DXF") != pr.piece_key("6364-01-004-lock plate_5mm PETG_revR.DXF")
+    assert pr.piece_key("6364-02-001-LEFT END_18mm MFC_revW.DXF") != pr.piece_key("6364-02-001-LEFT END LIP_18mm MFC_revW.DXF")
+    assert pr.piece_key("X-01J_PART1_18mm_REV A.DXF") != pr.piece_key("X-01J_PART2_18mm_REV A.DXF")
+
+
+def test_the_same_piece_twice_is_still_a_rival_copy_and_is_asked():
+    assert pr.piece_key("X-01J_BASE_18mm_REV F.DXF") == pr.piece_key("x-01j_base_18mm_rev F - Copy.dxf")
+    assert pr.piece_key("X-01J_BASE_18mm_REV F.DXF") == pr.piece_key("X-01J_BASE_18mm_REV F (2).DXF")
+    tech = SHARE / "TTi" / "12164 - Stand" / "12164-Technical"
+    files = [_f(tech, "12164-00-GA_REV A.pdf"), _f(tech, "12164-01-01J_REV A.pdf"),
+             _f(tech, "12164-01-01J_BASE_18mm_REV A.DXF", 100),
+             _f(tech, "12164-01-01J_BASE_18mm_REV A (2).DXF", 999)]
+    m = pr.resolve("12164-00-GA", [(tech, files, False)], client="TTI",
+                   read_text=_read("12164-00-GA", ["12164-01-01J"]))
+    assert m["conflicts"], "two different files of the same piece at one revision are asked about"

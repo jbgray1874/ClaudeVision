@@ -323,6 +323,26 @@ def piece_number(name: str) -> str:
     return (m.group(1).lstrip("0") or "0") if m else ""
 
 
+_COPY_MARK = re.compile(r"(\s*-\s*copy(\s*\(\d+\))?|\s*\(\d+\)|[_\s-]copy\d*)$", re.I)
+
+
+def piece_key(name: str) -> str:
+    """What one file of a member IS, apart from its revision and from being a copy.
+
+    A PART'S NAMED PIECES ARE NOT RIVAL COPIES (the real share, 12 Nov 2026). Three jobs
+    already sent were classed "incorrect pack: two copies claim to be the issue":
+        11896-02-01-03J_BASE_MDF_18.0mm_REV F.DXF   ..._LHS_...   ..._REAR_...   ..._RIB_...
+        6364-01-004-LOCK COVER_3mm PETG_revR.DXF    6364-01-004-lock plate_5mm PETG_revR.DXF
+        6364-02-001-LEFT END_18mm MFC_revW.DXF      6364-02-001-LEFT END LIP_18mm MFC_revW.DXF
+    Each is a different piece of one part, cut from its own flat, and the name says which.
+    Two files are the same piece only when their names agree once the revision and any copy
+    mark ("- Copy", "(2)") are taken off. A numbered piece (PART5, _-07) keeps its number."""
+    stem = Path(str(name)).stem
+    stem = _REV_NAME.sub("", stem)
+    stem = _COPY_MARK.sub("", stem)
+    return re.sub(r"[\s_\-.]+", " ", stem).strip().upper()
+
+
 def _pick_revision(files: List[FileRow]) -> Tuple[List[FileRow], str, List[str], List[str]]:
     """The files of a member's latest revision (untagged CAD files ride with it), that revision,
     the superseded revisions present, and any conflict found."""
@@ -350,8 +370,9 @@ def _pick_revision(files: List[FileRow]) -> Tuple[List[FileRow], str, List[str],
         # flats of one part. Each piece number is compared with its own copies only.
         by_piece: Dict[str, List[FileRow]] = {}
         for f in fs:
-            by_piece.setdefault(piece_number(f[0].name), []).append(f)
-        for piece, pf in by_piece.items():
+            by_piece.setdefault(piece_key(f[0].name), []).append(f)
+        for _pk, pf in by_piece.items():
+            piece = piece_number(pf[0][0].name)
             # THE SAME BYTES ARE ONE FILE: a copy keeps its size whatever date the copy got.
             if len({s for _p, s, _m in pf}) <= 1:
                 continue
