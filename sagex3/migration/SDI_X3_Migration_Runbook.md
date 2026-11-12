@@ -2038,3 +2038,52 @@ James has an X3 admin login. **Work in the test folder only.** Production rules 
 - Every report and import is first proved against the Access equivalent, to the penny. Rebate REP-22 is the pattern.
 - Build and prove it in TEST. A patch takes it to LIVE.
 - Write up each one here and in the register / Jira.
+
+### 21.1 What we already know about SDI's X3 (RFI, 15 Apr 2026; Neil Morphew, Acuity, 18–26 May 2026)
+
+**Hosting – settled:**
+- **Sage X3 Cloud SaaS**, hosted by **Sage** on AWS UK South (London). Single tenant on Sage's hosting offer.
+- **Not** a private cloud.
+- **Consequences:**
+  - **No direct database / SQL access.** Sage runs the servers.
+  - **No server or endpoint settings for us.** Session timeouts are Sage's; the platform default is a check every minute and a 20-minute idle timeout.
+  - SDI's network, VPN and Wi-Fi don't matter. X3 is reachable from anywhere over HTTPS. Full-tunnel or split-tunnel VPN is SDI's own choice.
+  - **"Connection details" for us = the API endpoints + an API client (credentials)**, not a server, database and login.
+
+**Login:**
+- Sage ID with 2FA only.
+- Linking Sage IDs to SDI's Azure / Entra tenant is expected in the next SaaS release; not available yet.
+- SAML / OAuth to Azure exists only for private cloud.
+
+**Printing:** Vasion Print, supplied through Sage. The Vasion client goes on **a device on SDI's network that can see the printers**, e.g. thermal label printers. A machine has to be chosen.
+
+**Integration (RFI):**
+- **SOAP, REST and GraphQL APIs**, plus file exchange.
+- Real time via **webhooks**, or batch via the **X3 batch server**.
+- Acuity's usual middleware is **Microsoft Power Automate** (security and logging).
+- Built-in customisations use **Sage's Safe X3 framework**.
+
+**AI:**
+- No public Sage MCP server yet (roadmap, no date).
+- **Acuity have built an MCP server on the X3 data model** and offer it.
+- Sage Copilot exists; custom agents and workflows are still roadmap.
+
+**Data validation:** Acuity use Excel, Power tools and SQL tools on the extracts, plus record counts, spot checks and report comparisons. That is what we already do.
+
+**Demo environment:** offered, with a Teams workshop session.
+
+**Charlotte (Apr):** X3 is the building block – customisable, open API, links to other software.
+- **Note:** under SaaS that linking is **through the APIs**, not direct SQL.
+- To ask Acuity / Sage: is there any SaaS read-only data access – a reporting replica, data export or BI connector – for reports that today read SQL directly, like our Access ones?
+
+**What this changes in section 21:**
+- Hosting, database and endpoint questions are answered: SaaS, no DB.
+- **Ask Acuity for:**
+  1. An API client for SDI in the **test** folder, with credentials and the base URLs for REST and GraphQL, and which objects are exposed.
+  2. Whether webhooks and batch-server jobs can be set up by us or only by Acuity.
+  3. Development rights in Safe X3 (Y/Z objects) on SaaS, and how patches reach live.
+  4. Reporting options on SaaS: Crystal designer, requests / inquiries to Excel, any BI connector.
+  5. Read-only data access for reports.
+  6. Their MCP server: terms, data scope, and whether it works against test.
+  7. Vasion device requirements.
+- **Rebuild REP-22 in X3 via GraphQL / REST, or a request**, proved against Access as before.
