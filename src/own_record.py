@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 _BOOK = re.compile(r"^(?P<job>.+)_(?P<d>\d{8})_(?P<t>\d{6})\.xlsx$", re.IGNORECASE)
@@ -101,3 +102,57 @@ def other_jobs_files(deliverables: List[Dict[str, Any]], drawing_number: str = "
                for o in others):
             out.append(name)
     return sorted(out)
+
+
+# How long after its workbook a run's unstamped files (the report, the quote) are still its own.
+_BESIDE_WINDOW_S = 15 * 60.0
+
+
+def beside_the_book(book_path: Any, started_at: float = 0.0) -> List[Path]:
+    """THE FILES WRITTEN BESIDE A RUN'S WORKBOOK ARE THE RUN'S, WHEREVER THE WORKBOOK IS
+    (12 Nov 2026). The second runner's engine wrote its first files under its own checkout and
+    its workbook, record, covering note, walkthrough and report into the main checkout's
+    estimates folder. The collector looked only in its own tree and took the workbook because
+    the engine declared it: three finished estimates went out as a list of files headed "not
+    reported/unit", with their notes and records sitting on disk beside their workbooks.
+
+    Named for the workbook, "<job>_<date>_<time>_...", they are this run's without question.
+    Named for the job only ("<job>_report.html", "<job>_quote_PORTAL.html"), they are this
+    run's when written after the run began and within a quarter hour of its workbook: a later
+    run of the same job overwrites them, and an earlier run's are older than this one's start.
+    Never another run's stamped files, and never another job's."""
+    book = Path(str(book_path))
+    m = _BOOK.match(book.name)
+    if not m:
+        return []
+    stem, job = book.name[:-len(".xlsx")], m.group("job")
+    written = _stamp(m.group("d"), m.group("t"))
+    try:
+        entries = sorted(p for p in book.parent.iterdir() if p.is_file())
+    except OSError:
+        return []
+    out: List[Path] = []
+    for p in entries:
+        name = p.name
+        if p == book or name.startswith("~$"):
+            continue
+        if name.lower().startswith(stem.lower() + "_"):
+            out.append(p)
+            continue
+        if not (name.lower().startswith(job.lower() + "_") or name.lower().startswith(job.lower() + ".")):
+            continue
+        rest = name[len(job):]
+        if re.match(r"^_\d{8}_\d{6}(?:[_.]|$)", rest):
+            continue                                  # another run of this job
+        if re.match(r"^[-A-Za-z0-9]", rest[1:2] or "") and rest[:1] == "-":
+            continue                                  # "<job>-02..." is another drawing
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        if started_at and mtime + 1.0 < started_at:
+            continue
+        if written and not (written - 60.0 <= mtime <= written + _BESIDE_WINDOW_S):
+            continue
+        out.append(p)
+    return out

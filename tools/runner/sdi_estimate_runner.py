@@ -291,6 +291,35 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
             _seen.add(key)
             _wanted.append(item)
 
+    # AND WHAT LIES BESIDE THE RUN'S OWN WORKBOOK, WHEREVER THAT IS (12 Nov 2026). A second
+    # runner's engine wrote its workbook, record, note and walkthrough into the main checkout's
+    # estimates folder; only the workbook was declared, so only the workbook was filed and
+    # three estimates went out with no note. src/own_record.beside_the_book names them.
+    _beside = 0
+    try:
+        import own_record as _orc_b                       # noqa: PLC0415  (path set just below)
+    except Exception:                                      # noqa: BLE001
+        try:
+            _own_record_rules()
+            import own_record as _orc_b                   # noqa: PLC0415
+        except Exception:                                  # noqa: BLE001
+            _orc_b = None
+    if _orc_b is not None:
+        try:
+            _mine, _why_mine = _orc_b.own_book([{"name": _i.name} for _i in _wanted],
+                                               drawing_number, started_at)
+            for _bk in [_i for _i in list(_wanted) if _mine and _i.name == _mine]:
+                for _sib in _orc_b.beside_the_book(_bk, started_at):
+                    if str(_sib).lower() not in _seen:
+                        _seen.add(str(_sib).lower())
+                        _wanted.append(_sib)
+                        _beside += 1
+        except Exception as _exc_b:                        # noqa: BLE001
+            log.append(f"[collect] could not look beside the workbook: {_exc_b}")
+    if _beside:
+        log.append(f"[collect] {_beside} more file(s) found beside this run's workbook, outside "
+                   f"the folders above")
+
     # ANOTHER JOB'S FILES ARE NOT THIS RUN'S (11 Nov 2026). Whatever writes into this checkout
     # after the last run finished shows up here as new. Where the files name this run's own
     # workbook and another job's too, the other job's stay behind, and the log says which.
