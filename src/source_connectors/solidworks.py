@@ -987,6 +987,8 @@ def native_extract_for_job(
                 job.meta["files_read"] = _man.get("files_read")
                 job.meta["files_failed"] = _man.get("files_failed")
                 job.meta["extract_errors"] = _man.get("errors")
+                job.meta["extract_written_at"] = _man.get("written_at")
+                job.meta["extract_reader_build"] = _man.get("reader_build")
             _recs = _payload.get("records") or []
             _failed = [r for r in _recs if isinstance(r, dict) and r.get("errors")]
             _read = [r for r in _recs

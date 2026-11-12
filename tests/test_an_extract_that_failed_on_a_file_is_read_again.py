@@ -57,3 +57,15 @@ def test_an_unreadable_extract_counts_no_failures_and_is_left_to_the_other_rules
     bad = tmp_path / "_sw_native_extract.json"
     bad.write_text("{not json", encoding="utf-8")
     assert S.files_the_extract_left_unread(bad) == 0
+
+
+def test_the_extract_says_which_reader_wrote_it_and_when():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sw_native_analyse_build", ROOT / "tools/solidworks/sw_native_analyse.py")
+    sw = importlib.util.module_from_spec(spec); sys.modules[spec.name] = sw; spec.loader.exec_module(sw)
+    build = sw.reader_build()
+    assert build.startswith("sw_native_analyse ") and len(build.split()[-1]) == 12 and build == sw.reader_build()
+    text = (ROOT / "tools/solidworks/sw_native_analyse.py").read_text(encoding="utf-8")
+    assert '"written_at":' in text and '"reader_build": reader_build()' in text
+    conn = (ROOT / "src/source_connectors/solidworks.py").read_text(encoding="utf-8")
+    assert 'job.meta["extract_reader_build"]' in conn and 'job.meta["extract_written_at"]' in conn

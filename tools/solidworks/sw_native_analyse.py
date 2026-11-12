@@ -260,6 +260,16 @@ def same_file_by_content(a: str, b: str) -> bool:
         return False
 
 
+def reader_build() -> str:
+    """This reader's identity: the first 12 hex of the SHA-256 of its own source."""
+    try:
+        import hashlib
+        with open(os.path.abspath(__file__), "rb") as fh:
+            return "sw_native_analyse " + hashlib.sha256(fh.read()).hexdigest()[:12]
+    except Exception:                                                # noqa: BLE001
+        return "sw_native_analyse (build unreadable)"
+
+
 def wait_for_a_held_title(open_again, find_open, tries: int = 0, wait_s: float = -1.0,
                           sleep=None):
     """(document or None, what happened). A file refused because another document of its
@@ -2392,6 +2402,11 @@ def main():
             # analyser automatically now that it no longer closes anyone's work, so it
             # travels with the extract instead of scrolling past in a console.
             "read_from_open_documents": list(getattr(session, "borrowed_seen", []) or []),
+            # WHICH READER WROTE THIS, AND WHEN (12 Nov 2026). An extract is kept beside the
+            # pack and reused by later runs. Without these two lines nothing could tell a
+            # read made a minute ago by this build from one made yesterday by an older one.
+            "written_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "reader_build": reader_build(),
             "files_seen": len(all_results),
             "files_read": len(_ok),
             "files_failed": len(_errors),

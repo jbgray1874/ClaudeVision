@@ -3821,6 +3821,8 @@ def _finalize_scan_summary(
                     "freshness_check": _sw_job.meta.get("freshness_check"),
                     "files_read": _sw_job.meta.get("files_read"),
                     "files_failed": _sw_job.meta.get("files_failed"),
+                    "extract_written_at": _sw_job.meta.get("extract_written_at"),
+                    "extract_reader_build": _sw_job.meta.get("extract_reader_build"),
                     "native_files_present": _sw_job.meta.get("native_files_present"),
                     "native_files_fingerprint": _sw_job.meta.get("native_files_fingerprint"),
                     "analyser_error": _sw_job.meta.get("analyser_error"),
