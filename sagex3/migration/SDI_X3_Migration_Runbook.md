@@ -2140,3 +2140,73 @@ Read-only look-round, with nothing changed. Screenshot each screen for the runbo
 11. **Dashboards / landing pages:** what Customer Service will see (CS-08).
 
 Send the screenshots or notes back, and they'll be logged here against each question in the e-mail. Some questions may be answered before Neil replies.
+
+### 21.4 Likely solutions – estimating import (EST-10) and Live Orders (LO-00) (12 Nov, proposal)
+
+**Estimating spreadsheet → X3** (Dave Wright's IMPORT.xls; the yellow cells hold the drawing / rev, BOM, wire, sheet and labour).
+
+*Stage 1 – works now, no API needed.* A converter, built like the migration kit, reads the estimate workbook and writes the **same X3 import files we already produce**:
+- product (ZSDIITM layout), BOM (YA00408BOM), route (ZSDIROU2) and cost (YITC);
+- with the agreed work-centre map (30 matched; OVEN still to map; SALV to confirm) and run time in minutes → X3's unit;
+- and checks before anything is written:
+  - the parent code is new (or flagged as an update);
+  - every component exists in X3 (or is created as a new product);
+  - every work centre is valid;
+  - quantities are > 0.
+- The user loads the files in Usage → Imports.
+- Tested on the "IMPORT" parent part in test.
+
+*Stage 2 – the target, once the API client exists.* An **"Estimate → X3" app** (a button / web page, the same pattern as the rebate app):
+1. Reads the won estimate.
+2. **Checks it live against X3 through the API**: does the part exist, do the components and work centres?
+3. Shows a preview of what will be created or changed.
+4. Writes the product, BOM, route and cost through the API (or submits the import through the batch server).
+5. Returns the X3 references and keeps a log.
+
+**Repeatable:** run it twice and it updates, never duplicates. Later, it's triggered by the won opportunity / project (OPP-04).
+
+**Depends on:**
+- the API client;
+- the PHANT decision (sub-assemblies);
+- Marc mapping OVEN;
+- agreed part numbering (drawing no + rev).
+
+**Live Orders with stock checks, BOMs and routes** (Dave Wright / Rachael Smith: "can't function without it").
+
+*Check X3 standard first* (Acuity to demo):
+- works-order planning;
+- the MRP workbench / suggestions;
+- the work-centre load inquiry;
+- material shortages / availability;
+- dashboards.
+
+Part of the need may be standard. LO-01 (the sit-down) decides the rest.
+
+*Likely build for the rest* – an SDI board fed by X3:
+- **Data:** read through the API every 10–15 minutes (or pushed by webhooks), into a small SDI cache:
+  - open works orders with their BOM and operations (MFGHEAD / MFGITM / MFGOPE);
+  - sales orders (SORDERQ);
+  - stock and allocations (STOCK);
+  - open POs (PORDERQ);
+  - BOMs (BOMD), routes (ROUOPE) and MRP suggestions.
+- **Calculations:**
+  - **Material status per works order:** explode the BOM × quantity, set against free stock, allocations and PO due dates. Red: short with no PO. Amber: short, covered by a PO arriving before the start. Green: available. It replaces today's free-text column.
+  - **Work-centre load:** route time × quantity, by week by work centre, against capacity.
+  - **WO suggestions** from MRP, with parts with **no BOM or no route** flagged red ("can't make yet").
+  - **Exploded BOM with availability** (also covers REP-03).
+- **Front end:**
+  - an SDI-branded web board with filters (work centre, customer, due week, status);
+  - drill-down from order → works order → exploded BOM;
+  - Excel export;
+  - notes / priority held on the SDI side, or in an X3 custom field via the API.
+- **Depends on:**
+  - the API client;
+  - X3 work-centre capacities and MRP set-up (REP-08);
+  - the PHANT decision;
+  - LO-01, to agree columns, rules and who updates what.
+
+**Suggested order:**
+1. Estimating stage 1, now.
+2. LO-01 sit-down and the X3 standard demo.
+3. Once the API client exists: estimating stage 2 and a first Live Orders board (material status + work-centre load).
+4. Each one proved against today's spreadsheets before anyone relies on it.
