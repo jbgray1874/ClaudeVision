@@ -1731,3 +1731,20 @@ Ethan was told to disregard **both** files sent on 11 Nov with the lines: `YA004
 - **Until then:** nothing is re-sent; X3 keeps the Run 4 file.
 - **BICY is not affected.**
 - **If Ethan and Jim choose differently:** (b) supplier ref still needs suffixes where it repeats; (c) loses data as described in 19.12.
+
+**12 Nov: Run 4 BISY rebuilt to prove it is the right file.**
+- Rebuilt from the 4 Nov evening run (`ONLY=YA004BISY`, lines off) into `repro_BISY_12Nov/`.
+- The txt is byte-for-byte the file loaded in Run 4, and every cell on every tab of the xlsx is identical.
+- Copied to `deliver/BISY_Run4/YA004BISY_guide_MAPPED_Run4_as_loaded.*`.
+
+How to tell the two files apart:
+
+| | Run 4 (correct) | 11 Nov lines version (withdrawn) |
+|---|---|---|
+| Tabs | Mapping, Notes, Data with Headings, Guide | the same + **Lines** |
+| Line (column R) | 1 on every row | up to 18 (415 rows not 1) |
+| Size, xlsx / txt | 277,346 / 352,566 bytes | 312,005 / 353,016 bytes |
+| MD5, xlsx | 134843c4d2bfdd00d377cdf34edb6fce | 271dbf3400b4e251f10592c4b6b327cc |
+| MD5, txt | a5eb08a22aa2f99838b57ad738bbb299 | 83336853c8de59cd193b972355ec2737 |
+
+Both have 2,056 rows and GBP £6,813,472.18.
