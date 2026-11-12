@@ -368,10 +368,9 @@ SELECT
          WHEN 'ADR' THEN 'MJDT'
          WHEN 'ACR' THEN 'MJCT'
          ELSE 'MINV' END                                        AS InvoiceType,
-    CASE WHEN s.ref_seq = 1 THEN LTRIM(RTRIM(s.PT_HEADER_REF)) COLLATE DATABASE_DEFAULT
-         ELSE LEFT(LTRIM(RTRIM(s.PT_HEADER_REF)), 18) COLLATE DATABASE_DEFAULT
-              + '-' + CAST(s.ref_seq AS varchar(4))
-    END                                                         AS Document,
+    -- Document = the Access transaction number (PT_PRIMARY): unique, in Access, nothing made up
+    -- (agreed with Ethan / Jim, 12 Nov). The 5xxxxxx number is the PO number: it goes in Comments2.
+    CAST(s.PT_PRIMARY AS varchar(20))                           AS Document,
     xs.SAGE_CODE                                                AS Supplier,
     'S01A'                                                      AS Site,
     '20261031'                                                  AS AccountingDate,  -- ACCOUNTING DATE
@@ -395,15 +394,14 @@ SELECT
                    THEN 'BAC_IMM' ELSE 'TFR_IMM' END
          WHEN LTRIM(RTRIM(ISNULL(s.PT_CURRENCYCODE, ''))) IN ('EUR', 'USD')
          THEN 'TFR_IMM' ELSE 'BAC_IMM' END                      AS PaymentTerms,
-    -- The supplier's reference, else the order number, else the document. Each is NULLIF'd:
-    -- Access holds a missing order number as '' not NULL, which stopped the COALESCE there and
-    -- left 317 items blank on 28 Oct.
-    LEFT(LTRIM(RTRIM(COALESCE(NULLIF(LTRIM(RTRIM(s.PT_HEADER_REF2)) COLLATE DATABASE_DEFAULT, ''),
-                              NULLIF(LTRIM(RTRIM(s.PT_ORDER_NUMBER)) COLLATE DATABASE_DEFAULT, ''),
-                              s.PT_HEADER_REF   COLLATE DATABASE_DEFAULT, ''))), 20)
+    -- The supplier's own reference (PT_HEADER_REF; PT_HEADER_REF2 if that is ever blank). 12 Nov:
+    -- the order number no longer stands in here - it is the PO number and has its own column.
+    LEFT(LTRIM(RTRIM(COALESCE(NULLIF(LTRIM(RTRIM(s.PT_HEADER_REF)) COLLATE DATABASE_DEFAULT, ''),
+                              NULLIF(LTRIM(RTRIM(s.PT_HEADER_REF2)) COLLATE DATABASE_DEFAULT, ''),
+                              CAST(s.PT_PRIMARY AS varchar(20))))), 20)
                                                                 AS SourceDocument,
     LEFT(LTRIM(RTRIM(ISNULL(s.PT_DESCRIPTION, ''))), 30) COLLATE DATABASE_DEFAULT        AS Comments1,
-    ''                                                          AS Comments2,
+    LEFT(LTRIM(RTRIM(ISNULL(s.PT_ORDER_NUMBER, ''))), 30) COLLATE DATABASE_DEFAULT     AS Comments2,  -- the PO number, blank if none
     ''                                                          AS Comments3,
     1                                                           AS Line,
     'S01A'                                                      AS LineSite,

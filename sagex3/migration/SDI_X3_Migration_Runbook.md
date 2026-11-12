@@ -218,7 +218,10 @@ Document, Supplier, **Company**, Site, Accounting Date, Currency, GBP Amount, ..
 - Company in column D, as BICY (C01). Document and Source Document swapped as BICY: 454 repeated
   values take -2, -3. The blanks Acuity filled with BLANK are already filled from the document
   reference (the 317 above), so none reach X3 blank.
-- **Lines, not suffixes (Ethan / Jim, 11 Nov, Run 4). ON HOLD 12 Nov, `LINES=1` only: see 19.12. The 5xxxxxx number is the PO number.**
+- **12 Nov, AGREED with Ethan / Jim, and it supersedes everything above for BISY:** Document (B) = Access transaction number
+  (PT_PRIMARY); Source Document (N) = supplier's reference; Comments (P) = PO number (blank if none);
+  Line = 1; no swap, no suffixes. Done in `vw_BISX_V2` (`sql/views_v2.sql`) and `build_bicy_bisy.py`. Section 19.13.
+- **Lines, not suffixes (11 Nov) – WITHDRAWN 12 Nov (`LINES=1` only): the 5xxxxxx number is the PO number, see 19.12.**
   Document (B) is the Access document number (5 and six digits), never one we made up. Rows that
   share an Access number (same supplier, currency, terms, type) are lines 1, 2, 3 of that one
   document (Line, column R), written next to each other; header GBP Amount and Transaction Amount
@@ -1748,3 +1751,64 @@ How to tell the two files apart:
 | MD5, txt | a5eb08a22aa2f99838b57ad738bbb299 | 83336853c8de59cd193b972355ec2737 |
 
 Both have 2,056 rows and GBP £6,813,472.18.
+
+### 19.13 Ethan, 12 Nov 09:39 and 09:50: document number agreed; BRW500 dates; customer accounting codes; aged-report sign-off
+
+**1. BISY document number – agreed.**
+- Ethan: the repeated numbers were his mistake. Every Document must be unique, Line is always 1, and X3 accepts a row as long as no Document is missing.
+- Agreed layout: B = Access transaction number, N = supplier's reference (as now), Comments = PO number (blank if none). "That works for X3 and for reconciling against Access."
+- **Done:**
+  - `sql/views_v2.sql`, `vw_BISX_V2`:
+    - `Document = CAST(PT_PRIMARY AS varchar(20))`;
+    - `SourceDocument = PT_HEADER_REF` (PT_HEADER_REF2, then PT_PRIMARY, if blank);
+    - `Comments2 = PT_ORDER_NUMBER`.
+    - The `ref_seq` in its CTE is now unused.
+  - `scripts/build_bicy_bisy.py`:
+    - BISY is no longer swapped (`SWAP_BISY=1` brings back the old swap, for the 4 Nov extract only).
+    - New checks: every Document is all digits and unique, none equals N, and Line = 1.
+    - On an old extract the build stops: "a Document is not an Access transaction number".
+- **Tests (12 Nov):**
+  - The 4 Nov extract with `SWAP_BISY=1` still reproduces the Run 4 BISY byte for byte.
+  - BICY is unchanged, byte for byte.
+  - Simulated new-view data builds cleanly, e.g. `MINV;60001;SIG500;…;0000013372;Purchase Overhead;5029976;;1;…`.
+- **Needs the next live run:** James runs `sql/views_v2.sql` (now changes our own view only), then `rebuild/sql/extract_transactions.sql`.
+- **BICY** still uses the order number with suffixes (170) and fills blanks (20). Ethan's "every number unique, none of our own" points the same way: BICY could use ST_PRIMARY. **Raised with Ethan, not changed.**
+
+**2. BRW500 1209156 failed on dates, not the document number.** Source date (J) must not be after the accounting date (F). The invoice is dated 02/11/2026 and F was 31/10/2026.
+- In the Run 4 files:
+  - BISY: 1 item (this one) is dated after F;
+  - BICY: **59 items (£763,936.91) are dated 2–4 Nov**, because the extract was taken on 4 Nov with F fixed at 31/10. Ethan reported no date errors on BICY; asked him to check.
+- **Cause:** the accounting date (31/10, hard-coded as `'20261031'` in the views and `ACCOUNTING_DATE` in `populate_guides.py`) is earlier than the extract date (4 Nov).
+- **Fix to decide (James):**
+  - (a) Accounting date = extract date. Recommended: it's the go-live rule (31 Dec / 31 Dec), and it matches the open items to the day.
+  - (b) Keep 31/10 and drop or hold items dated after it. That leaves the ledgers incomplete against Access.
+- **Not changed yet.**
+
+**3. Customer accounting code (ACCCOD), YA004BPC.**
+- All 303 customers were loaded STD, so every customer debit posted to one control account. There should be three:
+  - STD = Unassigned;
+  - EU = Assigned EUR;
+  - ID = Assigned (taken to mean the invoice discounting facility; to confirm).
+- **Action: James and Claire.**
+  - `deliver/Finance_Customer_Accounting_Codes.xlsx`: 303 customers, the 83 with open items first, largest balance first, with a STD/EU/ID drop-down (blank = STD). There are 21 EUR customers.
+  - Once it's back, the codes go into `YA004BPC` (column Q, ACCCOD) and Ethan reloads customers before BICY.
+- Confidential (names and balances), so it stays inside SDI.
+
+**4. Aged debtors / creditors sign-off.**
+- Ethan sent the X3 trial balance after the SL/PL load, plus the Aged Debtors and Aged Creditors reports from X3. The relevant person must sign them off against the same reports from Access "as at 31/10".
+- **Watch:** X3 holds the open items as extracted on **4 Nov 18:39**, not as at 31/10. Run the Access reports as at the same moment, or reconcile on the extract's control totals:
+  - customers £8,506,050.44 gross, 814 items;
+  - suppliers £6,813,472.18 gross, 2,056 items;
+  - net basis as in 19.9.
+  Otherwise payments and invoices from 1–4 Nov show as differences.
+- Action: James forwards it to Claire (Finance) with Ethan's reports.
+
+**Next:** Ethan wants a new import run of every file we have, once these changes are made. Order:
+1. ACCCOD back from Claire.
+2. The accounting-date decision.
+3. Re-run views and extracts on the day.
+4. Full rebuild.
+
+Every file, every run (rule 1e).
+
+**Lesson:** a fixed accounting date in a view goes stale the moment the extract is taken on a later day. Every date set in the build must follow the run date.

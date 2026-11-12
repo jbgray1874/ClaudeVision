@@ -21,6 +21,10 @@ What changed from BICX / BISX (James, 28 Oct):
     Off by default since 12 Nov (LINES=1 turns it on): the 5xxxxxx number turned out to be the
     Access PURCHASE ORDER number (PT_ORDER_NUMBER), so rows sharing it are separate supplier
     invoices against one PO, not lines of one invoice. Runbook 19.12.
+  * BISY from 12 Nov (agreed with Ethan / Jim): NO swap. The view now gives Document = the Access
+    transaction number (PT_PRIMARY), Source Document = the supplier's reference, Comments2 = the PO
+    number (blank if none), Line = 1. The build checks every Document is unique, all digits and
+    never equal to the Source Document. SWAP_BISY=1 restores the old swap (only for an old extract).
 Everything else is the BICX / BISX file exactly as built (populate_guides.py): same rows,
 same values, same order. The build reads every data row back and checks that.
 
@@ -44,6 +48,7 @@ SRC = os.environ.get("SRC_DIR", f"{BASE}/out_mapped")
 OUT = os.environ.get("OUT_DIR", f"{BASE}/out_mapped")
 COMPANY = os.environ.get("COMPANY", "C01")
 SWAP = os.environ.get("SWAP", "1") != "0"
+SWAP_BISY = os.environ.get("SWAP_BISY", "0") == "1"   # 12 Nov: BISY takes the view's columns as they are
 LINES = os.environ.get("LINES", "0") == "1"   # off (12 Nov): the 5xxxxxx number is the PO number, not the invoice - see runbook 19.12
 ONLY = os.environ.get("ONLY")             # e.g. ONLY=YA004BISY rebuilds just that file
 ACCESS_DOC = re.compile(r"5\d{6}")      # an Access purchase document number: 5 and six digits
@@ -165,9 +170,10 @@ def build(old, new, bp, drop_curled):
     for r in range(2, d.max_row + 1):
         if d.cell(r, 1).value is not None:
             d.cell(r, 4, COMPANY or None)
-    swapped = swap(d) if SWAP else Counter()
+    do_swap = SWAP and (new != "YA004BISY" or SWAP_BISY)
+    swapped = swap(d) if do_swap else Counter()
     multi = None
-    if LINES and new == "YA004BISY" and SWAP:
+    if LINES and new == "YA004BISY" and do_swap:
         multi = lines(d)
 
     # read back: the same rows, with Company in D and (BISY) no CURLED
@@ -204,12 +210,18 @@ def build(old, new, bp, drop_curled):
         expect.append(r[:3] + [COMPANY or None] + r[3:])
     if expect is None:
         pass
-    elif SWAP:                           # B and N swapped: the old B is now N, every new B unique
+    elif do_swap:                        # B and N swapped: the old B is now N, every new B unique
         assert [a[BPRVCR - 1] for a in after] == [e[NUM - 1] for e in expect], new
         assert len({a[NUM - 1] for a in after}) == len(after), new + ": a Document is used twice"
         assert all(str(a[NUM - 1] or "").strip() not in ("", "0") for a in after), new
         expect = [e[:NUM - 1] + [a[NUM - 1]] + e[NUM:BPRVCR - 1] + [a[BPRVCR - 1]] + e[BPRVCR:]
                   for e, a in zip(expect, after)]
+    if new == "YA004BISY" and not do_swap:   # Document = Access transaction number (12 Nov)
+        docs = [str(a[NUM - 1]) for a in after]
+        assert all(x.isdigit() for x in docs), new + ": a Document is not an Access transaction number (old extract? see SWAP_BISY)"
+        assert len(set(docs)) == len(docs), new + ": a Document is used twice"
+        assert not any(str(a[NUM - 1]) == str(a[BPRVCR - 1]) for a in after), new + ": Document = Source Document"
+        assert all(a[LINE - 1] == 1 for a in after), new + ": Line is not 1"
     if expect is not None:
         assert [a[:len(e)] for a, e in zip(after, expect)] == expect and len(after) == len(before), new
 
@@ -247,16 +259,18 @@ def build(old, new, bp, drop_curled):
                   + (". 11 Nov (Ethan): Document is the Access number; rows sharing one are lines 1, 2, 3 of "
                      "that document, written together, header amounts = document total. See the Lines tab"
                      if multi else "")
+                  + (". 12 Nov (Ethan / Jim): Document = Access transaction number, Source Document = supplier "
+                     "reference, Comments (P) = PO number, Line = 1" if new == "YA004BISY" and not do_swap else "")
                   + (". Document (B) and Source Document (N) swapped, as Acuity did for Run 2: "
                      f"{swapped['repeat']} repeated values took -2, -3 and {swapped['blank']} blank or 0 took "
-                     "the Access invoice number, so every Document is unique" if SWAP else "")
+                     "the Access invoice number, so every Document is unique" if do_swap else "")
                   + ". Every row and value is otherwise as in the " + old + " file.")
     path = f"{OUT}/{new}_guide_MAPPED.xlsx"
     wb.save(path)
     txt, n_lines, _ = write_load(path, "Data with Headings", 2)     # one heading row (rule 1c)
     assert n_lines == len(after), (n_lines, len(after))
     print(path.split("/")[-1], len(after), "rows checked,", len(after[0]) if after else 0, "columns",
-          f"| company {COMPANY} | swap: {dict(swapped)}" if SWAP else f"| company {COMPANY} | no swap")
+          f"| company {COMPANY} | swap: {dict(swapped)}" if do_swap else f"| company {COMPANY} | no swap")
 
 
 if ONLY in (None, "YA004BICY"):
