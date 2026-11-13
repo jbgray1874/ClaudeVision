@@ -2255,12 +2255,25 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
     # members looked like uncoated steel, so the GA was coated again over two coated
     # sub-assemblies. A name that is a job record's code plus a sub-assembly word is that
     # record.
+    # A SPACE IS NOT A DIFFERENT ASSEMBLY (12773-01-GA 17:07, 12 Nov 2026). The drawing printed
+    # "12773-02GA" and the model named the same sub-assembly "12773-02 GA". No record matched
+    # the model's name, so the product's edge to it was dropped, and its eight children were
+    # then "reached only from" another model in the pack and set aside uncosted. The graph
+    # already joins two spellings that differ only by white space; the tree uses the same rule,
+    # and only where exactly one record answers to the spelling.
+    _spaceless: Dict[str, List[str]] = {}
+    for _c in by_code:
+        _spaceless.setdefault(re.sub(r"\s+", "", _c), []).append(_c)
+
     def _resolve(name: Any) -> str:
         code = _clean_pn(str(name or "")).upper()
         if code in by_code:
             return code
         stem = model_assembly_stem(code)
-        return stem if stem and stem in by_code else code
+        if stem and stem in by_code:
+            return stem
+        same = _spaceless.get(re.sub(r"\s+", "", code)) or []
+        return same[0] if len(same) == 1 else code
 
     # TWO PHASES: STAMP THE PARENTS THAT EXIST, THEN JUDGE THE ONES THAT DON'T. The
     # minting decision below needs to know which children the job's REAL assemblies
