@@ -299,6 +299,15 @@ Tube, then the TTI jobs.
 
 ---
 
+### 13 Nov 2026 evening: the release went live, and two tooling faults it exposed (e95107df)
+
+- **Live.** Laptop checkout `65075d2a` contains `7f7f9790`. Both services and both runners report `65075d2`. The reruns of the weekly jobs started at 21:00 through Self-Running. A finished run is not acceptance: each record is checked against the standing list on SCRUM-274.
+- **"2 SEPARATE RUNNERS STARTED" was a false alarm** (`bc0efa8c`). `restart-runner.ps1` matched every runner process on the machine, so the main runner's restart ended slot 2 too and then counted slot 2's return as a second main runner. A restart now touches only the slot asked for, read from `--slot` on the command line. There was never a second starter.
+- **The publish left the watcher refused by its own lock** (`bc0efa8c`). A stopped watcher cannot release `live_enquiry.lock` and a new one refuses a lock touched in the last ten minutes. The publish step now ends leftover watcher processes, clears a lock whose holder has gone, will not remove one whose holder is alive, and waits to hear the watcher on 8071. Until that is deployed, `install-self-running-task.ps1` is the way to bring the watcher back.
+- **A pack and the versions kept of it are one pack** (`e95107df`). Rows were held with "2 folders fit: X, X v2 - leave one" because the pack store files a changed pack beside the old one. The share now chooses: a folder a person made (no pack manifest, drawings in it) wins; otherwise the newest version; two folders a person made are still held. Nothing is deleted. Held on this at the time: 11896-01-00-GA, 11896-04-00-GA, 11896-08-01-GA.
+- **Not proved on the laptop yet:** the two PowerShell changes could not be run in the cloud session. Their first proof is the next publish.
+- **Still a sheet change, not software:** 11896-02-01-GA runs at 1 and 8 until 68 is on its row.
+
 ## 1. WHAT THE PROJECT IS
 
 SDI Intelligence is a Python engine at `C:\ClaudeVision\src\` that reads PDF + DXF engineering
