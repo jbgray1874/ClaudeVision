@@ -435,6 +435,34 @@ def fingerprint(files: Sequence[Path]) -> str:
     return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:12]
 
 
+_A_KEPT_VERSION = re.compile(r"\s+v(\d+)$", re.IGNORECASE)
+
+
+def the_pack_among_its_versions(folders: Sequence[Path]) -> Optional[Path]:
+    """The folder to price where every folder is one pack or a version kept of it ("X",
+    "X v2", "X v3" - the names src/pack_store.py gives), else None and the caller holds.
+
+    A folder a person made wins (JG, 10 Nov 2026): it carries no pack manifest of ours and
+    holds a drawing. Exactly one such is the pack. None such, and the newest version is: that
+    is the one the store filed last. Two a person made is a question only a person answers."""
+    import pack_store as ps
+    numbered = []
+    for f in folders:
+        m = _A_KEPT_VERSION.search(f.name)
+        numbered.append((int(m.group(1)) if m else 1,
+                         (f.name[:m.start()] if m else f.name).strip().casefold(), f))
+    if len({base for _n, base, _f in numbered}) != 1 or \
+            len({n for n, _b, _f in numbered}) != len(numbered):
+        return None                 # not one pack's versions: different packs, or a clash
+    by_hand = [f for _n, _b, f in numbered if not (f / ps.MANIFEST).exists()
+               and any(p.suffix.lower() in DRAWING_EXTENSIONS for p in pack_files(f))]
+    if len(by_hand) == 1:
+        return by_hand[0]
+    if by_hand:
+        return None
+    return max(numbered)[2]
+
+
 @dataclass
 class Located:
     status: str                    # found | waiting | held
@@ -508,6 +536,18 @@ class LiveEnquiryShare:
                            client_folder_name=client_dir.name, source=self.name)
         where = "the root" if at_root else client_dir.name
         client_name = "" if at_root else client_dir.name
+        kept_versions = ""
+        if len(hits) > 1:
+            # ONE PACK AND THE VERSIONS KEPT OF IT ARE ONE PACK (JG, 13 Nov 2026). Three rows
+            # were held with "2 folders fit: X, X v2 - leave one". The second folder was the
+            # pack store's own: a changed pack is filed beside the old as "X vN" so nothing is
+            # lost, and the next read then met two folders and stopped. Nothing is deleted;
+            # the folder to price is chosen and said.
+            chosen = the_pack_among_its_versions(hits)
+            if chosen is not None:
+                kept_versions = (f"; {len(hits) - 1} other version(s) kept beside it and not "
+                                 f"read: {', '.join(h.name for h in hits if h != chosen)}")
+                hits = [chosen]
         if len(hits) > 1:
             return Located("held", f"{len(hits)} folders under {where} fit {row.drawing}: "
                                    f"{', '.join(h.name for h in hits)} — leave one",
@@ -521,7 +561,8 @@ class LiveEnquiryShare:
                                       f"(only files directly in the folder are read)",
                            folder=folder, client_folder_name=client_name, files=files,
                            source=self.name)
-        return Located("found", f"{len(drawings)} drawing(s) in {folder.name}{old_layout}",
+        return Located("found", f"{len(drawings)} drawing(s) in {folder.name}{old_layout}"
+                                f"{kept_versions}",
                        folder=folder, client_folder_name=client_name, files=files,
                        source=self.name)
 
