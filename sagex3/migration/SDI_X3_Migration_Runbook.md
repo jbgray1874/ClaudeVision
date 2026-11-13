@@ -2448,7 +2448,7 @@ The agenda is in the chat (13 Nov). The pre-reads and the decision / action log 
 
 **Confidential: Directors don't want the rebate figures visible to AMs.** So:
 - **No agreement figures or customer names in git, Jira or the register.**
-- The terms, account list and open points live in a **private parameters file** in the scratchpad: `finance_private/boots_rebate_params.json`, folder mode 700. The finance workbook and the revenue query are in the same folder.
+- The terms, account list and open points live in a **private parameters file** in the scratchpad: `finance_private/partner_rebate_params.json`, folder mode 700. The finance workbook and the revenue query are in the same folder.
 
 **The agreement in outline** (customer's financial year September – August):
 1. A progressive tiered rebate. **Marginal bands**: each rate applies only to revenue inside its band.
@@ -2471,7 +2471,7 @@ The agenda is in the chat (13 Nov). The pre-reads and the decision / action log 
     - first invoice → window end (EDATE);
     - goods / design → reward, capped.
   - **Open points.**
-- **Private:** `boots_revenue.sql` (read-only, monthly invoiced by account from Sep 2024, the third party's lines for review, the sales-ledger columns). Its purpose is to reconcile to the agreement's two baseline years.
+- **Private:** `partner_revenue.sql` (read-only, monthly invoiced by account from Sep 2024, the third party's lines for review, the sales-ledger columns). Its purpose is to reconcile to the agreement's two baseline years.
 
 **Open points** (in the workbook):
 - Entity scope: one group entity named in the agreement has no SDI account; a hearing-care entity and an Ireland entity – in or out?
@@ -2499,7 +2499,7 @@ Charlotte is checking how today's daily sales report hides the rebate by custome
 
 **Next:**
 1. Charlotte: scope and open points.
-2. James: run `boots_revenue.sql`.
+2. James: run `partner_revenue.sql`.
 3. Reconcile the baseline years.
 4. Current-year estimate.
 5. Referral register populated.
