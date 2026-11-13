@@ -16560,7 +16560,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         # A PIECE IS MADE ONCE FOR EVERY ONE OF ITS PART, IN ITS PART'S MATERIAL (6364-01).
         try:
             from drawing_job_merge import pieces_take_their_parts_count_and_material as _pieces
-            _took = _pieces(parts)
+            _took = _pieces(parts, (summary.get("document_analysis") or {}).get("bom_rows"))
             if _took:
                 summary.setdefault("ai_inference", {})["pieces_from_their_parts"] = _took
                 print("   [pieces] " + "; ".join(

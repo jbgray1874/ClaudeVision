@@ -70,8 +70,16 @@ def test_it_is_applied_once_however_often_it_runs():
     assert _by(parts)["T-011-5MM"]["quantity"] == 3
 
 
+def test_the_parts_gauge_is_not_passed_on_where_its_pieces_state_their_own():
+    # the bin's sheet prints one gauge; its panels are 5 mm and 3 mm by their own files
+    parts = _job() + [_part("T-004-08", 1, "inference", "PETG", "dxf_filename", 5.0, of="T-004")]
+    M.pieces_take_their_parts_count_and_material(parts); p = _by(parts)["T-004-01"]
+    assert p["normalized_material"] == "PETG" and not p.get("normalized_thickness_mm")
+    assert "3, 5 mm" in p["material_from_its_part"]["gauge_not_taken"]
+
+
 def test_a_piece_with_no_material_takes_what_its_parts_sheet_states():
-    parts = _job(); said = M.pieces_take_their_parts_count_and_material(parts); p = _by(parts)["T-004-01"]
+    parts = [q for q in _job() if q["part_number"] != "T-004-09"]; said = M.pieces_take_their_parts_count_and_material(parts); p = _by(parts)["T-004-01"]
     assert p["normalized_material"] == "PETG" and p["normalized_thickness_mm"] == 5.0
     assert p["material_from_its_part"] == {"part": "T-004", "material": "PETG",
                                            "stated_by": "drawing_deterministic", "thickness_mm": 5.0}
@@ -98,4 +106,58 @@ def test_parts_that_are_not_pieces_are_untouched():
 def test_it_runs_before_anything_is_costed():
     est = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
     assert "pieces_take_their_parts_count_and_material as _pieces" in est
-    assert est.index("_inherit(parts)") < est.index("_took = _pieces(parts)")
+    assert est.index("_inherit(parts)") < est.index("_took = _pieces(parts, ")
+
+
+
+# ── the part's own table says how many of each piece (12424-02-GA 14:34, 11 Nov 2026) ────
+# The reader captured eight panels (2, 1, 2 and 3 by size) and four were costed.
+def _insert():
+    panel = lambda n, l, w: dict(_part(f"T-01A-0{n}", 1, "inference", "ACRYLIC", "dxf_filename", 3.0, of="T-01A"),
+                                 overall_length_mm=l, overall_width_mm=w)  # noqa: E731
+    return [_part("T-01A", 1, "solidworks_api", "ACRYLIC", "drawing_deterministic", 3.0),
+            panel(1, 290.0, 260.0), panel(2, 358.0, 264.0), panel(3, 358.0, 290.0), panel(4, 293.0, 260.0)]
+
+
+def _table(parent="T-01A"):
+    row = lambda i, d, q: {"part_number": "", "description": d, "quantity": q,  # noqa: E731
+                           "bom_parent": parent, "bom_item_no": str(i)}
+    return [{"part_number": "T-01A", "description": "INSERT", "quantity": 1, "bom_parent": "T-GA"},
+            row(1, "290 x 260 x 3 mm", 2), row(2, "358 x 264 x 3 mm", 1),
+            row(3, "358 x 290 x 3 mm", 2), row(4, "293 x 260 x 3 mm", 3)]
+
+
+def test_all_eight_panels_reach_costing():
+    parts = _insert(); M.pieces_take_their_parts_count_and_material(parts, _table()); by = _by(parts)
+    assert [by[f"T-01A-0{n}"]["quantity"] for n in (1, 2, 3, 4)] == [2, 1, 2, 3]
+    assert sum(by[f"T-01A-0{n}"]["quantity"] for n in (1, 2, 3, 4)) == 8
+    took = by["T-01A-04"]["quantity_from_its_part"]
+    assert took["per_part"] == 3 and "293 x 260 x 3 mm" in took["basis"] and "item 4" in took["basis"]
+
+
+def test_the_tables_count_is_multiplied_by_the_parts_own():
+    parts = _insert(); parts[0] = _part("T-01A", 5, "solidworks_api", "ACRYLIC", "drawing_deterministic", 3.0)
+    M.pieces_take_their_parts_count_and_material(parts, _table())
+    assert _by(parts)["T-01A-01"]["quantity"] == 10 and _by(parts)["T-01A-02"]["quantity"] == 5
+
+
+def test_a_row_that_fits_two_pieces_gives_neither_its_count():
+    parts = _insert(); parts[4]["overall_length_mm"] = 290.0      # now two 290 x 260 panels
+    M.pieces_take_their_parts_count_and_material(parts, _table()); by = _by(parts)
+    assert by["T-01A-01"]["quantity"] == 1 and by["T-01A-04"]["quantity"] == 1
+    assert by["T-01A-03"]["quantity"] == 2
+
+
+def test_another_parts_table_and_a_coded_row_are_not_used():
+    parts = _insert()
+    M.pieces_take_their_parts_count_and_material(parts, _table(parent="T-99"))
+    assert all(_by(parts)[f"T-01A-0{n}"]["quantity"] == 1 for n in (1, 2, 3, 4))
+    coded = [dict(r, part_number="T-55") if r.get("bom_item_no") else r for r in _table()]
+    parts = _insert(); M.pieces_take_their_parts_count_and_material(parts, coded)
+    assert all(_by(parts)[f"T-01A-0{n}"]["quantity"] == 1 for n in (1, 2, 3, 4))
+
+
+def test_a_gauge_that_differs_is_not_the_same_row():
+    parts = _insert(); parts[1]["normalized_thickness_mm"] = 5.0
+    M.pieces_take_their_parts_count_and_material(parts, _table())
+    assert _by(parts)["T-01A-01"]["quantity"] == 1
