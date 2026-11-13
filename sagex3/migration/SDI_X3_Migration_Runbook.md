@@ -2769,3 +2769,110 @@ An Excel macro in the template was considered and **not recommended**. It would 
 **Recorded:**
 - Register: EST-10, LO-00;
 - Jira: SCRUM-210, 241, 208.
+
+### 22.11 Live Orders board built (13 Nov) – LO-00..05, Jira SCRUM-241 / 245–249
+
+**Code – `sagex3/production/live_orders/`:**
+- **`live_orders.sql`:** read only. Grids CHECK / WOR / SOH / POH / SMR: open works orders (ASC_WOR_TBL), open SO lines, open PO lines and stock (the migration views, already in X3 codes). It uses the same grids as `extract_transactions.sql`, so **either file feeds the board**.
+- **`build_live_orders.py`:** extract + master data in X3 form → `SDI_Live_Orders_<date>.html` + `.xlsx`. Master data:
+  - the products file (ZSDIITM);
+  - BOMs (YA00408BOM);
+  - routes (ZSDIROU2);
+  - `work_centres.csv` for the Access names.
+  - So codes and work centres are already X3's. After go-live, only the transaction source changes (X3 export or API).
+- **`live_orders_app.py`:** web page on port 8767.
+  - "Refresh from Access" through pyodbc (SDI_SQL_CONN, read-only), or upload a saved result.
+  - Boards kept in `runs/` (gitignored).
+  - Master files from LO_PRODUCTS / LO_BOMS / LO_ROUTES; optional LO_DAVE to compare against Dave's workbook.
+
+**What it works out (Dave's three tabs and more):**
+- **Live Orders:** one row per open WO. Balance = (amended or ordered) − made.
+  - **Customer date:** from the WO's sales order (order + product, else the order). "SO not open" if the order isn't open; "Check SO dates" if it has several dates (Dave's own formula, which was broken with #REF!).
+  - Part, description, drawing (part code without the customer prefix), rev.
+  - **Material status:** BOM × balance. Stock is shared out in due-date order; shortages are covered by open PO lines, then by works orders for made components.
+    - **GREEN** in stock;
+    - **AMBER** covered on time, or a call-off material still to order;
+    - **RED** short / late / no BOM.
+    - Call-off list (provisional): SHEETMETAL, POWDER, PACK, PALLET, WIRE, CARRIAGE.
+  - Metal / Joinery / Acrylics from the route's work centres (M / J / A).
+  - **Hours** still to do per X3 work centre: run × balance, + set-up if nothing is made yet.
+  - Comments / Prog / Tube req are left blank for Production (LO-01).
+- **Work-centre load:** hours by week of the due date; overdue counts in this week. Heat-shaded.
+- **WO Suggestions:** SO lines for made parts (BOM, route or FGML) not covered by stock or open WOs. Start = SO due − 14 days. Red = no BOM or no route.
+  - SO lines due more than 60 days ago are **not** suggested; they're listed on Checks.
+- **Exploded BOMs:** all levels, with stock, on PO (next due), on WO and make / buy. A drill-down per WO on the page.
+- **Check against Dave:** WO by WO against `Live_Orders.xlsx`.
+
+**Run on the live Access extract of 4 Nov 18:39** (`runs/2026-11-04-pm/extract/extract_transactions.txt`) with the 4 / 5 Nov master files:
+- **731 WOs to make** (250 top level):
+  - 170 green, 291 amber, 270 red;
+  - 9 with no BOM, 10 with no route;
+  - **11,103 hours** to do;
+  - 135 overdue.
+- **145 WO suggestions** (10 with no BOM / route).
+- **Against Dave's sheet** (saved ~9 Oct, 220 WOs): **102 still open – part the same on all 102, balance the same on 98**. 118 have been completed since.
+- **Data findings for go-live:**
+  - **1,508 of 3,728 open SO lines were due more than 60 days ago.** They migrate as open orders (re-dated to 30 Nov in SOHPJ) – to Selina / CS to close or re-date.
+  - **135 overdue WOs**, some from 2024–25 – to Dave.
+- **Tested:** the page builds from an upload; Refresh is refused cleanly with no connection; filters work (157 red top-level WOs); the drill-down is readable; no JS errors; phone width OK.
+
+**Outputs (scratchpad):** `live_orders/SDI_Live_Orders_2026-11-04.html / .xlsx`, screenshots in `live_orders/shots/`.
+
+**Email to Dave + Rachael (cc Selina), held for the outage – outbox email 8:** 12 questions:
+1. the material rule;
+2. the call-off list and horizon;
+3. top-level vs sub-assembly rows;
+4. which due date drives planning;
+5. hours to do vs total, and set-up;
+6. MCS;
+7. Comments / Prog / Tube req as X3 user fields;
+8. booked in = made;
+9. the 135 overdue WOs;
+10. the 1,508 old SO lines;
+11. the 14-day suggestion lead;
+12. weekly capacity per work centre.
+
+**Next:**
+1. James runs `live_orders.sql` today (read-only), or uses the page's Refresh on an SDI PC, to see today's board.
+2. Dave / Rachael's answers.
+3. LO-01 session.
+4. Switch the source to X3 TEST (Acuity email 6, section C).
+
+### 22.12 Where we are – 13 Nov (Outlook outage day): estimating, Live Orders, Acuity, users
+
+| Workstream | Built | Proved | Waiting on |
+|---|---|---|---|
+| Estimating → X3 (EST-10) | `est_to_x3.py` (both layouts) + `est_app.py` page | Gift card estimate = the part's Access route exactly; BOM the same 8 components | Dave + James Ryan (email 4); Acuity B (email 6); a TEST load of IMPORT |
+| Live Orders (LO-00..05) | `live_orders.sql` + `build_live_orders.py` + `live_orders_app.py` | 102 of Dave's WOs: part 102 / 102, balance 98 / 102 | Dave + Rachael (email 8); Acuity C (email 6); LO-01 |
+| Live Enquiry → opportunity (OPP) | not started – needs Acuity's design | – | Acuity D (email 6) |
+| Rebate report (REP-22) | report + `rebate_app.py` | = Claire's November report to the penny | Claire + Nick (email 7) |
+
+**From Acuity / Sage (email 6, 24 questions):**
+- **A. Connection details:** base URLs, connected app / client ID and secret, integration user, IP restrictions, rate limits, licences, API documentation.
+- **B. Estimating:** re-import replace / add / reject; product-site; scrap; revisions; costs; OVEN / SALV / time unit; rights; product export; stage-2 route.
+- **C. Live Orders:**
+  - read access to WOs (header / products / operations / materials), SO lines, stock and allocations, PO lines, BOMs, routes, MRP;
+  - WO webhooks;
+  - allocation;
+  - WO → SO link;
+  - capacities and MRP in TEST;
+  - WO user fields;
+  - a standard-screens demo.
+- **D. Opportunity:** template / API write; PDFs; won → project.
+- **E.** The 12 Nov items (development rights, reporting, MCP, Vasion).
+
+**Users – emails held in `outbox_13Nov/UNSENT_emails_13Nov.md` (8 emails) + `finance_private/` (Charlotte):**
+1. Selina – report list / TTI.
+2. Debbie – her three daily reports.
+3. Marc – standard report list.
+4. Dave + James Ryan – the estimating import process (14 questions).
+5. Simon (+ Ewa) – 6 report definitions.
+6. Acuity – 24 X3-side questions.
+7. Claire + Nick – the rebate report.
+8. Dave + Rachael – Live Orders (12 questions).
+- Charlotte (private) – the partner rebate.
+
+**Answers already in hand (no need to ask again):**
+- Estimating: the parent = A63 part code; descriptions in D; scrap not on Access BOMs; run minutes = 60 / rate × qty (route matches Access).
+- IMPORT.xls has no macro.
+- Live Orders: Dave's WO numbers = Access top-level WO numbers; his customer-date formula is broken (#REF!).
