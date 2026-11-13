@@ -144,7 +144,7 @@ def family(wc):
 
 
 def drawing_of(code):
-    m = re.match(r"^[A-Z&]{2,5}-(\d.*)$", code)       # BOT-9149-00-GA1 -> 9149-00-GA1
+    m = re.match(r"^[A-Z&]{2,5}-(\d.*)$", code)       # ABC-9149-00-GA1 -> 9149-00-GA1
     return m.group(1) if m else code
 
 

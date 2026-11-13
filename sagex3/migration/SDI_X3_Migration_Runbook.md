@@ -2612,11 +2612,11 @@ Charlotte is checking how today's daily sales report hides the rebate by custome
 - **Sheet steel:** **no code**, only gauge (H) and sheet size (I × J).
 - **Other sheet material:** **no code column**.
 - **Labour:** by **Access department** (G), with a rate per hour (I) and set-up minutes (L).
-- **Parent:** the part code is in the labour block, **A63** (`M&S-0359869`), not the drawing number.
+- **Parent:** the part code is in the labour block, **A63** (the customer part code, e.g. `XX-0359869`), not the drawing number.
 - A **Route Import** tab: the route as the Access import takes it (part code / op number blank).
 
 **Converter (`est_to_x3.py`) now reads both layouts**, told apart by row 10 ("Part code" in H10 = the template):
-- **Parent:** A63, through the migration code rule (M&S-0359869 → MS-0359869). Found in X3 (FGML), so only the BOM and route are written.
+- **Parent:** A63, through the migration code rule (e.g. `X&Y-0359869` → `XY-0359869`: "&" and spaces removed). Found in X3 (FGML), so only the BOM and route are written.
 - **Work centre:** Access department → X3 from `work_centres.csv` (the migration's own map).
 - **Run time:** 60 / rate × qty, in minutes per unit.
 - **Sheet steel:** gauge + sheet size → the X3 SHEETMETAL product whose Description 2 / 3 reads "L x W x Tmm CR4". `--sheet-material` picks ZINTEC / Galvanised instead. Each pick is listed, with the other materials X3 has for that size.
@@ -2643,7 +2643,7 @@ Charlotte is checking how today's daily sales report hides the rebate by custome
 3. **Other sheet material:** add a code column.
 4. Wire gauges 2 / 2.5 / 4.5 / 10mm have no code in the template's gauge table.
 
-**Files:** `est/out_GIFT/` (scratchpad) – MS-0359869 YA00408BOM / ZSDIROU2 / CHECKS.
+**Files:** `est/out_GIFT/` (scratchpad) – the part's YA00408BOM / ZSDIROU2 / CHECKS.
 
 **Recorded:**
 - Register: EST-10 and EST-01;
@@ -2876,3 +2876,5 @@ An Excel macro in the template was considered and **not recommended**. It would 
 - Estimating: the parent = A63 part code; descriptions in D; scrap not on Access BOMs; run minutes = 60 / rate × qty (route matches Access).
 - IMPORT.xls has no macro.
 - Live Orders: Dave's WO numbers = Access top-level WO numbers; his customer-date formula is broken (#REF!).
+
+**Lesson (13 Nov):** part codes carry a customer prefix (e.g. a retailer's initials). Sections 22.7 and 22.11 first went into git with a real customer-prefixed part code. That was corrected in the next commit (history not rewritten, as with c45777d). **Use a neutral example (XX-…, ABC-…) in git; real codes stay in the scratchpad.**
