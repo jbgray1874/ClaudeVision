@@ -806,7 +806,8 @@ def _same_job_key(a: Any, b: Any) -> bool:
 
 # ── request models ───────────────────────────────────────────────────────────
 def _run_log_drop_off(run: "Run", folder: Any, client: str, drawing: str, title: str,
-                      sources: List[str]) -> Dict[str, Any]:
+                      sources: List[str],
+                      left_out: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Keep the staged pack in the drop-off folder and say so (pack_dropoff.py). Never raises."""
     import pack_dropoff
     result: Dict[str, Any] = {"saved": False, "why": "not attempted"}
@@ -827,7 +828,8 @@ def _run_log_drop_off(run: "Run", folder: Any, client: str, drawing: str, title:
         except Exception:                                                # noqa: BLE001
             _rev = None
         result = pack_dropoff.save(folder, client, drawing, _REPO_ROOT, run_id=run.run_id,
-                                   title=title, sources=where, revision_of=_rev, safe=safe_segment)
+                                   title=title, sources=where, revision_of=_rev, safe=safe_segment,
+                                   left_out=left_out)
         line = pack_dropoff.said(result)
         if line:
             run.line(("Drop-off  " if result.get("saved") else "") + line)
@@ -3703,7 +3705,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     # exact files just staged, under <client>\\<drawing> - <title>. It never stops the job; what
     # happened goes in this log and beside the staged drawings, where the note reads it.
     if not _brief_only:
-        _run_log_drop_off(run, folder, client, drawing, str(req.job_title or ""), _sources)
+        _run_log_drop_off(run, folder, client, drawing, str(req.job_title or ""), _sources,
+                          left_out=list((staged or {}).get("skipped") or []))
     run.line(f"Staged    {staged['copied_count']} drawing(s) into {job}"
              + (f" (replaced {staged['replaced_count']} from a previous run)"
                 if staged["replaced_count"] else ""))

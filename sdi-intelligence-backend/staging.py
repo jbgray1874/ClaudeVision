@@ -51,7 +51,16 @@ config = the_service_config(config)   # this service's, even where the engine's 
 # .slddrw belongs here with .sldprt and .sldasm: the engine's own _NATIVE_EXTS counts all three
 # as native model files, so leaving it out made a job with a SolidWorks drawing look like one
 # without.
-DRAWING_SUFFIXES = (".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp")
+# IGS TOO (JG, 13 Nov 2026). The pack resolver gathers .igs and .iges with the rest of a pack
+# and this list left them out, so four files of a pack were found on the design share and
+# then dropped on the way to the job with nothing said. The engine does not read them, any
+# more than it reads a STEP; it names them as seen and not read, which it can only do for a
+# file it was given.
+DRAWING_SUFFIXES = (".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp",
+                    ".igs", ".iges")
+# CARRIED WITH THE PACK, NEVER A REASON TO RUN ONE. A selection holding only these is still
+# "nothing the engine can read", as it was before they were staged.
+CARRIED_NOT_READ = (".igs", ".iges")
 
 # A RENDER IS A DRAWING ONLY WHEN SOMEBODY SAYS IT IS. Customer packs arrive as images as
 # well as PDFs — two renders of an M&S collection bin started this — and the engine reads
@@ -441,7 +450,9 @@ def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:
     """
     folder = job_folder_for(client, drawing)
     files, skipped = _expand(paths)
-    if not files:
+    if not [f for f in files if f.suffix.lower() not in CARRIED_NOT_READ]:
+        skipped = skipped + [(str(f), f"kept with a pack, but the engine does not read "
+                                      f"{f.suffix.lower()} files") for f in files]
         # NOTHING BESIDE THE GA, AND THE DRAWINGS ONE LEVEL DOWN. Sub-folders are never read
         # (D-375), so a job folder whose drawings all sit in a sub-folder stages nothing — and
         # the old sentence named the IGS and HTML files beside them, not the reason. Say which

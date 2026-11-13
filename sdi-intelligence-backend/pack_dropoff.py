@@ -21,6 +21,15 @@ earlier one is left exactly as it was. Nothing is ever deleted, moved or overwri
 THE MANIFEST SAYS WHERE EACH FILE CAME FROM: its source path, revision, size and fingerprint,
 the runs that used this pack, and what the pack resolver found missing or could not read.
 
+A COPY IS NOT CALLED COMPLETE UNLESS IT IS (JG, 13 Nov 2026). Four packs were kept that night
+and three lacked files the resolver had listed, with nothing in the manifest to say so. The
+manifest now says three more things. `engine` on each file: whether the engine reads that
+kind of file at all, or it is kept and not read. `not_in_this_copy`: every file the resolver
+listed, or staging left, that is not in this folder, each with its reason. `complete`: false
+while anything is left out, missing, or an assembly is unread, with `incomplete_because`.
+What a kind of file is given to is not proof it was read on a run: that is in the run's own
+record.
+
 IT NEVER STOPS A JOB, AND A FAILURE IS SAID. `save` returns what happened; the service writes
 it into the run log and beside the staged drawings (PACK_DROPOFF.json), and the covering note
 prints the folder or the failure.
@@ -48,6 +57,54 @@ _OFF = {"off", "0", "no", "false", "none"}
 # part of the pack. The resolver's pack_manifest.json is read into the manifest, not copied.
 _STAGE_NOTE = re.compile(r"[A-Z][A-Z_]+\.json|ENQUIRY_BRIEF\.txt")
 _VERSION = re.compile(r"^(.*) v(\d+)$")
+
+
+# WHAT THE ENGINE DOES WITH A KIND OF FILE, as src/cad_inputs.py has it (a test holds the two
+# together). Said per file so "in the pack" is never read as "read by the estimate".
+_ENGINE = {".pdf": "read by the engine", ".dxf": "read by the engine",
+           ".sldprt": "read through SolidWorks", ".sldasm": "read through SolidWorks",
+           ".slddrw": "read through SolidWorks",
+           ".dwg": "converted to DXF where it can be, then read"}
+_KEPT_NOT_READ = {".step", ".stp", ".iges", ".igs", ".x_t", ".x_b", ".sat", ".stl", ".3dm"}
+
+
+def engine_use(name: str) -> str:
+    suffix = Path(str(name)).suffix.lower()
+    if suffix in _ENGINE:
+        return _ENGINE[suffix]
+    if suffix in _KEPT_NOT_READ:
+        return "kept with the pack; the engine does not read this kind of file"
+    return "supporting file; not a drawing or model"
+
+
+def not_in_this_copy(resolver: Dict[str, Any], copied: List[str],
+                     left_out: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, str]]:
+    """Every file the resolver listed for the pack, or staging left behind, that is not in
+    the copy, with the reason given for it. A file with no reason on record says exactly that."""
+    have = {Path(n).name.lower() for n in copied}
+    why = {}
+    for item in left_out or []:
+        name = Path(str(item.get("path") or "")).name
+        if name:
+            why[name.lower()] = (name, str(item.get("reason") or ""))
+    out, seen = [], set()
+    for member in (resolver or {}).get("members") or []:
+        for f in member.get("files") or []:
+            name = Path(str(f.get("path") or "")).name
+            key = name.lower()
+            if not name or key in have or key in seen:
+                continue
+            seen.add(key)
+            out.append({"name": name, "source_path": str(f.get("path") or ""),
+                        "listed_by": "the pack resolver",
+                        "reason": why.get(key, ("", ""))[1]
+                        or "no reason was recorded when the pack was staged"})
+    for key, (name, reason) in sorted(why.items()):
+        if key not in have and key not in seen:
+            seen.add(key)
+            out.append({"name": name, "source_path": "", "listed_by": "staging",
+                        "reason": reason or "no reason was recorded when the pack was staged"})
+    return out
 
 
 def root(repo_root: Path) -> Optional[Path]:
@@ -97,7 +154,8 @@ def _saved(folder: Path) -> Dict[str, Any]:
 def save(staged_folder: Any, client: str, drawing: str, repo_root: Path, *, run_id: str = "",
          title: str = "", sources: Optional[Dict[str, str]] = None,
          revision_of: Optional[Callable[[str], str]] = None,
-         safe: Callable[[Any], str] = str, now: Optional[datetime] = None) -> Dict[str, Any]:
+         safe: Callable[[Any], str] = str, now: Optional[datetime] = None,
+         left_out: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Keep the staged pack under <drop-off>\\<client>\\<drawing> - <title>. Never raises."""
     out: Dict[str, Any] = {"saved": False, "folder": "", "state": "", "version": 0,
                            "files": 0, "why": ""}
@@ -128,7 +186,8 @@ def save(staged_folder: Any, client: str, drawing: str, repo_root: Path, *, run_
                     had.setdefault("runs", []).append(run)
                     (folder / MANIFEST).write_text(json.dumps(had, indent=1), encoding="utf-8")
                 out.update(saved=True, folder=str(folder), state="unchanged",
-                           version=int(had.get("version") or 1), files=len(files))
+                           version=int(had.get("version") or 1), files=len(files),
+                           incomplete_because=list(had.get("incomplete_because") or []))
                 return out
 
         version = len(earlier) + 1
@@ -154,11 +213,24 @@ def save(staged_folder: Any, client: str, drawing: str, repo_root: Path, *, run_
             listed.append({"name": rel.as_posix(), "size": p.stat().st_size,
                            "sha256": prints[rel.as_posix()],
                            "revision": (revision_of(p.name) if revision_of else "") or "",
-                           "source_path": (sources or {}).get(p.name.lower(), "")})
+                           "source_path": (sources or {}).get(p.name.lower(), ""),
+                           "engine": engine_use(p.name)})
+        absent = not_in_this_copy(resolver, [f["name"] for f in listed], left_out)
+        because = []
+        if absent:
+            because.append(f"{len(absent)} file(s) found for the pack are not in this copy")
+        if resolver.get("missing"):
+            because.append(f"{len(resolver['missing'])} drawing(s) the pack calls for were not found")
+        if resolver.get("unread_assemblies"):
+            because.append(f"{len(resolver['unread_assemblies'])} assembly(ies) could not be read "
+                           f"for their parts")
         manifest = {
             "schema": SCHEMA, "client": client, "drawing": drawing, "title": title,
             "version": version, "saved_at": stamp, "staged_from": str(src), "runs": [run],
             "files": listed,
+            "complete": not because,
+            "incomplete_because": because,
+            "not_in_this_copy": absent,
             "missing": list(resolver.get("missing") or []),
             "unread_assemblies": list(resolver.get("unread_assemblies") or []),
             "parts_list_read": resolver.get("references_read") if resolver else None,
@@ -168,7 +240,7 @@ def save(staged_folder: Any, client: str, drawing: str, repo_root: Path, *, run_
         }
         (dest / MANIFEST).write_text(json.dumps(manifest, indent=1), encoding="utf-8")
         out.update(saved=True, folder=str(dest), state="new" if version == 1 else "new version",
-                   version=version, files=len(files))
+                   version=version, files=len(files), incomplete_because=because)
     except Exception as exc:                                             # noqa: BLE001
         out.update(saved=False, why=f"{type(exc).__name__}: {exc}")
     return out
@@ -180,7 +252,10 @@ def said(result: Dict[str, Any]) -> str:
         how = {"unchanged": "unchanged, the pack already kept is reused",
                "new": "new", "new version": f"changed, saved as version {result.get('version')}; "
                                             f"the earlier pack is kept"}.get(result.get("state"), "")
-        return f"Review copy of this pack ({result.get('files')} file(s), {how}): {result.get('folder')}"
+        gaps = "; ".join(result.get("incomplete_because") or [])
+        return (f"Review copy of this pack ({result.get('files')} file(s), {how}): "
+                f"{result.get('folder')}"
+                + (f". NOT A COMPLETE PACK: {gaps} (see pack_manifest.json)" if gaps else ""))
     if "no drop-off folder" in str(result.get("why")):
         return ""
     return f"WARNING: the review copy of this pack was NOT saved to the drop-off folder: {result.get('why')}"
