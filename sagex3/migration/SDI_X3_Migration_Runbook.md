@@ -2550,3 +2550,13 @@ Charlotte is checking how today's daily sales report hides the rebate by custome
 - **The question goes to Charlotte** (e-mail redrafted in the chat with the reconciliation table).
 - **The estimate is on hold** until the definition is known.
 - The current-year-to-date figures are held in the finance-only folder.
+
+**13 Nov – finance workbook v2 (`build_model.py`, private output):**
+- **New "How to use" tab** (first): what it is, the tabs, then step by step – rebate for a figure, monthly actuals, pass-through share, projected rebate, referrals, year end – plus the built-in checks, what not to overwrite, and support.
+- **New "Reconciliation" tab:** each account by agreed year, all accounts, the agreed figure, the difference; note that no combination reproduces both years.
+- **Estimate:** pre-filled from the sales-ledger run (INV − CRN by month); the pass-through share is entered by Finance (yellow); all pass-through work is shown greyed for reference, not counted.
+- Accounts and names now come from the private parameters file (Access codes; X3 codes noted).
+- **Proved** by LibreOffice recalculation:
+  - Calculator at the example figure = the calculator script;
+  - Reconciliation totals = the ledger analysis;
+  - the run rate counts the current part-month as a month, so it understates early in a month.

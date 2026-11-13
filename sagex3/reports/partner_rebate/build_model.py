@@ -11,6 +11,7 @@ from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
 INK, Y, LY, MUTED = "282928", "F5D947", "FDF6CF", "6B6F6C"
@@ -77,46 +78,91 @@ def build(params, out, actuals=None):
     for col, w in zip("ABCDE", [46, 18, 10, 18, 16]):
         c.column_dimensions[col].width = w
 
+    # ---- actuals: sales-ledger net by account and month (code, month, INV / CRN, nett - partner_revenue_2 grid 1)
+    net = {}
+    if actuals and Path(actuals).exists():
+        for row in csv.reader([l for l in Path(actuals).read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()],
+                              delimiter="\t"):
+            if len(row) >= 4 and row[0] in ACCOUNTS and row[2] in ("INV", "CRN"):
+                try:
+                    v = float(row[3])
+                except ValueError:
+                    continue
+                net[(row[0], row[1][:7])] = net.get((row[0], row[1][:7]), 0) + (v if row[2] == "INV" else -v)
+    names = p.get("account_names", {})
+    direct = [a for a in ACCOUNTS if a != pass_through]
+
     # ---- Estimate (monthly actuals -> full-year projection)
     e = wb.create_sheet("Estimate")
-    banner(e, "Current year estimate (1 Sep 2026 – 31 Aug 2027)", 9)
-    head(e, 4, ["Month"] + [a for a in ACCOUNTS if a != pass_through] + [f"{pass_through} (pass-through share)", "Qualifying total"])
-    months = ["2026-09", "2026-10", "2026-11", "2026-12", "2027-01", "2027-02", "2027-03", "2027-04", "2027-05",
-              "2027-06", "2027-07", "2027-08"]
-    act = {}
-    if actuals and Path(actuals).exists():
-        lines = [l for l in Path(actuals).read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()]
-        rdr = csv.reader(lines, delimiter="\t")
-        for row in rdr:
-            if len(row) >= 5 and row[0] in ACCOUNTS and row[2][:7] in months:
-                try:
-                    act[(row[0], row[2][:7])] = act.get((row[0], row[2][:7]), 0) + float(row[4])
-                except ValueError:
-                    pass
+    ncol = len(direct) + 4
+    banner(e, "Current year estimate (" + " – ".join(p["year"]) + ")", ncol)
+    head(e, 4, ["Month"] + [f"{a} {names.get(a, '')}".strip() for a in direct]
+         + [f"{pass_through} share that qualifies (enter)", "Qualifying total", f"{pass_through} all work (info, not counted)"])
+    y0 = int(p["year"][0][:4])
+    months = [f"{y0 + (m > 12)}-{(m - 1) % 12 + 1:02d}" for m in range(9, 21)]
+    tot_col = len(direct) + 3
+    T = get_column_letter(tot_col)
     for i, m in enumerate(months):
         r = 5 + i
         e.cell(r, 1, m)
-        for j, a in enumerate(ACCOUNTS):
-            v = act.get((a, m))
-            cell = e.cell(r, 2 + j, v)
-            cell.number_format = GBP
-            if a == pass_through:
-                cell.fill = PatternFill("solid", fgColor=LY)       # only the partner's pass-through share counts
-        e.cell(r, 8, f"=SUM(B{r}:G{r})").number_format = GBP
-    e["A18"], e["C18"] = "Actual to date", "=SUM(H5:H16)"
-    e["A19"], e["C19"] = "Months with actuals", "=COUNT(H5:H16)-COUNTIF(H5:H16,0)"
-    e["A20"], e["C20"] = "Projected full year (run rate)", "=IF(C19=0,0,C18/C19*12)"
-    e["A21"], e["C21"] = "Projected rebate (Calculator)", "← set Calculator!B4 to =Estimate!C20"
+        for j, a in enumerate(direct):
+            e.cell(r, 2 + j, round(net[(a, m)], 2) if (a, m) in net else None).number_format = GBP
+        share = e.cell(r, len(direct) + 2)
+        share.fill, share.number_format = PatternFill("solid", fgColor=LY), GBP
+        e.cell(r, tot_col, f"=SUM(B{r}:{get_column_letter(tot_col - 1)}{r})").number_format = GBP
+        info = e.cell(r, tot_col + 1, round(net[(pass_through, m)], 2) if (pass_through, m) in net else None)
+        info.number_format, info.font = GBP, Font(color=MUTED, italic=True)
+    e["A18"], e["C18"] = "Qualifying to date", f"=SUM({T}5:{T}16)"
+    e["A19"], e["C19"] = "Months with invoicing", f"=COUNTIF({T}5:{T}16,\"<>0\")"
+    e["A20"], e["C20"] = "Projected full year (simple run rate)", "=IF(C19=0,0,C18/C19*12)"
+    e["A21"], e["C21"] = "Projected rebate", "Put =Estimate!C20 in Calculator!B4 (see How to use, step 4)"
     for r in (18, 20):
         e[f"C{r}"].number_format = GBP
         e[f"A{r}"].font = Font(bold=True)
-    e["A23"] = ("Pass-through column (yellow): enter only the partner's share – the agreement counts agreed "
-                "pass-through revenue, not all of that account's work. Qualifying = invoiced AND collected, net of credit notes, "
-                "cancellations and returns: the run rate above is invoiced only; the year-end reconciliation adjusts.")
-    e["A23"].alignment = Alignment(wrap_text=True)
-    e.merge_cells("A23:H25")
-    for col, w in zip("ABCDEFGH", [12, 14, 14, 14, 14, 14, 20, 16]):
-        e.column_dimensions[col].width = w
+    e["A23"] = ("Figures: Access sales ledger, net of VAT, invoices less credit notes, by invoice date. Yellow column: type only "
+                "the share of the pass-through account that is the partner's work (the grey column shows all its work for "
+                "reference). Qualifying revenue is invoiced AND collected: the run rate is invoiced only, and the year-end "
+                "reconciliation adjusts for anything unpaid. Invoicing is lumpy - treat an early-year run rate with care.")
+    e["A23"].alignment = Alignment(wrap_text=True, vertical="top")
+    e.merge_cells(f"A23:{get_column_letter(ncol)}26")
+    e.column_dimensions["A"].width = 12
+    for k in range(2, ncol + 1):
+        e.column_dimensions[get_column_letter(k)].width = 17
+    e.freeze_panes = "B5"
+
+    # ---- Reconciliation to the agreed baseline years
+    rc = wb.create_sheet("Reconciliation")
+    banner(rc, "Access figures against the agreed baseline years", 4)
+    yrs = list(p.get("baseline_years", {}).items())
+    head(rc, 4, ["Account"] + [k for k, _ in yrs])
+    def fy_total(a, label):
+        a0, a1 = label.split("..")
+        return round(sum(v for (c, m), v in net.items() if c == a and a0 <= m <= a1), 2)
+    for i, a in enumerate(ACCOUNTS):
+        r = 5 + i
+        rc.cell(r, 1, f"{a} {names.get(a, '')}".strip() + (" (all work)" if a == pass_through else ""))
+        for k, (label, _) in enumerate(yrs):
+            rc.cell(r, 2 + k, fy_total(a, label)).number_format = GBP
+    last = 4 + len(ACCOUNTS)
+    rows = [("All accounts in Access", lambda L: f"=SUM({L}5:{L}{last})"),
+            ("Agreed baseline year", None),
+            ("Difference (Access – agreed)", lambda L: f"={L}{last + 1}-{L}{last + 2}")]
+    for k, (label, val) in enumerate(yrs):
+        L = get_column_letter(2 + k)
+        rc[f"{L}{last + 1}"] = rows[0][1](L)
+        rc[f"{L}{last + 2}"] = val
+        rc[f"{L}{last + 3}"] = rows[2][1](L)
+        for r in (last + 1, last + 2, last + 3):
+            rc[f"{L}{r}"].number_format = GBP
+            rc[f"{L}{r}"].font = Font(bold=True)
+    for k, (lab, _) in enumerate(rows):
+        rc.cell(last + 1 + k, 1, lab).font = Font(bold=True)
+    rc.cell(last + 5, 1, "No combination of these accounts (with or without VAT) reproduces both agreed years: the baselines "
+                         "came from another source. Finance to confirm the source before the year-end reconciliation.")
+    rc.cell(last + 5, 1).alignment = Alignment(wrap_text=True)
+    rc.merge_cells(start_row=last + 5, start_column=1, end_row=last + 7, end_column=4)
+    for col, w in zip("ABCD", [44, 20, 20, 20]):
+        rc.column_dimensions[col].width = w
 
     # ---- Referral register
     rr = wb.create_sheet("Referral register")
@@ -155,6 +201,43 @@ def build(params, out, actuals=None):
     for row in o.iter_rows(min_row=4):
         for cell in row:
             cell.alignment = Alignment(wrap_text=True, vertical="top")
+    # ---- How to use (first tab)
+    h = wb.create_sheet("How to use", 0)
+    banner(h, "How to use this workbook", 2)
+    guide = [
+        ("What it is", "The partnership rebate, worked out exactly as the agreement says. Finance only - keep it within Finance; "
+                       "account managers must not see rebate values."),
+        ("Tabs", "Calculator – the rebate for any annual revenue.  Estimate – this year's revenue month by month and a projection.  "
+                 "Reconciliation – Access against the agreed baseline years.  Referral register – customers the partner introduces.  "
+                 "Open points – what still needs deciding."),
+        ("1. Rebate for a revenue figure", "Calculator tab: type the annual qualifying revenue in the yellow cell (B4). The bands, "
+                 "tiered rebate, year-end bonus, total and effective rate update. Each rate applies only to revenue inside its band."),
+        ("2. Update this year's actuals", "Estimate tab: each month, type (or paste) the net invoiced revenue per account – invoices "
+                 "less credit notes, excluding VAT. The figures already there come from the Access sales ledger."),
+        ("3. Pass-through revenue", "Estimate tab, yellow column: type only the part of the pass-through account's revenue that is the "
+                 "partner's work. The grey column beside it shows all of that account's work, for reference only - it is not counted."),
+        ("4. Projected rebate", "Estimate shows 'Projected full year' (C20). To see its rebate, type =Estimate!C20 into Calculator B4. "
+                 "Early in the year invoicing is lumpy - use the projection as a guide, not a forecast."),
+        ("5. Referrals", "Referral register: one row per customer the partner introduces. Fill the code, name, introducer, registration "
+                 "date (before selling starts), SDI confirmed (Yes / No / Pending) and first qualifying invoice date. 'Window ends' "
+                 "is worked out (12 months). Each quarter, enter goods revenue and separately invoiced design revenue in the window: "
+                 "the reward and the capped payable amount are worked out. The total is at the bottom."),
+        ("6. Year end", "After the partner's year closes: use revenue that is invoiced AND paid (net of credits and returns), to the "
+                 "penny, put it in Calculator B4, add the referral total, and agree the settlement (credit note or payment)."),
+        ("Checks built in", "The calculator was proved against every worked example in the agreement. The agreement's examples round "
+                 "to the pound; this workbook works to the penny, so one example differs by under £1."),
+        ("Do not", "Overwrite formulas (white cells with figures on the Calculator; Window ends, Calculated, Payable on the register). "
+                   "Type only in yellow or blank input cells."),
+        ("Source and support", "Built by James Gray (AI and Systems Controller). Rebuilt from the private parameters file with "
+                 "build_model.py; figures from read-only Access queries. In Sage X3 the same calculation will run as a finance-only report."),
+    ]
+    for r, (a, b) in enumerate(guide, 4):
+        h.cell(r, 1, a).font = Font(bold=True)
+        h.cell(r, 2, b).alignment = Alignment(wrap_text=True, vertical="top")
+        h.cell(r, 1).alignment = Alignment(vertical="top")
+        h.row_dimensions[r].height = 48 if len(b) > 160 else 32
+    h.column_dimensions["A"].width, h.column_dimensions["B"].width = 30, 120
+    wb.active = 0
     wb.save(out)
 
 
