@@ -278,7 +278,20 @@ reads differently.**
     workbook, Q on another); `--col-cost` applies only when no column carries that header and
     the named column has no other heading. Not yet proved on the real tracker.
   * **Deployment state is whatever the laptop last printed.** A pushed commit is not a
-    deployed one; as of this note nobody has deployed `ddc6b5a0` or rerun anything on it.
+    deployed one. As checked on the laptop on the evening of 13 Nov: both portals (8071,
+    8072) and both runners were on portal commit `030ffc98`, which already includes
+    `ddc6b5a0`, so the reader, quantity, duplicate-record and unfinished-price safeguards of
+    that release ARE live there. What was missing from it: the tube stock-length rule
+    (`7d3c5596`), the tracker-writer changes (`3d3df3f2`) and the bond rule below. An idle
+    snapshot is not permission to restart: check both runners are idle immediately before
+    any deployment. The server's portal is on older `00072f3f`; its work is paused and its
+    grid configuration is left as it is.
+  * **Two bonds that are two pieces of work are two charges (JG, 13 Nov 2026).** An
+    assembly-scope bond naming several participants is ONE event, homed where they meet, not
+    one per participant. A member's distinct bond does not suppress its assembly's bond:
+    the one-level rule stands a bond down only for the same printed evidence, or a reading
+    with none of its own. Source references, participants and quantity basis are kept.
+    Labour time and set-up sharing remain estimating decisions.
 
 Review copies sit in `C:\ClaudeVision\chatgptdropoff\AICalculators`; they are not the live
 sources. Order of work agreed with JG: weekly Live Enquiry recovery first, then Print and

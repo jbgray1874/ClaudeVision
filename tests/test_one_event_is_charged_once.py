@@ -426,3 +426,59 @@ def test_one_reading_of_a_gluing_is_left_as_it_is():
     assert len(_required(out, "glue", WORKTOP)) == 1
     assert not [p for p in _codes(out, "assembly_readings_pooled_on_target")
                 if p["operation"] == "glue"]
+
+
+# ── a bond between several things is one event (6364-01 18:24, 13 Nov 2026) ───────────────
+# JG, 13 Nov 2026: "two charges ... Keep both genuine bonding operations. The decision is
+# based on the physical work, not simply different wording or assembly level."
+THE_BOND = {"operation": "glue", "part_numbers": [SKIN_WELD, INSERT, WOOD], "scope": "assembly",
+            "sequence": 93, "qty_per_unit": 1, "source": "drawing_notes",
+            "evidence": "HINGES TO BE BONDED TO MAIN BODY AND DOOR",
+            "evidence_where": "assembly sheet note", "notes": "one bond of the hinge set"}
+THE_JAMB = {"operation": "glue", "part_numbers": [SKIN], "scope": "part", "sequence": 91,
+            "source": "drawing_notes", "evidence": "BOND DOOR JAM TO DOOR MAIN BODY",
+            "evidence_where": "door sheet view note", "notes": "once per door"}
+ANOTHER_CHILD = {"operation": "glue", "part_numbers": [TAB], "scope": "part", "sequence": 90,
+                 "source": "drawing_notes", "evidence": "BOND LENS TO FRAME",
+                 "evidence_where": "lens sheet note", "notes": "an unrelated bond on another child"}
+
+
+def _glue(out, target):
+    return _required(out, "glue", target)
+
+
+def test_the_hinge_event_is_charged_once_where_its_parts_meet():
+    out = _compile(WELDS + [THE_BOND])
+    at_worktop = _glue(out, WORKTOP)
+    assert len(at_worktop) == 1, at_worktop
+    assert set(at_worktop[0]["participants"]) >= {SKIN_WELD, INSERT, WOOD}
+    for elsewhere in (SKIN_WELD, INSERT, WOOD):
+        assert _glue(out, elsewhere) == [], elsewhere
+    assert _codes(out, "assembly_route_homed_where_its_parts_meet")
+
+
+def test_the_jamb_bond_survives_beside_the_hinge_bond():
+    out = _compile(WELDS + [THE_BOND, THE_JAMB])
+    hinge, jamb = _glue(out, WORKTOP), _glue(out, SKIN)
+    assert len(hinge) == 1 and len(jamb) == 1, (hinge, jamb)
+    assert "HINGES" in hinge[0]["evidence"] and "JAM" in jamb[0]["evidence"]
+    assert hinge[0]["evidence_where"] == "assembly sheet note"
+    assert jamb[0]["evidence_where"] == "door sheet view note"
+    assert set(hinge[0]["participants"]) >= {SKIN_WELD, INSERT, WOOD} and jamb[0]["participants"] == [SKIN]
+
+
+def test_unrelated_bonds_on_other_children_remain():
+    out = _compile(WELDS + [THE_BOND, THE_JAMB, ANOTHER_CHILD])
+    assert len(_glue(out, WORKTOP)) == 1 and len(_glue(out, SKIN)) == 1 and len(_glue(out, TAB)) == 1
+
+
+def test_the_same_event_read_twice_is_still_charged_once():
+    again = dict(THE_BOND, part_numbers=[SKIN_WELD], notes="the same sentence, read against the sub-assembly")
+    out = _compile(WELDS + [THE_BOND, again])
+    total = sum(len(_glue(out, t)) for t in (WORKTOP, SKIN_WELD, INSERT, WOOD, SKIN))
+    assert total == 1, [(t, _glue(out, t)) for t in (WORKTOP, SKIN_WELD)]
+
+
+def test_a_bond_on_one_part_stays_on_that_part():
+    out = _compile(WELDS + [THE_JAMB])
+    assert len(_glue(out, SKIN)) == 1 and _glue(out, WORKTOP) == []
