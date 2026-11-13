@@ -205,6 +205,45 @@ that cost reruns. They are generic and each has a regression test.
     field of the question plus provider, model and `CACHE_VERSION`. It has no age limit: open
     decision.
 
+**Quantity and identity rules added on 2026-11-13.** Each was found by replaying a record, not
+by rerunning a job.
+
+  * **A space in a model assembly's name is not a second assembly.** The drawing printed
+    `…-02GA`, the model named it `…-02 GA`; the product lost its edge to that sub-assembly and
+    its children were set aside as "outside the product". The model tree now joins on the
+    graph's own rule (white space only, exactly one record answering). A hyphen is still a
+    different code.
+  * **An assembly that shares a number with the part inside it is counted once.** The model's
+    bill counts by number. For an assembly row the count comes from the assembly tree
+    multiplied down from the product (`quantities_by_the_tree`).
+  * **A sheet that lists its own number is not its own parent** (`src/bom_tree.py`). A
+    self-row used to multiply at every depth: 26 plates and 52 bushes from a bill of 2 and 4.
+  * **A count nobody read is not replaced by one.** The quantity cap still carries an
+    uncounted quantity over the limit at 1, but marks it `quantity_unresolved`, flags it
+    blocking and never passes it as a credible figure. It used to "reset to 1" with a warning,
+    which hid the fault above.
+  * **One bill row is one record.** The scan keeps the code it rejected
+    (`part_number_rejected`); when that bill row is made a record, the nameless record of the
+    same row is withdrawn.
+  * **To check a quantity without a rerun:** replay the record's `document_analysis.bom_rows`
+    through `bom_tree.resolve_effective_quantities`, and walk
+    `solidworks_native.hierarchy` from the top assembly. Compare both with the costed
+    quantity. Read records with `python3 -I` and print only the fields needed.
+
+**The three calculators (2026-11-13).** Each is estimating's own workbook, named by a setting
+and never copied into the repository. Unset, unreadable or laid out differently, the engine
+prices as before and the run says why.
+
+| Calculator | Setting | State |
+|---|---|---|
+| AI Box | `SDI_BOX_CALCULATOR_XLSX` | Live source of box pricing, read from the shared estimating drive (`src/box_calculator_sheet.py`). A calculator result is not proof the carton is right: the packing inputs still have to be. |
+| AI Tube | `SDI_TUBE_CALCULATOR_XLSX` | `src/tube_calculator_sheet.py`. Its stock rows join the engine's tube and section price rows under their own part codes; a code it prices takes its price. Its cut, hole, slot and mitre rates are read and applied to nothing: open decision whether they replace the engine's tube-laser times. The sheet's own working area has every cost typed as 0. |
+| AI Print | `SDI_PRINT_CALCULATOR_XLSX` | `src/print_calculator_sheet.py`. Works the sheet's sums cell for cell and prices NO estimate line yet. To confirm first: scrap entered as -0.7 (charges 30% of the sheet cost), one set-up cost for six substrates, one-orientation yield, sheet sizes and costs typed again inside the formulas. |
+
+Review copies sit in `C:\ClaudeVision\chatgptdropoff\AICalculators`; they are not the live
+sources. Order of work agreed with JG: weekly Live Enquiry recovery first, then Print and
+Tube, then the TTI jobs.
+
 ---
 
 ## 1. WHAT THE PROJECT IS
