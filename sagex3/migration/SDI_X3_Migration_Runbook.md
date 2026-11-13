@@ -2648,3 +2648,27 @@ Charlotte is checking how today's daily sales report hides the rebate by custome
 **Recorded:**
 - Register: EST-10 and EST-01;
 - Jira: SCRUM-210.
+
+### 22.8 Outlook outage (13 Nov) – today's emails held, plus one to Simon
+
+A Microsoft-wide Outlook outage meant **none of today's emails went out**. They are kept, unsent, in the scratchpad (not git):
+- `outbox_13Nov/UNSENT_emails_13Nov.md`:
+  1. Selina (report list / TTI);
+  2. Debbie (three daily reports);
+  3. Marc (standard report list – "before today's meeting" replaced by Wed 18 Nov);
+  4. **Dave – rewritten after 22.7**: four questions (sheet material, other-sheet code column, wire gauges without codes, FIXING49) and a TEST session on the IMPORT part;
+  5. **Simon – new**: his 6 "needs definition" reports (REP-11, 12, 14, 15, 16, 17), with **REP-14 prototype vs production the priority** because it feeds Live Orders; Ewa cc'd for export-invoice samples (REP-05). His 10 likely-standard reports are listed for information.
+- `finance_private/UNSENT_Charlotte_partner_rebate_email_13Nov.md` (confidential, mode 600).
+
+The dates assume sending on Mon 16 Nov.
+
+**Company notice during the outage:** a Teams team **"WeAreSDI – All Company"** was created:
+- Private, 114 members added from the All Users group;
+- channel **Announcements**;
+- the outage notice was posted with an @team mention.
+
+**Follow-ups:**
+- the Global Admin to convert it to Org-wide (Teams admin centre → Teams → Manage teams → Privacy), so new starters join automatically;
+- post the all-clear when Outlook is back.
+
+**Lesson:** an all-staff channel didn't exist before this outage. Keep this one, so that the next outage doesn't depend on email.
