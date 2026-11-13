@@ -124,6 +124,56 @@ def apply(ledger: Dict[str, Any], change: List[Dict[str, Any]], when: str) -> in
     return done
 
 
+def unfinished(ledger: Dict[str, Any], verdicts: Dict[str, Dict[str, Any]],
+               only: Iterable[str] = ()) -> List[Dict[str, Any]]:
+    """Attempts showing a price although their run did not finish. Nothing is written.
+
+    Reviewer, 12 Nov 2026: "For unfinished runs, show 'failed/incomplete, no validated
+    price'." Only a run the audit positively found unfinished is listed; one whose files
+    could not be reached is "not checked" and is left alone.
+    """
+    import live_enquiry_runner as ler  # noqa: PLC0415
+    only = set(only or ())
+    out: List[Dict[str, Any]] = []
+    for job in (ledger.get("jobs") or {}).values():
+        for attempt in job.get("attempts") or []:
+            rid = str(attempt.get("run_id") or "")
+            if only and rid not in only:
+                continue
+            shows = attempt.get("engine_price_gbp") not in (None, "") or bool(attempt.get("quantity_prices"))
+            if not shows:
+                continue
+            verdict = str((verdicts.get(rid) or {}).get("verdict") or "")
+            failed = attempt.get("status") == "error" or ler.stopped_by_hand(attempt)
+            if verdict != "not a finished run" and not failed:
+                continue
+            earlier = ler.last_completed(job, before=attempt)
+            out.append({"customer": job.get("customer"), "drawing": job.get("drawing"), "run_id": rid,
+                        "why": "its run did not finish" if verdict == "not a finished run"
+                               else "the attempt failed or was stopped",
+                        "shows": {"engine_price_gbp": attempt.get("engine_price_gbp"),
+                                  "quantity_prices": attempt.get("quantity_prices") or []},
+                        "earlier_completed": earlier, "_attempt": attempt})
+    return out
+
+
+def hold(found: List[Dict[str, Any]], when: str) -> int:
+    """Move each listed attempt's unproved figure aside; the figure is kept, not deleted."""
+    import live_enquiry_runner as ler  # noqa: PLC0415
+    n = 0
+    for f in found:
+        attempt = f["_attempt"]
+        attempt["unvalidated_price_gbp"] = attempt.get("engine_price_gbp")
+        attempt["unvalidated_quantity_prices"] = attempt.get("quantity_prices") or []
+        attempt["engine_price_gbp"] = None
+        attempt["quantity_prices"] = []
+        attempt["price_validated"] = False
+        attempt["price_note"] = ler.NO_VALIDATED_PRICE
+        attempt["price_held"] = {"at": when, "by": "ledger_correct.py", "why": f["why"]}
+        n += 1
+    return n
+
+
 def _show(q: Any) -> str:
     return ", ".join(f"{a} off {b:.2f}" for a, b in _prices(q)) or "none"
 
@@ -180,6 +230,17 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print("\nLeft exactly as they are:")
         for x in left:
             print(f"  {x['drawing']}  run {x['run_id']}: {x['why']}")
+    held = unfinished(ledger, verdicts, a.only)
+    if held:
+        print("\nShowing a price although the run did not finish. Each would show "
+              "'failed/incomplete, no validated price':")
+        for h in held:
+            e = h["earlier_completed"]
+            print(f"  {h['drawing']}  ({h['customer']})  run {h['run_id']}: {h['why']}; shows "
+                  f"{h['shows']['engine_price_gbp']}"
+                  + (f"\n      earlier completed estimate kept separately: £{e['unit_gbp']:,.2f} "
+                     f"finished {e['finished_at']} (run {e['run_id']})" if e else
+                     "\n      no earlier completed estimate for this job"))
     after = json.loads(json.dumps(ledger))
     apply(after, change, "preview")
     still = shared_prices(after)
@@ -190,12 +251,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print(f"  {line}")
     if a.json:
         Path(a.json).write_text(json.dumps({"ledger": str(path), "changes": change, "left": left,
+                                            "unfinished": [{k: v for k, v in h.items() if k != "_attempt"}
+                                                           for h in held],
                                             "shared_before": before, "shared_after": still},
                                            indent=1, default=str), encoding="utf-8")
     if not a.apply:
         print("\nNothing was changed. Run again with --apply to make these changes.")
         return 0
-    if not change:
+    if not change and not held:
         print("\nNothing to change.")
         return 0
     when = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -204,10 +267,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     backup = keep / f"{path.stem}.{time.strftime('%Y%m%d_%H%M%S')}.before.json"
     shutil.copy2(path, backup)
     n = apply(ledger, change, when)
+    m = hold(held, when)
+    for h in held:
+        h.pop("_attempt", None)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(ledger, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     tmp.replace(path)
-    print(f"\n{n} attempt(s) corrected. The ledger as it was: {backup}")
+    print(f"\n{n} attempt(s) corrected; {m} unfinished attempt(s) now show no validated "
+          f"price. The ledger as it was: {backup}")
     return 0
 
 

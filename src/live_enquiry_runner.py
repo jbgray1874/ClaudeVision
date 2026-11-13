@@ -1160,9 +1160,76 @@ def stopped_by_hand(attempt: Dict[str, Any]) -> bool:
         ("Released by hand", "Released with the rest of this enquiry"))
 
 
+NO_VALIDATED_PRICE = "failed/incomplete, no validated price"
+
+
+def validated_price(attempt: Dict[str, Any]) -> Optional[float]:
+    """The attempt's unit price, only when the run finished and produced its workbook.
+
+    Reviewer, 12 Nov 2026: "For unfinished runs, show 'failed/incomplete, no validated
+    price'." A figure posted by a run that then failed, was stopped, or filed no workbook is
+    not a price anyone checked against a record. It is kept on the attempt under another
+    name and never shown as the price.
+    """
+    if not isinstance(attempt, dict) or attempt.get("price_validated") is False:
+        return None
+    if attempt.get("status") != "done" or attempt.get("error") or stopped_by_hand(attempt):
+        return None
+    try:
+        price = float(attempt.get("engine_price_gbp"))
+    except (TypeError, ValueError):
+        return None
+    return price if price > 0 else None
+
+
+def price_words(attempt: Dict[str, Any]) -> str:
+    """What a list shows in the price column for this attempt."""
+    price = validated_price(attempt)
+    if price is not None:
+        return f"£{price:,.2f}"
+    if (attempt or {}).get("status") in {"queued", "running", "claimed"}:
+        return ""
+    return NO_VALIDATED_PRICE
+
+
+def last_completed(job: Dict[str, Any], before: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The job's most recent attempt with a validated price, kept apart from a later failure.
+
+    "Preserve any earlier completed estimate separately, clearly dated; don't present its
+    price as the failed run's result."
+    """
+    for attempt in reversed((job or {}).get("attempts") or []):
+        if attempt is before:
+            continue
+        price = validated_price(attempt)
+        if price is not None:
+            return {"unit_gbp": price, "finished_at": attempt.get("finished_at") or attempt.get("queued_at") or "",
+                    "run_id": attempt.get("run_id") or "", "output_path": attempt.get("output_path") or ""}
+    return None
+
+
+def hold_an_unvalidated_price(attempt: Dict[str, Any]) -> bool:
+    """Move a finished attempt's unproved figure aside. True when something moved."""
+    if attempt.get("status") not in {"done", "error"} or validated_price(attempt) is not None:
+        return False
+    if attempt.get("engine_price_gbp") in (None, "") and not attempt.get("quantity_prices"):
+        return False
+    attempt["unvalidated_price_gbp"] = attempt.get("engine_price_gbp")
+    attempt["unvalidated_quantity_prices"] = attempt.get("quantity_prices") or []
+    attempt["engine_price_gbp"] = None
+    attempt["quantity_prices"] = []
+    attempt["price_validated"] = False
+    attempt["price_note"] = NO_VALIDATED_PRICE
+    return True
+
+
 def _attempt_from(snapshot: Dict[str, Any], attempt: Dict[str, Any]) -> Dict[str, Any]:
     if snapshot.get("stopped_by_hand"):
         attempt["stopped_by_hand"] = True
+    # THE SERVICE SAYS WHETHER THE RUN FILED ITS WORKBOOK. It holds the run's files; this
+    # process only hears about them. A service that does not say is believed on its status.
+    if "price_validated" in snapshot and snapshot.get("status") in {"done", "error"}:
+        attempt["price_validated"] = bool(snapshot.get("price_validated"))
     attempt.update({
         "status": snapshot.get("status") or attempt.get("status"),
         "error": snapshot.get("error") or "",
@@ -1177,6 +1244,7 @@ def _attempt_from(snapshot: Dict[str, Any], attempt: Dict[str, Any]) -> Dict[str
     })
     if attempt["status"] in {"done", "error"}:
         attempt.setdefault("finished_at", _now())
+        hold_an_unvalidated_price(attempt)
     return attempt
 
 
@@ -1341,9 +1409,10 @@ def run_ready(decisions: Sequence[Decision], portal: Portal, ledger: Dict[str, A
             say(f"   {d.row.drawing}: the portal refused it — {exc.message}")
             continue
         done.append(attempt)
-        price = attempt.get("engine_price_gbp")
+        price = validated_price(attempt)
         say(f"   {d.row.drawing}: {attempt['status']}"
-            + (f" — £{price:,.2f} a unit at {d.quantities[0]} off" if price else "")
+            + (f" — £{price:,.2f} a unit at {d.quantities[0]} off" if price
+               else f" — {NO_VALIDATED_PRICE}" if attempt["status"] in {"done", "error"} else "")
             + (f" — {attempt.get('error')}" if attempt.get("error") else ""))
         if after_each is not None:
             after_each(d, attempt)
@@ -1355,7 +1424,7 @@ def run_ready(decisions: Sequence[Decision], portal: Portal, ledger: Dict[str, A
 # ── WHAT IT SAYS ─────────────────────────────────────────────────────────────────────
 STATUS_COLUMNS = ("row", "customer", "drawing", "description", "estimator", "due", "status",
                   "reason", "folder", "quantities", "quantity_source", "last_run",
-                  "last_status", "unit_gbp", "output")
+                  "last_status", "unit_gbp", "price_shown", "output")
 
 
 def status_rows(decisions: Sequence[Decision]) -> List[Dict[str, Any]]:
@@ -1371,7 +1440,8 @@ def status_rows(decisions: Sequence[Decision]) -> List[Dict[str, Any]]:
             "quantity_source": d.quantity_source,
             "last_run": d.last.get("finished_at") or d.last.get("queued_at") or "",
             "last_status": d.last.get("status") or "",
-            "unit_gbp": d.last.get("engine_price_gbp") or "",
+            "unit_gbp": validated_price(d.last) or "",
+            "price_shown": price_words(d.last) if d.last else "",
             "output": d.last.get("output_path") or "",
         })
     return out
@@ -1552,10 +1622,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                       f"{job['drawing']:<18.18} {'':<12} baselined (run by hand before the "
                       f"runner)")
             for a in job.get("attempts") or []:
-                price = a.get("engine_price_gbp")
                 print(f"{a.get('queued_at', ''):<20} {job['customer']:<16.16} "
                       f"{job['drawing']:<18.18} {'/'.join(map(str, a.get('quantities') or [])):<12}"
-                      f" {a.get('status', ''):<8} {('£%.2f' % price) if price else '':>10}  "
+                      f" {a.get('status', ''):<8} {price_words(a):>10}  "
                       f"{a.get('output_path') or a.get('error') or ''}")
         return 0
     if args.command == "scan":

@@ -386,6 +386,8 @@ class Run:
             "pdf_path": self.pdf_path, "batch_id": self.batch_id,
             "llm_price_gbp": self.llm_price_gbp, "llm": self.llm,
             "engine_price_gbp": self.engine_price_gbp,
+            # A PRICE IS VALIDATED ONLY BY A FINISHED RUN THAT FILED ITS WORKBOOK (12 Nov 2026).
+            "price_validated": price_is_validated(self.status, self.error, self.deliverables),
             "quantity_prices": list(self.quantity_prices),
             "walkthrough_url": (estimate_walkthrough.url_for(self.walkthrough)
                                 if self.walkthrough else ""),
@@ -710,6 +712,19 @@ def _claim_refused_because(runner_id: str, hostname: str,
 _MODEL_SUFFIXES = (".sldprt", ".sldasm")
 _EXTRACT_NAME = "_sw_native_extract.json"
 _MODEL_POINTER = "_sdi_model_sources.json"
+
+
+def price_is_validated(status: Any, error: Any, deliverables: Any) -> bool:
+    """Whether a run's price may be shown as its result.
+
+    "Incomplete runs must not present a validated price." A run that failed, or finished
+    without filing a workbook, has a figure nobody can check against a record.
+    """
+    if status != "done" or error:
+        return False
+    names = [str((d or {}).get("name") if isinstance(d, dict) else d or "").lower()
+             for d in (deliverables or [])]
+    return any(n.endswith((".xlsx", ".xlsm")) for n in names)
 
 
 def _extract_left_files_unread(extract: Path) -> bool:
