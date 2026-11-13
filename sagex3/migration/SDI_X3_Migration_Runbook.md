@@ -2401,3 +2401,45 @@ The agenda is in the chat (13 Nov). The pre-reads and the decision / action log 
   - The labour parent is IMPORT.
 - **Questions to Dave, now with proposals** (in the chat, 13 Nov).
 - **Lesson:** check codes through the migration's code rule before calling a code missing. The rule is what turns Access codes into X3 codes.
+
+### 22.5 Attachments checked, gaps chased, Jira / register updated (13 Nov)
+
+**Attachments (copied aside to `in_13nov/` in the scratchpad):**
+- **`IMPORT.xls` and `Live_Orders.xlsx`:** byte-identical to the 10 Nov copies (`dave_in/`, same MD5). Nothing changes. The estimating converter (21.5 / 22.4) and the Live Orders analysis (section 20, LO-00..05) stand.
+- **`TTI_Delivery_Schedule_2021_V3.xlsx`** (Selina, 28 Oct, "TTI Report", kept on OneDrive): **new requirement → SHT-01, Jira SCRUM-276** (under SCRUM-213).
+  - **Layout:** a weekly schedule for the TTI group accounts (TIE02E / POL / UK / ENL, TIE16E, RYO03, RY001); tabs Oct 26 Wk 40 – Feb 27 Wk 8; 21 columns, almost all hand-typed; only pallet sums / ratios are formulas.
+  - **Order columns X3 can supply:**
+    - due date, account, SDI order no, customer PO;
+    - part, description, qty;
+    - delivery address, invoice number, pick / delivery note numbers.
+  - **Logistics columns (manual):**
+    - who pays / VAT route ("through French VAT");
+    - origin China / UK / Poland, plus the China PO number;
+    - trailer, pallets, number per pallet;
+    - lorry from SDI / Poland, into ELC;
+    - label + batch, booked in with TTI;
+    - **proof of export** – evidence for zero-rated EU sales, so it needs a proper home.
+  - **Links:** comments reference Live Orders dates and prototype projects (SDI-PROTO / CUST-PROTOTYPE → REP-14).
+  - **Proposal:** an X3 query / API feed refreshes the order columns; the logistics stays in the sheet keyed by order line, or moves to X3 user fields on the order / delivery; invoice and proof of export come through from X3.
+  - **Next:** a walk-through with Selina.
+- **Not Selina's "list".** Her 19 Oct "list I sent through" is still unaccounted for. She may mean the TTI report – the e-mail asks her to confirm.
+
+**E-mails drafted (13 Nov, in the chat):**
+1. Selina – her report list, or confirm it was the TTI report.
+2. Debbie – screenshots / filters / content for SDI MRP (DF), Outstanding Orders, Delivered not Invoiced.
+3. Marc – the X3 standard report list.
+
+**Jira (13 Nov):**
+- SCRUM-276 created (SHT-01 TTI delivery schedule);
+- SCRUM-212 comment (requirements check, gaps chased, TTI);
+- SCRUM-210 comment (0 stops, Dave's confirmations).
+
+**Register:**
+- SHT-01 added (**66 items**);
+- the TTI report added to Sources;
+- REP-00 next action = chase the three gaps;
+- Selina's items dated 8 Oct;
+- EST-01 / EST-10 updated;
+- xlsx + html rebuilt (`deliver/`).
+
+**Standing rule (James, 13 Nov):** every change goes to **Jira and the register (xlsx + html)** as well as this runbook, in the same turn.
