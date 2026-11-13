@@ -324,6 +324,13 @@ every e-mail and filed covering note shows the pack the run was given.
 - **Still open, not resolved by any of this:** SA01 and SA02 unread on 11896-02-01-GA; `6364-02-015A` missing.
 - **Agreed order:** let the running jobs finish; deploy when idle; check each record for missing parts, failed reads, wrong quantities and unpriced items; preview recovery of the four kept packs; rerun only estimates with an evidenced costing or scope fault.
 
+### Where a run's estimate pack is written (JG, 13 Nov 2026: keep it like this)
+
+- Main runner: `C:\ClaudeVision\output\estimates`. Slot 2: `C:\ClaudeVision-s2\output\estimates`.
+- This is deliberate (`227f6204`, 12 Nov): one shared folder is how prices and attachments crossed on 10 and 11 Nov. JG has ruled it stays, going forwards. Do not merge the folders.
+- A job that seems missing from one folder is in the other. The runner name on the job in Grid Control (ending `-s2` or not) and the run log's `[collect] looked in` line say which.
+- Every finished run is also filed to AISheets and the completed AI briefs area, whichever runner ran it.
+
 ## 1. WHAT THE PROJECT IS
 
 SDI Intelligence is a Python engine at `C:\ClaudeVision\src\` that reads PDF + DXF engineering
