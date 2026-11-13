@@ -2529,3 +2529,15 @@ Charlotte is checking how today's daily sales report hides the rebate by custome
 - **So the agreement's figures were not built from invoice lines.** Either lines without an order-line price drop out of the left join, or invoicing bypasses order lines (sales-ledger invoices, e.g. services).
 - **Follow-up:** `partner_revenue_2.sql` (private): sales-ledger net (`ST_NETT`, INV / CRN) by account and month, still-unpaid (for "collected"), the count of unpriced invoice lines, and the pass-through account's lines by part-code prefix (BOT- = partner work?).
 - **Lesson:** reconcile to the agreed figures before estimating – the obvious source (invoice lines) was not the agreement's source.
+
+**13 Nov – ledger run (`partner_revenue_2.sql`, results in the finance-only folder):**
+- **The sales-ledger net (INV − CRN) equals the invoice-line totals exactly**, and no invoice lines are unpriced. Access is consistent with itself.
+- **The gap is real:**
+  - year 2 is ~£454k under the agreed figure even with every group account + all pass-through;
+  - year 1: main + optical + all pass-through is ~£32k under (invoice-only ~£27k over).
+- The pass-through account's lines by prefix: partner-design parts (BOT-), its own codes (SRS-), project parts (11367-, 11019-), carriage, and other retailers' parts (M&S-, BRI-). **Only part of it is the partner's work.**
+- **Hypothesis:**
+  - revenue on accounts not named for the group (e.g. the group's beauty company / brand company) – `partner_revenue_3.sql`, which looks for accounts by name and brand;
+  - or the agreement used a different basis (orders, a different date, or another ledger).
+- **"Collected":** the ledger's still-unpaid column is available for the year-end test.
+- Ask Charlotte which report produced the baseline figures.
