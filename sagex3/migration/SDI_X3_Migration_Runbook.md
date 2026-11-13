@@ -2672,3 +2672,23 @@ The dates assume sending on Mon 16 Nov.
 - post the all-clear when Outlook is back.
 
 **Lesson:** an all-staff channel didn't exist before this outage. Keep this one, so that the next outage doesn't depend on email.
+
+### 22.9 IMPORT.xls has no macro – how it was meant to work (13 Nov)
+
+**Checked:** neither IMPORT.xls nor the real estimate contains a VBA project, macro, button or shape. The only names in them are Excel's own filter names.
+
+So IMPORT.xls is **a mapping, not a tool**. Dave added columns that mirror the X3 import fields:
+- B "Component Type" → CPNTYP;
+- C "UOM link quantity" → LIKQTY;
+- R X3 work centre → WST;
+- Q run minutes → OPETIM.
+
+The cells were meant to be copied into X3's import layouts by hand, or picked up by something Acuity would build. Likewise, the estimate's **Route Import** tab is the flat table that Access's own route import reads. Nothing in the workbook does it automatically.
+
+**The converter (`est_to_x3.py`) is that missing button.** It reads the estimate itself, so the IMPORT columns aren't needed.
+
+**Proposed:**
+1. A small "Estimate → X3" page, the same pattern as the rebate app: drop the estimate in, see the checks, download the files, then load them in Usage → Imports.
+2. Later, stage 2 posts them through the API.
+
+An Excel macro in the template was considered and **not recommended**. It would be harder to maintain and to check, and it would need the macro security settings changed on every estimator's PC.
