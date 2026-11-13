@@ -1189,6 +1189,10 @@ def _fetch_catalogue_section_rows() -> Optional[List[Any]]:
             print(f"   [tube] {_tube_said['rows']} stock price(s) from the AI Tube calculator "
                   f"({len(_tube_said['replaced'])} replace a catalogue price, "
                   f"{len(_tube_said['added'])} are new): {_tube_said['path']}", flush=True)
+            if _tube_said.get("not_used_no_stated_length"):
+                print(f"   [tube] {len(_tube_said['not_used_no_stated_length'])} calculator row(s) "
+                      f"state no stock length and price nothing: "
+                      f"{', '.join(_tube_said['not_used_no_stated_length'][:8])}", flush=True)
         elif _tube_calc.configured_path():
             print(f"   [tube] AI Tube calculator NOT used: {_tube_said.get('why_not')}", flush=True)
     except Exception as _tube_exc:                                   # noqa: BLE001

@@ -251,6 +251,30 @@ change, and which are worth one diagnostic rerun each: 6364-01, 12674-01-GA, 126
 12773-01-GA, 11896-02-01-GA. The standing job-by-job checklist is on SCRUM-274; no item on it
 closes because a run finishes.
 
+**Corrections agreed with the reviewer on 2026-11-13. These supersede anything above that
+reads differently.**
+
+  * **Boxing and shipping are not blockers.** The AI Box calculator is accepted as an
+    estimating allowance. Packaging stays a line with its source recorded; it holds no job.
+  * **68-off on 11896-02-01-GA is a requested-quantity update, not a software fault.** That
+    pack runs at 1, 8 and 68. Every other job keeps its agreed quantities.
+  * **A TTI pilot run now is a test of the EXISTING estimating workflow.** It cannot prove
+    the new calculators: both are switched off, tube operation rates are applied to nothing,
+    and the print calculator prices no line.
+  * **No tube stock row is assumed to be 6.1 m.** The reader takes each row's stock length
+    from the row's own description (`stated_stock_length_m`). A row that states none, or two,
+    replaces no catalogue price and is listed by `rows_without_a_stated_length`. On the
+    workbook uploaded 13 Nov all 89 priced rows state 6.1 m and none is an exception.
+  * **Two categories, neither customer-ready by itself:** a job that needs software repair,
+    and a job that can go to estimating specifically for a rate or scope decision.
+  * **TTI weekend batch:** pilot rows are chosen from the current TTI tracker and shown
+    (row, drawing number, quantities) before anything is queued. The batch expands only after
+    the pilot proves correct pack selection, no duplicate charging and reliable `AiCost`
+    write-back. The `AiCost` writer is not built yet: locate the `AiCost` header, match
+    drawing and quantity, leave the neighbouring columns untouched, read back.
+  * **Deployment state is whatever the laptop last printed.** A pushed commit is not a
+    deployed one; as of this note nobody has deployed `ddc6b5a0` or rerun anything on it.
+
 Review copies sit in `C:\ClaudeVision\chatgptdropoff\AICalculators`; they are not the live
 sources. Order of work agreed with JG: weekly Live Enquiry recovery first, then Print and
 Tube, then the TTI jobs.

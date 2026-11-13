@@ -81,6 +81,28 @@ def test_the_engine_joins_the_calculators_rows_to_its_tube_prices():
     assert at < est.index('_SECTION_ROWS_CACHE["rows"] = rows', at)
 
 
+def test_each_rows_stock_length_is_read_from_the_row_and_never_assumed(tmp_path):
+    assert T.stated_stock_length_m("ERW SQUARE. 30 x 30 x 1.5mm (6.1m)") == 6.1
+    assert T.stated_stock_length_m("ERW ROUND 25.4 x 1.5mm (7.5 m)") == 7.5
+    assert T.stated_stock_length_m("ERW RECT. 40 x 10 x 1.5mm") is None, "the 1.5mm gauge is not a length"
+    assert T.stated_stock_length_m("TUBE (6.1m) or (3m)") is None, "two lengths is not one"
+    wb = openpyxl.load_workbook(_tube_book(tmp_path / "t.xlsx")); ws = wb.active
+    ws.append(["TUBE77", "50 x 25 x 1.5mm", "ERW RECT. 50 x 25 x 1.5mm", 22.0, 0.1, 0.1, 0.1, 0.1])
+    ws.append(["TUBE78", "20 x 20 (7.5m)", "ERW SQUARE 20 x 20 (7.5m)", 19.0, 0.1, 0.1, 0.1, 0.1])
+    wb.save(tmp_path / "t.xlsx")
+    read = T.read_sheet(str(tmp_path / "t.xlsx"))
+    by = {r["code"]: r for r in read["rows"]}
+    assert by["TUBE84"]["stock_length_m"] == 6.1 and by["TUBE78"]["stock_length_m"] == 7.5
+    assert by["TUBE77"]["stock_length_m"] is None and by["TUBE77"]["unit"] == "NOT STATED on the row"
+    odd = T.rows_without_a_stated_length(read)
+    assert [o["code"] for o in odd] == ["TUBE77"]
+    existing = [("TUBE77", "ERW RECT 50x25x1.5", 30.0, "A Supplier", "EA")]
+    rows, said = T.merged_with(existing, read)
+    kept = {r[0]: r for r in rows}
+    assert kept["TUBE77"][2] == 30.0 and kept["TUBE77"][3] == "A Supplier", "an unstated unit replaces no price"
+    assert said["not_used_no_stated_length"] == ["TUBE77"] and said["stock_lengths_m"] == [6.1, 7.5]
+
+
 # ── print ───────────────────────────────────────────────────────────────────────────────
 def test_the_print_sheet_is_worked_cell_for_cell(tmp_path):
     read = P.read_sheet(_print_book(tmp_path / "p.xlsx"))

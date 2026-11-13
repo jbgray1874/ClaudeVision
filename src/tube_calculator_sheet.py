@@ -18,6 +18,7 @@ engine's own tube-laser times (open decision, 13 Nov 2026).
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -29,6 +30,17 @@ HEADERS = {"A": "part", "D": "material cost", "E": "cut cost", "F": "cost per ho
 def configured_path() -> Optional[str]:
     p = os.getenv("SDI_TUBE_CALCULATOR_XLSX", "").strip().strip('"')
     return p or None
+
+
+_STATED_LENGTH = re.compile(r"\(\s*(\d+(?:\.\d+)?)\s*(m|mtr|metre|metres)\s*\)", re.I)
+
+
+def stated_stock_length_m(description: Any) -> Optional[float]:
+    """The stock length a row's own description states, in metres: "(6.1m)" gives 6.1.
+    None when it states none or more than one. The length is read from each row and never
+    assumed (reviewer, 13 Nov 2026: "Do not assume every tube stock row is 6.1 m")."""
+    found = {round(float(v), 3) for v, _u in _STATED_LENGTH.findall(str(description or ""))}
+    return found.pop() if len(found) == 1 else None
 
 
 def _num(v: Any) -> Optional[float]:
@@ -73,8 +85,12 @@ def read_sheet(path: Optional[str] = None) -> Dict[str, Any]:
         cost = _num(r[3])
         if not code or cost is None or cost <= 0:
             continue
+        _desc = str(r[2] or r[1] or "").strip()
+        _len = stated_stock_length_m(_desc) or stated_stock_length_m(r[1])
         out["rows"].append({
             "row": n, "code": code,
+            "stock_length_m": _len,
+            "unit": (f"one {_len:g} m stock length" if _len else "NOT STATED on the row"),
             "description": str(r[2] or r[1] or "").strip(),
             "stock_length_cost_gbp": round(cost, 4),
             "cut_gbp": _num(r[4]), "hole_gbp": _num(r[5]),
@@ -94,8 +110,19 @@ def catalogue_rows(read: Optional[Dict[str, Any]] = None) -> List[Tuple[str, str
     read = read if read is not None else read_sheet()
     if not read.get("ok"):
         return []
+    # ONLY A ROW THAT STATES ITS OWN STOCK LENGTH PRICES ANYTHING. A cost with no stated unit
+    # is not known to be a price per length, so it replaces no catalogue price.
     return [(r["code"], r["description"], r["stock_length_cost_gbp"], SOURCE, "EA")
-            for r in read["rows"]]
+            for r in read["rows"] if r.get("stock_length_m")]
+
+
+def rows_without_a_stated_length(read: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """The priced rows whose description states no single stock length: the exceptions to
+    put to estimating. They price nothing until the row says what its cost is for."""
+    read = read if read is not None else read_sheet()
+    return [{"row": r["row"], "code": r["code"], "description": r["description"],
+             "stock_length_cost_gbp": r["stock_length_cost_gbp"]}
+            for r in (read.get("rows") or []) if not r.get("stock_length_m")]
 
 
 def merged_with(existing: Optional[List[Any]], read: Optional[Dict[str, Any]] = None
@@ -111,8 +138,11 @@ def merged_with(existing: Optional[List[Any]], read: Optional[Dict[str, Any]] = 
     codes = {m[0] for m in mine}
     kept = [r for r in (existing or []) if str(r[0] or "").strip().upper() not in codes]
     had = {str(r[0] or "").strip().upper() for r in (existing or [])}
+    _lengths = sorted({r["stock_length_m"] for r in read["rows"] if r.get("stock_length_m")})
     said.update(used=True, why_not="",
-                replaced=sorted(codes & had), added=sorted(codes - had), rows=len(mine))
+                replaced=sorted(codes & had), added=sorted(codes - had), rows=len(mine),
+                stock_lengths_m=_lengths,
+                not_used_no_stated_length=[x["code"] for x in rows_without_a_stated_length(read)])
     return kept + mine, said
 
 
