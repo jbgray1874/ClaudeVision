@@ -2903,3 +2903,27 @@ James ran `live_orders.sql` in SSMS (Results to Text, tab-delimited) and uploade
 **Lesson:** a Live Orders refresh is only as current as its master data. Refresh LO_PRODUCTS / LO_BOMS / LO_ROUTES alongside the transactions.
 
 **Simon's email (email 5):** this answers his report list of **13 Oct 2026**: 17 reports (REP-01–17) for himself, Sam and Ewa. Nothing newer has come from him.
+
+### 22.14 Held emails sent (Fri 13 Nov, after the Outlook outage) – Simon's held back for a rewrite
+
+| # | To | Sent | Attachments | Reply by |
+|---|---|---|---|---|
+| 1 | Selina | 13 Nov | – | Tue 17 Nov |
+| 2 | Debbie (cc Selina) | 13 Nov | – | Tue 17 Nov |
+| 3 | Marc (cc Charlotte) | 13 Nov | – | Wed 18 Nov |
+| 4 | Dave + James Ryan | 13 Nov | `Estimating_to_X3_examples.xlsx`: one workbook with a Read me tab (Gift Card + IMPORT: summary, BOM, route, checks) | Fri 20 Nov |
+| 5 | Simon (cc Ewa) | **Not sent**: being rewritten to quote his 13 Oct email, with his report list attached | `Simon_Foister_reports_for_Sage_X3.xlsx` | Fri 20 Nov |
+| 6 | Acuity (Neil; cc Marc, Jim, Charlotte) | 13 Nov | – | Fri 20 Nov |
+| 7 | Claire + Nick | 13 Nov | Rebate HTML + xlsx | – |
+| 8 | Live Orders (Dave / Rachael) | 13 Nov | 4 Nov board, HTML + xlsx (matches the figures in the email) | Fri 20 Nov |
+| – | Charlotte (finance only) | 13 Nov | Finance-only workbook | – |
+
+**Lessons (James, 13 Nov):**
+- **Never send a pile of raw files.** The first email 4 set was 12 files: Sage load .txt files plus four separate workbooks. It was cut to **one workbook with a Read me tab** that says what every tab is for.
+- **Every attachment needs a short "what this is" paragraph in the email body.**
+- **Machine load files (.txt) are for Acuity / TEST only, never for users.**
+- **Send one version of a board.** Sending the 4 Nov and 13 Nov boards together would show the same people two versions.
+- **A reply email must say what it's replying to** (the sender's own email and date) and map each item to the register / Jira reference, so the recipient knows what relates to what. Attach their own list back to them, with a column for their answer.
+- Dave's auto-reply: off 13 Nov, back Mon 16 Nov.
+
+The register has been rebuilt (as at 13 Nov): REP-00, REP-05, REP-11–17, REP-22, REP-23, EST-01, EST-10 and LO-00 updated.
