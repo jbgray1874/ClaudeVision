@@ -210,6 +210,110 @@ def into_note(note: Dict[str, str], record: Dict[str, Any],
     return dict(note, html=html[:at] + s["html"] + html[at:], text=s["text"] + str(note.get("text") or ""))
 
 
+# ── WHAT THIS RUN ACTUALLY READ, WRITTEN INTO THE REVIEW COPY (JG, 13 Nov 2026) ──────────
+_KEPT_NOT_READ = (".step", ".stp", ".iges", ".igs", ".x_t", ".x_b", ".sat", ".stl", ".3dm")
+_NATIVE = (".sldprt", ".sldasm")
+
+
+def _component(name: str) -> str:
+    return (_number(name) or Path(_name(name)).stem).upper()
+
+
+def read_evidence(record: Dict[str, Any], pack_files: List[str],
+                  manifest: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """What became of each file of the pack ON THIS RUN, from the run's own record.
+
+    "The engine reads this kind of file" is not "it was read". Each file is one of: read,
+    NOT READ (with the reader's reason), supporting, or NO RECORD where the run's record does
+    not mention it. A file of a kind the engine never reads (IGS, STEP) is covered only where
+    a native model of the same component was read on this run. Otherwise that component's
+    coverage is UNRESOLVED: the absence of a reader is not proof nothing was lost."""
+    g = gather(record, manifest)
+    by_name = {r["file"].lower(): r for r in g["rows"]}
+    native: Dict[str, List[Dict[str, str]]] = {}
+    drawings: Dict[str, List[str]] = {}
+    for r in g["rows"]:
+        low = r["file"].lower()
+        if low.endswith(_NATIVE):
+            native.setdefault(_component(r["file"]), []).append(r)
+        elif low.endswith((".pdf", ".dxf")) and r["state"] == "read":
+            drawings.setdefault(_component(r["file"]), []).append(r["file"])
+    files, unresolved = [], []
+    for name in pack_files:
+        nm = _name(name)
+        row = by_name.get(nm.lower())
+        if nm.lower().endswith(_KEPT_NOT_READ):
+            models = native.get(_component(nm)) or []
+            read = [m["file"] for m in models if m["state"] == "read"]
+            if read:
+                files.append({"file": nm, "state": "not read; covered",
+                              "why": "a native model of the same component was read on this "
+                                     "run: " + ", ".join(read)})
+                continue
+            if models:
+                why = ("its native model was NOT read on this run: "
+                       + "; ".join(f"{m['file']} ({m['why'] or m['state']})" for m in models))
+            else:
+                why = "no native model of this component was given to this run"
+            also = drawings.get(_component(nm)) or []
+            if also:
+                why += ". A drawing of this number was read (" + ", ".join(also) + "), which is not the model"
+            files.append({"file": nm, "state": "NOT READ; COVERAGE UNRESOLVED", "why": why})
+            unresolved.append(nm)
+        elif row:
+            files.append({"file": nm, "state": row["state"], "why": row["why"]})
+        else:
+            files.append({"file": nm, "state": "NO RECORD",
+                          "why": "the run's record does not mention this file"})
+    not_read = [f["file"] for f in files if f["state"] == "NOT READ"]
+    no_record = [f["file"] for f in files if f["state"] == "NO RECORD"]
+    because = []
+    if not_read:
+        because.append(f"{len(not_read)} file(s) could not be read: {', '.join(not_read[:12])}")
+    if unresolved:
+        because.append(f"{len(unresolved)} file(s) of a kind the engine does not read have no "
+                       f"native model read in their place: {', '.join(unresolved[:12])}")
+    if no_record:
+        because.append(f"{len(no_record)} file(s) are not mentioned in the run's record: "
+                       f"{', '.join(no_record[:12])}")
+    return {"files": files, "not_read": not_read, "coverage_unresolved": unresolved,
+            "no_record": no_record,
+            "state": "incomplete" if because else "complete",
+            "because": because or ["every file of the pack was read, or covered by a native "
+                                   "model that was read"]}
+
+
+def record_read_evidence_safely(record: Dict[str, Any]) -> str:
+    """Write this run's read evidence into the review copy's manifest, under its run id.
+    Adds to `read_on_runs` and sets completeness.read; touches nothing else in the pack.
+    Never raises; returns one line saying what happened, or "" where there is no review copy."""
+    try:
+        from datetime import datetime
+        note = _drop_off_beside(record)
+        folder = Path(str(note.get("folder") or ""))
+        path = folder / "pack_manifest.json"
+        if not note.get("saved") or not path.is_file():
+            return ""
+        kept = json.loads(path.read_text(encoding="utf-8"))
+        names = [str(f.get("name")) for f in kept.get("files") or []] + \
+                [str(a.get("name")) for a in kept.get("not_in_this_copy") or []]
+        ev = read_evidence(record, names)
+        run_id = str(record.get("run_id") or "") or \
+            str(((kept.get("runs") or [{}])[-1]).get("run_id") or "") or "unnamed run"
+        ev["recorded_at"] = datetime.now().isoformat(timespec="seconds")
+        kept.setdefault("read_on_runs", {})[run_id] = ev
+        kept.setdefault("completeness", {})["read"] = {
+            "state": ev["state"], "because": ev["because"], "run_id": run_id}
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(kept, indent=1), encoding="utf-8")
+        tmp.replace(path)
+        return (f"Review copy: what this run read is recorded in {path} "
+                f"(read coverage {ev['state']}"
+                + (": " + "; ".join(ev["because"]) if ev["state"] != "complete" else "") + ")")
+    except Exception as exc:                                         # noqa: BLE001
+        return f"WARNING: this run's read evidence was NOT written to the review copy ({type(exc).__name__}: {exc})"
+
+
 def into_note_safely(note: Dict[str, str], record: Dict[str, Any]) -> Dict[str, str]:
     """into_note that never stops a note being written: on any failure the note goes out as
     it was, and the console says the section is missing."""
