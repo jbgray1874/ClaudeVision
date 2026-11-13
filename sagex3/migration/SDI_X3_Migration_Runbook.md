@@ -2602,3 +2602,49 @@ Charlotte is checking how today's daily sales report hides the rebate by custome
 **Recorded:**
 - Register: EST-10 and LO-00 next actions;
 - Jira: SCRUM-210 and SCRUM-241 comments.
+
+### 22.7 A real estimate from the estimating template (13 Nov) – the converter reads it, and it matches Access
+
+**What James sent:** a real estimate made by the estimators (Tim, 1 Sep 2026) on today's template: **12539-04-GA (0359869) rev B, GIFT CARD HEADER**, quantity 40, unit cost £33.02. It is kept in the scratchpad (`est_in_13nov/`), not in git, because it holds customer data.
+
+**How it relates to IMPORT.xls.** IMPORT.xls is Dave's copy of the **same template with X3 columns added**: component code (B / I), link quantity (C), X3 work centre (R) and run minutes (Q). The real template is one column to the left, and it has:
+- **Codes:** standard-material codes in **H**.
+- **Sheet steel:** **no code**, only gauge (H) and sheet size (I × J).
+- **Other sheet material:** **no code column**.
+- **Labour:** by **Access department** (G), with a rate per hour (I) and set-up minutes (L).
+- **Parent:** the part code is in the labour block, **A63** (`M&S-0359869`), not the drawing number.
+- A **Route Import** tab: the route as the Access import takes it (part code / op number blank).
+
+**Converter (`est_to_x3.py`) now reads both layouts**, told apart by row 10 ("Part code" in H10 = the template):
+- **Parent:** A63, through the migration code rule (M&S-0359869 → MS-0359869). Found in X3 (FGML), so only the BOM and route are written.
+- **Work centre:** Access department → X3 from `work_centres.csv` (the migration's own map).
+- **Run time:** 60 / rate × qty, in minutes per unit.
+- **Sheet steel:** gauge + sheet size → the X3 SHEETMETAL product whose Description 2 / 3 reads "L x W x Tmm CR4". `--sheet-material` picks ZINTEC / Galvanised instead. Each pick is listed, with the other materials X3 has for that size.
+- **Other sheet material:** the code is taken from the first word of the description, with a WARN. The template has no code column there.
+- **Repeated components** are merged into one line, as Access holds them.
+- **IMPORT layout output is unchanged** (all three files byte-identical).
+
+**Result: 0 stops, 0 warnings.** BOM 8 lines, route 9 operations.
+
+**Proved against Access:** the part's migrated BOM and route (`track2/Clean_run/*_load7_*`):
+- **Route: identical**, operation for operation (work centre, description, set-up, run). The only difference is "ASSEMBLE/BULK PACK" against "ASSEMBLE-BULK PACK"; today's migration text rule also turns "/" into "-".
+- **BOM: the same 8 components and quantities.** The one difference is SHEETMETAL11: 0.015848 (exact, two parts added) against Access 0.016, which Access rounded up.
+
+**This answers 5 of the 7 questions to Dave (21.5), from the evidence:**
+- **Q3 parent:** it is the part code in A63, not the drawing number. The IMPORT layout keeps E5.
+- **Q4 descriptions:** the real template carries them (column D).
+- **Q5 labour parent:** A63.
+- **Q6 scrap:** Access does not carry it on the BOM either, so we match it.
+- **Q7 minutes:** confirmed, because the route matches Access.
+
+**Still open:**
+1. FIXING49 (IMPORT only).
+2. **Sheet material:** the template has no material, so CR4 is assumed. Add a material column, or type the code.
+3. **Other sheet material:** add a code column.
+4. Wire gauges 2 / 2.5 / 4.5 / 10mm have no code in the template's gauge table.
+
+**Files:** `est/out_GIFT/` (scratchpad) – MS-0359869 YA00408BOM / ZSDIROU2 / CHECKS.
+
+**Recorded:**
+- Register: EST-10 and EST-01;
+- Jira: SCRUM-210.
