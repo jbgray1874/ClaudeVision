@@ -2560,3 +2560,45 @@ Charlotte is checking how today's daily sales report hides the rebate by custome
   - Calculator at the example figure = the calculator script;
   - Reconciliation totals = the ledger analysis;
   - the run rate counts the current part-month as a month, so it understates early in a month.
+
+### 22.6 Back to estimating and Live Orders (13 Nov, after the Teams set-up)
+
+**Estimating – IMPORT test part built:**
+- `est_to_x3.py dave_in/IMPORT.xls est/out_IMPORT --products Ethan_fixes_2026-11-05/ZSDIITM_products_MAPPED.xlsx --parent IMPORT` gives **0 stops, 1 warning** (FIXING49 "DONT USE"), a 14-line BOM and 30 operations.
+- **Load order in TEST:**
+  1. ZSDIITM, only if IMPORT is not already a product in TEST. The products file is the migration list, so it reports IMPORT as new.
+  2. YA00408BOM.
+  3. ZSDIROU2.
+- Then compare the BOM and route in X3 with the estimate.
+- FIXING49 stays until Dave picks FIXING2664 or FIXING2833. It is a warning, not a stop, so the test load can go ahead.
+
+**Live Orders (LO-00) – stage 1 without the API.** The same idea as estimating stage 1: don't wait for the API client.
+- X3's own inquiries and export templates give the data: works orders and their operations / material lines, sales-order lines, stock, POs, BOMs, routes and MRP suggestions.
+- An SDI builder then reproduces Dave's three tabs.
+- **Column map for `Live_Orders.xlsx`, 41 columns** (X3 objects to confirm with Acuity):
+
+| Live Orders column(s) | Comes from in X3 |
+|---|---|
+| Due date | Works-order end date |
+| Customer Date | Sales-order line requested date, via the WO's originating order (the sheet's own lookup is broken: `#REF!`) |
+| WO Num / SO Num | WO number / its originating SO and line |
+| Part code, Description, Drawing, Rev | Product master (drawing = code; rev in Description 2, as migrated) |
+| MATERIAL STATUS | WO material lines: allocated vs shortage, with PO due dates → RAG. Replaces today's free text |
+| QTY / Booked in / Balance | WO planned / completed / remaining quantity |
+| Metal / Joinery / Acrylics | Derived from the work centres on the WO's route |
+| LASM … PACP (23 columns) | Remaining hours per work centre from the WO operations; the codes are already X3 work centres |
+| Tube req, Comments, Prog | Manual, kept on the SDI side keyed by WO (or X3 user fields) |
+
+- **WO Suggestions tab:** MRP suggestions, with "has BOM / has route" flags; red where either is missing.
+- **BOM Report tab:** BOM explosion × quantity, against stock, on PO (with due date), on WO, make / buy.
+- **"MCS"** (column 38) is still to be confirmed with Dave.
+
+**Next:**
+1. James to approve building the stage-1 board.
+2. Prove it from Access today, so it can be compared line for line with Dave's sheet.
+3. Switch the source to the X3 TEST exports.
+4. LO-01 sit-down to agree columns and rules.
+
+**Recorded:**
+- Register: EST-10 and LO-00 next actions;
+- Jira: SCRUM-210 and SCRUM-241 comments.
