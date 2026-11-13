@@ -643,6 +643,14 @@ def resolve_effective_quantities(
         total, counted = 0, False
         for r, src in rows:
             own = _qty(r)
+            # A SHEET THAT LISTS ITS OWN NUMBER IS NOT ITS OWN PARENT (6364-01, 12 Nov 2026).
+            # The castor plate's sheet is an assembly of a plate and two bushes, and item 1
+            # of its list is the plate under the sheet's own number. Counted as a child of
+            # itself, the plate was "1 x however many plates there are", asked again at each
+            # depth: 26 plates and 52 bushes from a bill that calls for 2 and 4. The count of
+            # a sheet comes from the sheets above it, never from its own list.
+            if _norm(src) == code:
+                continue
             if _norm(src) == _main_key:
                 if code in install_context:
                     return 1
