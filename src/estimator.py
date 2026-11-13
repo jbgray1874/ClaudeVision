@@ -1178,6 +1178,21 @@ def _fetch_catalogue_section_rows() -> Optional[List[Any]]:
             cn.close()
         except Exception:
             pass
+    # THE AI TUBE CALCULATOR, WHERE ESTIMATING KEEPS IT (13 Nov 2026). When
+    # SDI_TUBE_CALCULATOR_XLSX names the workbook, its stock rows price their own part codes.
+    # Unset or unreadable, the catalogue rows are used exactly as before.
+    try:
+        import tube_calculator_sheet as _tube_calc
+        rows, _tube_said = _tube_calc.merged_with(rows)
+        _SECTION_ROWS_CACHE["tube_calculator"] = _tube_said
+        if _tube_said.get("used"):
+            print(f"   [tube] {_tube_said['rows']} stock price(s) from the AI Tube calculator "
+                  f"({len(_tube_said['replaced'])} replace a catalogue price, "
+                  f"{len(_tube_said['added'])} are new): {_tube_said['path']}", flush=True)
+        elif _tube_calc.configured_path():
+            print(f"   [tube] AI Tube calculator NOT used: {_tube_said.get('why_not')}", flush=True)
+    except Exception as _tube_exc:                                   # noqa: BLE001
+        print(f"   [tube] AI Tube calculator not read ({_tube_exc}); catalogue prices used", flush=True)
     _SECTION_ROWS_CACHE["rows"] = rows
     return rows
 
