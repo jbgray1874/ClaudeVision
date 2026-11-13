@@ -210,3 +210,34 @@ def test_the_two_default_ports_are_both_documented_somewhere():
         encoding="utf-8", errors="ignore")
     assert re.search(r'_opt\("SDI_PORT",\s*"8071"\)', cfg), "config.py's fallback"
     assert re.search(r"\[int\]\s*\$Port\s*=\s*8072", start), "the start script's default"
+
+
+def test_a_linked_worktree_reads_its_branch_from_the_main_clone(tmp_path):
+    """The second runner's checkout is a git worktree (13 Nov 2026): HEAD is in its own git
+    folder and the branch is in the clone that folder's `commondir` names."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("app_build_probe", APP)
+    src = APP.read_text(encoding="utf-8")
+    body = src[src.index("def _commit_from_git_dir"):src.index("def _resolve_commit")]
+    ns = {}
+    exec("from pathlib import Path\n" + body, ns)
+    read = ns["_commit_from_git_dir"]
+    clone = tmp_path / "clone" / ".git"
+    (clone / "refs" / "heads").mkdir(parents=True)
+    (clone / "refs" / "heads" / "portal").write_text("abcdef1234567890\n", encoding="utf-8")
+    (clone / "HEAD").write_text("ref: refs/heads/other\n", encoding="utf-8")
+    wt_git = clone / "worktrees" / "s2"
+    wt_git.mkdir(parents=True)
+    (wt_git / "HEAD").write_text("ref: refs/heads/portal\n", encoding="utf-8")
+    (wt_git / "commondir").write_text("../..\n", encoding="utf-8")
+    slot2 = tmp_path / "slot2"
+    slot2.mkdir()
+    (slot2 / ".git").write_text(f"gitdir: {wt_git}\n", encoding="utf-8")
+    assert read(slot2) == "abcdef1"
+    # packed, as after a gc
+    (clone / "refs" / "heads" / "portal").unlink()
+    (clone / "packed-refs").write_text("# pack-refs\nabcdef1234567890 refs/heads/portal\n", encoding="utf-8")
+    assert read(slot2) == "abcdef1"
+    # and an ordinary clone still reads its own branch
+    (clone / "refs" / "heads" / "other").write_text("1234567890abcdef\n", encoding="utf-8")
+    assert read(tmp_path / "clone") == "1234567"

@@ -80,9 +80,21 @@ def _commit_from_git_dir(root: Path) -> str:
         if not head.startswith("ref:"):
             return head[:7]                  # a detached HEAD holds the hash itself
         ref = head.split(":", 1)[1].strip()
-        loose = git_dir / ref
-        if loose.is_file():
-            return loose.read_text(encoding="utf-8").strip()[:7]
+        # A LINKED WORKTREE KEEPS ITS HEAD HERE AND ITS BRANCHES IN THE MAIN CLONE (13 Nov
+        # 2026). The second runner is a worktree: its git folder holds HEAD and a `commondir`
+        # file naming the clone that holds refs and packed-refs. Read only here, the branch
+        # was never found and the build read as blank.
+        places = [git_dir]
+        common_file = git_dir / "commondir"
+        if common_file.is_file():
+            common = (git_dir / common_file.read_text(encoding="utf-8").strip()).resolve()
+            if common.is_dir() and common != git_dir:
+                places.append(common)
+        for place in places:
+            loose = place / ref
+            if loose.is_file():
+                return loose.read_text(encoding="utf-8").strip()[:7]
+        git_dir = places[-1]
         # A branch that has not moved since the last `git gc` lives in packed-refs, not in
         # refs/heads — so a freshly cloned repo has no loose ref at all and this is the only
         # place the hash exists.
