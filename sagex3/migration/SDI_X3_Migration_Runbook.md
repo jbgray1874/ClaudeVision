@@ -2702,3 +2702,70 @@ An Excel macro in the template was considered and **not recommended**. It would 
 - **Asks for 30 minutes** watching a real Access import, then a TEST load of the IMPORT part.
 - **Reply by Fri 20 Nov.**
 - **Written to be answered in place** (proposals to agree, one-line answers), so a slow reply is still usable.
+
+### 22.10 Estimate → X3 page built; X3-side gaps and questions for Acuity (13 Nov)
+
+**`sagex3/estimating/est_app.py` – the "button" for the estimating import** (the rebate app's pattern: stdlib server, port **8766**, runs kept in `runs/`, gitignored).
+
+    set EST_PRODUCTS=<latest ZSDIITM file or X3 product export>
+    python est_app.py            (add --host 0.0.0.0 to share inside SDI; no login)
+
+- **Upload an estimate** (either layout).
+- **Options:**
+  - part code override (e.g. IMPORT);
+  - category FGML / FGSL;
+  - sheet material CR4 / ZINTEC / Galvanised;
+  - revision in the code;
+  - a newer product list, used for that run only.
+- **The result page shows:**
+  - **READY TO LOAD / NOT READY**;
+  - the part (new or existing), layout, BOM / route counts;
+  - every check, STOP first, by cell;
+  - the BOM and route as read, with each component's X3 category and description;
+  - the files and a zip;
+  - the load order in Usage → Imports.
+- **Existing parts get a red warning:** load in TEST only, or as the IMPORT test part, until Acuity confirm whether the import replaces or adds lines.
+- "Send to Sage X3" is shown but disabled (stage 2, needs the API client).
+
+**Tested** (scratchpad `est_app_runs/`, screenshots `est_app_shots/`):
+- the gift card estimate and Dave's IMPORT.xls give **byte-identical files to the command line**;
+- a wrong file type is refused;
+- path tricks return 404;
+- the zip and file downloads work;
+- no horizontal scroll at phone width.
+
+**X3-side gaps → email to Acuity (Neil; cc Marc, Jim, Charlotte), held for the outage (`outbox_13Nov`, email 6).** 24 questions, reply by Fri 20 Nov:
+- **A. Connection details (TEST, then LIVE):**
+  - base URLs (REST / GraphQL / SOAP) and folder names;
+  - connected app (client ID / secret) and an SDI integration user and role;
+  - IP restrictions, rate limits, licence use;
+  - API documentation, including write.
+- **B. Estimating import:**
+  - **re-import of an existing part – replace, add or reject** (the blocker for LIVE use);
+  - does ZSDIITM create the product-site (S01A) record works orders need;
+  - a scrap % field in YA00408BOM;
+  - the revision approach (replace / alternative / validity);
+  - costs (YITC / price lists);
+  - OVEN, SALV, and time unit 2 = minutes;
+  - user rights to run imports and see the log;
+  - a schedulable product and work-centre export for the page's checks;
+  - stage 2: API write or import file via the batch server.
+- **C. Live Orders:**
+  - read access (API object or export template) to works orders (header / products / operations / materials), SO lines, stock and allocations, PO lines, BOMs, routes and MRP results;
+  - works-order webhooks;
+  - automatic allocation / global allocation;
+  - the WO → originating SO link;
+  - work-centre capacities and MRP in TEST;
+  - user fields on the WO for Production's notes;
+  - a demo date for the standard planning screens.
+- **D. Live Enquiry → opportunity:**
+  - opportunity template / API write;
+  - drawings and PDFs on SaaS (attach or link);
+  - won → project design, date and event.
+- **E.** The items still outstanding from the 12 Nov requirements email (21.2).
+
+**Priority if Acuity can only do a few:** items 1–2 (API client) and 6 (re-import behaviour).
+
+**Recorded:**
+- Register: EST-10, LO-00;
+- Jira: SCRUM-210, 241, 208.

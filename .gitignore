@@ -29,3 +29,4 @@ output/
 *.sql
 # rebate report runs name customers - keep them out of git
 sagex3/reports/rebate/runs/
+sagex3/estimating/runs/
