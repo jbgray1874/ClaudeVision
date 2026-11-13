@@ -547,6 +547,25 @@ def _pick_top_assembly(records: List[Dict[str, Any]],
 
 
 # ── normalisation ────────────────────────────────────────────────────────────
+def quantities_by_the_tree(hierarchy: Any, top: str) -> Dict[str, float]:
+    """How many of each child one product holds, multiplied down the assembly tree."""
+    tree = {_clean_pn(str(p)): [(_clean_pn(str(c)), float(q or 0)) for c, q in (kids or [])]
+            for p, kids in (hierarchy or {}).items()}
+    total: Dict[str, float] = {}
+
+    def _walk(parent: str, times: float, above: Tuple[str, ...]) -> None:
+        for child, q in tree.get(parent, []):
+            if not child or q <= 0:
+                continue
+            total[child] = total.get(child, 0.0) + times * q
+            if child in tree and child not in above:
+                _walk(child, times * q, above + (child,))
+
+    if top:
+        _walk(top, 1.0, (top,))
+    return total
+
+
 def normalize_native_extract(records: List[Dict[str, Any]],
                              job_codes: Optional[set] = None) -> NativeJob:
     job = NativeJob()
@@ -727,6 +746,7 @@ def normalize_native_extract(records: List[Dict[str, Any]],
         if len(_tb) == 3:
             job.meta["top_assembly_bbox_mm"] = [round(v, 1) for v in _tb]
         job.meta.update(_amb)
+        _walked = quantities_by_the_tree(job.hierarchy, _clean_pn(str(top.get("title") or "")))
         for line in (top.get("bom") or []):
             pn = _clean_pn(line.get("part_number") or "")
             if not pn:
@@ -756,6 +776,18 @@ def normalize_native_extract(records: List[Dict[str, Any]],
                 source=(DOCMGR_SOURCE_NAME if _record_reader(top) == DOCMGR_SOURCE_NAME
                         else SOURCE_NAME),
             )
+            # AN ASSEMBLY AND THE PART INSIDE IT CAN SHARE ONE NUMBER (6364-01, 12 Nov 2026).
+            # The castor plate is an assembly, 6364-01-005, holding a plate part of the same
+            # number and two bushes. The model's bill counts by number, so two assemblies
+            # and their two plates read as four, and four plates were costed where the
+            # drawing and the tree both say two. The tree counts each assembly under its
+            # parent once, so for an assembly it is the count.
+            _tree_q = _walked.get(pn)
+            if is_asm and _tree_q and abs(_tree_q - row.quantity) > 1e-6:
+                row.flags.append(f"the model's bill counted {row.quantity:g} of this number; the "
+                                 f"assembly tree holds {_tree_q:g} of the assembly, which is "
+                                 f"the count used (a part inside it carries the same number)")
+                row.quantity = float(_tree_q)
             if desc:
                 row.flags.append(f"desc: {desc}")
             if weld:
