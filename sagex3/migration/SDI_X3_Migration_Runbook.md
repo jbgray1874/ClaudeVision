@@ -2520,3 +2520,12 @@ Charlotte is checking how today's daily sales report hides the rebate by custome
 - the revenue query results (baseline reconciliation, actuals);
 - Charlotte's answers;
 - the X3 set-up.
+
+**13 Nov – first revenue run (results kept in the finance-only folder):**
+- Accounts found by name: six partner-group accounts plus the pass-through account. One group account has no invoices since Sep 2024.
+- **The invoice-line totals do not reproduce the agreement's baselines:**
+  - year 1: the closest combination (the main UK account + optical + all pass-through) is ~£32k under;
+  - year 2: even all accounts together are ~£454k under.
+- **So the agreement's figures were not built from invoice lines.** Either lines without an order-line price drop out of the left join, or invoicing bypasses order lines (sales-ledger invoices, e.g. services).
+- **Follow-up:** `partner_revenue_2.sql` (private): sales-ledger net (`ST_NETT`, INV / CRN) by account and month, still-unpaid (for "collected"), the count of unpriced invoice lines, and the pass-through account's lines by part-code prefix (BOT- = partner work?).
+- **Lesson:** reconcile to the agreed figures before estimating – the obvious source (invoice lines) was not the agreement's source.
