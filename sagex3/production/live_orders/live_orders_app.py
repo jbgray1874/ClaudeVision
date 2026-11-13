@@ -105,7 +105,7 @@ def home(msg=""):
 <button {'disabled' if why_db or why_m else ''}>Refresh the board</button></form>
 <form class="card" method="post" action="/upload" enctype="multipart/form-data"><h2>…or upload a saved result</h2>
 <p class="note">Run <code>live_orders.sql</code> in SQL Server with results to file (tab delimited), or use the migration's extract_transactions.txt.</p>
-<p><input type="file" name="extract" accept=".txt,.tsv" required></p><button {'disabled' if why_m else ''}>Build the board</button></form>
+<p><input type="file" name="extract" accept=".txt,.tsv,.rpt,.csv" required></p><button {'disabled' if why_m else ''}>Build the board</button></form>
 <section class="card"><h2>Boards</h2>{'<table><tr><th>As at</th><th>Source</th><th>Result</th><th></th></tr>' + hist + '</table>' if hist else '<p class="note">None yet.</p>'}</section>
 <p class="note">Master data: {' · '.join(f'{k}: {e(Path(v).name) if v else "not set"}' for k, v in MASTER.items())} · Jira SCRUM-241 · boards kept in {e(str(RUNS))}</p>""")
 
