@@ -2800,13 +2800,6 @@ def main() -> None:
                     )
                 from pack_used import into_note_safely as _pack_note
                 _note = _pack_note(_note, summary)   # the files this run was given
-                # ...AND WHAT IT READ OF THEM GOES INTO THE REVIEW COPY (13 Nov 2026): the
-                # copy's manifest says what the engine does with a kind of file; only the
-                # run can say what was read.
-                from pack_used import record_read_evidence_safely as _read_ev
-                _ev_line = _read_ev(summary)
-                if _ev_line:
-                    print("   " + _ev_line, flush=True)
                 _note_path = Path(xlsx_path).with_name(
                     f"{Path(xlsx_path).stem}_covering_email.html")
                 _note_path.write_text(
@@ -2816,6 +2809,13 @@ def main() -> None:
                 # HTML — its own tag-strip ran table cells together.
                 _note_path.with_suffix(".txt").write_text(_note["text"], encoding="utf-8")
                 _sop["covering_email"] = str(_note_path)
+                # ...AND WHAT IT READ OF THEM GOES INTO THE REVIEW COPY (13 Nov 2026): the
+                # copy's manifest says what the engine does with a kind of file; only the
+                # run can say what was read.
+                from pack_used import record_read_evidence_safely as _read_ev
+                _ev_line = _read_ev(summary)
+                if _ev_line:
+                    print("   " + _ev_line, flush=True)
                 print(f"   [covering-note] {_note_path.name} — {_note['subject']}",
                       flush=True)
                 # THE SAME NOTE, SPOKEN (D-609): its words beside the workbook, and the sound

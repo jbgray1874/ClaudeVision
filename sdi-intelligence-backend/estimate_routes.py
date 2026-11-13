@@ -78,6 +78,7 @@ import docmgr
 import estimate_email
 import estimate_history
 import estimate_walkthrough
+import pack_link
 import quote_release
 import self_running_switch
 import staging
@@ -255,6 +256,9 @@ class Run:
     quantity_prices: List[Dict[str, Any]] = field(default_factory=list)
     # THE WALKTHROUGH PAGE'S TOKEN (D-610), when the run filed a walkthrough.
     walkthrough: str = ""
+    # THE LINK TO THE EXACT PACK THIS RUN WAS GIVEN (13 Nov 2026): the token of the record
+    # made when its pack was kept at queue time. Empty where no copy was kept.
+    pack_token: str = ""
     # WHETHER A RUNNER SHOULD EVER PICK THIS UP. Nothing sets this False any more: an
     # LLM-only enquiry used to end at the fast text read — no runner, no workbook — and
     # since 22 Sep 2026 it queues a runner job like every other method, because "populate
@@ -391,6 +395,8 @@ class Run:
             "quantity_prices": list(self.quantity_prices),
             "walkthrough_url": (estimate_walkthrough.url_for(self.walkthrough)
                                 if self.walkthrough else ""),
+            "pack_token": self.pack_token,
+            "pack_url": pack_link.url_for(self.pack_token) if self.pack_token else "",
             "log": self.log, "deliverables": self.deliverables,
             "email_to": list(self.email_to), "email_result": dict(self.email_result),
             "requested_by": self.requested_by,
@@ -833,6 +839,15 @@ def _run_log_drop_off(run: "Run", folder: Any, client: str, drawing: str, title:
         line = pack_dropoff.said(result)
         if line:
             run.line(("Drop-off  " if result.get("saved") else "") + line)
+        # THE LINK THE E-MAIL AND THE FILED NOTE WILL CARRY, to this version of the pack and
+        # no later one. Made here, where the pack is kept, for every way a job is queued.
+        try:
+            run.pack_token = pack_link.make(run.run_id, client, drawing, result)
+            if run.pack_token:
+                run.line(f"Pack link for this run (version {result.get('version')}): "
+                         f"{pack_link.url_for(run.pack_token)}")
+        except OSError as _pexc:
+            run.line(f"WARNING: the link to this run's pack could not be recorded ({_pexc}).")
         note = Path(str(folder)) / pack_dropoff.RESULT_NOTE
         if line:
             note.write_text(json.dumps(dict(result, said=line), indent=1), encoding="utf-8")
@@ -2403,6 +2418,20 @@ def complete(run_id: str, req: CompleteRequest,
     # writing to the share can take seconds. The engine wrote the covering note before this
     # service made the walkthrough page, so the filed copies, in AISheets and in the completed
     # AI briefs area, gain the same two buttons the e-mail carries.
+    # THE LINK TO THE RUN'S PACK IN EVERY FILED NOTE (13 Nov 2026), walkthrough or not: the
+    # engine left a mark in its drawing pack section and the link is filled in here.
+    try:
+        _linked = pack_link.stamp_note_files(_filed_note_copies(_deliverables, _archived), _snapshot)
+    except Exception as _lexc:                                       # noqa: BLE001
+        _linked = []
+        print(f"[pack-link] {run_id}: {type(_lexc).__name__}: {_lexc}", flush=True)
+    if _linked:
+        with _LOCK:
+            _live = _RUNS.get(run_id)
+            if _live is not None:
+                _live.line(f"Link to this run's drawing pack written into {len(_linked)} filed "
+                           f"covering note(s).")
+                _keep(_live)
     if _snapshot.get("walkthrough_url"):
         _note_files = _filed_note_copies(_deliverables, _archived)
         _stamped = estimate_walkthrough.stamp_note_files(
@@ -2507,6 +2536,8 @@ def _email_finished_run(snapshot: Dict[str, Any], deliverables: List[Dict[str, s
         if snapshot.get("walkthrough_url"):
             note = estimate_walkthrough.email_button(note, snapshot["walkthrough_url"],
                                                      estimate_walkthrough.audio_of(deliverables))
+        # THE DRAWING PACK SECTION, WITH ITS LINK, IN EVERY E-MAIL (13 Nov 2026).
+        note = pack_link.into_note(note, snapshot)
         result = estimate_email.send(recipients, note["subject"], note["html"],
                                      note["text"], paths)
         if held:
@@ -3939,6 +3970,61 @@ def walkthrough_file(token: str, name: str, request: Request = None,
                             headers={"X-SDI-Quote-Release": "portal",
                                      "Content-Security-Policy":
                                          "sandbox allow-downloads allow-popups"})
+    return FileResponse(str(path), media_type=media or "application/octet-stream",
+                        filename=path.name)
+
+
+# ── THE PACK A RUN WAS GIVEN (13 Nov 2026) ───────────────────────────────────────────────
+# Behind the link in the e-mail and the filed note: /estimating/pack/<token> is the page;
+# these are its data and its files. Only the files the kept pack's manifest lists.
+def _pack_relayed(request: Optional[Request], path: str) -> Optional[Tuple[bytes, str, str]]:
+    import grid_peers
+    if request is not None and request.headers.get(grid_peers.RELAY_HEADER):
+        return None
+    m = re.match(r"^/api/estimate/pack/([^/]+)(?:/|$)", path)
+    return grid_peers.relay(path) if m and pack_link.token_ok(m.group(1)) else None
+
+
+def _pack_or_404(token: str) -> Dict[str, Any]:
+    rec = pack_link.load(token)
+    if rec is None:
+        raise HTTPException(404, "This drawing pack link is not known here. It was recorded by "
+                                 "the service that queued the run; open it there.")
+    return rec
+
+
+@router.get("/pack/{token}")
+def pack_view(token: str, request: Request = None,
+              x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    if pack_link.load(token) is None:
+        got = _pack_relayed(request, f"/api/estimate/pack/{token}")
+        if got is not None:
+            return Response(content=got[0], media_type=got[1] or "application/json")
+    return pack_link.view(_pack_or_404(token))
+
+
+@router.get("/pack/{token}/file/{name:path}")
+def pack_file(token: str, name: str, request: Request = None,
+              x_sdi_key: Optional[str] = Header(default=None)):
+    """One of the kept pack's own files, as its manifest lists it; nothing else."""
+    _check_key(x_sdi_key)
+    if pack_link.load(token) is None:
+        got = _pack_relayed(request, f"/api/estimate/pack/{token}/file/{urllib.parse.quote(name)}")
+        if got is not None:
+            return Response(content=got[0], media_type=got[1],
+                            headers={"Content-Disposition": got[2]} if got[2] else {})
+    path = pack_link.file_for(_pack_or_404(token), name)
+    if path is None:
+        raise HTTPException(404, f"{name!r} is not one of this pack's files, or it has been moved.")
+    media, _ = mimetypes.guess_type(path.name)
+    # A PACK IS DRAWINGS AND MODELS, NEVER A QUOTATION. Should one ever sit in a pack, it is
+    # held by the same gate as everywhere else: read in the browser, never downloaded.
+    if quote_release.looks_like_a_quote(path) and not quote_release.may_go_to_a_customer(path):
+        return FileResponse(str(path), media_type=media or "application/octet-stream",
+                            filename=path.name, content_disposition_type="inline",
+                            headers={"X-SDI-Quote-Release": "portal",
+                                     "Content-Security-Policy": "sandbox allow-downloads allow-popups"})
     return FileResponse(str(path), media_type=media or "application/octet-stream",
                         filename=path.name)
 

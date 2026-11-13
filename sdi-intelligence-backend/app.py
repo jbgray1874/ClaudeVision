@@ -579,6 +579,21 @@ def walkthrough_page(token: str, request: Request):
                         content={"detail": "sdi-walkthrough.html is not next to app.py"})
 
 
+# THE PACK A RUN WAS GIVEN (13 Nov 2026): the page behind the link in the e-mail and the
+# filed covering note. Signed in like the walkthrough; its data is /api/estimate/pack/<token>.
+_PACK_PAGE = Path(__file__).with_name("sdi-pack.html")
+
+
+@app.get("/estimating/pack/{token}")
+def pack_page(token: str, request: Request):
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    if _PACK_PAGE.exists():
+        return FileResponse(str(_PACK_PAGE), headers=_PAGE_HEADERS)
+    return JSONResponse(status_code=404,
+                        content={"detail": "sdi-pack.html is not next to app.py"})
+
+
 # ONE VOICE SCRIPT FOR EVERY ESTIMATING PAGE (D-622): the e-mail page, the desk page and the
 # phone ask by voice and read answers aloud through the same code. Static, no job data in it.
 _VOICE_JS = Path(__file__).with_name("sdi-voice.js")
