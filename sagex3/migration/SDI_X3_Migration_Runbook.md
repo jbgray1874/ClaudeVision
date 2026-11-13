@@ -2541,3 +2541,12 @@ Charlotte is checking how today's daily sales report hides the rebate by custome
   - or the agreement used a different basis (orders, a different date, or another ledger).
 - **"Collected":** the ledger's still-unpaid column is available for the year-end test.
 - Ask Charlotte which report produced the baseline figures.
+
+**13 Nov – account search (`partner_revenue_3.sql`):**
+- No other group, brand or beauty-company accounts: the same seven (one has no revenue).
+- **No combination of accounts reproduces the agreement's two baseline years**, with or without VAT on any account.
+  - Best year-2 fit is still ~£43k out, and it doesn't fit year 1 at the same time.
+- **Conclusion:** the baselines came from a source other than Access's sales ledger / invoice lines. Possibilities: Boots' own purchase data, orders, another period basis, a pro-forma / manual adjustment.
+- **The question goes to Charlotte** (e-mail redrafted in the chat with the reconciliation table).
+- **The estimate is on hold** until the definition is known.
+- The current-year-to-date figures are held in the finance-only folder.
