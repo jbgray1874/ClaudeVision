@@ -2276,3 +2276,46 @@ The Material Price Break tab shows #VALUE!, so prices / costs (YITC) are not par
 2. Load into TEST against the IMPORT part.
 3. Compare in X3 with the estimate.
 4. Stage 2 (API) when the API client exists.
+
+**13 Nov – recorded:**
+- **Register:** EST-10 → In progress; EST-01 → Built, with the blockers named. Rebuilt: 65 items.
+- **Jira:** SCRUM-210 comment (stage 1 built, blockers, next steps).
+- **E-mail to Dave:** the 7 questions above, drafted 12 Nov, for James to send.
+- To revisit shortly.
+
+### 21.6 The users' projects and how to implement each on X3 Cloud (13 Nov)
+
+**Routes:**
+- **Std:** X3 standard, configured by Acuity.
+- **X3 build:** a Crystal report, a request / inquiry to Excel, or Safe X3 code, built by Acuity or by SDI if it is given development rights.
+- **API app:** SDI's own tool reading / writing X3 through REST / GraphQL – the rebate-app pattern.
+- **Import:** an X3 import file / template.
+
+| Project (register) | Raised by | Likely implementation | Depends on |
+|---|---|---|---|
+| Live Orders board (LO-00..05) | Dave Wright, Rachael Smith | Demo of X3 standard first (WO planning, MRP workbench, WC load, shortages, dashboards); then an **API app** board: material RAG per WO (BOM explosion vs stock, allocations, PO dates), WC hours per week, MRP suggestions flagging no BOM / route, drill-down exploded BOM, Excel export | API client; LO-01 sit-down; WC capacities; MRP set-up; PHANT |
+| Estimating import (EST-10..03) | Dave Wright | Stage 1 **Import** (built: `est_to_x3.py`); stage 2 **API app** button with live checks, preview, write, idempotent; later triggered by a won opportunity | Dave's answers; API client; PHANT |
+| Estimating port (EST-00) | James | Estimating reads codes, costs, suppliers and rates from X3 via **API** (a nightly cache), parity runs against Access | API client |
+| Opportunity → live project (OPP-00..06) | Marc's CRM minutes / James | **Import** or **API** create / update from SDI Live; a won opportunity creates the project dimension (Acuity bespoke / webhook); PDF fallback = link to an SDI store | Acuity design (OPP-04, 05); API client |
+| Works orders auto-created (PRD-00) | James | X3 **Std** (order → WO, MRP) + automation; job cards = an X3 report | PHANT; MRP set-up |
+| PO delivery by date, receive goods (REP-01, 02) | Simon Foister (Sam) | **Std** inquiries / reports | Acuity confirm |
+| Exploded BOMs incl. cartons (REP-03) | Simon (Sam) | **Std** BOM explosion inquiry; else shares the Live Orders drill-down | Acuity confirm |
+| Outstanding POs / SOs to Excel (REP-04, 07) | Simon, Debbie Freeth | **Std** + request to Excel | – |
+| Export invoices (REP-05) | Ewa | Define, then **X3 build** (request / Crystal) | Ewa's sample |
+| Debtors (REP-06) | Ewa | **Std** aged debtors (also the migration sign-off) | – |
+| MRP suggestions (REP-08) | Simon | **Std** MRP | MRP set-up, PHANT |
+| End-of-month stock, stock usage (REP-09, 10) | Simon | **Std** valuation / consumption | Valuation basis |
+| Internal revenue, total revenue (REP-11, 12) | Simon | Define, then **X3 build** or **API app** | Simon's calculation |
+| Stock tracking / locations / movements (REP-13) | Simon | **Std** stock inquiries | – |
+| Production Live / Proto Live (REP-14) | Simon | Define the prototype flag (category or project type), then a request / board filter (Live Orders) | Definition |
+| Project tracker (REP-15) | Simon | **X3 build** on the project dimension, or **API app** | OPP-04 |
+| Manufactured sales (REP-16) | Simon | **Std** sales analysis filtered on made categories (FGML / PHANT) | Definition |
+| Department on-time delivery (REP-17) | Simon | **API app** or Crystal: due vs delivered by department (WC / route) | Definition of the measure |
+| SDI MRP by operator (REP-18) | Debbie, Selina Kuddus | Request: shortages on orders by order-entry user | New MRP |
+| Delivered not invoiced (REP-19) | Debbie | **Std** | – |
+| Tungsten EDI, YINVLIST (REP-20, 21) | Farhana Khan | Built by Acuity – UAT only | UAT |
+| Rebate rolling report (REP-22) | Claire | **Done on Access** (ties to the penny, web app); X3 version via **API app** or request – same SQL logic on X3 invoices | API client; Claire's confirmations |
+| Spreadsheets refresh / write-back (SHT-00, CS-02) | Selina, James | Read: request exports or Power Query on the API; write: imports / API only | Sheet list per team; API client |
+| Customer Service UAT (CS-01..10) | Selina | Acuity training / config (project codes, back-to-back, global allocation, pro forma, dashboards); "&" rule kept; AI-drafted process documents (SDI) | Acuity dates |
+
+**Pattern for every one:** define with the user → build in TEST → prove against Access (to the penny, as REP-22) → live via patch / deployment → runbook + register + Jira.
