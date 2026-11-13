@@ -2051,6 +2051,61 @@ def drawing_bom_tables(doc) -> List[BomLine]:
     return lines
 
 
+def open_document_state(doc: Any) -> Dict[str, Any]:
+    """What a document read out of somebody's open session is showing (12 Nov 2026).
+
+    A document this run opened is the file on disk in its saved configuration. A document
+    that was already open is whatever its holder has on screen: perhaps another
+    configuration, perhaps edits that were never saved. Neither can be seen from the file,
+    so both are asked of the document itself and travel with the read. Reviewer: "check
+    file identity, configuration and unsaved state".
+
+    unsaved: True, False, or None when SolidWorks would not say.
+    configuration_unverified: True when the document has more than one configuration, since
+    the one on screen need not be the one the drawing calls for.
+    """
+    state: Dict[str, Any] = {"title": _safe_str(_get0(doc, "GetTitle")),
+                             "path": _safe_str(_get0(doc, "GetPathName")),
+                             "configuration": "", "configurations": None, "unsaved": None}
+    try:
+        flag = _get0(doc, "GetSaveFlag")
+        state["unsaved"] = None if flag is None else bool(flag)
+    except Exception:                                                # noqa: BLE001
+        state["unsaved"] = None
+    try:
+        mgr = _get0(doc, "ConfigurationManager")
+        active = _get0(mgr, "ActiveConfiguration") if mgr is not None else None
+        state["configuration"] = _safe_str(_get0(active, "Name")) if active is not None else ""
+    except Exception:                                                # noqa: BLE001
+        pass
+    try:
+        names = _get0(doc, "GetConfigurationNames")
+        state["configurations"] = len(list(names)) if names is not None else None
+    except Exception:                                                # noqa: BLE001
+        state["configurations"] = None
+    state["configuration_unverified"] = state["configurations"] is None or state["configurations"] > 1
+    return state
+
+
+def cautions_for_an_open_document(state: Dict[str, Any]) -> List[str]:
+    """The plain-word cautions a read out of an open session carries."""
+    out: List[str] = []
+    name = state.get("title") or state.get("path") or "the document"
+    if state.get("unsaved") is True:
+        out.append(f"{name} was read from an open session with unsaved changes: what was "
+                   f"read may not be what is saved on disk")
+    elif state.get("unsaved") is None:
+        out.append(f"{name} was read from an open session and SolidWorks did not say "
+                   f"whether it has unsaved changes")
+    if state.get("configuration_unverified"):
+        n = state.get("configurations")
+        out.append(f"{name} was read in the configuration its holder had on screen "
+                   f"('{state.get('configuration') or 'unnamed'}', "
+                   f"{'an unknown number' if n is None else n} available): not checked "
+                   f"against the configuration the drawing calls for")
+    return out
+
+
 def analyse_file(session: SolidWorksSession, path: str) -> Dict[str, Any]:
     doc, doctype = session.open(path)
     result: Dict[str, Any] = {
@@ -2063,6 +2118,17 @@ def analyse_file(session: SolidWorksSession, path: str) -> Dict[str, Any]:
         "route_signals": None,
         "errors": [],
     }
+    # WHOSE DOCUMENT THIS WAS. Opened by this run: the file as saved. Already open: read in
+    # place, never closed by us, and its configuration and unsaved state recorded.
+    if getattr(session, "last_open_borrowed", False):
+        _state = open_document_state(doc)
+        result["document_owner"] = "already open before this run"
+        result["read_from_open_document"] = _state
+        result["read_cautions"] = cautions_for_an_open_document(_state)
+        for _c in result["read_cautions"]:
+            print(f"[ownership] {_c}")
+    else:
+        result["document_owner"] = "opened and closed by this run"
     result["title"] = _safe_str(_get0(doc, "GetTitle"))
     try:
         result["custom_properties"] = get_custom_properties(doc)
@@ -2402,6 +2468,8 @@ def main():
             # analyser automatically now that it no longer closes anyone's work, so it
             # travels with the extract instead of scrolling past in a console.
             "read_from_open_documents": list(getattr(session, "borrowed_seen", []) or []),
+            "read_cautions": [c for r in all_results if isinstance(r, dict)
+                              for c in (r.get("read_cautions") or [])][:200],
             # WHICH READER WROTE THIS, AND WHEN (12 Nov 2026). An extract is kept beside the
             # pack and reused by later runs. Without these two lines nothing could tell a
             # read made a minute ago by this build from one made yesterday by an older one.
