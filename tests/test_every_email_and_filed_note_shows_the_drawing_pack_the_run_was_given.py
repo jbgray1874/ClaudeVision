@@ -204,6 +204,50 @@ def test_a_number_alone_with_no_revision_on_either_file_establishes_nothing():
     assert f["state"] == "NOT READ; COVERAGE UNRESOLVED" and "cannot be compared" in f["why"]
 
 
+def _ev(solidworks, unread, manifest=None, failed=()):
+    record = {"run_id": "r1", "cad_inputs": {"solidworks": list(solidworks), "unread": [unread]},
+              "solidworks_native": {"extract_errors": [{"path": n, "errors": ["could not be opened"]}
+                                                       for n in failed]}}
+    return pack_used.read_evidence(record, [unread], manifest or {"members": []})["files"][0]
+
+
+def test_the_same_file_name_does_not_override_a_second_issue_of_the_component_in_the_pack():
+    """JG: a matching filename alone must not override conflicting evidence."""
+    alone = _ev(["70001-01-02M.SLDPRT"], "70001-01-02M.igs")
+    assert alone["state"] == "not read; covered" and "same file name" in alone["why"]
+    assert "no revision is stated on either file" in alone["why"]
+    beside = _ev(["70001-01-02M_revC.SLDPRT", "70001-01-02M_revD.SLDPRT"], "70001-01-02M_revC.igs")
+    assert beside["state"] == "NOT READ; COVERAGE UNRESOLVED"
+    assert "more than one issue of this component" in beside["why"] and "rev D" in beside["why"]
+
+
+def test_the_same_file_name_does_not_override_the_revision_the_packs_manifest_gives():
+    manifest = {"members": [{"drawing": "70001-01-02M", "revision": "D"}]}
+    f = _ev(["70001-01-02M_revC.SLDPRT"], "70001-01-02M_revC.igs", manifest)
+    assert f["state"] == "NOT READ; COVERAGE UNRESOLVED"
+    assert "manifest gives this drawing as rev D" in f["why"]
+    agreed = _ev(["70001-01-02M_revC.SLDPRT"], "70001-01-02M_revC.igs",
+                 {"members": [{"drawing": "70001-01-02M", "revision": "C"}]})
+    assert agreed["state"] == "not read; covered" and "same revision" in agreed["why"]
+
+
+def test_the_same_file_name_does_not_override_unconfirmed_configurations():
+    f = _ev(["70001-01-02M.SLDPRT"], "70001-01-02M.igs",
+            {"members": [], "configurations_unconfirmed": True})
+    assert f["state"] == "NOT READ; COVERAGE UNRESOLVED" and "configurations are unconfirmed" in f["why"]
+
+
+def test_a_second_issue_that_failed_to_read_is_still_a_second_issue():
+    f = _ev(["70001-01-02M_revC.SLDPRT", "70001-01-02M_revD.SLDPRT"], "70001-01-02M_revC.igs",
+            failed=["70001-01-02M_revD.SLDPRT"])
+    assert f["state"] == "NOT READ; COVERAGE UNRESOLVED" and "more than one issue" in f["why"]
+
+
+def test_another_components_model_never_covers_this_one():
+    f = _ev(["70001-01-03M_revC.SLDPRT"], "70001-01-02M_revC.igs")
+    assert f["state"] == "NOT READ; COVERAGE UNRESOLVED" and "no native model of this component" in f["why"]
+
+
 # ── a recovered pack is labelled as one ────────────────────────────────────────────────────
 def test_the_link_stays_on_the_pack_the_run_was_given_and_a_recovery_is_shown_apart(er, tmp_path, monkeypatch):
     run = _queue(er, tmp_path)

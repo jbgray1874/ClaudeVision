@@ -275,14 +275,35 @@ def _stated_revision(name: str) -> str:
 
 
 def _equivalent(unread: str, model: str) -> str:
-    """"same" where the two files are shown to be one issue of one model; otherwise why not."""
-    if Path(_name(unread)).stem.casefold() == Path(_name(model)).stem.casefold():
-        return "same"
+    """"same revision" or "same file name" where the two files are shown to be one issue of
+    one model; otherwise the reason they are not."""
     a, b = _stated_revision(unread), _stated_revision(model)
     if a and b:
-        return "same" if a == b else f"revisions differ ({_name(unread)} is rev {a}, {_name(model)} is rev {b})"
+        return "same revision" if a == b else \
+            f"revisions differ ({_name(unread)} is rev {a}, {_name(model)} is rev {b})"
+    if Path(_name(unread)).stem.casefold() == Path(_name(model)).stem.casefold():
+        return "same file name"
     return ("no revision is stated on " + " or ".join(_name(n) for n, r in ((unread, a), (model, b)) if not r)
             + ", so the two cannot be compared")
+
+
+def _conflicts(unread: str, chosen: str, models: List[Dict[str, str]], pack_revision: str,
+               unconfirmed: bool) -> List[str]:
+    """Evidence against treating `chosen` as the model `unread` was exported from. A matching
+    name or revision does not override any of these (JG, 13 Nov 2026)."""
+    out: List[str] = []
+    if unconfirmed:
+        out.append("the pack's configurations are unconfirmed, so which configuration either "
+                   "file shows is not established")
+    rev = _stated_revision(chosen) or _stated_revision(unread)
+    others = sorted({f"{m['file']} (rev {_stated_revision(m['file'])})" for m in models
+                     if _stated_revision(m["file"]) and rev and _stated_revision(m["file"]) != rev})
+    if others:
+        out.append("the pack holds more than one issue of this component: " + ", ".join(others))
+    if pack_revision and rev and pack_revision.upper() != rev:
+        out.append(f"the pack's manifest gives this drawing as rev {pack_revision.upper()}, "
+                   f"and these files are rev {rev}")
+    return out
 
 
 def _component(name: str) -> str:
@@ -300,6 +321,9 @@ def read_evidence(record: Dict[str, Any], pack_files: List[str],
     coverage is UNRESOLVED: the absence of a reader is not proof nothing was lost."""
     g = gather(record, manifest)
     unconfirmed = bool(g.get("configurations_unconfirmed"))
+    _m = manifest if manifest is not None else _manifest_beside(record)
+    pack_revs = {str(x.get("drawing") or "").upper(): str(x.get("revision") or "")
+                 for x in (_m or {}).get("members") or []}
     by_name = {r["file"].lower(): r for r in g["rows"]}
     native: Dict[str, List[Dict[str, str]]] = {}
     drawings: Dict[str, List[str]] = {}
@@ -317,22 +341,26 @@ def read_evidence(record: Dict[str, Any], pack_files: List[str],
             models = native.get(_component(nm)) or []
             read = [m for m in models if m["state"] == "read"]
             # THE SAME NUMBER IS NOT THE SAME MODEL (JG, 13 Nov 2026). A native model covers
-            # this file only where it is shown to be the same issue of it: the same file name,
-            # or the same stated revision, and no question over which configuration the pack
-            # is. A number alone establishes nothing where revisions or configurations differ.
-            same = [m["file"] for m in read if _equivalent(nm, m["file"]) == "same"]
-            if same and not unconfirmed:
+            # this file only where three things hold: it is the same component, it is the
+            # same issue (the same stated revision, or the same file name where neither
+            # states one), and nothing contradicts that. A matching name never overrides
+            # conflicting evidence: unconfirmed configurations, a second issue of the
+            # component in the pack, or a different revision in the pack's manifest.
+            basis = {m["file"]: _equivalent(nm, m["file"]) for m in read}
+            match = [f for f, how in basis.items() if how.startswith("same")]
+            against = _conflicts(nm, match[0], models, pack_revs.get(_component(nm), ""),
+                                 unconfirmed) if match else []
+            if match and not against:
                 files.append({"file": nm, "state": "not read; covered",
-                              "why": "a native model of the same component and issue was read "
-                                     "on this run: " + ", ".join(same)})
+                              "why": "a native model of the same component was read on this run, "
+                                     + "; ".join(f"{f} ({basis[f]})" for f in match)
+                                     + ("" if any(basis[f] == "same revision" for f in match) else
+                                        "; no revision is stated on either file")})
                 continue
             if read:
-                how = sorted({_equivalent(nm, m["file"]) for m in read})
+                reasons = [how for how in sorted(set(basis.values())) if not how.startswith("same")] + against
                 why = ("a native model of this drawing number was read (" + ", ".join(m["file"] for m in read)
-                       + ") but is not shown to be the same model: "
-                       + ("; ".join(h for h in how if h != "same") or "")
-                       + ("; " if unconfirmed and any(h != "same" for h in how) else "")
-                       + ("the pack's configurations are unconfirmed" if unconfirmed else ""))
+                       + ") but is not shown to be the same model: " + "; ".join(reasons))
                 files.append({"file": nm, "state": "NOT READ; COVERAGE UNRESOLVED", "why": why})
                 unresolved.append(nm)
                 continue
