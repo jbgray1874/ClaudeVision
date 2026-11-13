@@ -2319,3 +2319,85 @@ The Material Price Break tab shows #VALUE!, so prices / costs (YITC) are not par
 | Customer Service UAT (CS-01..10) | Selina | Acuity training / config (project codes, back-to-back, global allocation, pro forma, dashboards); "&" rule kept; AI-drafted process documents (SDI) | Acuity dates |
 
 **Pattern for every one:** define with the user → build in TEST → prove against Access (to the penny, as REP-22) → live via patch / deployment → runbook + register + Jira.
+
+## 22. How we organise ourselves (13 Nov)
+
+**One list:**
+- The programme register (`register/register_data.py` → xlsx + html) is the single list.
+- Every item has an owner, a status and a next action. Jira mirrors it, and this runbook holds the detail and the lessons.
+- Nothing is worked on that isn't on the register.
+
+**Weekly rhythm:**
+- **Monday:** update the register and send the status report.
+- **One session a week with Acuity,** agenda from the register.
+- **Front foot:** for every item, do what SDI can do itself first (as with Dave's estimate), then take Acuity only what needs Acuity.
+
+**Four tracks (13 Nov):**
+1. Requirements basis.
+2. Technical checks in the X3 UI.
+3. The Acuity meeting.
+4. The estimating import.
+
+### 22.1 Requirements basis – checked against the e-mails
+
+**Selina Kuddus, 8 Oct ("Sage update from Customer Services"):** every point is on the register as CS-01..10. The register's dates were corrected from "Nov 2026" to **8 Oct 2026** (13 Nov).
+
+| Selina's point | Register | Still needed |
+|---|---|---|
+| Marc's list of standard reports – compare, have fewer reports | CS-01 | **Marc's list (ask in the meeting)** |
+| Reports to Excel that refresh on opening; AM / PM requirements | CS-02 | Ask the AMs / PMs |
+| Project-code training (several teams create codes) | CS-03 | Training date |
+| Back-to-back orders: training, test asap | CS-04 | Jim's session date |
+| "&" in codes (M&S); web-services risk | CS-05 | Decision: the migration already drops "&"; keep Sage's block |
+| Global allocation back on | CS-06 | Update date |
+| Pro forma / deferred sales payment term | CS-07 | Option added |
+| Dashboards demo | CS-08 | Demo date |
+| Real data in test; how much history (2–3 years SO history?); cleansing | CS-09 | **History decision**; cleansing so far = dormant accounts / inactive products left out |
+| Documented processes with AI | CS-10 | Process list |
+
+**Debbie Freeth, 13 Oct:** her daily Access reports:
+- SDI Reports → SDI MRP (pull down DF) = REP-18;
+- Sales → Reports → Outstanding Orders = REP-07;
+- Sales → Reports → Delivered not Invoiced = REP-19.
+
+James asked her on 19 Oct for screenshots, filters and content. **Not received.**
+
+**Selina, 19 Oct (for Debbie):** "two of the orders… already on the list I sent through". **That list is still not held here.** Ask Selina for it again. SDI MRP by operator (REP-18) may be covered by the new MRP – to test.
+
+**Gaps to close:**
+- Selina's list.
+- Debbie's screenshots and filters.
+- Marc's standard report list.
+- Replies from Sales, Estimating, Design and the rest of Finance / Purchasing (asked 7 Oct).
+- The history decision.
+
+### 22.2 Technical checks in the X3 UI (James, admin, TEST folder, read-only first)
+
+These follow 21.3, with the "can we do it ourselves?" question added. Screenshot each answer.
+
+1. **About:** version / update. Decides REST / GraphQL.
+2. **Folders:** names of TEST / LIVE / demo.
+3. **Connected applications / web services:** can our admin create an API client (connected app) ourselves? If yes, **we self-serve the API** and don't wait for Acuity.
+4. **Users / roles:** what our admin role can create (users, requests, dashboards, templates).
+5. **Requester / queries:** build a test query (e.g. open SOs) and export it to Excel. If it works, many "standard + Excel" reports are ours to make.
+6. **Dashboards / landing pages:** can we build and share one (CS-08)?
+7. **Import templates (GESAOE) and Imports:** can we run an import in TEST ourselves? Then load the estimate files for the IMPORT part (22.4).
+8. **Report dictionary (GESARP) / Crystal:** what exists; whether the designer is available to us.
+9. **Development menu:** visible and usable on SaaS? (Y / Z objects, scripts.)
+10. **Batch server / recurring tasks:** can we schedule a query or an export?
+
+Record each as one of: **can do ourselves / needs Acuity / not available on SaaS**.
+
+### 22.3 Acuity meeting, 13 Nov – Marc, Shaleenah, Charlotte, James (90 min)
+
+The agenda is in the chat (13 Nov). The pre-reads and the decision / action log go here afterwards.
+
+### 22.4 Estimating – revisited (13 Nov)
+
+- **SHEET METAL 10 / 11 / 12 are in X3**, as SHEETMETAL10 / 11 / 12. The migration code rule removes spaces, and the converter now applies the same rule (`common.product_code`) to every component and the parent.
+- **Result: 0 stops.** The estimate can be loaded in TEST.
+- **Remaining warnings:**
+  - FIXING49 is "DONT USE" in X3. Candidates: FIXING2664 "M6 Half Hexagon Thinsheet" or FIXING2833 "M6 Thinsheet Nutsert Brass" (FIXING47 / 48 / 50 are the M4 / M5 / M8 thinsheet inserts, so FIXING49 was the M6).
+  - The labour parent is IMPORT.
+- **Questions to Dave, now with proposals** (in the chat, 13 Nov).
+- **Lesson:** check codes through the migration's code rule before calling a code missing. The rule is what turns Access codes into X3 codes.

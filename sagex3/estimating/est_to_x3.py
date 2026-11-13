@@ -29,7 +29,7 @@ from openpyxl import Workbook, load_workbook
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE.parent / "migration" / "rebuild"))
-from common import add_sheet, notes, write_load, x3_text  # noqa: E402
+from common import add_sheet, notes, product_code, write_load, x3_text  # noqa: E402
 
 BOM_HEAD = ["ITMREF", "BOMALT", "USESTA", "BOHSTRDAT", "BOHENDDAT", "BASQTY", "QTYCOD", "BOMSEQ", "CPNITMREF",
             "CPNTYP", "LIKQTY"]
@@ -120,7 +120,7 @@ def build(est_path, out_dir, products_path, parent=None, category="FGML", rev_in
     ws = open_estimate(est_path)
     head, bom, ops = read(ws)
     prods, wcs = x3_products(products_path), x3_work_centres()
-    code = parent or head["drawing"] + (head["rev"] if rev_in_code else "")
+    code = product_code(parent or head["drawing"] + (head["rev"] if rev_in_code else ""))   # the migration's code rule
     if not code:
         raise SystemExit("No parent code: the SDI drawing number (E5) is empty and --parent was not given")
     checks, stop = [], 0
@@ -141,6 +141,9 @@ def build(est_path, out_dir, products_path, parent=None, category="FGML", rev_in
 
     bom_rows, seq = [], 0
     for b in bom:
+        raw, b["code"] = b["code"], product_code(b["code"])     # Access-style code -> X3 code (spaces, & ...)
+        if raw != b["code"]:
+            check("INFO", b["cell"], f"{raw} -> {b['code']}", "X3 code rule, as in the migration")
         qty = num(b["qty"])
         p = prods.get(b["code"])
         if qty <= 0:
