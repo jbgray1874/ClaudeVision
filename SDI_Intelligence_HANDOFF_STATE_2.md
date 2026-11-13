@@ -308,6 +308,22 @@ Tube, then the TTI jobs.
 - **Not proved on the laptop yet:** the two PowerShell changes could not be run in the cloud session. Their first proof is the next publish.
 - **Still a sheet change, not software:** 11896-02-01-GA runs at 1 and 8 until 68 is on its row.
 
+### 13 Nov 2026 late: the drawing pack, as kept, as read and as shown (48e9988b)
+
+JG's rulings: the review copy must be an identical, accurate copy; "supported" is not "read"; a
+kept file proves nothing about what was never gathered; no reruns to improve a review copy;
+every e-mail and filed covering note shows the pack the run was given.
+
+- **IGS and IGES are staged with the pack** (`700ae279`). Staging dropped them while the resolver gathered them. A selection of nothing but IGS is still refused.
+- **Three answers, never one flag** (`45f36517`). The kept pack's `completeness` holds `source_pack`, `copy` and `read`. `intended_handling` per file is what the engine does with that kind of file. What a run read is written from its own record under `read_on_runs`.
+- **Coverage of an unread IGS or STEP** needs a native model read on that run with the same file name or the same stated revision, and confirmed configurations. A drawing number alone establishes nothing.
+- **Recovery** is `tools\dropoff_recover.py`: preview by default, `--apply` writes a new version beside the pack from sources whose fingerprints still match. The original and its run evidence are not written to.
+- **E-mail and filed note** (`48e9988b`). Both carry, near the top: a link to the exact pack kept for the run (`/estimating/pack/<token>`, public portal address, behind sign-in), run id and pack version, each file's drawing number, revision, format and outcome, and PACK COMPLETENESS NOT PROVED with the reasons. Made at the one queueing place, so manual, Self-Running and TTI jobs all get it. Nothing is resent.
+- **Not proved yet:** no real e-mail sent with the section, no real kept pack opened through the link, off-site access not confirmed, the page not loaded in a browser. The first job after deploy is the proof.
+- **Limit:** the pack sits on the estimating laptop, so the link works while that laptop's service is up.
+- **Still open, not resolved by any of this:** SA01 and SA02 unread on 11896-02-01-GA; `6364-02-015A` missing.
+- **Agreed order:** let the running jobs finish; deploy when idle; check each record for missing parts, failed reads, wrong quantities and unpriced items; preview recovery of the four kept packs; rerun only estimates with an evidenced costing or scope fault.
+
 ## 1. WHAT THE PROJECT IS
 
 SDI Intelligence is a Python engine at `C:\ClaudeVision\src\` that reads PDF + DXF engineering
