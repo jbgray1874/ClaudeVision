@@ -270,8 +270,13 @@ reads differently.**
   * **TTI weekend batch:** pilot rows are chosen from the current TTI tracker and shown
     (row, drawing number, quantities) before anything is queued. The batch expands only after
     the pilot proves correct pack selection, no duplicate charging and reliable `AiCost`
-    write-back. The `AiCost` writer is not built yet: locate the `AiCost` header, match
-    drawing and quantity, leave the neighbouring columns untouched, read back.
+    write-back. **Both tracker writers already exist and were extended on 13 Nov; do not
+    build a third.** `src/tti_central.py` writes the central SharePoint sheet (row by drawing
+    number, column by its `AI Cost`/`AiCost` header, one cell, read back) and now refuses a row
+    whose Quantity differs from the quantity priced. `src/tti_pricer.py` writes the network
+    copy and now takes its cost column from the same header, wherever it sits (P on one
+    workbook, Q on another); `--col-cost` applies only when no column carries that header and
+    the named column has no other heading. Not yet proved on the real tracker.
   * **Deployment state is whatever the laptop last printed.** A pushed commit is not a
     deployed one; as of this note nobody has deployed `ddc6b5a0` or rerun anything on it.
 
