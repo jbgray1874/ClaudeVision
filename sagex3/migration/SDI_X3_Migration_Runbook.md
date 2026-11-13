@@ -2878,3 +2878,28 @@ An Excel macro in the template was considered and **not recommended**. It would 
 - Live Orders: Dave's WO numbers = Access top-level WO numbers; his customer-date formula is broken (#REF!).
 
 **Lesson (13 Nov):** part codes carry a customer prefix (e.g. a retailer's initials). Sections 22.7 and 22.11 first went into git with a real customer-prefixed part code. That was corrected in the next commit (history not rewritten, as with c45777d). **Use a neutral example (XX-…, ABC-…) in git; real codes stay in the scratchpad.**
+
+### 22.13 First live run of live_orders.sql (13 Nov, 11:45) – board rebuilt from today's Access data
+
+James ran `live_orders.sql` in SSMS (Results to Text, tab-delimited) and uploaded the output: 741 WOR, 3,880 SOH, 781 POH and 8,626 SMR rows, plus the CHECK as-at line. **It built first time; the parser needed no changes.** The output is kept in the scratchpad (`in_13nov/lo/`), not git.
+
+| | 4 Nov | 13 Nov |
+|---|---|---|
+| Works orders on the board | 731 (250 top level) | 703 (260 top level) |
+| Green / amber / red | 170 / 291 / 270 | 169 / 261 / 273 |
+| Hours | 11,103.2 | 8,125.0 |
+| WO suggestions | 145 | 118 |
+| Overdue WOs | 135 | 99 |
+| SO lines more than 60 days late | 1,508 | 1,557 |
+| No BOM / no route | 9 / 10 | 51 / 52 |
+
+- Between the two runs, 204 works orders were opened and 232 closed.
+- **No BOM / no route rose because master data is still the 4 Nov mapped set.** The parts created since 4 Nov (new GA numbers, PROTOS, SUB… subcontract codes) aren't in it. **This is not a fault.**
+  - Every refresh must use the current ZSDIITM / BOM / route set: the next migration extract, or X3 after go-live.
+  - Otherwise new parts show no hours.
+- **Against Dave's sheet:** 49 of his 220 rows are still open; for all 49 the part matches, and for 43 the balance matches. The other 171 have closed since he saved it.
+- **Email 8 (Dave + Rachael)** still quotes 4 Nov, so it goes with the 4 Nov files. The 13 Nov board is the live version to show them.
+
+**Lesson:** a Live Orders refresh is only as current as its master data. Refresh LO_PRODUCTS / LO_BOMS / LO_ROUTES alongside the transactions.
+
+**Simon's email (email 5):** this answers his report list of **13 Oct 2026**: 17 reports (REP-01–17) for himself, Sam and Ewa. Nothing newer has come from him.
