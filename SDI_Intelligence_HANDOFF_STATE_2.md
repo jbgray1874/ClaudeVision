@@ -240,6 +240,17 @@ prices as before and the run says why.
 | AI Tube | `SDI_TUBE_CALCULATOR_XLSX` | `src/tube_calculator_sheet.py`. Its stock rows join the engine's tube and section price rows under their own part codes; a code it prices takes its price. Its cut, hole, slot and mitre rates are read and applied to nothing: open decision whether they replace the engine's tube-laser times. The sheet's own working area has every cost typed as 0. |
 | AI Print | `SDI_PRINT_CALCULATOR_XLSX` | `src/print_calculator_sheet.py`. Works the sheet's sums cell for cell and prices NO estimate line yet. To confirm first: scrap entered as -0.7 (charges 30% of the sheet cost), one set-up cost for six substrates, one-orientation yield, sheet sizes and costs typed again inside the formulas. |
 
+**Release `ddc6b5a0` (2026-11-13), the commit to deploy to both runners.** Full suite twice in
+random order on that exact commit in a clean checkout: 11,561 passed and 11,562 passed, 0
+failed (the one-test difference is the API-key skip described above). Test-merge into the
+portal copy clean. An earlier pass on this set failed one test, the README rule that every
+setting the engine reads is documented; the two calculator settings were added and the suite
+rerun. Nothing in this release is proved on a fresh run yet. Box costing is accepted by JG as
+an estimating allowance and is not a blocker. The five packs whose results this release should
+change, and which are worth one diagnostic rerun each: 6364-01, 12674-01-GA, 12674-02-GA,
+12773-01-GA, 11896-02-01-GA. The standing job-by-job checklist is on SCRUM-274; no item on it
+closes because a run finishes.
+
 Review copies sit in `C:\ClaudeVision\chatgptdropoff\AICalculators`; they are not the live
 sources. Order of work agreed with JG: weekly Live Enquiry recovery first, then Print and
 Tube, then the TTI jobs.
