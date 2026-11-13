@@ -594,6 +594,21 @@ def pack_page(token: str, request: Request):
                         content={"detail": "sdi-pack.html is not next to app.py"})
 
 
+# ONE RUN'S FILED BUNDLE (13 Nov 2026): the page behind the link in the e-mail, the filed
+# covering note and Grid Control's completed list. Its data is /api/estimate/bundle/<token>.
+_BUNDLE_PAGE = Path(__file__).with_name("sdi-bundle.html")
+
+
+@app.get("/estimating/bundle/{token}")
+def bundle_page(token: str, request: Request):
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    if _BUNDLE_PAGE.exists():
+        return FileResponse(str(_BUNDLE_PAGE), headers=_PAGE_HEADERS)
+    return JSONResponse(status_code=404,
+                        content={"detail": "sdi-bundle.html is not next to app.py"})
+
+
 # ONE VOICE SCRIPT FOR EVERY ESTIMATING PAGE (D-622): the e-mail page, the desk page and the
 # phone ask by voice and read answers aloud through the same code. Static, no job data in it.
 _VOICE_JS = Path(__file__).with_name("sdi-voice.js")

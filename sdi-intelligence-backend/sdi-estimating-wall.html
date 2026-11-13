@@ -719,6 +719,16 @@
         <div class="ptable" id="hRepeats"></div>
       </div>
     </div>
+    <!-- ONE COMPLETED-ESTIMATES LIST (JG, 13 Nov 2026): every finished estimate, whichever
+         runner ran it, with its bundle on the share checked. The runner and its working
+         folder are in each row's tooltip, for diagnosis only. -->
+    <div class="panel" style="display:flex;flex-direction:column">
+      <div class="ptitle"><span><b>Completed estimates</b> · both runners, one list · bundle checked on the share</span><span class="r" id="hDoneN"></span></div>
+      <div class="hfilter"><input id="hDoneQ" autocomplete="off" placeholder="Filter by drawing, client or run id">
+        <select id="hDoneS"><option value="">every bundle</option><option value="verified">verified</option><option value="INCOMPLETE">incomplete</option><option value="NOT CHECKED">not checked</option><option value="NO BUNDLE">did not finish</option></select>
+        <span class="cnt" id="hDoneC"></span></div>
+      <div class="ptable tall" id="hDone"></div>
+    </div>
     <div class="panel" style="display:flex;flex-direction:column">
       <div class="ptitle"><span><b>Every run</b> · this service's record</span><span class="r" id="hRunsN"></span></div>
       <div class="hfilter"><input id="hRunsQ" autocomplete="off" placeholder="Filter by drawing, client, machine or what read the models">
@@ -2013,8 +2023,37 @@ async function readHistory(force){
     hist = await api(`/api/estimate/wall/history${force ? "?refresh=1" : ""}`);
     histAt = Date.now();
     renderHistory();
+    readCompleted(force);
   }catch(e){ setText("hRead", "could not read: " + e.message); }
   finally{ histBusy = false; }
+}
+// ── COMPLETED ESTIMATES: one list for both runners, each bundle checked on the share ──
+let doneList = null;
+async function readCompleted(force){
+  try{ doneList = await api(`/api/estimate/wall/completed${force ? "?refresh=1" : ""}`); renderHDone(); }
+  catch(e){ setText("hDoneN", "could not read: " + e.message); }
+}
+function renderHDone(){
+  if(!doneList) return;
+  const rows = doneList.rows || [], c = doneList.counts || {};
+  const q = $("hDoneQ").value.trim().toLowerCase(), st = $("hDoneS").value;
+  const keep = rows.filter(r => (!st || r.bundle_state === st)
+      && (!q || `${r.drawing_number} ${r.client} ${r.run_id}`.toLowerCase().includes(q)));
+  setText("hDoneN", `${c.completed ?? 0} completed · ${c.verified ?? 0} verified · ${c.incomplete ?? 0} incomplete · ${c.not_checked ?? 0} not checked · ${c.did_not_finish ?? 0} did not finish`);
+  setText("hDoneC", q || st ? `${keep.length} shown` : "");
+  if(!keep.length){ $("hDone").innerHTML = '<div class="empty">No completed estimate matches.</div>'; return; }
+  const when = t => t ? new Date(t * 1000).toLocaleString("en-GB", {day:"2-digit", month:"short", hour:"2-digit", minute:"2-digit"}) : "—";
+  $("hDone").innerHTML = `<table><tr><th>Finished</th><th>Drawing</th><th>Client</th><th>Run</th><th>Bundle on the share</th><th>Missing</th><th>Pack</th></tr>`
+    + keep.map(r => {
+        const good = r.bundle_state === "verified";
+        const tip = `runner ${r.runner || "not recorded"} · working folder ${r.working_folder || "not recorded"} · share ${r.bundle_folder || "not recorded"}`;
+        const miss = (r.missing || []).map(m => m.name || m.what);
+        return `<tr title="${esc(tip)}"><td>${when(r.finished_at)}</td><td><b>${esc(r.drawing_number || "")}</b>${r.units ? ` <span style="opacity:.7">${r.units} off</span>` : ""}</td>`
+          + `<td>${esc(r.client || "")}</td><td style="font-family:ui-monospace,Consolas,monospace;font-size:12px">${esc(r.run_id || "")}</td>`
+          + `<td>${r.bundle_url ? `<a href="${esc(r.bundle_url)}" target="_blank" rel="noopener">open bundle</a> · ` : ""}<span style="color:${good ? "var(--s-done)" : "var(--s-failed)"};font-weight:600">${esc(good ? "verified · " + r.files + " files" : r.bundle_state)}</span></td>`
+          + `<td style="color:var(--s-failed)">${miss.length ? esc(miss.slice(0, 4).join(", ")) + (miss.length > 4 ? ` +${miss.length - 4}` : "") : (good ? "" : esc(r.outcome === "completed" ? r.bundle_says : (r.error || r.bundle_says)))}</td>`
+          + `<td>${r.pack_url ? `<a href="${esc(r.pack_url)}" target="_blank" rel="noopener">pack</a>` : '<span style="opacity:.7">—</span>'}</td></tr>`;
+      }).join("") + `</table>`;
 }
 function renderHistory(){
   if(!hist) return;
@@ -2172,6 +2211,8 @@ $("hRuns").addEventListener("click", e => {
   if(!tr || e.target.closest("a")) return;
   const id = tr.dataset.run; hOpen.has(id) ? hOpen.delete(id) : hOpen.add(id); renderHRuns();
 });
+$("hDoneQ").addEventListener("input", renderHDone);
+$("hDoneS").addEventListener("change", renderHDone);
 $("hRunsQ").addEventListener("input", renderHRuns);
 $("hRunsO").addEventListener("change", renderHRuns);
 $("hRunsT").addEventListener("change", renderHRuns);

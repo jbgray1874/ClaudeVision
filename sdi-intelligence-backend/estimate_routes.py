@@ -78,6 +78,7 @@ import docmgr
 import estimate_email
 import estimate_history
 import estimate_walkthrough
+import bundle_link
 import pack_link
 import quote_release
 import self_running_switch
@@ -259,6 +260,8 @@ class Run:
     # THE LINK TO THE EXACT PACK THIS RUN WAS GIVEN (13 Nov 2026): the token of the record
     # made when its pack was kept at queue time. Empty where no copy was kept.
     pack_token: str = ""
+    # THE LINK TO THIS RUN'S FILED BUNDLE ON THE SHARE (13 Nov 2026), made when it finishes.
+    bundle_token: str = ""
     # WHETHER A RUNNER SHOULD EVER PICK THIS UP. Nothing sets this False any more: an
     # LLM-only enquiry used to end at the fast text read — no runner, no workbook — and
     # since 22 Sep 2026 it queues a runner job like every other method, because "populate
@@ -395,6 +398,8 @@ class Run:
             "quantity_prices": list(self.quantity_prices),
             "walkthrough_url": (estimate_walkthrough.url_for(self.walkthrough)
                                 if self.walkthrough else ""),
+            "bundle_token": self.bundle_token,
+            "bundle_url": bundle_link.url_for(self.bundle_token) if self.bundle_token else "",
             "pack_token": self.pack_token,
             "pack_url": pack_link.url_for(self.pack_token) if self.pack_token else "",
             "log": self.log, "deliverables": self.deliverables,
@@ -2398,6 +2403,14 @@ def complete(run_id: str, req: CompleteRequest,
                                                             run.deliverables) or ""
             except OSError as _wexc:
                 run.line(f"The walkthrough page could not be recorded ({_wexc}).")
+        # THE FILED BUNDLE, ON DISK, FOR EVERY FINISHED ESTIMATE (13 Nov 2026): the link the
+        # e-mail, the filed note and Grid Control's completed list all carry. Whichever runner
+        # ran it, the bundle is the one folder on the share.
+        if not run.job_type and not run.bundle_token:
+            try:
+                run.bundle_token = bundle_link.make(run.as_json())
+            except OSError as _bexc:
+                run.line(f"The link to this run's filed bundle could not be recorded ({_bexc}).")
         r = _RUNNERS.get(req.runner_id)
         if r is not None:
             r.last_seen, r.run_id = now, ""
@@ -2419,9 +2432,12 @@ def complete(run_id: str, req: CompleteRequest,
     # service made the walkthrough page, so the filed copies, in AISheets and in the completed
     # AI briefs area, gain the same two buttons the e-mail carries.
     # THE LINK TO THE RUN'S PACK IN EVERY FILED NOTE (13 Nov 2026), walkthrough or not: the
-    # engine left a mark in its drawing pack section and the link is filled in here.
+    # engine left a mark in its drawing pack section and the link is filled in here. The link
+    # to the filed bundle, and what the check of it found, goes in with it.
     try:
         _linked = pack_link.stamp_note_files(_filed_note_copies(_deliverables, _archived), _snapshot)
+        _linked = sorted(set(_linked) | set(bundle_link.stamp_note_files(
+            _filed_note_copies(_deliverables, _archived), _snapshot)))
     except Exception as _lexc:                                       # noqa: BLE001
         _linked = []
         print(f"[pack-link] {run_id}: {type(_lexc).__name__}: {_lexc}", flush=True)
@@ -2429,8 +2445,8 @@ def complete(run_id: str, req: CompleteRequest,
         with _LOCK:
             _live = _RUNS.get(run_id)
             if _live is not None:
-                _live.line(f"Link to this run's drawing pack written into {len(_linked)} filed "
-                           f"covering note(s).")
+                _live.line(f"Links to this run's drawing pack and filed bundle written into "
+                           f"{len(_linked)} filed covering note(s).")
                 _keep(_live)
     if _snapshot.get("walkthrough_url"):
         _note_files = _filed_note_copies(_deliverables, _archived)
@@ -2533,6 +2549,9 @@ def _email_finished_run(snapshot: Dict[str, Any], deliverables: List[Dict[str, s
         paths, held = estimate_email.choose_attachments(
             deliverables, provisional=provisional, include_quote=include_quote)
         note = estimate_email.compose(snapshot, deliverables, provisional=provisional)
+        # THE LINK TO THE FILED BUNDLE FIRST, so the Ask and Listen buttons, added next, still
+        # lead (D-613). The filed note is stamped in the same order.
+        note = bundle_link.into_note(note, snapshot)
         if snapshot.get("walkthrough_url"):
             note = estimate_walkthrough.email_button(note, snapshot["walkthrough_url"],
                                                      estimate_walkthrough.audio_of(deliverables))
@@ -3970,6 +3989,108 @@ def walkthrough_file(token: str, name: str, request: Request = None,
                             headers={"X-SDI-Quote-Release": "portal",
                                      "Content-Security-Policy":
                                          "sandbox allow-downloads allow-popups"})
+    return FileResponse(str(path), media_type=media or "application/octet-stream",
+                        filename=path.name)
+
+
+# ── ONE COMPLETED-ESTIMATES LIST, AND EACH RUN'S FILED BUNDLE (13 Nov 2026) ──────────────
+# JG: "We should not need to identify a runner or search two folders." Every finished
+# estimate this service knows, whichever runner ran it, with its bundle on the share checked.
+_COMPLETED: Dict[str, Any] = {"at": 0.0, "body": None}
+_COMPLETED_LOCK = threading.Lock()
+_COMPLETED_SECONDS = 45.0
+
+
+@router.get("/wall/completed")
+def wall_completed(refresh: bool = False, x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    with _COMPLETED_LOCK:
+        if (not refresh and _COMPLETED["body"] is not None
+                and time.time() - _COMPLETED["at"] < _COMPLETED_SECONDS):
+            return _COMPLETED["body"]
+        with _LOCK:
+            # A RUN THAT FINISHED BEFORE THIS LIST EXISTED GETS ITS LINK NOW. Making the record
+            # reads nothing and changes no file of the run; nothing is sent.
+            for r in _RUNS.values():
+                if (not r.job_type and r.status == "done" and not r.bundle_token
+                        and r.output_path):
+                    try:
+                        r.bundle_token = bundle_link.make(r.as_json())
+                        _keep(r)
+                    except OSError:
+                        pass
+            runs = [r.as_json() for r in _RUNS.values()]
+        rows = bundle_link.completed(runs)          # the share is looked at outside the lock
+        body = {"rows": rows, "read_at": time.time(),
+                "counts": {"completed": sum(1 for x in rows if x["outcome"] == "completed"),
+                           "verified": sum(1 for x in rows if x["bundle_state"] == "verified"),
+                           "incomplete": sum(1 for x in rows if x["bundle_state"] == "INCOMPLETE"),
+                           "not_checked": sum(1 for x in rows if x["bundle_state"] == "NOT CHECKED"),
+                           "did_not_finish": sum(1 for x in rows if x["outcome"] != "completed")},
+                "bundle_root": str(OUTPUT_ROOT)}
+        _COMPLETED.update(at=time.time(), body=body)
+        return body
+
+
+def _bundle_relayed(request: Optional[Request], path: str) -> Optional[Tuple[bytes, str, str]]:
+    import grid_peers
+    if request is not None and request.headers.get(grid_peers.RELAY_HEADER):
+        return None
+    m = re.match(r"^/api/estimate/bundle/([^/]+)(?:/|$)", path)
+    return grid_peers.relay(path) if m and bundle_link.token_ok(m.group(1)) else None
+
+
+def _bundle_or_404(token: str) -> Dict[str, Any]:
+    rec = bundle_link.load(token)
+    if rec is None:
+        raise HTTPException(404, "This bundle link is not known here. It was recorded by the "
+                                 "service the run reported to; open it there.")
+    return rec
+
+
+@router.get("/bundle/{token}")
+def bundle_view(token: str, request: Request = None,
+                x_sdi_key: Optional[str] = Header(default=None)):
+    _check_key(x_sdi_key)
+    if bundle_link.load(token) is None:
+        got = _bundle_relayed(request, f"/api/estimate/bundle/{token}")
+        if got is not None:
+            return Response(content=got[0], media_type=got[1] or "application/json")
+    return bundle_link.view(_bundle_or_404(token))
+
+
+@router.get("/bundle/{token}/file/{name}")
+def bundle_file(token: str, name: str, request: Request = None,
+                x_sdi_key: Optional[str] = Header(default=None)):
+    """One of the bundle's own files, by exact name; nothing else. A quotation not yet
+    released is read in the browser, never downloaded: the same gate as /api/file."""
+    _check_key(x_sdi_key)
+    if bundle_link.load(token) is None:
+        got = _bundle_relayed(request, f"/api/estimate/bundle/{token}/file/{urllib.parse.quote(name)}")
+        if got is not None:
+            content, media, disposition = got
+            if quote_release.looks_like_a_quote(Path(name)):
+                import tempfile
+                with tempfile.TemporaryDirectory() as tmp:
+                    held = Path(tmp) / Path(name).name
+                    held.write_bytes(content)
+                    released = quote_release.may_go_to_a_customer(held)
+                if not released:
+                    return Response(content=content, media_type=media,
+                                    headers={"Content-Disposition": f'inline; filename="{Path(name).name}"',
+                                             "X-SDI-Quote-Release": "portal",
+                                             "Content-Security-Policy": "sandbox allow-downloads allow-popups"})
+            return Response(content=content, media_type=media,
+                            headers={"Content-Disposition": disposition} if disposition else {})
+    path = bundle_link.file_for(_bundle_or_404(token), name)
+    if path is None:
+        raise HTTPException(404, f"{name!r} is not one of this bundle's files, or it has been moved.")
+    media, _ = mimetypes.guess_type(path.name)
+    if quote_release.looks_like_a_quote(path) and not quote_release.may_go_to_a_customer(path):
+        return FileResponse(str(path), media_type=media or "application/octet-stream",
+                            filename=path.name, content_disposition_type="inline",
+                            headers={"X-SDI-Quote-Release": "portal",
+                                     "Content-Security-Policy": "sandbox allow-downloads allow-popups"})
     return FileResponse(str(path), media_type=media or "application/octet-stream",
                         filename=path.name)
 
