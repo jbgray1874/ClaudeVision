@@ -2692,3 +2692,13 @@ The cells were meant to be copied into X3's import layouts by hand, or picked up
 2. Later, stage 2 posts them through the API.
 
 An Excel macro in the template was considered and **not recommended**. It would be harder to maintain and to check, and it would need the macro security settings changed on every estimator's PC.
+
+**22.9 follow-up – email to Dave Wright and James Ryan (drafted 13 Nov, held for the outage).** It replaces the earlier Dave email in `outbox_13Nov/` and asks for the full import process.
+- **Sets out** what we know.
+- **14 numbered questions:**
+  - today's Access steps: when, who, menu path for the Route Import tab, how the BOM gets in, who creates the part code, what else is set up, who checks, volume;
+  - revisions and repeats: replace or version; whether made sub-parts become their own parts;
+  - the template's gaps: sheet material, other-sheet code column, wire gauges without codes, FIXING49, scrap.
+- **Asks for 30 minutes** watching a real Access import, then a TEST load of the IMPORT part.
+- **Reply by Fri 20 Nov.**
+- **Written to be answered in place** (proposals to agree, one-line answers), so a slow reply is still usable.
