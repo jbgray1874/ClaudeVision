@@ -2443,3 +2443,64 @@ The agenda is in the chat (13 Nov). The pre-reads and the decision / action log 
 - xlsx + html rebuilt (`deliver/`).
 
 **Standing rule (James, 13 Nov):** every change goes to **Jira and the register (xlsx + html)** as well as this runbook, in the same turn.
+
+### 20.4 Key-account partnership rebate and referral tracking – REP-23, Jira SCRUM-277 (13 Nov, Charlotte) – FINANCE ONLY
+
+**Confidential: Directors don't want the rebate figures visible to AMs.** So:
+- **No agreement figures or customer names in git, Jira or the register.**
+- The terms, account list and open points live in a **private parameters file** in the scratchpad: `finance_private/boots_rebate_params.json`, folder mode 700. The finance workbook and the revenue query are in the same folder.
+
+**The agreement in outline** (customer's financial year September – August):
+1. A progressive tiered rebate. **Marginal bands**: each rate applies only to revenue inside its band.
+2. A year-end bonus at a flat rate on qualifying revenue above a two-year-average baseline.
+3. A referral reward per introduced customer: a goods rate, and a higher rate on **separately invoiced** design services. It is capped per customer, with no overall cap, over **12 months from that customer's first qualifying invoice**.
+
+"Qualifying revenue" = net invoiced **and collected**, excluding VAT, adjusted for credits, cancellations and returns. Group entities plus **agreed pass-through revenue invoiced via a third party**.
+
+**Built – repo `sagex3/reports/partner_rebate/` (generic, no figures):**
+- **`partner_rebate.py`:** the calculator.
+  - Tiered (marginal), bonus and referral (with the cap), all to the penny.
+  - `--check` proves it against **every worked example in the agreement – all agree**.
+  - The agreement's examples round each part to the pound and then add them, so one example is £0.85 from the exact pence figure. The agreement itself says reconcile to pence.
+  - Revenue above the top band has no agreed rate (an open admin point), so it is shown separately and not priced.
+- **`build_model.py`:** writes the finance-only workbook (proved by LibreOffice recalculation: the same figure as the calculator).
+  - **Calculator:** live formulas, one input cell.
+  - **Estimate:** monthly actuals by account, with the pass-through share entered by hand, and a run-rate projection.
+  - **Referral register:**
+    - introducer, registration, SDI confirmation;
+    - first invoice → window end (EDATE);
+    - goods / design → reward, capped.
+  - **Open points.**
+- **Private:** `boots_revenue.sql` (read-only, monthly invoiced by account from Sep 2024, the third party's lines for review, the sales-ledger columns). Its purpose is to reconcile to the agreement's two baseline years.
+
+**Open points** (in the workbook):
+- Entity scope: one group entity named in the agreement has no SDI account; a hearing-care entity and an Ireland entity – in or out?
+- Which of the pass-through account's orders count.
+- Collected vs invoiced.
+- Revenue above the top band.
+- Design services as a separate product / category.
+- Settlement method.
+- Confidentiality in X3.
+
+**Tracking in X3 (proposal):**
+- **Group scope:** a customer statistical group / user field on the group's accounts.
+- **Pass-through:** an analytical **dimension or order flag** on the third party's orders that are the partner's work, so the revenue flows to the invoices.
+- **Referrals:**
+  - a **referral flag on the introduced customer**, plus a register of introducer, registration date (before selling – the X3 opportunity fits: OPP flow) and SDI confirmation;
+  - the first qualifying invoice date and the 12-month window, derived from invoices.
+- **Design services:** a separate product category so they're invoiced separately.
+- **Confidentiality:**
+  - the rebate report and the accrual / provision account are in **finance-only** functions and rights;
+  - the AM sales report shows revenue only;
+  - the monthly accrual is posted by Finance;
+  - settlement is by credit note or payment, per the agreement.
+
+Charlotte is checking how today's daily sales report hides the rebate by customer.
+
+**Next:**
+1. Charlotte: scope and open points.
+2. James: run `boots_revenue.sql`.
+3. Reconcile the baseline years.
+4. Current-year estimate.
+5. Referral register populated.
+6. The X3 set-up with Acuity.
