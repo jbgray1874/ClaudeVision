@@ -185,3 +185,11 @@ assets/
 emails/
 review/
 sagex3/
+
+# Pack fixtures: the folder listings and drawing text the resolver read for a real job.
+# The customer's file names and drawing text; kept on the estimating machine only.
+tests/pack_fixtures_local/
+
+# Drawing packs kept per client and job (pack_dropoff.py): customer data, never committed.
+# The files directly in chatgptdropoff/ that are already tracked stay tracked.
+chatgptdropoff/*/

@@ -2798,6 +2798,8 @@ def main() -> None:
                         provisional=_provisional,
                         quantity_sweep=summary.get("quantity_sweep"),
                     )
+                from pack_used import into_note_safely as _pack_note
+                _note = _pack_note(_note, summary)   # the files this run was given
                 _note_path = Path(xlsx_path).with_name(
                     f"{Path(xlsx_path).stem}_covering_email.html")
                 _note_path.write_text(
@@ -2843,6 +2845,19 @@ def main() -> None:
                 print(f"   [record] NOT pinned ({_pin_exc}) — {Path(str(_canon_pin)).name} is "
                       f"the job's latest record and the next run of it will overwrite it.",
                       flush=True)
+
+        # THE RUN SAYS WHICH FILES ARE ITS OWN (reviewer, 12 Nov 2026), after the last of them
+        # is written: <workbook stem>_deliverables.json beside the workbook (run_manifest.py).
+        if xlsx_path:
+            try:
+                import run_manifest as _run_manifest
+                _mf = _run_manifest.write(xlsx_path, summary)
+                if _mf:
+                    print(f"   [deliverables] manifest: {_mf.name} lists "
+                          f"{len(_run_manifest.read(xlsx_path).get('files') or [])} file(s)", flush=True)
+            except Exception as _mf_exc:                             # noqa: BLE001
+                print(f"   [deliverables] manifest NOT written ({_mf_exc}) — the collector "
+                      f"falls back to what lies beside the workbook.", flush=True)
 
         # THE OPEN ITEMS, ONE STRUCTURED LINE (D-739), so the service and the wall monitor can
         # show what still needs a person beside a finished run without ever reading an

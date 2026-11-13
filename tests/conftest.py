@@ -28,3 +28,33 @@ import pytest  # noqa: E402
 @pytest.fixture(autouse=True)
 def _private_state_folder(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("SDI_STATE_DIR", str(tmp_path_factory.mktemp("sdi-state")))
+    # NO TEST DROPS A PACK INTO THE CHECKOUT'S OWN chatgptdropoff (12 Nov 2026). A test that
+    # wants the drop-off sets SDI_PACK_DROPOFF_DIR to its own folder.
+    monkeypatch.setenv("SDI_PACK_DROPOFF_DIR", "off")
+
+
+# ── NO PRICE CACHED BY ONE TEST REACHES ANOTHER (12 Nov 2026) ─────────────────────────────
+# The estimator keeps its sheet rates, researched board rates, market indications and section
+# rows in module-level caches "for the life of the run". A run is one process, so that is
+# right in production. The suite is also one process, and pytest-randomly shuffles its order:
+# a test that priced 18 mm MFC left that rate for whichever test came next, and two tests
+# that assert "no evidence, so no price" failed on some orders and passed on others. Twice on
+# 12 Nov a full run failed two tests that passed alone and passed on the next run. The
+# reviewer: "a successful second run does not establish that the failure is harmless."
+# Every test now starts with those caches empty.
+_ESTIMATOR_CACHES = ("_SHEET_RATE_CACHE", "_SHEET_RATE_ROWS", "_SHEET_RATE_META",
+                     "_RESEARCHED_BOARD_RATE_CACHE", "_MARKET_INDICATION_CACHE",
+                     "_SECTION_ROWS_CACHE")
+
+
+@pytest.fixture(autouse=True)
+def _no_price_cached_by_another_test():
+    import sys as _sys
+    mod = _sys.modules.get("estimator")
+    if mod is not None:
+        for name in _ESTIMATOR_CACHES:
+            cache = getattr(mod, name, None)
+            if isinstance(cache, dict):
+                cache.clear()
+    yield
+

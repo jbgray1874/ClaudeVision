@@ -164,6 +164,47 @@ place, so **re-running 7332 overwrites it** — copy or freeze it before any re-
 fixture under `tests\replay\7332-01\` is a different, earlier, pre-workbook record and must not be
 mistaken for it.
 
+**Rules added on 2026-11-12/13 (release `510b8c28` on `main-2026`).** Each came from a fault
+that cost reruns. They are generic and each has a regression test.
+
+  * **A saved model read is reused only when it is complete.** `_sw_native_extract.json` sits
+    beside the pack and is reused while the models' fingerprint matches. An extract that records
+    a failed file, or one read out of somebody's open SolidWorks session, is read again. A file
+    the Document Manager already read in its place is not asked for again. Before this, a failed
+    read was inherited for good and rerunning an unchanged job reproduced the same failure. **So
+    a rerun of an unchanged job proves nothing about a reader fix unless the record says the
+    read was fresh.** The record carries `read_obtained` (fresh or reused, written when, by which
+    reader build) and `read_cautions`.
+  * **Whose document it was.** Each file's read records `document_owner`. For a document already
+    open the reader records its configuration and unsaved state and says each caution. The
+    engine closes only what it opened. Two runners take the one SolidWorks in turn for the model
+    read only (`src/solidworks_turn.py`); costing runs side by side.
+  * **A model envelope is not a blank.** A part its own model measured gets no category-default
+    or borrowed blank. Its envelope is recorded (`model_envelope_unresolved`), no blank is
+    written and it stays visibly unresolved. This is a safeguard, not finished costing: the
+    construction still has to be evidenced or covered by a documented estimator allowance.
+  * **A part is named by its code.** `.SLDPRT1` and the like come off the costed part's number;
+    the printed spelling is kept in `part_number_as_printed`. Two parts are never merged.
+  * **An unfinished run shows no validated price.** The service states `price_validated` (run
+    finished without error and filed its workbook). Self-Running shows "failed/incomplete, no
+    validated price" otherwise and keeps the figure under `unvalidated_price_gbp`. The job's last
+    completed estimate is kept separately with its date. `src/ledger_correct.py` previews and,
+    with `--apply`, holds existing rows whose run the audit found unfinished.
+  * **Each runner files into its own output folder** (`wb_populate.workbook_output_dir`,
+    `SDI_WB_OUTPUT_DIR`) and writes a run manifest (`<workbook stem>_deliverables.json`). The
+    workbook folder used to be hard-coded for every runner, which crossed and lost files.
+  * **The second runner is a git worktree** (`C:\ClaudeVision-s2`). Anything that reads `.git`
+    directly must follow `gitdir:` and then `commondir`; the build reader now does.
+  * **Tests.** `pytest-randomly` shuffles the order. `tests/conftest.py` empties the estimator's
+    module-level price caches before every test; a new cache must be added to that list (a test
+    enforces it). Two tests skip or run depending on whether an earlier test configured an API
+    key, so the skip count moves by one between passes and the pass count with it. Run the suite
+    from the main checkout and, before a release, once from a worktree as well.
+  * **Price caches in production.** Each estimate is its own process, so the estimator's caches
+    cannot cross jobs. The on-disk generated-price cache is shared on purpose and keyed on every
+    field of the question plus provider, model and `CACHE_VERSION`. It has no age limit: open
+    decision.
+
 ---
 
 ## 1. WHAT THE PROJECT IS

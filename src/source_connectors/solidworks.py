@@ -920,6 +920,10 @@ def native_extract_for_job(
     if _turn:
         # WHETHER THIS RUN WAITED FOR ANOTHER RUN'S SOLIDWORKS READ, and for how long (D-731).
         job.meta["solidworks_turn"] = dict(_turn)
+    if jp is not None and Path(jp).exists():
+        job.meta["read_obtained"] = how_the_read_was_obtained(
+            bool(_must_run), (load_native_payload(jp) or {}).get("_manifest"))
+        print(f"   [solidworks] {job.meta['read_obtained']['said']}", flush=True)
     job.meta.setdefault("extract_path", str(jp) if jp else None)
     if (_analyse_from is not None and folder is not None
             and Path(_analyse_from) != Path(folder)):
@@ -987,6 +991,9 @@ def native_extract_for_job(
                 job.meta["files_read"] = _man.get("files_read")
                 job.meta["files_failed"] = _man.get("files_failed")
                 job.meta["extract_errors"] = _man.get("errors")
+                job.meta["extract_written_at"] = _man.get("written_at")
+                job.meta["read_cautions"] = _man.get("read_cautions") or []
+                job.meta["extract_reader_build"] = _man.get("reader_build")
             _recs = _payload.get("records") or []
             _failed = [r for r in _recs if isinstance(r, dict) and r.get("errors")]
             _read = [r for r in _recs
@@ -1151,6 +1158,99 @@ def _extract_schema_version(extract_path: Path) -> int:
     return 0
 
 
+def read_cautions_of(extract_path: str | Path) -> List[str]:
+    """The cautions a saved extract carries from documents it read out of an open session.
+
+    Such a read describes what its holder had on screen: perhaps unsaved edits, perhaps
+    another configuration. The fingerprint hashes the FILE and cannot see either, so the
+    extract would pass every freshness check and be reused for good. It is read again.
+    """
+    try:
+        data = json.loads(Path(extract_path).read_text(encoding="utf-8"))
+        man = data.get("_manifest") if isinstance(data, dict) else None
+        got = (man or {}).get("read_cautions")
+        return [str(c) for c in got] if isinstance(got, list) else []
+    except Exception:                                            # noqa: BLE001
+        return []
+
+
+def this_reader_build() -> Optional[str]:
+    """The build of the SolidWorks reader in this checkout, as the reader stamps it."""
+    try:
+        import hashlib
+        src = Path(__file__).resolve().parents[2] / "tools" / "solidworks" / "sw_native_analyse.py"
+        return "sw_native_analyse " + hashlib.sha256(src.read_bytes()).hexdigest()[:12]
+    except Exception:                                            # noqa: BLE001
+        return None
+
+
+def how_the_read_was_obtained(ran_now: bool, manifest: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Fresh or reused, said in words, with what a reused read was checked against.
+
+    Reviewer, 13 Nov 2026: "successful reused reads must be identified as reused and checked
+    against file/configuration identity and reader compatibility."
+    """
+    man = manifest if isinstance(manifest, dict) else {}
+    built = man.get("reader_build")
+    mine = this_reader_build()
+    same = None if not built or not mine else (built == mine)
+    out: Dict[str, Any] = {
+        "evidence": "fresh" if ran_now else "reused",
+        "written_at": man.get("written_at"),
+        "reader_build": built,
+        "reader_is_this_build": same,
+    }
+    if ran_now:
+        out["said"] = "The models were read by this run."
+    else:
+        out["checked"] = ["every model file's content fingerprint matches the read",
+                          "the read's schema is one this engine accepts",
+                          "no file in it failed", "none was read out of an open session"]
+        out["said"] = ("The models were not read again: an earlier read was reused"
+                       + (f", written {man.get('written_at')}" if man.get("written_at") else
+                          ", written at a time it does not record")
+                       + (" by this reader build." if same else
+                          " by a different reader build." if same is False else
+                          " by a reader build it does not record."))
+    return out
+
+
+def files_the_extract_left_unread(extract_path: str | Path) -> int:
+    """How many model files the saved extract failed to read; 0 when none or unreadable.
+
+    AN EXTRACT THAT FAILED ON A FILE IS NOT FINISHED (6364-01 and 12674-02-GA, 12 Nov 2026).
+    6364-01 ran alone at 18:24 and still reported three models "open under the same title".
+    Nothing was open: the run never asked SolidWorks. The extract beside the pack had been
+    written by an earlier run, its fingerprint matched the unchanged models, and so it was
+    reused, three failures included. The same reuse kept the 12674-02-GA side panel at
+    nothing after the reader was fixed, which is why no trace ever showed the new wait.
+    """
+    try:
+        data = json.loads(Path(extract_path).read_text(encoding="utf-8"))
+    except Exception:                                            # noqa: BLE001
+        return 0
+    man = data.get("_manifest") if isinstance(data, dict) and isinstance(data.get("_manifest"), dict) else {}
+    try:
+        n = int(man.get("files_failed") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    errs = man.get("errors") if isinstance(man.get("errors"), list) else []
+    # A FILE THE DOCUMENT MANAGER READ IN ITS PLACE IS READ. The top-up beside the extract
+    # holds those files; only what neither reader opened is still owed.
+    filled: set = set()
+    try:
+        tp = Path(extract_path).parent / DOCMGR_TOPUP_FILENAME
+        if tp.exists() and Path(extract_path).name != DOCMGR_TOPUP_FILENAME:
+            filled = {_path_key(r.get("path")) for r in load_native_extract(tp)
+                      if isinstance(r, dict) and r.get("title") and not r.get("errors")}
+    except Exception:                                            # noqa: BLE001
+        filled = set()
+    if filled and errs:
+        owed = [e for e in errs if not (isinstance(e, dict) and _path_key(e.get("path")) in filled)]
+        return len(owed) if len(errs) >= n else max(len(owed), n - len(filled))
+    return max(n, len(errs))
+
+
 def _should_run(extract_path: Path, folder: str | Path) -> bool:
     """Run the analyser when there is no extract, the one we have predates the MODELS, or it
     predates the analyser CODE (its schema version is behind what the estimate now needs)."""
@@ -1162,6 +1262,10 @@ def _should_run(extract_path: Path, folder: str | Path) -> bool:
     # we can now read out of the same unchanged models has moved on.
     if _extract_schema_version(extract_path) < _MIN_EXTRACT_SCHEMA_VERSION:
         return True
+    if files_the_extract_left_unread(extract_path):
+        return True          # a failed file is asked for again, never inherited as failed
+    if read_cautions_of(extract_path):
+        return True          # read out of somebody's open session: not a snapshot to keep
     # THE FINGERPRINT, NOT THE TIMESTAMP, WHEN THERE IS ONE.
     #
     # These two questions -- "is this extract stale" and "should I regenerate it" -- were

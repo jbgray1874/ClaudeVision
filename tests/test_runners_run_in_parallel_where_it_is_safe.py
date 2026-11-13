@@ -162,3 +162,36 @@ def test_the_backup_switch_without_its_key_is_no_reader(monkeypatch):
     monkeypatch.setenv("SDI_SW_DOCMGR", "1")
     monkeypatch.delenv("SDI_SW_DOCMGR_KEY", raising=False)
     assert "no_models" in runner.runner_capabilities()
+
+
+# ── 11 Nov 2026: "there is only one grid runner working despite the second one being queued" ──
+
+def test_after_a_service_restart_the_second_slot_still_takes_the_queued_job(api, monkeypatch):
+    """The 17:55 restart: the laptop's runner, mid-job, came back through its progress posts with
+    no capabilities, so slot 2 was told one desktop drives one estimate and sat idle. What the
+    claiming runner said it can do is kept on the run, which survives the restart."""
+    er, tmp_path = api
+    monkeypatch.setenv("SDI_MAX_CONCURRENT_RUNS", "2")
+    a, b = _two_queued(er, tmp_path)
+    assert _claim(er, "LAPTOP-1", "LAPTOP", ["desktop_token"])["run"]["run_id"] == a
+    assert er._RUNS[a].runner_capabilities == ["desktop_token"]
+    er._RUNNERS.clear()                                   # the service restarted; runs are restored
+    er.progress(a, er.ProgressRequest(runner_id="LAPTOP-1", lines=["still working"]))
+    assert "desktop_token" in er._RUNNERS["LAPTOP-1"].capabilities
+    got = _claim(er, "LAPTOP-1-s2", "LAPTOP", ["desktop_token"])
+    assert got["run"] and got["run"]["run_id"] == b
+
+
+def test_grid_control_says_why_an_idle_runner_is_not_taking_a_queued_job(api, monkeypatch):
+    er, tmp_path = api
+    import estimate_wall as ew
+    a, b = _two_queued(er, tmp_path)                      # one run at a time (the default)
+    assert _claim(er, "laptop", "LAPTOP")["run"]["run_id"] == a
+    assert _claim(er, "server", "SDI-APP01")["run"] is None
+    held = er._RUNNERS["server"].as_json()["held"]
+    assert held["reason"] == "another run is in progress" and held["queued"] == 1
+    rag, why = ew.runner_rag(er._RUNNERS["server"].as_json())
+    assert rag == ew.AMBER and why == "not taking the 1 queued job(s): another run is in progress"
+    er._RUNS[b].status = "error"                          # nothing queued any more: nothing to explain
+    _claim(er, "server", "SDI-APP01")
+    assert er._RUNNERS["server"].as_json()["held"] == {}

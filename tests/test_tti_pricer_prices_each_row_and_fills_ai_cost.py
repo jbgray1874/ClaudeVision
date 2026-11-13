@@ -150,7 +150,7 @@ def test_each_row_is_priced_and_its_cost_written_to_column_p_with_a_backup(tmp_p
         setattr(self, "sheet", s), setattr(self, "sheet_name", n), setattr(self, "col", c),
         setattr(self, "backup", None), setattr(self, "how", "openpyxl")) and None)
     portal = FakePortal()
-    rep = tp.run_batch(_args(sheet), portal=portal, status_path=tmp_path / "s.json", sleep=lambda s: None)
+    rep = tp.run_batch(_args(sheet, replace_costs=True), portal=portal, status_path=tmp_path / "s.json", sleep=lambda s: None)
     by_row = {b["enquiry_brief"].split("row ")[1].split(".")[0]: b for b in portal.started}
     assert by_row["3"]["method"] == "both" and [Path(f).name for f in by_row["3"]["files"]] == ["TTI-10234 rev B.pdf"]
     assert by_row["3"]["client"] == "TTI" and by_row["3"]["units"] == 4
@@ -172,7 +172,7 @@ def test_a_locked_workbook_keeps_the_price_and_says_why(tmp_path, monkeypatch):
     def locked(self, row, value):
         raise PermissionError("the file is open in Excel")
     monkeypatch.setattr(tp.SheetWriter, "write", locked)
-    rep = tp.run_batch(_args(sheet, rows="3"), portal=FakePortal(), status_path=None, sleep=lambda s: None)
+    rep = tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=FakePortal(), status_path=None, sleep=lambda s: None)
     (r,) = rep["rows"]
     assert r["unit_cost"] == 123.46 and "could not be written" in r["why"] and "written" not in r
 
@@ -322,13 +322,13 @@ def test_a_priced_rows_pack_is_kept_in_live_enquiry_and_reused_next_time(tmp_pat
     sheet = _sheet(tmp_path)
     _areas(tmp_path, monkeypatch)
     monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: None)
-    first = tp.run_batch(_args(sheet, rows="3"), portal=FakePortal(), status_path=None, sleep=lambda s: None)
+    first = tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=FakePortal(), status_path=None, sleep=lambda s: None)
     kept = first["rows"][0]["kept"]
     assert kept["state"] == "new" and kept["folder"] == str(tmp_path / "held" / "LiveEnquiry" / "TTI" / "TTI-10234")
-    again = tp.run_batch(_args(sheet, rows="3"), portal=FakePortal(), status_path=None, sleep=lambda s: None)
+    again = tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=FakePortal(), status_path=None, sleep=lambda s: None)
     assert again["rows"][0]["kept"]["state"] == "unchanged"
     portal = FakePortal()
-    tp.run_batch(_args(sheet, rows="3"), portal=portal, status_path=None, sleep=lambda s: None)
+    tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=portal, status_path=None, sleep=lambda s: None)
     assert "Drawing pack provisional:" in portal.started[0]["enquiry_brief"], "the pack's assumptions travel with the job"
 
 
@@ -405,3 +405,329 @@ def test_a_row_that_could_not_be_queued_says_why_on_screen(tmp_path, monkeypatch
     monkeypatch.setattr(tp, "run_batch", lambda *a, **k: rep)
     tp.main(["--sheet", str(tmp_path / "s.xlsx"), "--status-file", str(tmp_path / "st.json")])
     assert "why: the service at http://localhost:8071 refused the key" in capsys.readouterr().out
+
+
+# ── the batch: pack rows only, existing costs kept, resumed not duplicated (JG, 11 Nov 2026) ──
+
+class _Portal(FakePortal):
+    def __init__(self, status="done", price=123.456, start_error=None):
+        super().__init__(price)
+        self.state, self.start_error, self.asked = status, start_error, []
+
+    def start(self, body):
+        if self.start_error:
+            raise RuntimeError(self.start_error)
+        return super().start(body)
+
+    def status(self, run_id):
+        self.asked.append(run_id)
+        if self.state != "done":
+            return {"status": self.state, "error": "engine stopped" if self.state == "error" else ""}
+        return {"status": "done", "quantity_prices": [{"quantity": 4, "unit_gbp": self.price}]}
+
+
+def _quiet(monkeypatch):
+    """Write into the test's own sheet with openpyxl (no Excel, no backup copy), so the
+    read-back check sees what was written."""
+    monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: self._openpyxl(row, value))
+    monkeypatch.setattr(tp.shutil, "copy2", lambda *a, **k: None)
+
+
+def test_a_cost_already_in_the_cell_is_kept_and_not_priced_again(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)                                   # row 3 holds 99.0
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    portal = _Portal()
+    rep = tp.run_batch(_args(sheet, rows="3"), portal=portal, status_path=tmp_path / "s.json", sleep=lambda s: None)
+    (r,) = rep["rows"]
+    assert r["state"] == "has a cost" and "99" in r["why"] and portal.started == []
+
+
+def test_drawings_only_prices_a_resolved_pack_and_never_a_thumbnail(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)                                   # row 4: number, thumbnail, no drawings
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    portal = _Portal()
+    rep = tp.run_batch(_args(sheet, rows="4-6", drawings_only=True), portal=portal,
+                       status_path=tmp_path / "s.json", sleep=lambda s: None)
+    by = {r["row"]: r for r in rep["rows"]}
+    assert by[4]["state"] == "needs drawing" and by[6]["state"] == "skipped"
+    assert portal.started == [], "no thumbnail-only or description-only estimate is queued"
+
+
+def test_a_rerun_waits_for_its_own_running_job_instead_of_starting_another(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    status = tmp_path / "s.json"
+    first = _Portal(status="running")
+    calls = {"n": 0}
+
+    def short_wait(portal, run_id, sleep=None, **k):
+        calls["n"] += 1
+        return {"status": "timeout"}
+    monkeypatch.setattr(tp, "wait_for", short_wait)
+    rep = tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=first, status_path=status, sleep=lambda s: None)
+    assert len(first.started) == 1 and rep["rows"][0]["state"] == "timeout"
+    assert "left as it was" in rep["rows"][0]["why"], "an unfinished run writes nothing"
+    ledger = tp.load_ledger(tp.ledger_path(sheet, status))
+    (entry,) = ledger.values()
+    assert entry["run_id"] == "r1" and entry["approval"] == "not finished" and entry["pack_key"]
+    again = _Portal(status="running")
+    rep = tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=again, status_path=status, sleep=lambda s: None)
+    assert again.started == [], "the batch resumed its own run, it did not submit a duplicate"
+    assert rep["rows"][0]["run_id"] == "r1" and "earlier batch" in rep["rows"][0]["resumed"]
+
+
+def test_a_finished_run_from_an_earlier_batch_is_used_not_rerun(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    status = tmp_path / "s.json"
+    monkeypatch.setattr(tp, "wait_for", lambda portal, run_id, sleep=None, **k: {"status": "timeout"})
+    tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=_Portal(status="running"),
+                 status_path=status, sleep=lambda s: None)
+    done = _Portal(status="done")
+    rep = tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=done, status_path=status, sleep=lambda s: None)
+    (r,) = rep["rows"]
+    assert done.started == [] and r["unit_cost"] == 123.46 and r["written"] == "P3 = 123.46"
+    assert r["approval"].startswith("provisional"), "finished and written is not the same as approved"
+
+
+def test_a_failed_run_writes_nothing_and_the_ledger_says_why(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    wrote = []
+    monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: wrote.append((row, value)))
+    status = tmp_path / "s.json"
+    rep = tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=_Portal(status="error"),
+                       status_path=status, sleep=lambda s: None)
+    assert wrote == [] and rep["rows"][0]["state"] == "error"
+    (entry,) = tp.load_ledger(tp.ledger_path(sheet, status)).values()
+    assert entry["written"] is None and entry["approval"] == "not finished" and entry["why"]
+
+
+def test_a_job_another_hand_started_is_named_not_duplicated(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    msg = ("409: TTI-10234 for TTI is already running (290s). Running it again now would replace the "
+           "drawings that run is reading, so it is refused. POST /api/estimate/8bb60b92c9d8/abandon")
+    rep = tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=_Portal(start_error=msg),
+                       status_path=tmp_path / "s.json", sleep=lambda s: None)
+    (r,) = rep["rows"]
+    assert r["state"] == "not queued" and "did not start run 8bb60b92c9d8" in r["why"]
+
+
+def test_a_ga_and_its_ga2_are_two_scopes():
+    import pack_resolver as pr
+    assert not pr._same("12181-00-GA", "12181-00-GA2")
+    assert tp.row_key({"row": 9, "drawing": "12181-00-GA", "quantity": 1}) != \
+        tp.row_key({"row": 10, "drawing": "12181-00-GA2", "quantity": 1})
+
+
+# ── the 11 Nov 2026 review: inputs, lost workers, approval, the named tab, read-back ──────
+
+def _done_with(quality):
+    class P(_Portal):
+        def status(self, run_id):
+            st = super().status(run_id)
+            st["quality"] = quality
+            return st
+    return P()
+
+
+def test_a_cost_priced_from_other_inputs_is_kept_but_flagged_outdated(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    status = tmp_path / "s.json"
+    tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=_Portal(), status_path=status, sleep=lambda s: None)
+    portal = _Portal()
+    rep = tp.run_batch(_args(sheet, rows="3", method="targeted"), portal=portal, status_path=status, sleep=lambda s: None)
+    (r,) = rep["rows"]
+    assert portal.started == [] and r["state"] == "has a cost" and r["outdated"] == ["method"]
+    assert "POSSIBLY OUTDATED" in r["why"] and r["approval"].startswith("outdated")
+
+
+def test_a_restarted_batch_neither_submits_nor_writes_twice(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    status = tmp_path / "s.json"
+    first = _Portal()
+    tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=first, status_path=status, sleep=lambda s: None)
+    assert len(first.started) == 1
+    writes = []
+    monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: writes.append(row))
+    again = _Portal()
+    rep = tp.run_batch(_args(sheet, rows="3"), portal=again, status_path=status, sleep=lambda s: None)
+    assert again.started == [] and writes == [], "the cost in the cell is this batch's own: nothing again"
+    assert rep["rows"][0]["state"] == "done" and "earlier batch" in rep["rows"][0]["why"]
+
+
+def test_a_run_whose_worker_went_silent_is_held_not_resubmitted(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    status = tmp_path / "s.json"
+    monkeypatch.setattr(tp, "wait_for", lambda portal, run_id, sleep=None, **k: {"status": "timeout"})
+    tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=_Portal(status="running"),
+                 status_path=status, sleep=lambda s: None)
+
+    class Lost(_Portal):
+        def status(self, run_id):
+            return {"status": "error", "runner": "PC-s2",
+                    "error": "The runner (PC-s2) stopped responding 40334s into the run. Nothing was filed."}
+    lost = Lost()
+    rep = tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=lost, status_path=status, sleep=lambda s: None)
+    (r,) = rep["rows"]
+    assert lost.started == [] and r["state"] == "held: lost worker" and "--resubmit-lost" in r["why"]
+    again = Lost()
+    tp.run_batch(_args(sheet, rows="3", replace_costs=True, resubmit_lost=True), portal=again,
+                 status_path=status, sleep=lambda s: None)
+    assert len(again.started) == 1, "submitted once a person says the old worker is gone"
+
+
+def test_ready_for_approval_needs_a_clean_estimate_not_only_a_verified_pack(tmp_path, monkeypatch):
+    item = {"state": "done", "unit_cost": 10.0, "written": "Q7 = 10.0", "write_check": ""}
+    verified = {"status": "verified", "missing": [], "bought_in_unmatched": []}
+    assert tp.approval_of(dict(item, quality={"state": "complete"}), verified) == "ready for estimator approval"
+    a = tp.approval_of(dict(item, quality={"state": "missing costs", "label": "Finished: 2 missing costs"}), verified)
+    assert a.startswith("provisional") and "2 missing costs" in a
+    a = tp.approval_of(dict(item, quality={}), verified)
+    assert a.startswith("provisional") and "no review tally" in a
+    b = tp.approval_of(dict(item, quality={"state": "complete"}),
+                       {"status": "provisional", "missing": [], "bought_in_unmatched": ["12736-01-04X"]})
+    assert b.startswith("provisional") and "12736-01-04X" in b
+    assert tp.approval_of(dict(item, write_check="P7 changed"), verified).startswith("written, but the check failed")
+
+
+def test_the_cost_goes_to_the_named_tab_and_is_read_back(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)                                   # rows on the "Tracker" tab
+    wb = openpyxl.load_workbook(sheet)
+    other = wb.create_sheet("Notes", 0)
+    other["P3"] = "leave me"
+    wb.active = 0                                              # another tab is the active one
+    wb.save(sheet)
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    rep = tp.run_batch(_args(sheet, rows="3", replace_costs=True, sheet_name="Tracker"),
+                       portal=_done_with({"state": "complete"}), status_path=tmp_path / "s.json", sleep=lambda s: None)
+    (r,) = rep["rows"]
+    wb = openpyxl.load_workbook(sheet)
+    assert wb["Tracker"]["P3"].value == 123.46 and wb["Notes"]["P3"].value == "leave me"
+    assert r["write_check"] == "" and "'Tracker'" in r["write_checked"]
+
+
+def test_a_read_back_names_any_other_cell_that_moved():
+    before = {"N": 2, "P": 50.0, "Q": None}
+    assert tp.check_write(before, {"N": 2, "P": 50.0, "Q": 12.5}, "Q", 12.5) == ""
+    msg = tp.check_write(before, {"N": 2, "P": 12.5, "Q": 12.5}, "Q", 12.5)
+    assert "P changed from 50.0 to 12.5" in msg
+    assert "reads None" in tp.check_write(before, before, "Q", 12.5)
+
+
+class _BreaksPortal(FakePortal):
+    """Prices the run's own quantity and every break it was asked for: £100 a unit less £10 a step."""
+
+    def status(self, run_id):
+        body = self.started[int(run_id[1:]) - 1]
+        qs = [body["units"]] + list(body.get("quantity_breaks") or [])
+        return {"status": "done", "run_id": run_id,
+                "quantity_prices": [{"quantity": q, "unit_gbp": 100.0 - 10 * i} for i, q in enumerate(sorted(qs))]}
+
+
+def _same_ga_three_quantities(tmp_path) -> Path:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws["L1"], ws["G1"], ws["D1"], ws["P1"] = "Drawing Number", "Notes", "Qty", "AICost"
+    for r, q in ((2, 1), (3, 2), (4, 3), (5, 1)):
+        ws[f"L{r}"], ws[f"G{r}"], ws[f"D{r}"] = "12110-01-GA1", "booth", q
+    p = tmp_path / "d.xlsx"
+    wb.save(p)
+    return p
+
+
+def test_one_run_prices_every_quantity_the_sheet_asks_for_one_drawing(tmp_path, monkeypatch):
+    """11 Nov 2026 dry run: 12110-01-GA1 on five rows at 1, 2 and 3 off was three full estimates."""
+    p = _same_ga_three_quantities(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: None)
+    portal = _BreaksPortal()
+    rep = tp.run_batch(_args(p), portal=portal, status_path=None, sleep=lambda s: None)
+    assert len(portal.started) == 1, "one run for one drawing"
+    assert portal.started[0]["units"] == 1 and portal.started[0]["quantity_breaks"] == [2, 3]
+    by = {x["row"]: x for x in rep["rows"]}
+    assert (by[2]["unit_cost"], by[3]["unit_cost"], by[4]["unit_cost"], by[5]["unit_cost"]) == (100.0, 90.0, 80.0, 100.0)
+    assert by[3]["same_run_as_row"] == 2 and "2-off break" in by[3]["why"]
+
+
+def test_a_dry_run_says_which_rows_share_a_run_and_which_are_asked(tmp_path, monkeypatch):
+    p = _same_ga_three_quantities(tmp_path)
+    _areas(tmp_path, monkeypatch)
+    rep = tp.run_batch(_args(p, dry_run=True), portal=None, status_path=None, sleep=lambda s: None)
+    by = {x["row"]: x for x in rep["rows"]}
+    assert by[3]["state"] == "same run as row 2" and by[5]["state"] == "same as row 2"
+    monkeypatch.setattr(tp, "pack_for", lambda d, l, c: (
+        {"folder": "X", "files": [], "match": "pack"},
+        {"status": "ambiguous", "price_ok": False, "question": "Which copy is the issued one?",
+         "assumptions": [], "members": [], "conflicts": ["x"]}))
+    rep = tp.run_batch(_args(p, dry_run=True), portal=None, status_path=None, sleep=lambda s: None)
+    assert rep["rows"][0]["state"] == "ask", "an ambiguous pack is asked in a dry run too, not 'planned'"
+
+
+# ── write back, never price (11 Nov 2026 review of row 18) ──
+
+def _unwritten_row(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    wb = openpyxl.load_workbook(sheet); wb.active["P3"] = None; wb.save(sheet)
+    _areas(tmp_path, monkeypatch)
+    monkeypatch.setattr(tp.shutil, "copy2", lambda *a, **k: None)
+    monkeypatch.setattr(tp.SheetWriter, "write",
+                        lambda self, row, value: (_ for _ in ()).throw(OSError("the workbook is open")))
+    first = _Portal()
+    rep = tp.run_batch(_args(sheet, rows="3"), portal=first, status_path=tmp_path / "s.json", sleep=lambda s: None)
+    assert rep["rows"][0]["unit_cost"] == 123.46 and not rep["rows"][0].get("written")
+    return sheet
+
+
+class _NeverStarts(FakePortal):
+    def start(self, body):
+        raise AssertionError("--write-only must never start an estimate")
+
+    def status(self, run_id):
+        return {}                                           # the service no longer holds the run
+
+
+def test_write_only_writes_the_saved_cost_and_never_starts_an_estimate(tmp_path, monkeypatch):
+    sheet = _unwritten_row(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    rep = tp.run_batch(_args(sheet, rows="3", write_only=True), portal=_NeverStarts(),
+                       status_path=tmp_path / "s.json", sleep=lambda s: None)
+    (r,) = rep["rows"]
+    assert r["written"] == "P3 = 123.46" and "ledger" in r["resumed"]
+    assert openpyxl.load_workbook(sheet).active["P3"].value == 123.46
+
+
+def test_write_only_with_nothing_on_record_says_so_and_starts_nothing(tmp_path, monkeypatch):
+    sheet = _sheet(tmp_path)
+    wb = openpyxl.load_workbook(sheet); wb.active["P3"] = None; wb.save(sheet)
+    _areas(tmp_path, monkeypatch)
+    _quiet(monkeypatch)
+    rep = tp.run_batch(_args(sheet, rows="3", write_only=True), portal=_NeverStarts(),
+                       status_path=tmp_path / "s.json", sleep=lambda s: None)
+    (r,) = rep["rows"]
+    assert r["state"] == "nothing to write" and "never starts an estimate" in r["why"]
+
+
+def test_the_central_sheet_setting_must_be_an_address_or_a_workbook(tmp_path):
+    bad = 'cd C:\\ClaudeVision Add-Content .env "SDI_TTI_CENTRAL_SHEET=$(Get-Clipboard)"'
+    assert "neither an https address" in tp.central_sheet_problem(bad)
+    assert tp.central_sheet_problem("https://x.sharepoint.com/sites/T/Shared Documents/TRACKER.xlsx".replace(" ", "%20")) == ""
+    assert "does not end in a workbook name" in tp.central_sheet_problem("https://x.sharepoint.com/:x:/r/sites/T/Doc.aspx?sourcedoc=1")
+    assert tp.central_sheet_problem("") == ""
+    f = tmp_path / "T.xlsx"; f.write_bytes(b"x")
+    assert tp.central_sheet_problem(str(f)) == ""
+    with pytest.raises(SystemExit, match="Nothing was queued or written"):
+        tp.main(["--sheet", str(f), "--central-sheet", bad])

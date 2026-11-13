@@ -307,12 +307,25 @@ except ImportError:
 # Set False to revert to the old flag-and-drop behaviour.
 STRICT_BOM_OVERFLOW = True
 
+def workbook_output_dir() -> str:
+    """Where this checkout's runs write their workbooks: <checkout>/output/estimates, or the
+    folder SDI_WB_OUTPUT_DIR names."""
+    return (os.environ.get("SDI_WB_OUTPUT_DIR") or "").strip() or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output", "estimates")
+
+
 CELL_MAP = {
     # UNC path (not K:) so it resolves in ANY session regardless of drive mapping.
     # K: maps to \\sdi-dc01\shareddata$\Shared — using the UNC directly avoids the
     # drive being unmapped in admin shells / when the engine runs headless via main.py.
     "template_path": r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets\Blank Estimate Sheet  WB 2026.xlsx",
-    "output_dir":    r"C:\ClaudeVision\output\estimates",
+    # THIS CHECKOUT'S OWN FOLDER, NOT ONE PATH FOR EVERY RUNNER (reviewer, 12 Nov 2026). This
+    # read r"C:\ClaudeVision\output\estimates": the second runner, working in
+    # C:\ClaudeVision-s2, wrote its workbook, record, note and walkthrough into the first
+    # runner's folder. Two runs' files sat in one folder (how prices and attachments crossed
+    # on 10 and 11 Nov), and the second runner's collector, looking in its own tree, filed a
+    # workbook with no note. SDI_WB_OUTPUT_DIR names another folder for a run.
+    "output_dir":    workbook_output_dir(),
     "estimate_sheet": "Estimate",
     "structural_sheets": ["Labour", "Material Price Break"],  # NEVER overwrite these
 

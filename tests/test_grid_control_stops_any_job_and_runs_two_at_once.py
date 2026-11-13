@@ -189,7 +189,7 @@ def test_two_at_once_still_obeys_the_switch(share, monkeypatch):
 def test_grid_control_names_and_a_stop_on_every_running_and_queued_job():
     assert "<title>Grid Control</title>" in WALL and '<div class="sub">GRID CONTROL</div>' in WALL
     assert "<b>Fleet Grid Runners</b>" in WALL and "Fleet · runners" not in WALL
-    assert "${stopBtn(r)}${badge(r.rag, WORD[r.rag])}" in WALL, "on each running lane"
+    assert "${stopBtn(r, r._service)}${badge(r.rag, WORD[r.rag])}" in WALL, "on each running lane, on any service"
     assert 'waiting " + fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r)}' in WALL, "on the queue"
     assert '"/api/estimate/" + encodeURIComponent(id) + "/abandon"' in WALL
     assert ">Grid Control ↗</a>" in PAGE and ">Control panel ↗</a>" not in PAGE
@@ -329,3 +329,59 @@ def test_a_failed_job_has_a_re_run_button_and_the_service_takes_it():
     assert "data-self-rerun='\" + selfEsc(r.drawing)" in PAGE
     assert '"/api/estimate/self-running/rerun"' in PAGE
     assert '@router.post("/self-running/rerun")' in ROUTES
+
+
+# ── Re-run beside every finished job, whatever AICompleted says (JG, 11 Nov 2026) ──────
+def _pressed(drawing, customer="M&S"):
+    class Pressed(Switch):
+        def __init__(self):
+            super().__init__()
+            self.reruns = [{"drawing": drawing, "customer": customer, "by": "page"}]
+
+        def take_reruns(self):
+            got, self.reruns = self.reruns, []
+            return got
+    return Pressed()
+
+
+def _done_row(n, drawing, completed="YES"):
+    r = _row(n, drawing)
+    r.ai_completed, r.completed_column = completed, True
+    return r
+
+
+def test_a_page_re_run_runs_a_finished_row_once_even_when_aicompleted_says_yes(share, monkeypatch):
+    first_rows = [_done_row(5, "0360001", completed="")]
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": first_rows)
+    monkeypatch.setattr(ler, "mark_completed", lambda *a, **k: (False, "not written in the test"),
+                        raising=False)
+    sr.cycle(dict(share), Portal(), Switch(), say=lambda s: None, wait=_wait())
+    rows = [_done_row(5, "0360001", completed="YES")]
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": rows)
+    ledger = ler.load_ledger(share["ledger"])
+    assert ler.plan(rows, ler._sources(share["root"]), ledger)[0].status == "not_asked", \
+        "YES on the sheet: Self-Running leaves it alone"
+    again, said = Portal(), []
+    sr.cycle(dict(share), again, _pressed("0360001"), say=said.append, wait=_wait())
+    assert again.started == ["0360001"] and any("Re-run asked for on the page" in s for s in said)
+    third = Portal()
+    sr.cycle(dict(share), third, Switch(), say=lambda s: None, wait=_wait())
+    assert third.started == [], "a page Re-run is taken once"
+
+
+def test_a_page_re_run_for_a_row_no_longer_on_the_sheet_is_said_not_run(share, monkeypatch):
+    rows = [_row(5, "0360001")]
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": rows)
+    sr.cycle(dict(share), Portal(), Switch(), say=lambda s: None, wait=_wait())
+    monkeypatch.setattr(ler, "read_sheet", lambda path, sheet="": [_row(6, "0360002")])
+    portal, said, switch = Portal(), [], _pressed("0360001")
+    sr.cycle(dict(share), portal, switch, say=said.append, wait=_wait())
+    assert "0360001" not in portal.started
+    assert any("Re-run NOT taken" in s and "no longer on the Live Enquiry sheet" in s for s in said)
+    assert any(b.get("phase") == "re-run not taken" for b in switch.beats)
+
+
+def test_every_finished_job_has_a_re_run_button():
+    # However it ended, and per customer's drawing (11 Nov 2026): not only "done" and "error".
+    assert "if(!live && !selfRerunSeen.has(key)){" in PAGE
+    assert "whatever AICompleted" in PAGE

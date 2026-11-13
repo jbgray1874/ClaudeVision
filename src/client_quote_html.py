@@ -44,8 +44,45 @@ from typing import Any, Dict, List, Optional
 # missing FOLDER.
 #
 # SDI_CUSTOMER_LOGOS relocates it; the Windows install still resolves to the same place.
-ASSETS_LOGOS = os.environ.get("SDI_CUSTOMER_LOGOS") or str(
-    Path(__file__).resolve().parents[1] / "assets" / "customer_logos")
+def logos_folder(root: Path) -> str:
+    """The logo folder for a checkout. A SECOND RUNNER'S CHECKOUT HAS NO LOGOS OF ITS OWN
+    (11 Nov 2026): slot 2 runs from C:\\ClaudeVision-s2, a git worktree, and the logo files are
+    not in git, so every quote it made (12161-03-GA, 12773-01-GA) carried the plain yellow mark
+    and no customer logo while the main runner's had both. A slot's checkout ("<main>-sN") with
+    no logo file takes the main checkout's folder, as it already takes the main checkout's .env."""
+    own = Path(root) / "assets" / "customer_logos"
+    try:
+        has = any(f.suffix.lower() in (".svg", ".png", ".jpg", ".jpeg", ".webp") for f in own.iterdir())
+    except OSError:
+        has = False
+    if has:
+        return str(own)
+    # EVERY RUNNER, HOWEVER ITS CHECKOUT IS NAMED (reviewer, 11 Nov 2026). A git worktree's
+    # .git is a file naming the main checkout ("gitdir: <main>/.git/worktrees/<name>"): that
+    # is where the logos are, whatever the slot's folder is called. The "<main>-sN" name is
+    # the fallback for a slot that is a plain copy.
+    mains = []
+    try:
+        pointer = (Path(root) / ".git").read_text(encoding="utf-8", errors="replace")
+        g = re.search(r"gitdir:\s*(.+?)[\\/]\.git[\\/]worktrees[\\/]", pointer)
+        if g:
+            mains.append(Path(g.group(1).strip()))
+    except OSError:
+        pass
+    m = re.fullmatch(r"(.+)-s\d+", Path(root).name)
+    if m:
+        mains.append(Path(root).with_name(m.group(1)))
+    for main_root in mains:
+        main = main_root / "assets" / "customer_logos"
+        try:
+            if any(f.suffix.lower() in (".svg", ".png", ".jpg", ".jpeg", ".webp") for f in main.iterdir()):
+                return str(main)
+        except OSError:
+            continue
+    return str(own)
+
+
+ASSETS_LOGOS = os.environ.get("SDI_CUSTOMER_LOGOS") or logos_folder(Path(__file__).resolve().parents[1])
 SDI_LOGO_KEY = "wearesdi"          # SDI's own logo file (left header), in the same folder
 MARKUP_FACTOR = 1.0                # 1.0 = show computed cost as-is (JG). >1.0 later for sell price.
 VALID_DAYS = 30

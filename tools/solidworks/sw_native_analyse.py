@@ -34,6 +34,7 @@ folder is often 2D only (DXF/PDF) — the native models live elsewhere under the
 from __future__ import annotations
 import json
 import os
+import time
 from pathlib import Path
 import re
 import sys
@@ -233,6 +234,74 @@ class RouteSignals:
     feature_types: List[str] = field(default_factory=list)  # diagnostic: raw type names seen
 
 
+SAME_TITLE_OPEN = 65536          # swFileWithSameTitleAlreadyOpen
+
+
+def same_file_by_content(a: str, b: str) -> bool:
+    """Are these two paths the same file, byte for byte? Two jobs that share a panel each
+    stage their own copy of it; SolidWorks will hold only one document of that name, so the
+    second job reads the first's open copy, and only when it IS the same file. A copy of
+    another size, or one that cannot be read, is not the same file."""
+    try:
+        if os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b)):
+            return True
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        import hashlib
+        digests = []
+        for path in (a, b):
+            h = hashlib.sha256()
+            with open(path, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    h.update(chunk)
+            digests.append(h.hexdigest())
+        return digests[0] == digests[1]
+    except OSError:
+        return False
+
+
+def reader_build() -> str:
+    """This reader's identity: the first 12 hex of the SHA-256 of its own source."""
+    try:
+        import hashlib
+        with open(os.path.abspath(__file__), "rb") as fh:
+            return "sw_native_analyse " + hashlib.sha256(fh.read()).hexdigest()[:12]
+    except Exception:                                                # noqa: BLE001
+        return "sw_native_analyse (build unreadable)"
+
+
+def wait_for_a_held_title(open_again, find_open, tries: int = 0, wait_s: float = -1.0,
+                          sleep=None):
+    """(document or None, what happened). A file refused because another document of its
+    title is open is asked for again, `tries` times `wait_s` apart: the holder is usually the
+    other runner's read of its own copy, closed within seconds. `open_again()` gives
+    (document or None, error bits); `find_open()` gives the open document or None. Stops at
+    once on any refusal that is not the held title. SDI_SW_TITLE_RETRIES and
+    SDI_SW_TITLE_WAIT_S set the patience (default 12 tries, 5 s)."""
+    if tries <= 0:
+        try:
+            tries = int(os.environ.get("SDI_SW_TITLE_RETRIES") or 12)
+        except ValueError:
+            tries = 12
+    if wait_s < 0:
+        try:
+            wait_s = float(os.environ.get("SDI_SW_TITLE_WAIT_S") or 5.0)
+        except ValueError:
+            wait_s = 5.0
+    sleep = sleep or time.sleep
+    for n in range(1, tries + 1):
+        sleep(wait_s)
+        doc, errs = open_again()
+        if doc is not None:
+            return doc, f"opened on try {n + 1}, once the document holding its title was closed"
+        if not errs & SAME_TITLE_OPEN:
+            return None, f"asked again {n} time(s); the refusal changed to errs={errs}"
+        doc = find_open()
+        if doc is not None:
+            return doc, f"found open on try {n + 1} and read in place"
+    return None, f"asked again {tries} time(s) over {tries * wait_s:.0f}s; its title stayed held"
+
+
 class SolidWorksSession:
     def __init__(self, visible: bool = False):
         if not _COM_AVAILABLE:
@@ -324,6 +393,30 @@ class SolidWorksSession:
                     self._borrowed_titles.append(_safe_str(_get0(doc, "GetTitle")) or path)
                     self.last_open_borrowed = True
                     return doc, doctype
+                # THE TITLE IS HELD FOR A MOMENT, NOT FOR GOOD (12674-02-GA, 11 Nov 2026). Two
+                # runners take one SolidWorks in turn, and jobs that share panels hold copies
+                # of one file name in two pack folders. While the other run has its copy open,
+                # this one is refused and the other's document is not ours to find; it closes
+                # it as soon as that file is read. Both side panels of 12674-02-GA were lost
+                # this way and priced at nothing. Ask again for a short while before failing.
+                def _again():
+                    _e = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                    _w = VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
+                    _d = self.sw.OpenDoc6(path, doctype, OPEN_OPTS, "", _e, _w)
+                    return _d, int(_e.value or 0)
+                doc, _how = wait_for_a_held_title(
+                    _again, lambda: self._get_open_document(path, []))
+                if doc is not None:
+                    print(f"[recovered] {os.path.basename(path)}: {_how}")
+                    _t = _safe_str(_get0(doc, "GetTitle"))
+                    if _how.startswith("opened"):
+                        if _t:
+                            self._open_titles.append(_t)
+                    else:
+                        self._borrowed_titles.append(_t or path)
+                        self.last_open_borrowed = True
+                    return doc, doctype
+                _trace.append(_how)
                 # Say what was tried. A bare "failed" told us nothing last time and cost a
                 # whole run to learn no more than that.
                 raise RuntimeError(
@@ -373,19 +466,56 @@ class SolidWorksSession:
             except Exception as exc:
                 trace.append(f"{_name}: raised {type(exc).__name__}")
 
-        # 2. The full array of open documents.
+        # 1b. BY ITS FILE NAME (12 Nov 2026). The documented call takes a document NAME. Asked by
+        # full path it answers only for that path, and a part another run holds open from its
+        # own pack folder has the same name and another path: "GetOpenDocumentByName: None",
+        # then every listing route failed in this binding, and a shared side panel was lost
+        # twice and priced at nothing. Asked by name it returns the document that holds the
+        # title, wherever its file is. Whether that document may be read for ours is decided
+        # by same_file_by_content, below.
         _by_title = None
-        try:
-            docs = self.sw.GetDocuments()
-            _n = len(docs) if docs is not None else 0
-            trace.append(f"GetDocuments: {_n} open")
-            for d in (docs or []):
+        for _name in ("GetOpenDocumentByName2", "GetOpenDocumentByName"):
+            for _asked in (os.path.basename(path), os.path.splitext(os.path.basename(path))[0]):
                 try:
-                    if self._norm(_safe_str(_get0(d, "GetPathName"))) == _target:
+                    d = getattr(self.sw, _name)(_asked)
+                except Exception:
+                    continue
+                if d is None:
+                    continue
+                _held = _safe_str(_get0(d, "GetPathName"))
+                if self._norm(_held) == _target:
+                    trace.append(f"{_name} by name: found")
+                    return d
+                if _held and not same_file_by_content(_held, path):
+                    trace.append(f"{_name} by name: a DIFFERENT file of this name is open "
+                                 f"({_held}); not read for this one")
+                    continue
+                trace.append(f"{_name} by name: the same file is open from "
+                             f"{_held or 'an unsaved document'}; read in place")
+                return d
+
+        # 2. The full array of open documents.
+        try:
+            # GetDocuments IS A PROPERTY IN THIS BINDING, NOT A CALL (12674-02-GA 19:46, the
+            # run's own trace: "GetDocuments: raised TypeError"). Called with (), the whole
+            # route that lists every open document, the one that finds a part held under
+            # another folder's copy, never ran: both side panels were lost and priced at
+            # nothing. Read as _get0 reads every other no-argument getter.
+            # ...and what it gives back is not always something len() accepts (the same trace,
+            # 12 Nov: still "raised TypeError" with the property read). Made a list first.
+            docs = _get0(self.sw, "GetDocuments")
+            docs = list(docs) if docs is not None else []
+            _n = len(docs)
+            trace.append(f"GetDocuments: {_n} open")
+            for d in docs:
+                try:
+                    _held = _safe_str(_get0(d, "GetPathName"))
+                    if self._norm(_held) == _target:
                         trace.append("GetDocuments: path match")
                         return d
                     _t = _safe_str(_get0(d, "GetTitle"))
-                    if _by_title is None and _t and os.path.splitext(_t)[0].lower() == _stem:
+                    if (_by_title is None and _t and os.path.splitext(_t)[0].lower() == _stem
+                            and (not _held or same_file_by_content(_held, path))):
                         _by_title = d
                 except Exception:
                     continue
@@ -402,7 +532,9 @@ class SolidWorksSession:
                     trace.append(f"GetFirstDocument walk: path match after {seen}")
                     return d
                 _t = _safe_str(_get0(d, "GetTitle"))
-                if _by_title is None and _t and os.path.splitext(_t)[0].lower() == _stem:
+                _held = _safe_str(_get0(d, "GetPathName"))
+                if (_by_title is None and _t and os.path.splitext(_t)[0].lower() == _stem
+                        and (not _held or same_file_by_content(_held, path))):
                     _by_title = d
                 d = _get0(d, "GetNext")
             trace.append(f"GetFirstDocument walk: {seen} document(s), no path match")
@@ -1919,6 +2051,61 @@ def drawing_bom_tables(doc) -> List[BomLine]:
     return lines
 
 
+def open_document_state(doc: Any) -> Dict[str, Any]:
+    """What a document read out of somebody's open session is showing (12 Nov 2026).
+
+    A document this run opened is the file on disk in its saved configuration. A document
+    that was already open is whatever its holder has on screen: perhaps another
+    configuration, perhaps edits that were never saved. Neither can be seen from the file,
+    so both are asked of the document itself and travel with the read. Reviewer: "check
+    file identity, configuration and unsaved state".
+
+    unsaved: True, False, or None when SolidWorks would not say.
+    configuration_unverified: True when the document has more than one configuration, since
+    the one on screen need not be the one the drawing calls for.
+    """
+    state: Dict[str, Any] = {"title": _safe_str(_get0(doc, "GetTitle")),
+                             "path": _safe_str(_get0(doc, "GetPathName")),
+                             "configuration": "", "configurations": None, "unsaved": None}
+    try:
+        flag = _get0(doc, "GetSaveFlag")
+        state["unsaved"] = None if flag is None else bool(flag)
+    except Exception:                                                # noqa: BLE001
+        state["unsaved"] = None
+    try:
+        mgr = _get0(doc, "ConfigurationManager")
+        active = _get0(mgr, "ActiveConfiguration") if mgr is not None else None
+        state["configuration"] = _safe_str(_get0(active, "Name")) if active is not None else ""
+    except Exception:                                                # noqa: BLE001
+        pass
+    try:
+        names = _get0(doc, "GetConfigurationNames")
+        state["configurations"] = len(list(names)) if names is not None else None
+    except Exception:                                                # noqa: BLE001
+        state["configurations"] = None
+    state["configuration_unverified"] = state["configurations"] is None or state["configurations"] > 1
+    return state
+
+
+def cautions_for_an_open_document(state: Dict[str, Any]) -> List[str]:
+    """The plain-word cautions a read out of an open session carries."""
+    out: List[str] = []
+    name = state.get("title") or state.get("path") or "the document"
+    if state.get("unsaved") is True:
+        out.append(f"{name} was read from an open session with unsaved changes: what was "
+                   f"read may not be what is saved on disk")
+    elif state.get("unsaved") is None:
+        out.append(f"{name} was read from an open session and SolidWorks did not say "
+                   f"whether it has unsaved changes")
+    if state.get("configuration_unverified"):
+        n = state.get("configurations")
+        out.append(f"{name} was read in the configuration its holder had on screen "
+                   f"('{state.get('configuration') or 'unnamed'}', "
+                   f"{'an unknown number' if n is None else n} available): not checked "
+                   f"against the configuration the drawing calls for")
+    return out
+
+
 def analyse_file(session: SolidWorksSession, path: str) -> Dict[str, Any]:
     doc, doctype = session.open(path)
     result: Dict[str, Any] = {
@@ -1931,6 +2118,17 @@ def analyse_file(session: SolidWorksSession, path: str) -> Dict[str, Any]:
         "route_signals": None,
         "errors": [],
     }
+    # WHOSE DOCUMENT THIS WAS. Opened by this run: the file as saved. Already open: read in
+    # place, never closed by us, and its configuration and unsaved state recorded.
+    if getattr(session, "last_open_borrowed", False):
+        _state = open_document_state(doc)
+        result["document_owner"] = "already open before this run"
+        result["read_from_open_document"] = _state
+        result["read_cautions"] = cautions_for_an_open_document(_state)
+        for _c in result["read_cautions"]:
+            print(f"[ownership] {_c}")
+    else:
+        result["document_owner"] = "opened and closed by this run"
     result["title"] = _safe_str(_get0(doc, "GetTitle"))
     try:
         result["custom_properties"] = get_custom_properties(doc)
@@ -2270,6 +2468,13 @@ def main():
             # analyser automatically now that it no longer closes anyone's work, so it
             # travels with the extract instead of scrolling past in a console.
             "read_from_open_documents": list(getattr(session, "borrowed_seen", []) or []),
+            "read_cautions": [c for r in all_results if isinstance(r, dict)
+                              for c in (r.get("read_cautions") or [])][:200],
+            # WHICH READER WROTE THIS, AND WHEN (12 Nov 2026). An extract is kept beside the
+            # pack and reused by later runs. Without these two lines nothing could tell a
+            # read made a minute ago by this build from one made yesterday by an older one.
+            "written_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "reader_build": reader_build(),
             "files_seen": len(all_results),
             "files_read": len(_ok),
             "files_failed": len(_errors),

@@ -46,6 +46,15 @@ _PRICING_SERVICE_SINGLETON = None
 _PRICING_SERVICE_FAILED = False
 _PRICING_SERVICE_ERROR = None      # why, when it could not be reached. See _get_pricing_service.
 
+def _lookups_abandoned() -> Dict[str, Any]:
+    """The pricing service's count of lookups it gave up on, or an empty count without one."""
+    try:
+        svc = _PRICING_SERVICE_SINGLETON
+        return svc.lookup_failure_summary() if svc is not None else {"count": 0, "by_table": {}, "says": ""}
+    except Exception:                                                # noqa: BLE001
+        return {"count": 0, "by_table": {}, "says": ""}
+
+
 def _get_pricing_service():
     """Return a shared PricingService, or None if it can't be constructed
     (e.g. DB unavailable). Cached; never raises into the estimate path."""
@@ -589,6 +598,10 @@ def _part_cost_credibility(mfg: Optional[Dict[str, Any]], est_part: Dict[str, An
     # material cost is not derivable. Never let that line pass as a credible £0.
     if mfg.get("native_material_without_geometry"):
         reasons.append("native_material_no_geometry")
+    # The model measured the part's envelope and nothing says how it is built: no blank was
+    # written for it, so whatever its material line shows is not a credible figure.
+    if mfg.get("model_envelope_unresolved"):
+        reasons.append("model_envelope_construction_unstated")
 
     has_dxf = _part_has_part_dxf(mfg)
     gr = _safe_float((est_part.get("process_estimate") or {}).get("geometry_reliability"))
@@ -4641,6 +4654,11 @@ def _model_measured_zero_bends(part: Dict[str, Any]) -> bool:
         return True          # the solid is one thickness thick — nowhere for a bend to be
     mf = part.get("manufacturing_features") or {}
     if not isinstance(mf, dict):
+        return False
+    # A SHAPE THAT CANNOT BE FLAT (12 Nov 2026). A part its description names a Z-bar, an
+    # angle or a channel, on a sheet gauge and a sheet metal, is folded: a zero counted off an
+    # export's empty bend layer does not rule that out. The solid measured flat, above, does.
+    if _formed_sheet_shape(part):
         return False
     # A ZERO FROM A SHORT EXPORT IS NOT A MEASUREMENT OF THE PART. 12614-01-14M's DXF carried
     # no bends; its sheet prints DOWN 40.6° and DOWN 49.4° and its model has two bend
@@ -16558,6 +16576,12 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             _edge_parts: List[Tuple[str, float, str, Optional[float]]] = []
             _edge_boards: List[str] = []    # every board the gate admitted, for a per-unit
                                             # confirmation whose metres name no single part
+            # THE METRES ON ONE PIECE OF EACH BANDED PART (11896-08-01-GA, 11 Nov 2026). The
+            # line's quantity is the product's metres, every piece counted; the graph hangs
+            # the line under the parts it bands and multiplies by THEIR count. Handed the
+            # product's figure as the per-parent quantity, 01J's two panels doubled 24.659 m
+            # to 49.318 m. Each banded part takes the metres of one of its pieces instead.
+            _edge_per_piece: Dict[str, float] = {}
             for _p in (parts or []):
                 if not isinstance(_p, dict):
                     continue
@@ -16585,6 +16609,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                     _edge_parts.append((
                         _pn_e, float(_v["mm"]) * float(_safe_float(_p.get("quantity")) or 1),
                         str(_v.get("basis") or ""), _safe_float(_v.get("edge_thickness_mm"))))
+                    _edge_per_piece[_pn_e] = float(_v["mm"])
             # ONE LINE PER DECOR (D-733). 12677-01-GA bands a Cleaf Taranta panel and a black
             # one; a single job-wide line named after the first decor would buy the second's
             # edging in the wrong colour. Each decor's parts make their own line.
@@ -16695,6 +16720,13 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _stub["_edging_for"] = sorted(set(_edge_for))
                 if _edge_for:
                     _stub["bom_parent"] = sorted(set(_edge_for))[0]
+                    # Per piece, per banded part: the graph's count of each part times its
+                    # own metres adds back to the product's metres, never more.
+                    _occ = [{"parent": _pn_o, "qty": round(_edge_per_piece[_pn_o] / 1000.0, 4)}
+                            for _pn_o in sorted(set(_edge_for))
+                            if _edge_per_piece.get(_pn_o)]
+                    if _occ and "estimator_confirmed" not in _edge_from:
+                        _stub["bom_parents"] = _occ
                 if _decor_row:
                     _stub["_edging_row"] = _decor_row
                     _stub.setdefault("review_flags", []).append(
@@ -17518,6 +17550,9 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                     }
                 ),
                 "pricing_basis": "external_or_config_fallback",
+                # PRICE LOOKUPS ABANDONED ON THIS RUN (12 Nov 2026), so a run priced from web
+                # and AI figures because its own databases timed out says so in its record.
+                "lookups_abandoned": _lookups_abandoned(),
             },
         },
     }

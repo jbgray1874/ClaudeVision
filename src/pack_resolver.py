@@ -84,6 +84,12 @@ def drawing_id(name: str) -> str:
         return ""
     m = _ID.match(tokens[0])
     first = m.group(1).upper() if m else ""
+    # "12773-02 GA.SLDASM" IS DRAWING 12773-02-GA (12 Nov 2026): the assembly word stood apart
+    # from its number, the file read as "12773-02", and the lower-body assembly the GA calls
+    # for was never gathered; the estimate priced a lower body with no members.
+    if first and "-" in first and len(tokens) > 1 and _ASSEMBLY.match(tokens[1]) \
+            and not _ASSEMBLY.match(first.split("-")[-1]) and re.fullmatch(r"\d+[A-Z]?", first.split("-")[-1]):
+        return first + "-" + tokens[1].upper()
     if first and "-" not in first:
         for tok in tokens[1:]:
             n = _ID.match(tok)
@@ -94,6 +100,30 @@ def drawing_id(name: str) -> str:
 
 def _same(a: str, b: str) -> bool:
     return re.sub(r"[\s_]", "", a).upper() == re.sub(r"[\s_]", "", b).upper()
+
+
+def _archive_path(path: Path) -> bool:
+    try:
+        sys.path.insert(0, str(HERE))
+        import drawing_index as di
+        return di.is_archive(str(path))
+    except Exception:                                                    # noqa: BLE001
+        return False
+
+
+def _segments(folder: str) -> List[str]:
+    return [x.strip().lower() for x in re.split(r"[\\/]", str(folder)) if x.strip()]
+
+
+def _in_job(folder: str, job: str) -> bool:
+    """A folder of job `job`: a path segment that opens with the job number ("11203 - QUIK-LOK
+    Holder", "11203-Technical", "12754_Gen 5 Wall CDU")."""
+    return any(re.match(re.escape(job) + r"(?!\d)", seg) for seg in _segments(folder))
+
+
+def _customer_folder(folder: str) -> bool:
+    """Under a customers folder of the design share, where the next segment names the customer."""
+    return any("customers" in seg for seg in _segments(folder))
 
 
 def family_prefix(drawing: str) -> str:
@@ -184,7 +214,13 @@ def read_drawing(path: Path, drawing: str, read_text: Callable[[Path], str] = re
     """What a PDF drawing says about itself: does it carry this number, which revision, what it references."""
     text = read_text(path) if path.suffix.lower() == ".pdf" else ""
     flat = re.sub(r"\s+", "", text).upper()
-    carries = bool(text) and re.sub(r"[\s_]", "", drawing).upper() in flat
+    # THE NUMBER AS THE TITLE BLOCK PRINTS IT (12 Nov 2026): 12674-01-GA and 12674-02-GA were
+    # read, yet "the GA is matched by file name; its own title block did not confirm". A title
+    # block prints the number across boxes, "12674-01" and "GA", or with other dashes; compared
+    # letter for letter with its hyphens the number was never found. Letters and digits only.
+    _only = lambda t: re.sub(r"[^0-9A-Z]", "", str(t).upper())          # noqa: E731
+    carries = bool(text) and (re.sub(r"[\s_]", "", drawing).upper() in flat
+                              or (len(_only(drawing)) >= 7 and _only(drawing) in _only(text)))
     up = text.upper()
     revs = [r for r in _REV_TEXT.findall(up) if revision_rank(r) and r not in _REV_HEADINGS]
     best = ""
@@ -198,8 +234,48 @@ def read_drawing(path: Path, drawing: str, read_text: Callable[[Path], str] = re
            if revision_rank(m.group(1)) and m.group(1) not in _REV_HEADINGS]
     if _tb:
         best = max(_tb, key=lambda r: revision_rank(r) or ("", 0))
-    refs = sorted({m.upper() for m in _REF.findall(text.upper())} - {drawing.upper()})
-    return {"read": bool(text), "carries_number": carries, "revision": best, "references": refs}
+    refs = sorted({m.upper() for m in _REF.findall(_joined_assembly_words(text.upper()))} - {drawing.upper()})
+    _sh = re.search(r"\bSHEET\s*(\d{1,2})\s*(?:OF|/)\s*(\d{1,2})\b", up)
+    return {"read": bool(text), "carries_number": carries, "revision": best, "references": refs,
+            "sheet_of": f"{_sh.group(1)} of {_sh.group(2)}" if _sh and int(_sh.group(2)) > 1 else ""}
+
+
+_SPLIT_ASSEMBLY = re.compile(r"(?<![0-9A-Z\-/.:])(\d{3,}[A-Z]?(?:-\d+[A-Z]?)+)[ ](GA|SA|ASSY|ASM)(?![0-9A-Z])")
+_TAIL_ASSEMBLY = re.compile(r"^(.*\d)-?(GA|SA|ASSY|ASM)(\d*)$")
+
+
+def spellings(drawing: str) -> List[str]:
+    """One assembly number as it may be written: 12674-01-101SA and 12674-01-101-SA are the
+    same drawing (12 Nov 2026: joining every glued form with a dash made the estimator's own
+    "12674-01-101SA.SLDASM" a missing reference). The number as given comes first."""
+    d = str(drawing or "").upper()
+    m = _TAIL_ASSEMBLY.match(d)
+    if not m:
+        return [d]
+    out = [d]
+    for alt in (f"{m.group(1)}-{m.group(2)}{m.group(3)}", f"{m.group(1)}{m.group(2)}{m.group(3)}"):
+        if alt not in out:
+            out.append(alt)
+    return out
+
+
+def _joined_assembly_words(text: str) -> str:
+    """"12773-02 GA" in a parts list is drawing 12773-02-GA. A glued "12773-02GA" is kept as
+    printed and matched by `spellings`."""
+    return _SPLIT_ASSEMBLY.sub(r"\1-\2", text)
+
+
+def sheets_of(assembly: str, ids: Iterable[str]) -> List[str]:
+    """The members that are numbered SHEETS of an assembly drawing: 11896-04-00-GA-01, -02, -03
+    are the three sheets of 11896-04-00-GA."""
+    # THE TOP DRAWING NUMBERED ALL ZEROS IS THE ASSEMBLY'S OWN DRAWING (12 Nov 2026): a job asked
+    # for as "NNNN-02" keeps its general assembly as "NNNN-02-000 <title>_revW.pdf", with its
+    # parts numbered -001, -002 after it. The pack gathered 34 drawings, read 0 PDFs and was
+    # classed "incorrect pack: the GA's parts list was not read". Zeros of any length are the
+    # top sheet; -001 and on stay parts.
+    pre = assembly.upper() + "-"
+    return sorted(d for d in ids if d.upper().startswith(pre)
+                  and (re.fullmatch(r"\d{1,2}", d[len(pre):]) or re.fullmatch(r"0{3,4}", d[len(pre):])))
 
 
 # ── fingerprints ─────────────────────────────────────────────────────────────────────────
@@ -240,6 +316,39 @@ def _members(rows: Sequence[FileRow], drawing: str, also: Iterable[str] = ()) ->
     return out
 
 
+# A PART'S NUMBERED PIECE IN ITS FILE NAME, as drawing_job_merge.member_number_from_filename reads
+# it (D-669): "...01A_-07_5MM..." -> "07", "...01J_PART5_10.8mm..." -> "5". Mirrored here because
+# that module takes seconds to import; a test holds the two readings together.
+_MEMBER_NUMBER = re.compile(r"[_\s-]-(\d{1,3})(?=[_\s.-])")
+_PIECE_WORD_NUMBER = re.compile(r"(?<=[_\s-])(?:PART|PIECE)[\s_-]?(\d{1,2})(?=[_\s-]|\.(?!\d)|$)", re.I)
+
+
+def piece_number(name: str) -> str:
+    stem = Path(str(name)).stem
+    m = _MEMBER_NUMBER.search(stem) or _PIECE_WORD_NUMBER.search(stem)
+    return (m.group(1).lstrip("0") or "0") if m else ""
+
+
+_COPY_MARK = re.compile(r"(\s*-\s*copy(\s*\(\d+\))?|\s*\(\d+\)|[_\s-]copy\d*)$", re.I)
+
+
+def piece_key(name: str) -> str:
+    """What one file of a member IS, apart from its revision and from being a copy.
+
+    A PART'S NAMED PIECES ARE NOT RIVAL COPIES (the real share, 12 Nov 2026). Three jobs
+    already sent were classed "incorrect pack: two copies claim to be the issue":
+        11896-02-01-03J_BASE_MDF_18.0mm_REV F.DXF   ..._LHS_...   ..._REAR_...   ..._RIB_...
+        6364-01-004-LOCK COVER_3mm PETG_revR.DXF    6364-01-004-lock plate_5mm PETG_revR.DXF
+        6364-02-001-LEFT END_18mm MFC_revW.DXF      6364-02-001-LEFT END LIP_18mm MFC_revW.DXF
+    Each is a different piece of one part, cut from its own flat, and the name says which.
+    Two files are the same piece only when their names agree once the revision and any copy
+    mark ("- Copy", "(2)") are taken off. A numbered piece (PART5, _-07) keeps its number."""
+    stem = Path(str(name)).stem
+    stem = _REV_NAME.sub("", stem)
+    stem = _COPY_MARK.sub("", stem)
+    return re.sub(r"[\s_\-.]+", " ", stem).strip().upper()
+
+
 def _pick_revision(files: List[FileRow]) -> Tuple[List[FileRow], str, List[str], List[str]]:
     """The files of a member's latest revision (untagged CAD files ride with it), that revision,
     the superseded revisions present, and any conflict found."""
@@ -261,9 +370,41 @@ def _pick_revision(files: List[FileRow]) -> Tuple[List[FileRow], str, List[str],
     for f in chosen:
         if revision_from_name(f[0].name) == best and best:
             by_kind.setdefault((f[0].suffix.lower(), best), []).append(f)
+    dropped: set = set()
     for (ext, r), fs in by_kind.items():
-        if len({(s, int(m)) for _p, s, m in fs}) > 1:
-            notes.append(f"{len(fs)} different {ext} files claim revision {r}")
+        # A PART'S NUMBERED PIECES ARE NOT COPIES (D-669): "01J_PART1" .. "01J_PART5" are five
+        # flats of one part. Each piece number is compared with its own copies only.
+        by_piece: Dict[str, List[FileRow]] = {}
+        for f in fs:
+            by_piece.setdefault(piece_key(f[0].name), []).append(f)
+        for _pk, pf in by_piece.items():
+            piece = piece_number(pf[0][0].name)
+            # THE SAME BYTES ARE ONE FILE: a copy keeps its size whatever date the copy got.
+            if len({s for _p, s, _m in pf}) <= 1:
+                continue
+            what = f"{ext} files" + (f" for piece {piece}" if piece else "")
+            dirs: Dict[Path, List[FileRow]] = {}
+            for f in pf:
+                dirs.setdefault(f[0].parent, []).append(f)
+            # COPIES IN OTHER FOLDERS (TTI dry run, 11 Nov 2026): a job keeps cutting copies in
+            # sub-folders (Cutters, CNC, laser). The issued file sits beside the member's own PDF;
+            # elsewhere is a copy, kept out of the pack and said. With no PDF beside one of them
+            # the evidence cannot choose, and it is asked.
+            pick = None
+            if len(dirs) > 1:
+                pdf_dirs = {f[0].parent for f in chosen if f[0].suffix.lower() == ".pdf"
+                            and revision_from_name(f[0].name) in (r, "")}
+                beside = [d for d in dirs if d in pdf_dirs]
+                pick = beside[0] if len(beside) == 1 else None
+            if pick is not None and len({s for _p, s, _m in dirs[pick]}) <= 1:
+                others = [f for d, g in dirs.items() if d != pick for f in g]
+                dropped.update(id(f) for f in others)
+                notes.append(f"{len(others)} other {what} claiming revision {r} sit away from the "
+                             f"drawing's PDF ({', '.join(sorted({str(f[0].parent) for f in others}))}); "
+                             f"the copy beside the PDF is used")
+                continue
+            notes.append(f"{len(pf)} different {what} claim revision {r}")
+    chosen = [f for f in chosen if id(f) not in dropped]
     return chosen, best, [r for r in revs if r != best], notes
 
 
@@ -299,8 +440,11 @@ def _is_assembly(did: str) -> bool:
 def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             read_text: Callable[[Path], str] = read_pdf_text, now: Optional[datetime] = None,
             area_rank: Optional[Callable[[Path], int]] = None,
-            lookup: Optional[Callable[[str], List[FileRow]]] = None) -> Dict[str, Any]:
-    """The pack for one drawing number, from the index's folders: chosen, proved and explained."""
+            lookup: Optional[Callable[[str], List[FileRow]]] = None,
+            client_folders_only: bool = False) -> Dict[str, Any]:
+    """The pack for one drawing number, from the index's folders: chosen, proved and explained.
+    `client_folders_only`: a caller whose client is spelt as its folder is (the TTI tracker) asks
+    about a pack found only under another customer's folder instead of pricing it."""
     rank = area_rank or _default_area_rank()
     _reads = {"n": 0}
     _inner = read_text
@@ -370,6 +514,37 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             manifest["assumptions"].append(f"{c['folder']} also holds {drawing} (revision {c['revision'] or '?'}) "
                                            f"in a later search area; the first area's copy is used")
     live = [c for c in live if rank(Path(c["folder"])) == first]
+    # THE DRAWING'S OWN JOB FOLDER OVER ANOTHER JOB'S COPY (TTI dry run, 11 Nov 2026): 11203-01-GA
+    # also sits in 11437's data folder, where that job reused it. A copy in another job's folder
+    # is noted, never compared, so it cannot make a conflict.
+    _jobm = re.match(r"\s*(\d{3,})", drawing)
+    if _jobm:
+        mine = [c for c in live if _in_job(c["folder"], _jobm.group(1))]
+        if mine and len(mine) < len(live):
+            for c in live:
+                if c not in mine:
+                    manifest["assumptions"].append(
+                        f"{c['folder']} also holds {drawing} (revision {c['revision'] or '?'}); it is "
+                        f"another job's folder, so job {_jobm.group(1)}'s own copy is used")
+            live = mine
+    # THE CLIENT'S OWN FOLDERS (same review): row 12775 of the TTI tracker matched a file under an
+    # M&S folder. Where the client is known, a copy in its folders wins; a pack found only in
+    # another customer's folders is asked about, not priced on a name match.
+    _cl = str(client or "").strip().lower()
+    if _cl:
+        ours = [c for c in live if _cl in _segments(c["folder"])]
+        if ours and len(ours) < len(live):
+            for c in live:
+                if c not in ours:
+                    manifest["assumptions"].append(
+                        f"{c['folder']} also holds {drawing}; it is not in a {client} folder, so "
+                        f"the {client} copy is used")
+            live = ours
+        elif not ours and client_folders_only and any(_customer_folder(c["folder"]) for c in live):
+            manifest["conflicts"].append(
+                f"{drawing} was found only outside the {client} folders ("
+                + "; ".join(sorted({c['folder'] for c in live})[:2])
+                + f"): is this the {client} drawing?")
 
     def better(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
         if a["carries_number"] != b["carries_number"]:
@@ -389,9 +564,12 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         if c is best:
             continue
         if c["revision"] and c["revision"] == best["revision"]:
+            # ONLY A FORMAT BOTH COPIES HOLD IS COMPARED: a folder with the model and one with
+            # the PDF are two halves of one issue, not two issues (12754-01-GA's 2D and 3D CAD).
             a = {(f[0].suffix.lower(), f[1]) for f in best["files"]}
             b = {(f[0].suffix.lower(), f[1]) for f in c["files"]}
-            if a != b:
+            shared = {e for e, _s in a} & {e for e, _s in b}
+            if any({x for x in a if x[0] == e} != {x for x in b if x[0] == e} for e in shared):
                 manifest["conflicts"].append(f"{c['folder']} holds a different {drawing} also marked revision "
                                              f"{best['revision']}")
         elif c["revision"] and best["revision"] and later(best["revision"], c["revision"]):
@@ -423,6 +601,12 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     all_refs: set = set()
     queue = [drawing] + sorted(d for d in groups if _is_assembly(d) and not _same(d, drawing))
     done: set = set()
+    read_any: set = set()                  # assemblies whose own drawing, or a sheet of it, was read
+    sheets_read: Dict[str, List[str]] = {}
+    sheet_refs: Dict[str, Dict[str, List[str]]] = {}
+    sheet_says: Dict[str, Dict[str, str]] = {}
+    if best.get("pdf_read"):
+        read_any.add(drawing)
     while queue:
         a = queue.pop(0)
         if a in done:
@@ -432,8 +616,43 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             pdfs = [f for f in groups.get(a, []) if f[0].suffix.lower() == ".pdf"]
             refs_of[a] = set(read_drawing(max(pdfs, key=lambda f: f[2])[0], a, read_text)["references"]) \
                 if pdfs else set()
+            if pdfs:
+                read_any.add(a)
+        # AN ASSEMBLY ISSUED AS NUMBERED SHEETS IS READ FROM ITS SHEETS (12 Nov 2026).
+        # 11896-04-00-GA has no PDF of its own: its drawing is 11896-04-00-GA-01, -02 and -03.
+        # None was read, so not one part it calls for was gathered, and the pack of 15 files
+        # with no parts was reported "drawings complete". Each sheet's references are the
+        # assembly's.
+        for sheet in sheets_of(a, groups):
+            spdfs = [f for f in groups[sheet] if f[0].suffix.lower() == ".pdf"]
+            if not spdfs:
+                continue
+            got = read_drawing(max(spdfs, key=lambda f: f[2])[0], a, read_text)
+            if got["read"]:
+                read_any.add(a)
+                sheets_read.setdefault(a, []).append(sheet)
+                sheet_refs.setdefault(a, {})[sheet] = sorted(
+                    x for x in got["references"] if _looks_drawing(x) and not x.upper().startswith(a.upper() + "-0"))
+                if got.get("sheet_of"):
+                    sheet_says.setdefault(a, {})[sheet] = got["sheet_of"]
+            refs_of[a] |= {x for x in got["references"] if not x.upper().startswith(a.upper() + "-")
+                           or not re.fullmatch(r"\d{1,2}", x[len(a) + 1:])}
         for x in sorted(refs_of[a]):
             if _same(x, a) or _same(x, drawing) or not _looks_drawing(x):
+                continue
+            # the same assembly, however its word is joined to its number
+            _alts = spellings(x)
+            _held = next((g for alt in _alts for g in groups if _same(g, alt)), None)
+            if _held is None and len(_alts) > 1:
+                if wider is None:
+                    wider = _members(wider_rows, drawing)
+                _held = next((g for alt in _alts[1:] for g in wider if _same(g, alt)), None)
+                if _held is None and lookup:
+                    _held = next((alt for alt in _alts[1:]
+                                  if any(not _archive_path(f[0]) for f in lookup(alt))), None)
+            if _held is not None:
+                x = _held
+            if any(_same(x, alt) for alt in spellings(a)) or any(_same(x, alt) for alt in spellings(drawing)):
                 continue
             all_refs.add(x)
             parent_of.setdefault(x, a)
@@ -445,6 +664,14 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                         wider = _members(wider_rows, drawing)
                     if x in wider:
                         groups[x] = wider[x]
+                    elif lookup:
+                        # A PART OF THE FAMILY NOT IN THE JOB'S FOLDERS OF THIS AREA (11 Nov 2026):
+                        # it was never looked for anywhere else, so a part kept in the other
+                        # search area, or in a folder not named for the job, left the pack as its
+                        # GA alone. It is looked up across the index, as a library part is.
+                        hit = [f for f in lookup(x) if not _archive_path(f[0])]
+                        if hit:
+                            groups[x] = hit
                 else:
                     hit = lookup(x) if lookup else [f for folder, files, archive in folders if not archive
                                                      for f in files if _same(drawing_id(f[0].name), x)]
@@ -456,6 +683,65 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             if x in groups and _is_assembly(x) and x not in done:
                 queue.append(x)
     refs = all_refs
+
+    # FILES IN THE PACK'S FOLDERS WHOSE NAMES CARRY NO DRAWING NUMBER (JG and the reviewer,
+    # 12 Nov 2026: "Inspect files in the associated folder even when their filenames do not
+    # contain XXXX-03 ... establish what each file belongs to before costing it"). A detail
+    # saved as "Back panel flat.pdf" beside 11896-04-01-01M was invisible: the pack is built
+    # from names. Every drawing-format file in the chosen folder's tree and in the folders the
+    # members came from is looked at. A PDF whose own text names a member is that member's
+    # file. Anything else is LISTED with its folder, never dropped and never priced as a part
+    # on the strength of where it sits: another job's copy or an old alternative can sit there.
+    member_folders = {root} | {f[0].parent for fs in groups.values() for f in fs}
+    held = {str(f[0]).lower() for fs in groups.values() for f in fs}
+    pool: List[FileRow] = list(near) + [f for folder, files, archive in folders
+                                        if not archive and folder in member_folders for f in files]
+    by_key = {re.sub(r"[\s_]", "", d).upper(): d for d in groups}
+    unassigned: List[Dict[str, str]] = []
+    other_numbers: List[Dict[str, str]] = []
+    assigned_by_text: List[Dict[str, str]] = []
+    _seen_paths: set = set()
+    _text_reads = 0
+    for f in sorted(pool):
+        path = f[0]
+        if str(path).lower() in held or str(path).lower() in _seen_paths \
+                or path.suffix.lower() not in DRAWING_EXT or _archive_path(path):
+            continue
+        _seen_paths.add(str(path).lower())
+        did = drawing_id(path.name)
+        if did and re.sub(r"[\s_]", "", did).upper() in by_key:
+            continue                                 # a member's superseded or duplicate file
+        if did and "-" in did:
+            other_numbers.append({"path": str(path), "drawing": did})
+            continue
+        owner = ""
+        if path.suffix.lower() == ".pdf" and _text_reads < 40:
+            _text_reads += 1
+            flat = re.sub(r"[\s_]", "", read_text(path) or "").upper()
+            named = sorted((k for k in by_key if k in flat), key=len, reverse=True)
+            # the longest number wins: a part's sheet names its assembly too
+            owner = by_key[named[0]] if named else ""
+        if owner:
+            groups[owner] = list(groups[owner]) + [f]
+            held.add(str(path).lower())
+            assigned_by_text.append({"path": str(path), "drawing": owner})
+        else:
+            unassigned.append({"path": str(path), "why": (
+                "its name carries no drawing number and its text names no drawing in this pack"
+                if path.suffix.lower() == ".pdf" else
+                "its name carries no drawing number; a model or flat cannot be assigned by name")})
+    manifest["assigned_by_text"] = assigned_by_text
+    manifest["unassigned_files"] = unassigned
+    manifest["other_drawings_in_folders"] = other_numbers
+    if assigned_by_text:
+        manifest["assumptions"].append(
+            f"{len(assigned_by_text)} file(s) with no drawing number in the name were assigned by "
+            "their own text: " + ", ".join(f"{Path(a['path']).name} -> {a['drawing']}" for a in assigned_by_text[:6]))
+    if unassigned:
+        manifest["assumptions"].append(
+            f"{len(unassigned)} drawing file(s) in the pack's folders belong to no drawing by name or "
+            "text and are NOT in the pack: " + ", ".join(Path(u["path"]).name for u in unassigned[:6])
+            + ". Say which part each is, or that it is not needed")
 
     ids = set(groups)
     for did in sorted(ids):
@@ -496,7 +782,37 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         # IDENTITY AND COMPLETENESS ARE TWO FACTS (10 Nov 2026 review): a GA proved by its own
         # title block with made parts missing is not a verified PACK. "verified" needs both.
         manifest["identity"] = "verified" if proved else "named"
-        manifest["complete"] = not manifest["missing"]
+        # COMPLETE NEEDS A PARTS LIST THAT WAS READ (12 Nov 2026). "No reference is missing" is
+        # true of a GA nobody read: 11896-04-00-GA was called complete on 0 drawings read.
+        manifest["references_read"] = drawing in read_any
+        manifest["sheets_read"] = sheets_read.get(drawing, [])
+        manifest["unread_assemblies"] = sorted(a for a in done if a not in read_any and not _same(a, drawing))
+        manifest["complete"] = not manifest["missing"] and manifest["references_read"]
+        # SHEETS OF ONE ASSEMBLY, OR ALTERNATIVE CONFIGURATIONS? (reviewer, 12 Nov 2026:
+        # "distinguishing alternative configurations from cumulative assemblies"). -GA-01, -02
+        # and -03 that each say "sheet n of m" are one drawing. Where they do not, and they call
+        # for different parts, they may be three versions of the product: every part is still
+        # gathered, each sheet's own list is kept, and the question is asked, because adding
+        # three alternatives together prices the product three times.
+        manifest["sheet_references"] = sheet_refs.get(drawing, {})
+        _sets = {tuple(v) for v in manifest["sheet_references"].values()}
+        _says = sheet_says.get(drawing, {})
+        if len(manifest["sheet_references"]) > 1 and len(_sets) > 1 \
+                and len(_says) < len(manifest["sheet_references"]):
+            manifest["configurations_unconfirmed"] = True
+            manifest["assumptions"].append(
+                ", ".join(sorted(manifest["sheet_references"])) + " call for different parts and do "
+                "not all say they are sheets of one drawing: they may be alternative configurations, "
+                "not one assembly. Every part is gathered; confirm which the enquiry is for before "
+                "the parts are added together")
+        if not manifest["references_read"]:
+            manifest["assumptions"].append(
+                "the GA's parts list was NOT READ (no readable PDF of the GA or of its sheets), so "
+                "what it calls for is unknown and the pack is not proved complete")
+        if manifest["unread_assemblies"]:
+            manifest["assumptions"].append(
+                "sub-assembly drawing(s) with no readable PDF, so their parts were not followed: "
+                + ", ".join(manifest["unread_assemblies"]))
         # A bought item still to be priced keeps the pack provisional too: its cost is a catalogue
         # match or a labelled allowance, not yet a fact.
         manifest["status"] = ("verified" if proved and manifest["complete"]
@@ -672,9 +988,20 @@ def main(argv: Optional[List[str]] = None) -> int:
               + (f"  superseded {','.join(x['superseded_revisions'])}" if x["superseded_revisions"] else ""))
     if m.get("identity"):
         print(f"  GA identity {m['identity']}; drawings "
-              f"{'complete' if m.get('complete') else 'INCOMPLETE'}"
+              f"{'complete' if m.get('complete') else ('NOT PROVED COMPLETE: the parts list was not read' if not m.get('references_read') and not m.get('missing') else 'INCOMPLETE')}"
+              + (f"; parts list read from sheet(s) {', '.join(m['sheets_read'])}" if m.get("sheets_read") else "")
               + (f"; {len(m['bought_in_unmatched'])} bought-in item(s) to price"
                  if m.get("bought_in_unmatched") else ""))
+    for x in m.get("assigned_by_text") or []:
+        print(f"  by text {Path(x['path']).name} is {x['drawing']}")
+    for x in m.get("unassigned_files") or []:
+        print(f"  UNASSIGNED  {x['path']}  ({x['why']})")
+    if m.get("other_drawings_in_folders"):
+        _o = sorted({x['drawing'] for x in m['other_drawings_in_folders']})
+        print(f"  other drawings in the pack's folders, not called for and not included: "
+              f"{', '.join(_o[:12])}{' ...' if len(_o) > 12 else ''}")
+    for sheet, called in sorted((m.get("sheet_references") or {}).items()):
+        print(f"  sheet   {sheet} calls for {len(called)}: {', '.join(called[:10])}{' ...' if len(called) > 10 else ''}")
     for x in m["members"]:
         if len(x.get("parents") or []) > 1:
             print(f"  shared  {x['drawing']} is called for by {', '.join(x['parents'])}")

@@ -106,6 +106,20 @@ def recent_runs(ledger: Dict[str, Any], limit: int = RECENT_RUNS_SHOWN,
     return out[:limit]
 
 
+def recent_from_ledger(ledger_path: Any) -> List[Dict[str, Any]]:
+    """The Latest runs list straight from the ledger on disk, for a beat that ran no cycle.
+
+    THE LIST, AND ITS RE-RUN BUTTONS, SURVIVE A RESTART AND THE SWITCH BEING OFF (JG, 12 Nov
+    2026: "where have all the re-run buttons gone on the portal now?"). The list was sent only
+    after a read of the sheet, and the service keeps it in memory: each publish restarted the
+    service, and with Self-Running switched off no read followed, so the card showed no runs
+    and no buttons. The ledger holds them; every beat carries them. Never stops a beat."""
+    try:
+        return recent_runs(ler.load_ledger(Path(str(ledger_path))))
+    except Exception:                                                # noqa: BLE001
+        return []
+
+
 def report(phase: str, message: str = "", **extra: Any) -> Dict[str, Any]:
     return {"host": socket.gethostname(), "pid": os.getpid(), "phase": phase,
             "message": message, "at": ler._now(), **extra}
@@ -456,6 +470,10 @@ def apply_reruns(ledger: Dict[str, Any], asked: List[Dict[str, Any]],
             if cust and str(job.get("customer") or "").strip().upper() != cust:
                 continue
             job["retry"] = True
+            # ONCE, OUTRANKING AI CHECK AND AICompleted (JG, 11 Nov 2026): taken by the next
+            # read that finds the row on the sheet, cleared when queued (or when the row has gone).
+            job["page_rerun"] = r.get("at") or time.time()
+            job.pop("page_rerun_refused", None)
             done.append(want)
             say(f"   {job.get('drawing')} ({job.get('customer')}): Re-run asked for on the page"
                 + (f" by {r.get('by')}" if r.get("by") else ""))
@@ -478,6 +496,13 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     sources = ler._sources(s["root"])
     switch.beat(report("reading the sheet", str(s["workbook"])))
     decisions = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger)
+    # A PAGE RE-RUN FOR A ROW THAT HAS LEFT THE SHEET IS SAID, ONCE (JG, 11 Nov 2026: "otherwise I
+    # need to manually re-run"), on the log and the page's beat, and then forgotten.
+    for _job in (ledger.get("jobs") or {}).values():
+        _why = _job.pop("page_rerun_refused", None)
+        if _why:
+            say(f"   Re-run NOT taken: {_why}")
+            switch.beat(report("re-run not taken", _why))
     # WHEN AND WHERE THE SHEET WAS READ, ON EVERY BEAT OF THIS CYCLE (JG, 10 Nov): the page said
     # "read 2026-11-03" through a whole day of runs, because the time only moved when a cycle
     # finished. The counts shown are this read's, so the time and the file shown are too.
@@ -804,7 +829,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         next_cycle = 0.0
         while True:
             on = switch.beat(report("idle", "waiting for the next read of the sheet"
-                                    if next_cycle else "started; waiting for the switch"))
+                                    if next_cycle else "started; waiting for the switch",
+                                    recent=recent_from_ledger(s["ledger"])))
             ler._touch_lock(s["ledger"])
             pressed = bool(switch.last.get("run_now")) or bool(getattr(switch, "reruns", []))
             if on and (pressed or time.time() >= next_cycle):

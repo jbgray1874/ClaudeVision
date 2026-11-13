@@ -5170,7 +5170,9 @@ function renderSelf(v){
       + "</div>" : "";
   const recent = w.recent || [];
   if(recent.length){
-    selfRerunSeen = new Set();
+    // The jobs with an attempt queued or running now: those show Stop, and no Re-run.
+    selfRerunSeen = new Set(recent.filter(r => r.status === "queued" || r.status === "running")
+                                  .map(r => (r.customer || "") + "|" + r.drawing));
     html += "<div style='margin-top:6px'><b>Latest runs:</b></div><ul style='margin:4px 0 0 18px'>"
       + recent.map(r => "<li>" + selfEsc(r.drawing) + " (" + selfEsc(r.customer) + ") — "
         + selfEsc(r.status)
@@ -5191,13 +5193,25 @@ function renderSelf(v){
    been re populated manually"). */
 let selfRerunSeen = new Set();
 function selfStopHtml(r){
-  if(r.status === "error" && !selfRerunSeen.has(r.drawing)){
-    selfRerunSeen.add(r.drawing);
+  /* ON EVERY FINISHED JOB, NOT ONLY A FAILED ONE (JG, 11 Nov 2026): "a button beside the jobs
+     that are still visible ... as long as the liveenquiry sheet still has entries for them,
+     even if the AIcompleted says yes, it re runs". Self-Running takes it once on its next read;
+     a row no longer on the sheet is said, not run. */
+  /* WHATEVER WAY IT ENDED (JG, 11 Nov 2026: "some jobs from the ai self / auto run were not with
+     the re run button"): the button was offered only for "done" and "error", and was keyed by
+     the drawing alone, so a job that ended any other way, or shared a drawing number with
+     another customer's, had none. The newest attempt of each customer's drawing that is not
+     queued or running has it. */
+  const key = (r.customer || "") + "|" + r.drawing, live = r.status === "queued" || r.status === "running";
+  /* ON EVERY FINISHED LINE (JG, 11 Nov 2026: "still plenty of jobs not re-runnable"): one button
+     per drawing left the older lines of a job looking as if they could not be run again. Every
+     finished line has it unless that job is queued or running now. It re-runs the JOB (the
+     sheet's row with today's pack), not that old attempt. */
+  if(!live && !selfRerunSeen.has(key)){
     return " <button type='button' class='btn-run' style='padding:1px 8px;font-size:12px;width:auto;display:inline-block'"
       + " data-self-rerun='" + selfEsc(r.drawing) + "' data-customer='" + selfEsc(r.customer || "") + "'"
       + (selfReruns[r.drawing] ? " disabled>Re-run asked " + selfEsc(selfReruns[r.drawing]) : ">Re-run") + "</button>";
   }
-  if(r.status === "queued" || r.status === "running" || r.status === "done") selfRerunSeen.add(r.drawing);
   if(!((r.status === "queued" || r.status === "running") && r.run_id)) return "";
   return " <button type='button' class='btn-stop' style='padding:1px 8px;font-size:12px;width:auto;display:inline-block'"
     + " data-self-stop='" + selfEsc(r.run_id) + "' data-server='" + selfEsc(r.server || "")
@@ -5277,7 +5291,9 @@ $("selfOut").addEventListener("click", async e => {
   if(rr && !rr.disabled){
     const drawing = rr.dataset.selfRerun;
     if(!confirm("Run " + drawing + " again?\n\nSelf-Running reads the sheet and the Live Enquiry "
-              + "folder again within about 15 seconds and queues it.")) return;
+              + "folder again within about 15 seconds and queues it once, whatever AICompleted "
+              + "says. The row must still be on the AI Live Enquiry sheet with a QTY; if it is "
+              + "not, the page says so and it must be run by hand.")) return;
     rr.disabled = true; rr.textContent = "Asking…";
     try{
       const r = await api("/api/estimate/self-running/rerun", {method:"POST", headers:{"Content-Type":"application/json"},

@@ -195,3 +195,57 @@ def test_a_pack_whose_folders_have_not_changed_is_not_listed_again(tmp_path, mon
     os.utime(pan, (time.time() + 10, time.time() + 10))
     ds.sweep(cfg, led, now=3000.0, estimated=set())
     assert listed == ["0358141 Pantheon"]
+
+
+# ── one line per job, and what the files show, no more (JG and the reviewer, 12 Nov 2026) ────
+def _cand(client, name, job, files, when="2026-11-11T09:00:00", first=None, est=False):
+    return {"client": client, "name": name, "job": job, "folder": rf"\\share\{client}\{name}",
+            "status": "new", "files": sum(1 for f in files if f.lower().endswith((".pdf", ".dxf", ".sldprt"))),
+            "flagged_at": when, "first_seen": first or when, "estimated": est,
+            "listing": {"files": [{"path": f, "modified": "2026-11-10T16:00:00", "size": 1} for f in files], "more": 0}}
+
+
+def test_a_jobs_standard_folders_are_one_line_and_an_empty_one_awaits_drawings():
+    import design_sweep as ds
+    rows = [_cand("TTi", f"12781-{n}", "12781", []) for n in
+            ("Technical", "Presentations", "Photos", "Creative", "2D")]
+    rows += [_cand("TTi", "12792 - Temperature Gauge Display", "12792", []),
+             _cand("Harrys", "12785 - Mini Branded Bay", "12785",
+                   ["12785-01-GA.pdf", "12785-01-01M.SLDPRT", "12785-01-01M.dxf", "photo.jpg", "brief.docx"]),
+             _cand("M&S", "info", "", ["a.pdf", "b.pdf"])]
+    jobs = {(j["client"], j["job"] or j["name"]): j for j in ds.candidate_jobs(rows)}
+    assert len(jobs) == 4
+    j = jobs[("TTi", "12781")]
+    assert len(j["folders"]) == 5 and j["stage"] == ds.STAGE_AWAITING and (j["pdfs"], j["cad"]) == (0, 0)
+    assert jobs[("TTi", "12792")]["stage"] == ds.STAGE_AWAITING
+    h = jobs[("Harrys", "12785")]
+    assert (h["pdfs"], h["cad"], h["other"]) == (1, 2, 2) and h["stage"] == ds.STAGE_DETECTED
+    assert h["name"] == "12785 - Mini Branded Bay" and h["newest_drawing"] == "2026-11-10T16:00:00"
+    assert h["estimate"] == "no matching AI estimate found"
+    assert jobs[("M&S", "info")]["stage"] == ds.STAGE_DETECTED and jobs[("M&S", "info")]["job"] == ""
+
+
+def test_no_stage_claims_a_pack_is_complete_or_ready():
+    import design_sweep as ds
+    for stage in (ds.STAGE_AWAITING, ds.STAGE_DETECTED):
+        assert "complete" not in stage and "ready" not in stage
+    assert "not yet checked" in ds.STAGE_DETECTED
+
+
+def test_first_detected_is_kept_apart_from_the_newest_drawing_and_drawings_come_first():
+    import design_sweep as ds
+    rows = [_cand("TTi", "12781-Technical", "12781", [], when="2026-11-12T08:00:00", first="2026-11-11T07:00:00"),
+            _cand("TTi", "12781-2D", "12781", ["12781-01-GA.pdf"], when="2026-11-12T09:00:00", first="2026-11-11T07:00:00"),
+            _cand("CCS", "12790 - Z-bends", "12790", [], when="2026-11-12T10:00:00")]
+    jobs = ds.candidate_jobs(rows)
+    assert [j["job"] for j in jobs] == ["12781", "12790"], "a job with drawings is listed before an empty one"
+    assert jobs[0]["first_detected"] == "2026-11-11T07:00:00" and jobs[0]["flagged_at"] == "2026-11-12T09:00:00"
+    assert jobs[0]["stage"] == ds.STAGE_DETECTED, "files arriving in a known folder update the same line"
+
+
+def test_the_panel_draws_jobs_says_what_it_is_and_flags_an_overdue_sweep():
+    page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-wall.html").read_text(encoding="utf-8")
+    assert "NEW JOB FOLDERS" in page and "not a list of packs ready to estimate" in page
+    assert "d.jobs" in page and "data-dsjob" in page and "OVERDUE" in page
+    for col in ("First detected", "PDF", "CAD", "Other", "Newest drawing file", "Stage"):
+        assert f">{col}<" in page, col

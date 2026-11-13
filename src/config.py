@@ -924,6 +924,7 @@ FORMED_SHEET_SHAPE_FOLDS = {
     "ANGLE": 1, "L BRACKET": 1, "L-BRACKET": 1,
     "CHANNEL": 2, "U CHANNEL": 2, "U-CHANNEL": 2,
     "Z BRACKET": 2, "Z-BRACKET": 2, "ZED": 2,
+    "Z BAR": 2, "Z-BAR": 2, "ZBAR": 2,       # 12 Nov 2026: a wall-fixing Z-bar is two folds
     "TOP HAT": 4, "TOP-HAT": 4,
 }
 # A RADIUS A FLAT CANNOT HOLD IS ROLLED (D-589). A sheet part whose sheet prints a radius at

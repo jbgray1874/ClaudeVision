@@ -175,9 +175,36 @@ BUTTON_MARK = "<!-- sdi-ask-buttons -->"
 _ASK_TEXT = "Ask a question about this estimate:"
 
 
-def _buttons(url: str) -> Dict[str, str]:
-    """The two buttons, as HTML and as plain text: ask about the estimate, which opens the page
-    at its question box, and listen to the walkthrough."""
+def audio_of(deliverables: Any) -> Optional[str]:
+    """The run's own spoken walkthrough among its files: its file name, "" when the run filed
+    a walkthrough's words but no sound (the audio was not made), None when it filed neither."""
+    names = [str((d or {}).get("name") or "") for d in (deliverables or []) if isinstance(d, dict)]
+    wav = sorted(n for n in names if n.lower().endswith("_walkthrough.wav"))
+    if wav:
+        return wav[-1]
+    return "" if any(n.lower().endswith("_walkthrough.txt") for n in names) else None
+
+
+def wav_url(url: str, audio: str) -> str:
+    """The address of the WAV itself, served by this service to anyone who can open the page:
+    never a path on the machine that made it."""
+    from urllib.parse import quote
+    page = url.split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    # the page is /estimating/walkthrough/<token>; its files are served, as the page itself
+    # fetches them, from /api/estimate/walkthrough/<token>/file/<name>
+    api = page.replace("/estimating/walkthrough/", "/api/estimate/walkthrough/", 1)
+    return api + "/file/" + quote(audio)
+
+
+def _buttons(url: str, audio: Optional[str] = None) -> Dict[str, str]:
+    """The buttons, as HTML and as plain text: ask about the estimate, which opens the page
+    at its question box, and listen to the walkthrough.
+
+    THE WAV, NAMED AS ONE (JG, 12 Nov 2026): "Add a clearly labelled 'Listen to the estimate
+    walkthrough, WAV' link to both the HTML covering note and the automatic email body. Use a
+    location recipients can access, not a runner-local path. If audio generation failed, say so
+    rather than showing a broken link." `audio` is the run's WAV file name, "" when the run
+    made the words and no sound, None when nothing is known (the buttons as they were)."""
     ask = ask_url(url)
     listen = url.split("#", 1)[0] + "#listen"
     _btn = ("display:inline-block;padding:11px 18px;border-radius:4px;text-decoration:none;"
@@ -191,8 +218,21 @@ def _buttons(url: str) -> Dict[str, str]:
         '<p style="margin:0 0 14px;color:#5b6b7d;font-size:12px">Opens the SDI Intelligence '
         'app: type a question and it is answered from this estimate\'s own figures. The price '
         'at every quantity, the spoken walkthrough and its words are on the same page. Works '
-        'on a phone; you sign in with your SDI Microsoft account.</p>' + BUTTON_MARK)
-    text = f"{_ASK_TEXT} {ask}\nListen to the walkthrough: {listen}\n\n"
+        'on a phone; you sign in with your SDI Microsoft account.</p>')
+    text = f"{_ASK_TEXT} {ask}\nListen to the walkthrough: {listen}\n"
+    if audio:
+        _wav = wav_url(url, audio)
+        html += ('<p style="margin:0 0 14px"><a href="' + _wav + '" style="color:#B8860B;'
+                 'font-weight:bold">&#128266; Listen to the estimate walkthrough &mdash; WAV</a>'
+                 '<span style="color:#5b6b7d;font-size:12px"> (' + audio + ')</span></p>')
+        text += f"Listen to the estimate walkthrough - WAV: {_wav}\n"
+    elif audio == "":
+        html += ('<p style="margin:0 0 14px;color:#8a1f11;font-size:13px">The spoken walkthrough '
+                 'was not made for this run: its audio could not be generated. Its words are on '
+                 'the page above.</p>')
+        text += "The spoken walkthrough was not made for this run: its audio could not be generated.\n"
+    html += BUTTON_MARK
+    text += "\n"
     return {"html": html, "text": text}
 
 
@@ -209,7 +249,7 @@ def _with_buttons_html(html: str, block: str) -> str:
     return html[:at] + block + html[at:]
 
 
-def email_button(note: Dict[str, str], url: str) -> Dict[str, str]:
+def email_button(note: Dict[str, str], url: str, audio: Optional[str] = None) -> Dict[str, str]:
     """The note with its two buttons at the top, in the HTML and the plain text: ask about
     the estimate, which opens the page at its question box, and listen to the walkthrough.
 
@@ -218,7 +258,7 @@ def email_button(note: Dict[str, str], url: str) -> Dict[str, str]:
     address when there is one, so it opens on a phone, through Microsoft sign-in, with no VPN.
     A note whose filed copy already carries them (D-709) is left as it is.
     """
-    b = _buttons(url)
+    b = _buttons(url, audio)
     html = _with_buttons_html(str(note.get("html") or ""), b["html"])
     text = str(note.get("text") or "")
     if _ASK_TEXT not in text:
@@ -229,7 +269,7 @@ def email_button(note: Dict[str, str], url: str) -> Dict[str, str]:
 _NOTE_SUFFIXES = ("_covering_email.html", "_covering_note.html")
 
 
-def stamp_note_files(paths: List[str], url: str) -> List[str]:
+def stamp_note_files(paths: List[str], url: str, audio: Optional[str] = None) -> List[str]:
     """Write the two buttons into the filed covering note, so the file in AISheets and in the
     completed AI briefs area reads like the e-mail (D-709).
 
@@ -241,7 +281,7 @@ def stamp_note_files(paths: List[str], url: str) -> List[str]:
     raised: the estimate is filed whatever happens here."""
     if not url:
         return []
-    b = _buttons(url)
+    b = _buttons(url, audio)
     done: List[str] = []
     for raw in paths or []:
         path = Path(str(raw or ""))

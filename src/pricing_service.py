@@ -391,6 +391,48 @@ def _claimed_as_bought(part: Dict[str, Any]) -> bool:
         return False
 
 
+def made_here_reason(part: Dict[str, Any]) -> str:
+    """Why this line is something SDI makes, or "" when it may be bought: fabrication evidence
+    of its own, SDI's cut-part numbering (a material letter on the code), or a place in the
+    structure as an assembly of costed members."""
+    try:
+        from bought_in_policy import has_fabrication_evidence
+        if has_fabrication_evidence(part):
+            return "the part has measured geometry of its own, so SDI makes it"
+    except Exception:                                                # noqa: BLE001
+        pass
+    try:
+        from part_code_conventions import material_suffix
+        if str(part.get("_estimator_make_or_buy") or "").strip().lower() != "buy" \
+                and material_suffix(str(part.get("part_number") or "")):
+            return "its number carries SDI's cut-part material letter, so SDI makes it"
+    except Exception:                                                # noqa: BLE001
+        pass
+    if part.get("assembly_children") or part.get("is_assembly") or part.get("is_rollup_parent"):
+        return "it is an assembly whose members are costed on their own lines"
+    # DRAWN UNDER SDI'S OWN JOB NUMBER, AND NOT SAID TO BE BOUGHT. "12674-01-01J", "6364-02-011":
+    # job, assembly, item. A supplier's article ("HAFELE: 637.30.941", "FIXING308", "GGC-10-401")
+    # is not numbered that way, and a part SDI draws but buys says so (the X suffix, a make-or-
+    # buy ruling, the bought-in policy).
+    code = str(part.get("part_number") or "").strip().upper()
+    if _SDI_DRAWN_PART.match(code):
+        try:
+            from bought_in_policy import is_bought_in
+            from part_code_conventions import purchased_suffix
+            bought = bool(purchased_suffix(code)) or is_bought_in(part) \
+                or str(part.get("_estimator_make_or_buy") or "").strip().lower() == "buy"
+        except Exception:                                            # noqa: BLE001
+            bought = False
+        if not bought:
+            return "it is drawn under SDI's own job number and nothing says it is bought"
+    return ""
+
+
+# job, assembly, item, and a weldment's own cut-list items after it: 6364-02-011, 12674-01-01J,
+# 11896-04-01-01M, 6364-02-004-01, 6364-02-004-5MM, 6364-02-016-INNER-01.
+_SDI_DRAWN_PART = re.compile(r"^\d{4,5}[A-Z]?-\d{2}(?:-[A-Z0-9]{1,6}){1,4}$")
+
+
 def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = True,
                               structure_decides: bool = True) -> bool:
     """May a market price be asked for this line at all? False for anything we make or build.
@@ -488,6 +530,14 @@ class PricingService:
         # merely correct. Falling through silently looks exactly like an empty catalogue,
         # and would send somebody chasing price files that are already loaded.
         self.catalogue_quarantine: List[str] = []
+        # LOOKUPS THAT WERE ABANDONED, COUNTED (12 Nov 2026). A query that timed out printed one
+        # console line, returned "nothing found", and the part fell through to the next source,
+        # ending at a web or AI figure. 6364-01's 14:30 run, made while a second job ran beside
+        # it, has no historical, catalogue or purchasing price on any line: 23 web or AI prices,
+        # the corner guards at 180.00 where the run the day before found 5.74. Nothing in the
+        # record said a lookup had failed. Each one is kept here, by table, for the record,
+        # the note and the release decision.
+        self.lookup_failures: List[Dict[str, str]] = []
 
     def __enter__(self) -> "PricingService":
         return self
@@ -567,12 +617,14 @@ class PricingService:
                 if self._is_query_timeout(exc):
                     # slow/locked query — abandon this lookup (part flags 'no price'), reconnect so
                     # subsequent parts still price, and never block the whole run on one query.
+                    self._note_lookup_failure(query, "timed out")
                     print(f"   [pricing] SQL query timed out — skipping this lookup, run continues", flush=True)
                     try:
                         self.conn = self._connection_factory()
                     except Exception:
                         pass
                     return None
+                self._note_lookup_failure(query, f"failed ({type(exc).__name__})")
                 raise
             finally:
                 if cursor is not None:
@@ -594,12 +646,14 @@ class PricingService:
                     self.conn = self._connection_factory()
                     continue
                 if self._is_query_timeout(exc):
+                    self._note_lookup_failure(query, "timed out")
                     print(f"   [pricing] SQL query timed out — skipping this lookup, run continues", flush=True)
                     try:
                         self.conn = self._connection_factory()
                     except Exception:
                         pass
                     return []
+                self._note_lookup_failure(query, f"failed ({type(exc).__name__})")
                 raise
             finally:
                 if cursor is not None:
@@ -608,6 +662,27 @@ class PricingService:
                     except Exception:
                         pass
         return []
+
+    def _note_lookup_failure(self, query: str, why: str) -> None:
+        m = re.search(r"\bFROM\s+([\w.\[\]]+)", str(query or ""), flags=re.I)
+        try:
+            self.lookup_failures.append({"table": (m.group(1) if m else "unknown").strip("[]"), "why": why})
+        except AttributeError:                       # a service built without __init__ (tests)
+            self.lookup_failures = [{"table": (m.group(1) if m else "unknown").strip("[]"), "why": why}]
+
+    def lookup_failure_summary(self) -> Dict[str, Any]:
+        """{"count", "by_table": {table: n}, "says"}: the price lookups this job abandoned."""
+        fails = list(getattr(self, "lookup_failures", []) or [])
+        by: Dict[str, int] = {}
+        for f in fails:
+            by[f["table"]] = by.get(f["table"], 0) + 1
+        says = ""
+        if fails:
+            says = (f"{len(fails)} price lookup(s) were abandoned on this run ("
+                    + ", ".join(f"{t}: {n}" for t, n in sorted(by.items()))
+                    + "). A line priced after an abandoned lookup may carry a web or AI figure "
+                      "where SDI holds a real price. Run it again before relying on those lines.")
+        return {"count": len(fails), "by_table": by, "says": says}
 
     def _freshness_adjustment(self, raw_date: Any) -> Dict[str, Any]:
         if raw_date is None:
@@ -1608,7 +1683,22 @@ class PricingService:
         bought = self._get_bought_in_part(part)
         if bought:
             return bought
+        # A PART WE MAKE IS NOT PRICED FROM ANOTHER JOB'S QUOTE LINE (reviewer, 12 Nov 2026:
+        # "prevent weak historical matches becoming authoritative prices, prevent bought-complete
+        # and manufactured-component double charging"). The historical lookup matches WORDS, at
+        # 45% overlap and up: 6364-02's bin was charged £569.92 from a 50% match to a different
+        # drawing's "BIN SLOPE" while its own components and labour were charged beside it, and
+        # 12674-01-GA's panels took £1,009 and £1,890 from other jobs' lines. A quote line for
+        # somebody else's finished item is no price for material we cut ourselves; that is
+        # costed from its own blank and operations. The lookup stays for what we buy.
+        _made = made_here_reason(part)
         historical = self._get_historical_rag(part)
+        if historical and _made:
+            print(f"   [pricing] {str(part.get('part_number') or '')[:40]}: a historical quote line "
+                  f"(GBP {float(historical.get('unit_price_gbp') or 0):.2f}, "
+                  f"{float(historical.get('token_overlap_score') or 0):.0%} word match) is NOT used: "
+                  f"{_made}", flush=True)
+            historical = None
         if historical:
             return historical
         catalog = self._get_supplier_catalog(part)

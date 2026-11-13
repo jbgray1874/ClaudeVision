@@ -227,6 +227,8 @@
   .node{border:1px solid var(--line);border-radius:9px;padding:6px 10px;background:var(--panel-2);
         display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:2px 9px;align-items:center}
   .node.planned .meta{display:none}
+  /* A runner that needs attention says why in full: its reason wraps, never an ellipsis. */
+  .node.amber .meta,.node.red .meta{white-space:normal;overflow:visible;text-overflow:clip}
   .node.red{border-color:rgba(208,59,59,.6)} .node.amber{border-color:rgba(250,178,25,.5)}
   .node.planned{border-style:dashed;opacity:.75}
   .node .hb{width:10px;height:10px;border-radius:50%;background:var(--grey)}
@@ -535,8 +537,8 @@
   <section class="parity" id="designSweep">
     <div class="sechead">
       <div>
-        <h2>NEW DRAWING PACKS <b>//</b> CANDIDATE JOBS FOR DESIGN</h2>
-        <div class="sub" id="dsSub">New or changed pack folders under the design share's client folders</div>
+        <h2>NEW JOB FOLDERS <b>//</b> CANDIDATES TO DISCUSS WITH DESIGN</h2>
+        <div class="sub" id="dsSub">Job folders first seen on the design share, one line per job</div>
       </div>
       <div class="acts"><span class="meta" id="dsRead">waiting for the first sweep…</span></div>
     </div>
@@ -840,15 +842,23 @@ function render(){
   b.className = "banner " + s.banner_rag;
   b.querySelector(".ico").textContent = ICON[s.banner_rag] || "○";
   $("bannerText").textContent = s.banner || "";
+  // EVERY RUNNING JOB ON THE GRID IS A RUN TILE (11 Nov 2026): this service's and the other
+  // services', once each, so a job started anywhere shows the same on every Grid Control.
+  const mine = new Set((s.live || []).map(r => r.run_id));
+  (s.grid || []).forEach(g => (g.live || []).forEach(r => {
+    if(!mine.has(r.run_id)){ mine.add(r.run_id); s.live = (s.live || []).concat([Object.assign({}, r, {_service: g.service, _label: g.label})]); }
+  }));
+  LIVE = s.live || [];
+  wholeGrid(s);
   renderKpis(s.kpis, s.expected_s);
   renderLanes(s);
   serviceHost = s.service_host || "";
   renderFleet(s.fleet || [], s.compute || []);
-  renderQueue(s.queue || [], s.grid || []);
+  renderQueue(s.queue || [], s.grid || [], s.intake || []);
   renderSolidWorks(s.solidworks || [], s.sw_wait_limit_s);
   renderTrend(s.series.run_times || [], s.kpis);
   renderActivity(s.series.activity_24h || []);
-  renderRecent(s.recent || []);
+  renderRecent(allRecent(s));
   renderTicker(s.alerts || []);
   renderParity(s.parity);
   renderParityTasks(s.parity_tasks || []);
@@ -886,9 +896,36 @@ function renderDesignSweep(d){
   const ix = d.index || {};
   const idx = ix.error ? ` · drawing index NOT refreshed: ${ix.error}`
             : ix.folders ? ` · drawing index ${ix.folders} folders, ${ix.drawings} drawings, built ${(ix.built_at || "").slice(11, 16)}` : "";
-  setText("dsRead", `swept ${fmtStamp((d.swept_at || "").replace("T", " ").replace("Z", ""))} · ${d.clients || 0} client folder(s), ${d.packs || 0} pack(s) · next ${(d.next_at || "").slice(11, 16)}${idx}${late}`);
+  // A NEXT SWEEP TIME THAT HAS PASSED IS SAID (12 Nov 2026): the panel read "next 08:26" at 10:28.
+  const due = d.next_at ? new Date(String(d.next_at).replace("Z", "")) : null;
+  const overdue = due && !isNaN(due) && (Date.now() - due.getTime()) > 10 * 60000;
+  const next = overdue ? `next sweep was due ${(d.next_at || "").slice(11, 16)}: OVERDUE` : `next ${(d.next_at || "").slice(11, 16)}`;
+  setText("dsRead", `swept ${fmtStamp((d.swept_at || "").replace("T", " ").replace("Z", ""))} · ${d.clients || 0} client folder(s), ${d.packs || 0} folder(s) looked at · ${next}${idx}${late}`);
   setText("dsSub", d.baseline ? "First sweep: the packs already there are the baseline; new ones are flagged from the next sweep"
                               : `Root ${d.root || ""} · candidates kept until dismissed or two weeks old`);
+  // ONE LINE PER CLIENT AND JOB, AND WHAT THE FILES SHOW, NO MORE (12 Nov 2026): job 12781 was
+  // listed nine times, once per standard folder, and an empty folder read as a pack.
+  const jobs = d.jobs || null;
+  if(jobs){
+    if(!jobs.length){ $("dsList").innerHTML = `<div class="empty">No new job folder since the last look.${(d.errors || []).length ? " Errors: " + esc(d.errors.join("; ")) : ""}</div>`; return; }
+    const day = t => fmtStamp(String(t || "").replace("T", " ").replace("Z", ""));
+    $("dsList").innerHTML = `<div class="sub" style="margin:0 0 8px">A discussion list for Design, not a list of packs ready to estimate. "Not yet checked" means no one has read the GA or followed its parts.</div>`
+      + `<table><tr><th>First detected</th><th>Client</th><th>Job</th><th>Folder(s)</th><th class="n">PDF</th><th class="n">CAD</th><th class="n">Other</th><th>Newest drawing file</th><th>Stage</th><th>AI estimate</th><th></th></tr>`
+      + jobs.map((j, i) => `<tr><td class="t">${day(j.first_detected)}</td><td class="c">${esc(j.client)}</td><td>${esc(j.job || "")}</td>
+          <td class="d" title="${esc((j.folders || []).map(f => f.folder).join("\n"))}">${esc(j.name)}${(j.folders || []).length > 1 ? ` <span style="color:var(--ink-3)">· ${(j.folders || []).length} folders</span>` : ""}</td>
+          <td class="n">${j.pdfs}</td><td class="n">${j.cad}</td><td class="n">${j.other}${j.not_listed ? "+" : ""}</td>
+          <td class="t">${j.newest_drawing ? day(j.newest_drawing) : "-"}</td>
+          <td>${esc(j.stage)}</td><td>${esc(j.estimate)}</td>
+          <td><button class="fsbtn" type="button" data-dsjob="${i}">dismiss</button></td></tr>`).join("") + "</table>";
+    document.querySelectorAll("[data-dsjob]").forEach(b => b.onclick = async () => {
+      const j = jobs[Number(b.dataset.dsjob)];
+      try { let last = null;
+            for(const f of (j.folders || [])) last = await api("/api/estimate/design-sweep/dismiss", {folder: f.folder});
+            if(last) renderDesignSweep(last); }
+      catch(e){ b.textContent = "could not dismiss"; b.title = e.message; }
+    });
+    return;
+  }
   if(!c.length){ $("dsList").innerHTML = `<div class="empty">No new or changed drawing pack since the last look.${(d.errors || []).length ? " Errors: " + esc(d.errors.join("; ")) : ""}</div>`; return; }
   $("dsList").innerHTML = `<table><tr><th>Flagged</th><th>Client</th><th>Pack folder</th><th>Job</th><th class="n">Files</th><th>Status</th><th>Estimated?</th><th></th></tr>`
     + c.map((r, i) => `<tr><td class="t">${fmtStamp((r.flagged_at || "").replace("T", " ").replace("Z", ""))}</td>
@@ -904,6 +941,36 @@ function renderDesignSweep(d){
   });
 }
 
+// CAPACITY, EACH RUNNER'S STATE AND THE QUEUE, COUNTED ACROSS THE WHOLE GRID (review of
+// SCRUM-271, 11 Nov 2026): with a job on each service the wall said capacity 1/2, Run 2 free and
+// slot 2 Ready. Each service counted its own runs only. A runner is working when any service on
+// the grid has a run of its; capacity counts every running job; a free runner is one with none.
+let GRID_FREE = null;
+function wholeGrid(s){
+  const live = s.live || [], k = s.kpis || {};
+  const byRunner = {};
+  live.forEach(r => { if(r.runner) byRunner[r.runner] = r; });
+  (s.fleet || []).forEach(f => {
+    const r = byRunner[f.runner_id];
+    if(r && !f.job){
+      f.job = r;
+      if(f.rag !== "red"){ f.rag = "green"; f.rag_reason = "working" + (r._label ? " for " + r._label : ""); }
+    }
+  });
+  (s.grid || []).forEach(g => { if(g.max_runs > (k.max_runs || 0)) k.max_runs = g.max_runs; });
+  k.running = live.length;
+  if(k.max_runs) k.utilisation_pct = Math.round(100 * Math.min(live.length, k.max_runs) / k.max_runs);
+  const real = (s.fleet || []).filter(f => f.online && !f.planned);
+  k.free_runners = real.filter(f => !f.job).length;
+  GRID_FREE = k.free_runners;
+  let waiting = (s.queue || []).length;
+  (s.grid || []).forEach(g => waiting += (g.queue || []).length);
+  k.queued_grid = waiting;
+}
+// WHY A QUEUED JOB IS WAITING, in words.
+function waitWhy(){
+  return GRID_FREE === 0 ? "waiting for a runner: all are working" : GRID_FREE == null ? "" : "a runner is free: starting";
+}
 function renderKpis(k, exp){
   const rate = k.success_rate_7d;
   const rateRag = rate == null ? "grey" : rate >= 90 ? "green" : rate >= 75 ? "amber" : "red";
@@ -993,13 +1060,13 @@ function renderLanes(s){
         `<div class="${j < r.stage_index ? "done" : j === r.stage_index ? "now" : ""}">${esc(name)}</div>`).join("");
       const tail = r.log_tail || [];
       html.push(`<div class="panel lane ${r.rag}" data-start="${r.started_at || 0}">
-        <div class="lanehead"><span class="slotname">RUN ${i + 1} · ${esc(r.runner || "")}</span><span class="lanectl">${stopBtn(r)}${badge(r.rag, WORD[r.rag])}</span></div>
+        <div class="lanehead"><span class="slotname">RUN ${i + 1} · ${esc(r.runner || "")}${r._label ? " · on " + esc(r._label) : ""}</span><span class="lanectl">${stopBtn(r, r._service)}${badge(r.rag, WORD[r.rag])}</span></div>
         <div class="job">
           <div class="ring">${ring(frac == null ? 0 : frac, r.rag)}
             <div class="pct"><b>${frac == null ? "—" : Math.round(frac * 100) + "%"}</b><span>OF USUAL</span></div></div>
           <div class="jobtext">
             <div class="dn">${esc(r.drawing_number || r.run_id)}</div>
-            <div class="cl">${esc(r.client || "")}${extract ? " · " + esc(r.job_type.replace("_", " ")) : ""}</div>
+            <div class="cl">${esc(r.client || "")}${extract ? " · " + esc(r.job_type.replace("_", " ")) : ""}${src(r)}</div>
             <div class="elapsed" data-elapsed><span>${fmtDur(r.elapsed_s)}</span><small>${exp ? "usual " + fmtDur(exp) : "no history yet"}</small></div>
           </div>
         </div>
@@ -1147,7 +1214,7 @@ function renderFleet(fleet, compute){
     if(m) shown.add(host);
     return `<div class="node ${f.rag}${f.planned ? " planned" : ""}">
       <span class="hb"></span><span class="nm">${esc(f.label)}</span><span class="chips">${caps}</span>${badge(f.rag, f.rag === "green" ? (f.job ? "Working" : "Ready") : WORD[f.rag])}
-      <div class="meta">${esc(f.label !== f.hostname ? f.hostname + " · " : "")}${esc(f.rag_reason)}${job}${seen ? " · " + seen : ""}${f.build ? " · build <b>" + esc(f.build.slice(0, 7)) + "</b>" : ""}</div>
+      <div class="meta" title="${esc(f.rag_reason)}">${esc(f.label !== f.hostname ? f.hostname + " · " : "")}${esc(f.rag_reason)}${job}${seen ? " · " + seen : ""}${f.build ? " · build <b>" + esc(f.build.slice(0, 7)) + "</b>" : ""}</div>
       ${gateLine(f.gate)}
       ${machineCompute(m, nowS())}
     </div>`;
@@ -1161,28 +1228,63 @@ function renderFleet(fleet, compute){
 /* THE REST OF THE GRID (JG, 10 Nov 2026): "whether it's on local machine and on port 8071 or 8072,
    the control grid still needs to see it". The other services' running jobs and queue, each named
    by its service, each with Stop (sent to that service through this one). */
+// ONE JOB, ONE LINE (SCRUM-271 review): a run already shown is never listed again, whichever
+// service also reports it.
+let SHOWN = new Set(), LIVE = [];
 function gridRows(grid){
   const n = nowS(), out = [];
   (grid || []).forEach(g => {
+    g = Object.assign({}, g, {live: (g.live || []).filter(r => !SHOWN.has(r.run_id)),
+                              queue: (g.queue || []).filter(r => !SHOWN.has(r.run_id))});
+    (g.live || []).concat(g.queue || []).forEach(r => SHOWN.add(r.run_id));
     if(!g.ok){ out.push(`<div class="qrow"><span class="n">↔</span><span><b>${esc(g.label)}</b> <span style="color:var(--ink-2)">${esc(g.error || "not answering")}</span></span><span></span><span></span></div>`); return; }
     (g.live || []).forEach(r => out.push(`<div class="qrow"><span class="n">▶</span>
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")} · running on ${esc(g.label)}${r.runner ? " · " + esc(r.runner) : ""}</span></span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}${src(r)} · running on ${esc(g.label)}${r.runner ? " · " + esc(r.runner) : ""}</span></span>
       <span class="t">${fmtDur(r.elapsed_s)}${r.silent_s > 300 ? " · silent " + fmtDur(r.silent_s) : ""}</span>${stopBtn(r, g.service)}</div>`));
     (g.queue || []).forEach(r => out.push(`<div class="qrow"><span class="n">·</span>
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")} · queued on ${esc(g.label)}</span></span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number || r.run_id)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}${src(r)} · queued on ${esc(g.label)}${waitWhy() ? " · " + waitWhy() : ""}</span></span>
       <span class="t">waiting ${fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r, g.service)}</div>`));
   });
   return out;
 }
-function renderQueue(q, grid){
-  const others = gridRows(grid);
+// WHERE A JOB CAME FROM (11 Nov 2026): the estimating page, Self-Running or the TTI batch.
+function src(r){
+  // Plain text, no element: the run tile's line is laid out as one piece of text.
+  return (r && r.source ? " · " + esc(r.source) : "") + (r && r.run_id ? " · run " + esc(String(r.run_id).slice(0, 8)) : "");
+}
+// WORK NOT YET IN THE QUEUE (11 Nov 2026): Self-Running reading the sheet or staging a pack,
+// and a TTI batch working through its rows. A queued or running job shows below with its source.
+function intakeRows(intake){
+  return (intake || []).map(x => {
+    if(x.error) return `<div class="qrow"><span class="n">⇢</span><span>${esc(x.error)}</span><span></span><span></span></div>`;
+    if(x.from === "Self-Running"){
+      // A stale beat is said as such, never as work in hand; a job it queued is shown once, below.
+      const st = !x.connected ? "watcher not connected" : !x.on ? "switched off" : (x.phase || "connected");
+      const queuedBelow = x.connected && x.run_id && SHOWN.has(x.run_id);
+      const said = !x.connected ? (x.message ? " · last said " + esc(x.message) : "")
+                 : queuedBelow ? ` · its job is on this list (run ${esc(String(x.run_id).slice(0, 8))})`
+                 : (x.message ? " · " + esc(x.message) : "");
+      return `<div class="qrow"><span class="n">⇢</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>Self-Running</b> <span style="color:var(--ink-2)">${esc(st)}${said}</span></span><span class="t">${esc(x.host || "")}</span><span></span></div>`;
+    }
+    const k = x.by_kind || {}, parts = ["priced", "reused", "needs decision", "skipped", "failed", "in progress"]
+      .filter(w => k[w]).map(w => k[w] + " " + w).join(" · ");
+    const cur = (x.current || []).map(c => "row " + c.row + " " + (c.drawing || "")).join(", ");
+    const state = x.state === "stopped" ? `<b style="color:var(--amber, #c80)">stopped</b> (no update since ${esc(String(x.updated || "").slice(11, 16))})`
+                : x.state === "finished" ? "finished " + esc(String(x.finished).slice(11, 16)) : "working";
+    return `<div class="qrow"><span class="n">⇢</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>TTI batch</b> <span style="color:var(--ink-2)">${esc(x.sheet || "")} · ${state} · ${x.rows || 0} rows: ${esc(parts || "none yet")}${cur ? " · now " + esc(cur) : ""}</span></span><span class="t"></span><span></span></div>`;
+  });
+}
+function renderQueue(q, grid, intake){
+  SHOWN = new Set((q || []).map(r => r.run_id).concat((LIVE || []).map(r => r.run_id)));
+  const gr = gridRows(grid);
+  const others = intakeRows(intake).concat(gr);
   $("queueCount").textContent = (q.length ? `${q.length} waiting here` : "none here")
     + ((grid || []).length ? ` · ${(grid || []).map(g => g.label).join(", ")} too` : "");
   if(!q.length && !others.length){ $("queue").innerHTML = '<div class="empty">Nothing waiting. A new estimate starts as soon as it is queued.</div>'; return; }
   if(!q.length){ $("queue").innerHTML = others.join(""); return; }
   const n = nowS();
   $("queue").innerHTML = q.slice(0, 6).map((r, i) => `<div class="qrow"><span class="n">#${i + 1}</span>
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}</span></span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.drawing_number)}</b> <span style="color:var(--ink-2)">${esc(r.client || "")}${src(r)}${waitWhy() ? " · " + waitWhy() : ""}</span></span>
       <span class="t">${r.start_at ? "starts ~" + fmtClock(r.start_at) + " · done ~" + fmtClock(r.finish_at) : "waiting " + fmtDur(n - (r.queued_at || n))}</span>${stopBtn(r)}</div>`).join("")
     + (q.length > 6 ? `<div class="empty">+ ${q.length - 6} more</div>` : "") + others.join("");
 }
@@ -1292,19 +1394,52 @@ function openItems(o){
   return `<span class="oi" title="${esc(o.phrase || "")}">${esc(bits.join(" · ") || o.total + " open")}</span>`;
 }
 
+// EVERY FINISHED JOB ON THE GRID, ONCE (11 Nov 2026): this service's and the other services',
+// newest first, each with its source and a Re-run.
+function allRecent(s){
+  const seen = new Set(), out = [];
+  (s.recent || []).forEach(r => { if(!seen.has(r.run_id)){ seen.add(r.run_id); out.push(r); } });
+  (s.grid || []).forEach(g => (g.recent || []).forEach(r => {
+    if(!seen.has(r.run_id)){ seen.add(r.run_id); out.push(Object.assign({}, r, {_service: g.service, _label: g.label})); }
+  }));
+  return out.sort((a, b) => (b.finished_at || 0) - (a.finished_at || 0)).slice(0, 30);
+}
+const rerunning = {};
+function rerunBtn(r){
+  if(!r || !r.run_id) return "";
+  const id = esc(r.run_id), sent = rerunning[r.run_id];
+  return `<button class="stopjob" type="button" data-rerun-job="${id}" data-service="${esc(r._service || "")}" data-name="${esc(r.drawing_number || r.run_id)}" data-source="${esc(r.source || "")}"${sent ? " disabled" : ""}
+    title="Run this job again">${sent ? esc(sent) : "Re-run"}</button>`;
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest && e.target.closest("[data-rerun-job]");
+  if(!b || b.disabled) return;
+  const id = b.dataset.rerunJob, self = b.dataset.source === "Self-Running";
+  if(!confirm(`Re-run ${b.dataset.name}?\n\n` + (self
+      ? "Self-Running reads the Live Enquiry sheet and gathers the pack again on its next beat."
+      : "It is queued again with the same inputs, quantities and method as this run."))) return;
+  rerunning[id] = "Asking…"; b.disabled = true; b.textContent = "Asking…";
+  try{
+    const r = b.dataset.service ? await api("/api/estimate/grid/rerun", {service: b.dataset.service, run_id: id})
+                                : await api("/api/estimate/" + encodeURIComponent(id) + "/rerun", {});
+    const j = r && r.json ? await r.json().catch(() => ({})) : (r || {});
+    rerunning[id] = self ? "Asked" : "Queued"; b.textContent = rerunning[id];
+    if(j && j.said) b.title = j.said;
+  }catch(err){ delete rerunning[id]; b.disabled = false; b.textContent = "Re-run"; alert("Not re-run: " + err.message); }
+});
 function renderRecent(rows){
   $("recentCount").textContent = rows.length ? `last ${rows.length}` : "";
   if(!rows.length){ $("recent").innerHTML = '<tr><td class="c">Nothing has finished yet.</td></tr>'; return; }
   const word = {done:"Completed", failed:"Failed", stopped:"Stopped"};
   const icon = {done:"✓", failed:"✕", stopped:"■"};
   // Every run the service sends (12): the panel scrolls inside itself, nothing is cut off.
-  $("recent").innerHTML = '<colgroup><col style="width:52px"><col style="width:31%"><col>'
-    + '<col style="width:96px"><col style="width:58px"></colgroup>' + rows.map(r => `<tr>
+  $("recent").innerHTML = '<colgroup><col style="width:52px"><col style="width:27%"><col>'
+    + '<col style="width:96px"><col style="width:58px"><col style="width:66px"></colgroup>' + rows.map(r => `<tr>
       <td class="t">${r.finished_at ? fmtClock(r.finished_at) : ""}</td>
       <td class="d">${esc(r.drawing_number)}</td>
-      <td class="c">${esc(r.client || "")}${r.job_type ? " · extract" : ""}${openItems(r.open_items)}</td>
+      <td class="c">${esc(r.client || "")}${r.job_type ? " · extract" : ""}${src(r)}${r._label ? " · on " + esc(r._label) : ""}${openItems(r.open_items)}</td>
       <td class="o">${qualityWord(r) ? badge(r.quality.rag, r.quality.state === "complete" ? "Complete" : r.quality.state === "missing costs" ? "Missing costs" : r.quality.state === "provisional" ? "Provisional" : "Not reviewed") : `<span class="o-${r.outcome}">${icon[r.outcome] || "·"}</span> <span class="lbl">${word[r.outcome] || esc(r.outcome)}</span>`}</td>
-      <td class="s">${fmtDur(r.seconds)}</td></tr>`).join("");
+      <td class="s">${fmtDur(r.seconds)}</td><td class="rr">${rerunBtn(r)}</td></tr>`).join("");
 }
 
 function renderTicker(alerts){

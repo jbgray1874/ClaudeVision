@@ -56,6 +56,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -102,6 +103,16 @@ _MAX_ASSEMBLY_DEPTH = 20
 
 
 # ── the key never leaves this process ─────────────────────────────────────────────────
+
+
+def reader_build() -> str:
+    """This reader's identity: the first 12 hex of the SHA-256 of its own source."""
+    try:
+        import hashlib
+        with open(os.path.abspath(__file__), "rb") as fh:
+            return "sw_docmgr_analyse " + hashlib.sha256(fh.read()).hexdigest()[:12]
+    except Exception:                                                # noqa: BLE001
+        return "sw_docmgr_analyse (build unreadable)"
 
 def _key_from_env() -> str:
     return (os.environ.get(KEY_ENV) or "").strip()
@@ -1521,6 +1532,9 @@ def build_payload(records: List[Dict[str, Any]], target: str, fp_before: str, fp
                          f"not save: {NOT_SAVED}",
             "files_seen": len(records),
             "files_read": len(ok),
+            # Which reader wrote this and when, as the SolidWorks reader records (12 Nov 2026).
+            "written_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "reader_build": reader_build(),
             "files_failed": len(errors),
             "errors": errors[:200],
         },

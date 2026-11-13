@@ -443,6 +443,28 @@ class Located:
     client_folder_name: str = ""
     files: List[Path] = field(default_factory=list)
     source: str = ""
+    # DRAWINGS THE PACK'S GA CALLS FOR THAT ITS FOLDER LACKS, found on the design share and sent
+    # with the folder (the service stages both into the run's one folder). Never copied into the
+    # estimator's own folder.
+    extra_files: List[Path] = field(default_factory=list)
+    # WHAT THE RESOLVER FOUND, SENT WITH THE JOB (12 Nov 2026). Every run's job folder had
+    # "manifest False": the pack was resolved here, its findings were used to choose files and
+    # then dropped, so the covering note could only say "No pack manifest was saved with this
+    # job". The service files this beside the staged drawings as pack_manifest.json.
+    manifest: Optional[Dict[str, Any]] = None
+
+
+def carried_manifest(m: Dict[str, Any], staged_from: str, held: Sequence[str] = ()) -> Dict[str, Any]:
+    """The resolver's manifest as it travels with a job: plain JSON, saying where the staged
+    files came from. A reference the design share lacks but the estimator's folder holds is
+    not missing from the job."""
+    out = json.loads(json.dumps(m, default=str))
+    have = {re.sub(r"[\s_]", "", str(h)).upper() for h in held}
+    if have:
+        out["missing"] = [x for x in out.get("missing") or []
+                          if re.sub(r"[\s_]", "", str(x)).upper() not in have]
+    out["staged_from"] = staged_from
+    return out
 
 
 class LiveEnquiryShare:
@@ -534,7 +556,12 @@ class DesignShare:
         share = LiveEnquiryShare(self.root).find(row) if self.root.is_dir() else None
         if share is not None and share.folder is not None and share.status == "found" \
                 and not (Path(share.folder) / ps.MANIFEST).exists():
-            return None
+            # ...AND WHAT ITS GA CALLS FOR THAT THE FOLDER LACKS IS ADDED (JG, 11 Nov 2026).
+            # 12674-02-GA's folder held its own parts; the GA also calls for 12674-01-02J,
+            # -03J and -06J, the shared panels drawn under 12674-01, which were never looked
+            # for: two sides and a back at £0 and a top with no material. The folder stays as
+            # the estimator made it; the missing drawings travel with it.
+            return self._with_what_the_ga_calls_for(row, share)
         if share is not None and share.status == "held" and " fit " in str(share.reason):
             return None             # two folders for the drawing: the share's question stands
         if self._folders is not None:
@@ -562,7 +589,55 @@ class DesignShare:
         folder = Path(kept["folder"])
         return Located("found", f"{m['status']} pack from the design share: {len(m['members'])} drawing(s), "
                                 f"revision {m.get('revision') or 'not read'}; {kept['state']} in {folder.name}",
-                       folder=folder, client_folder_name=client, files=pack_files(folder), source=self.name)
+                       folder=folder, client_folder_name=client, files=pack_files(folder), source=self.name,
+                       manifest=carried_manifest(m, "the pack gathered from the design share"))
+
+
+    def _with_what_the_ga_calls_for(self, row: EnquiryRow, share: Located) -> Optional[Located]:
+        import pack_resolver as pr
+        try:
+            if self._folders is not None:
+                folders, lookup = self._folders(), None
+            else:
+                folders, _source, lookup = pr.folders_for(row.drawing)
+            if not folders:
+                return None
+            m = pr.resolve(row.drawing, folders, client=row.customer, lookup=lookup)
+        except Exception:                                                # noqa: BLE001
+            return None             # the estimator's folder still stands as it is
+        if m.get("status") in ("not found",):
+            return None
+        held = set()
+        for f in share.files or pack_files(Path(share.folder)):
+            did = pr.drawing_id(Path(f).name)
+            if did:
+                held.add(re.sub(r"[\s_]", "", did).upper())
+        extra: List[Path] = []
+        added: List[str] = []
+        for mem in m.get("members") or []:
+            did = str(mem.get("drawing") or "")
+            if not did or not mem.get("referenced_by_ga") or pr._same(did, row.drawing):
+                continue
+            if re.sub(r"[\s_]", "", did).upper() in held:
+                continue
+            files = [Path(str(f["path"])) for f in mem.get("files") or [] if f.get("path")]
+            if files:
+                extra += files
+                added.append(did)
+        if not extra:
+            # the folder already holds everything its GA calls for: it goes as the share found
+            # it, with what the resolver read about it
+            return Located("found", share.reason, folder=share.folder,
+                           client_folder_name=share.client_folder_name, files=list(share.files),
+                           source=share.source,
+                           manifest=carried_manifest(m, "the estimator's Live Enquiry folder", held))
+        return Located("found", f"{share.reason}; the GA also calls for {', '.join(added)}, not in the "
+                                f"folder: found on the design share and sent with it",
+                       folder=share.folder, client_folder_name=share.client_folder_name,
+                       files=list(share.files), source=f"{share.source} + design share",
+                       extra_files=extra,
+                       manifest=carried_manifest(m, "the estimator's Live Enquiry folder, with the "
+                                                    "drawings its GA calls for from the design share", held))
 
 
 class DesignArea:
@@ -765,20 +840,30 @@ def checkout_build(root: Optional[Path] = None) -> str:
 
 def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
            seen: Optional[Dict[str, int]] = None) -> Decision:
-    if row.ai_check.strip().upper() not in {w.upper() for w in config.LIVE_ENQUIRY_ASKED}:
+    # RE-RUN PRESSED ON THE PAGE (JG, 11 Nov 2026): "it will attempt to re run as long as the
+    # liveenquiry sheet still has entries for them. If it does and even if the AIcompleted says
+    # yes, it re runs." A person pressing Re-run outranks AI CHECK and AICompleted for one run;
+    # the row must still be on the sheet, with a quantity.
+    page_rerun = bool(((ledger.get("jobs") or {}).get(job_key(row)) or {}).get("page_rerun"))
+    if not page_rerun and row.ai_check.strip().upper() not in {w.upper() for w in config.LIVE_ENQUIRY_ASKED}:
         return Decision(row, "not_asked", f"AI CHECK is '{row.ai_check or 'blank'}'")
     # THE AI LIVE ENQUIRY SHEET'S RULE (D-608): YES, a QTY, and AICompleted NO, N or Re-Run.
-    rerun = False
+    rerun = page_rerun
     if row.completed_column:
         said = completed_word(row.ai_completed)
-        if said not in config.LIVE_ENQUIRY_RUN_WHEN_COMPLETED:
+        if page_rerun:
+            if not parse_quantities(row.quantities):
+                return Decision(row, "held", "Re-run asked for on the page, but the row has no "
+                                             "QTY — put the quantities in the QTY column")
+        elif said not in config.LIVE_ENQUIRY_RUN_WHEN_COMPLETED:
             return Decision(row, "not_asked",
                             f"AICompleted is '{row.ai_completed or 'blank'}' — NO, N or Re-Run "
                             f"runs it")
-        if not parse_quantities(row.quantities):
+        elif not parse_quantities(row.quantities):
             return Decision(row, "held", "no QTY on the sheet — put the quantities in the QTY "
                                          "column")
-        rerun = said in config.LIVE_ENQUIRY_RERUN
+        else:
+            rerun = said in config.LIVE_ENQUIRY_RERUN
     note = _hold_note(row.notes)
     if note:
         return Decision(row, "held", f"the row's note says '{note}'")
@@ -799,7 +884,7 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
     # existed read "done" before Re-Run was ever looked at, so typing Re-Run on its row did
     # nothing. A person asking for it on the sheet is the stronger instruction; it runs once
     # per marking, as Re-Run does everywhere else.
-    _rerun_baseline = rerun and not job.get("rerun_taken")
+    _rerun_baseline = page_rerun or (rerun and not job.get("rerun_taken"))
     if not attempts and job.get("baseline") == "*" and not _rerun_baseline:
         return Decision(row, "done", f"run by hand before the runner (baselined "
                                      f"{job.get('baselined_at')})", located=located)
@@ -829,7 +914,7 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
     # RE-RUN RUNS ONCE PER MARKING (D-608). Until AICompleted is written back the cell still
     # says Re-Run after the run; the ledger remembers it was taken, and forgets when the cell
     # is seen saying anything else (plan()), so marking it Re-Run again runs it again.
-    rerun_due = rerun and not job.get("rerun_taken")
+    rerun_due = page_rerun or (rerun and not job.get("rerun_taken"))
     if not last:
         if job.get("baseline"):
             d.reason = ("Re-Run asked for on the sheet (it was baselined as estimated by hand)"
@@ -841,7 +926,7 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
                                         f"{last.get('queued_at')}"
         return d
     if rerun_due and last.get("status") in {"done", "error"}:
-        d.reason = "Re-Run asked for on the sheet"
+        d.reason = "Re-run asked for on the page" if page_rerun else "Re-Run asked for on the sheet"
         return d
     # A STOP MEANS STOP (JG, 10 Nov 2026). A person who stops a job, from the estimating page
     # or Grid Control, has decided; queueing it again as "attempt 2" a minute later undid
@@ -933,6 +1018,14 @@ def plan(rows: Sequence[EnquiryRow], sources: Sequence[Any],
         if r.completed_column and completed_word(r.ai_completed) not in config.LIVE_ENQUIRY_RERUN:
             (ledger.get("jobs", {}).get(job_key(r)) or {}).pop("rerun_taken", None)
     decisions = [decide(r, sources, ledger, seen) for r in rows]
+    on_sheet = {job_key(r) for r in rows}
+    for _k, _job in (ledger.get("jobs") or {}).items():
+        if _job.get("page_rerun") and _k not in on_sheet:
+            _job.pop("page_rerun", None)
+            _job["page_rerun_refused"] = (
+                f"{_job.get('drawing')} ({_job.get('customer')}) is no longer on the Live Enquiry "
+                f"sheet, so the page's Re-run was not taken: run it again by hand from the "
+                f"estimating page")
     if any(r.completed_column for r in rows):
         # THE AI LIVE ENQUIRY SHEET RUNS FROM THE TOP (D-608): ready rows in the sheet's order.
         return sorted(decisions, key=lambda d: (d.status != "ready", d.row.row))
@@ -1049,11 +1142,14 @@ def request_body(d: Decision, email_to: Optional[Sequence[str]] = None) -> Dict[
         "units": d.quantities[0],
         "quantity_breaks": d.quantities[1:],
         "job_folder": str(d.located.folder),
-        "files": [],
+        "files": [str(p) for p in (getattr(d.located, "extra_files", None) or [])],
+        "pack_manifest": getattr(d.located, "manifest", None),
+        "job_title": str(getattr(d.row, "description", "") or "").strip() or None,
         "deliverables": True,
         "method": "both",
         "email_to": ", ".join(recipients_for(d, email_to)) or None,
         "email_quote": False,
+        "source": "self_running",
     }
 
 
@@ -1064,9 +1160,76 @@ def stopped_by_hand(attempt: Dict[str, Any]) -> bool:
         ("Released by hand", "Released with the rest of this enquiry"))
 
 
+NO_VALIDATED_PRICE = "failed/incomplete, no validated price"
+
+
+def validated_price(attempt: Dict[str, Any]) -> Optional[float]:
+    """The attempt's unit price, only when the run finished and produced its workbook.
+
+    Reviewer, 12 Nov 2026: "For unfinished runs, show 'failed/incomplete, no validated
+    price'." A figure posted by a run that then failed, was stopped, or filed no workbook is
+    not a price anyone checked against a record. It is kept on the attempt under another
+    name and never shown as the price.
+    """
+    if not isinstance(attempt, dict) or attempt.get("price_validated") is False:
+        return None
+    if attempt.get("status") != "done" or attempt.get("error") or stopped_by_hand(attempt):
+        return None
+    try:
+        price = float(attempt.get("engine_price_gbp"))
+    except (TypeError, ValueError):
+        return None
+    return price if price > 0 else None
+
+
+def price_words(attempt: Dict[str, Any]) -> str:
+    """What a list shows in the price column for this attempt."""
+    price = validated_price(attempt)
+    if price is not None:
+        return f"£{price:,.2f}"
+    if (attempt or {}).get("status") in {"queued", "running", "claimed"}:
+        return ""
+    return NO_VALIDATED_PRICE
+
+
+def last_completed(job: Dict[str, Any], before: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The job's most recent attempt with a validated price, kept apart from a later failure.
+
+    "Preserve any earlier completed estimate separately, clearly dated; don't present its
+    price as the failed run's result."
+    """
+    for attempt in reversed((job or {}).get("attempts") or []):
+        if attempt is before:
+            continue
+        price = validated_price(attempt)
+        if price is not None:
+            return {"unit_gbp": price, "finished_at": attempt.get("finished_at") or attempt.get("queued_at") or "",
+                    "run_id": attempt.get("run_id") or "", "output_path": attempt.get("output_path") or ""}
+    return None
+
+
+def hold_an_unvalidated_price(attempt: Dict[str, Any]) -> bool:
+    """Move a finished attempt's unproved figure aside. True when something moved."""
+    if attempt.get("status") not in {"done", "error"} or validated_price(attempt) is not None:
+        return False
+    if attempt.get("engine_price_gbp") in (None, "") and not attempt.get("quantity_prices"):
+        return False
+    attempt["unvalidated_price_gbp"] = attempt.get("engine_price_gbp")
+    attempt["unvalidated_quantity_prices"] = attempt.get("quantity_prices") or []
+    attempt["engine_price_gbp"] = None
+    attempt["quantity_prices"] = []
+    attempt["price_validated"] = False
+    attempt["price_note"] = NO_VALIDATED_PRICE
+    return True
+
+
 def _attempt_from(snapshot: Dict[str, Any], attempt: Dict[str, Any]) -> Dict[str, Any]:
     if snapshot.get("stopped_by_hand"):
         attempt["stopped_by_hand"] = True
+    # THE SERVICE SAYS WHETHER THE RUN FILED ITS WORKBOOK. It holds the run's files; this
+    # process only hears about them. A service that does not say is believed on its status.
+    if "price_validated" in snapshot and snapshot.get("status") in {"done", "error"}:
+        attempt["price_validated"] = bool(snapshot.get("price_validated"))
     attempt.update({
         "status": snapshot.get("status") or attempt.get("status"),
         "error": snapshot.get("error") or "",
@@ -1081,6 +1244,7 @@ def _attempt_from(snapshot: Dict[str, Any], attempt: Dict[str, Any]) -> Dict[str
     })
     if attempt["status"] in {"done", "error"}:
         attempt.setdefault("finished_at", _now())
+        hold_an_unvalidated_price(attempt)
     return attempt
 
 
@@ -1182,7 +1346,8 @@ def queue_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: 
     attempt["output_path"] = started.get("output_path")
     job["attempts"].append(attempt)
     job.pop("retry", None)
-    if d.rerun:
+    job.pop("page_rerun", None)                   # the page's Re-run is answered: once
+    if d.rerun and completed_word(d.row.ai_completed) in config.LIVE_ENQUIRY_RERUN:
         job["rerun_taken"] = True                 # this Re-Run has been answered (D-608)
     save_ledger(ledger_path, ledger)
     say(f"   queued {d.row.drawing} ({d.row.customer}) at {'/'.join(map(str, d.quantities))} "
@@ -1244,9 +1409,10 @@ def run_ready(decisions: Sequence[Decision], portal: Portal, ledger: Dict[str, A
             say(f"   {d.row.drawing}: the portal refused it — {exc.message}")
             continue
         done.append(attempt)
-        price = attempt.get("engine_price_gbp")
+        price = validated_price(attempt)
         say(f"   {d.row.drawing}: {attempt['status']}"
-            + (f" — £{price:,.2f} a unit at {d.quantities[0]} off" if price else "")
+            + (f" — £{price:,.2f} a unit at {d.quantities[0]} off" if price
+               else f" — {NO_VALIDATED_PRICE}" if attempt["status"] in {"done", "error"} else "")
             + (f" — {attempt.get('error')}" if attempt.get("error") else ""))
         if after_each is not None:
             after_each(d, attempt)
@@ -1258,7 +1424,7 @@ def run_ready(decisions: Sequence[Decision], portal: Portal, ledger: Dict[str, A
 # ── WHAT IT SAYS ─────────────────────────────────────────────────────────────────────
 STATUS_COLUMNS = ("row", "customer", "drawing", "description", "estimator", "due", "status",
                   "reason", "folder", "quantities", "quantity_source", "last_run",
-                  "last_status", "unit_gbp", "output")
+                  "last_status", "unit_gbp", "price_shown", "output")
 
 
 def status_rows(decisions: Sequence[Decision]) -> List[Dict[str, Any]]:
@@ -1274,7 +1440,8 @@ def status_rows(decisions: Sequence[Decision]) -> List[Dict[str, Any]]:
             "quantity_source": d.quantity_source,
             "last_run": d.last.get("finished_at") or d.last.get("queued_at") or "",
             "last_status": d.last.get("status") or "",
-            "unit_gbp": d.last.get("engine_price_gbp") or "",
+            "unit_gbp": validated_price(d.last) or "",
+            "price_shown": price_words(d.last) if d.last else "",
             "output": d.last.get("output_path") or "",
         })
     return out
@@ -1455,10 +1622,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                       f"{job['drawing']:<18.18} {'':<12} baselined (run by hand before the "
                       f"runner)")
             for a in job.get("attempts") or []:
-                price = a.get("engine_price_gbp")
                 print(f"{a.get('queued_at', ''):<20} {job['customer']:<16.16} "
                       f"{job['drawing']:<18.18} {'/'.join(map(str, a.get('quantities') or [])):<12}"
-                      f" {a.get('status', ''):<8} {('£%.2f' % price) if price else '':>10}  "
+                      f" {a.get('status', ''):<8} {price_words(a):>10}  "
                       f"{a.get('output_path') or a.get('error') or ''}")
         return 0
     if args.command == "scan":

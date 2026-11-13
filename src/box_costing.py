@@ -153,15 +153,30 @@ def price_box(length_mm: Any, breadth_mm: Any, height_mm: Any, order_qty: Any,
     scrap = float(c["scrap_fraction"])
     panels: List[Dict[str, Any]] = []
     material = 0.0
+    oversize: List[str] = []
     for name, pl, pb in pairs:
         n = panels_per_sheet(pl, pb, c)
         if n <= 0:
-            return {"priced": False,
-                    "reason": (f"the {name} panel ({pl:g} x {pb:g} mm cut size) does not "
-                               f"fit the {c['stock_board']} sheet "
-                               f"{c['sheet_length_mm']:g} x {c['sheet_width_mm']:g} in the "
-                               f"calculator's own orientation — a box this size is the "
-                               f"packer's to price")}
+            # A PANEL BIGGER THAN THE SHEET IS BUILT FROM SEVERAL (JG, 12 Nov 2026: "packaging
+            # needs to be off the box calculator"). The calculator declined a box whose panel
+            # does not fit one sheet, and the line fell to an AI market figure: 12674-02-GA, a
+            # 2.4 m table, was packed at GBP 28 "per pallet (researched)". The same sheet, the
+            # same price and the same scrap are used; the panel takes as many whole sheets as
+            # its area needs, jointed. It is said on the line, and it is still provisional.
+            _usable = (float(c["sheet_length_mm"])
+                       * (float(c["sheet_width_mm"]) - float(c["sheet_edge_trim_mm"])))
+            if _usable <= 0:
+                return {"priced": False,
+                        "reason": f"the {c['stock_board']} sheet has no usable area in the calculator"}
+            _sheets = max(1, math.ceil((pl * pb) / _usable))
+            pair_gbp = sheet_gbp * _sheets * (1.0 + scrap) * 2.0
+            material += pair_gbp
+            oversize.append(f"{name} {pl:g} x {pb:g} mm from {_sheets} sheet(s) each")
+            panels.append({"pair": name, "count": 2, "cut_length_mm": round(pl, 1),
+                           "cut_breadth_mm": round(pb, 1), "per_sheet": 0,
+                           "sheets_per_panel": _sheets, "across": 0, "along": 0,
+                           "pair_cost_gbp": round(pair_gbp, 4)})
+            continue
         pair_gbp = (sheet_gbp / n) * (1.0 + scrap) * 2.0
         material += pair_gbp
         # The nest's two counts, so the working can be checked against the sheet's own cells.
@@ -179,6 +194,10 @@ def price_box(length_mm: Any, breadth_mm: Any, height_mm: Any, order_qty: Any,
     _n_total = int((_sheet.get("pairs_in_total")
                     if source.get("kind") in ("sheet_excel", "sheet_engine") else None) or 2)
     sheet_total = running + setup_share + sum(p["pair_cost_gbp"] for p in panels[:_n_total])
+    if oversize:
+        # the estimators' sheet does not hold a jointed panel: its own sum is not used here
+        source.pop("excel", None)
+        source["oversize"] = True
     if source.get("excel"):
         # THE SHEET'S OWN ANSWER IS CHARGED. The engine's copy is kept beside it as a check.
         _x = source.pop("excel")
@@ -215,8 +234,14 @@ def price_box(length_mm: Any, breadth_mm: Any, height_mm: Any, order_qty: Any,
         "setup_share_gbp": round(setup_share, 4),
         "order_qty": qty,
         "panels": panels,
+        "oversize": bool(oversize),
+        "oversize_panels": oversize,
         "stock_board": c.get("stock_board"),
-        "basis": (f"box calculator ({c.get('stated_by')}, {c.get('stated_on')}): a "
+        "basis": ((f"OVERSIZE CARTON: a panel is larger than one {c.get('stock_board')} sheet, "
+                   f"so it is built from several, jointed ({'; '.join(oversize)}). The "
+                   f"calculator's sheet does not hold this case; confirm the pack with "
+                   f"despatch. " if oversize else "")
+                  + f"box calculator ({c.get('stated_by')}, {c.get('stated_on')}): a "
                   f"PROVISIONAL panel-based allowance, not a quoted box price. "
                   f"{L:g} x {B:g} x {H:g} mm as 3 panel pairs +{ov:g} mm on "
                   f"{c.get('stock_board')} {c['sheet_length_mm']:g} x "

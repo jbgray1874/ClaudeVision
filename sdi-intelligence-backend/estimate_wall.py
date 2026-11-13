@@ -51,6 +51,7 @@ from __future__ import annotations
 import os
 import re
 import statistics
+from pathlib import Path
 import time
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -313,6 +314,9 @@ def runner_rag(runner: Mapping[str, Any], service_commit: str = "",
     gate = runner.get("gate") or {}
     if gate and not gate.get("ok") and not runner.get("run_id"):
         return AMBER, f"holding: not the room for one more run ({gate.get('measured') or '?'})"
+    held = runner.get("held") or {}
+    if held.get("reason") and held.get("queued") and not runner.get("run_id"):
+        return AMBER, (f"not taking the {held['queued']} queued job(s): {held['reason']}")
     if seen > th["runner_quiet_after_s"] and not runner.get("run_id"):
         return AMBER, f"quiet for {seen:.0f} s"
     if runner.get("busy_elsewhere") and not runner.get("run_id"):
@@ -604,6 +608,7 @@ def quality(run: Mapping[str, Any]) -> Dict[str, Any]:
 def _summary(r: Mapping[str, Any]) -> Dict[str, Any]:
     return {"run_id": r.get("run_id"), "drawing_number": r.get("drawing_number"),
             "client": r.get("client"), "job_type": r.get("job_type") or "",
+            "source": r.get("source") or "",
             "status": r.get("status"), "outcome": outcome(r), "runner": r.get("runner"),
             "queued_at": r.get("queued_at"), "started_at": r.get("started_at"),
             "finished_at": r.get("finished_at"),
@@ -847,6 +852,85 @@ def history_view(runs: Sequence[Mapping[str, Any]], now: Optional[float] = None,
                            key=lambda m: -m["runs"]),
         "evidence": sorted(evidence_mix.values(), key=lambda e: -e["count"]),
         "runs": rows, "runs_left_out": max(0, len(kept) - table)}
+
+
+# ── WORK NOT YET IN THE QUEUE (JG, 11 Nov 2026) ─────────────────────────────────────────
+# "the grid runner views also need to pick up all jobs running through any part of the
+# estimator - the individual jobs or the ai self running portal". A queued or running job is on
+# the wall whatever started it, with its source named. Before that, Self-Running is reading the
+# sheet or staging a pack, and a TTI batch is working through its rows: both are said here.
+TTI_RECENT_S = 3600.0
+# A batch whose status has not moved for this long is not shown as working: it saves a pulse
+# about every five minutes while a run works, so twenty minutes of silence means it stopped.
+TTI_STALE_S = 1200.0
+# EACH ROW'S STATE IN FIVE WORDS (SCRUM-271 review): a reused cost or a skipped row is not a
+# priced one, and a question is not a failure.
+TTI_KINDS = {
+    "priced": ("done",),
+    "reused": ("same as row", "same run as row", "has a cost"),
+    "needs decision": ("ask", "needs decision", "needs drawing", "held: lost worker", "outdated"),
+    "skipped": ("skipped",),
+    "failed": ("error", "failed", "not queued", "timeout", "cancelled", "abandoned"),
+    "in progress": ("running", "resumed", "planned"),
+}
+
+
+def tti_kind(item: Mapping[str, Any]) -> str:
+    st = str(item.get("state") or "").lower()
+    why = str(item.get("why") or "").lower()
+    if st == "done" and ("earlier batch" in why or item.get("same_run_as_row") or item.get("same_as_row")):
+        return "reused"
+    for kind, starts in TTI_KINDS.items():
+        if any(st.startswith(s) for s in starts):
+            return kind
+    return "other"
+
+
+def intake(self_running: Optional[Mapping[str, Any]], tti_reports: Sequence[Mapping[str, Any]],
+           now: float) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    sr = dict(self_running or {})
+    watcher = dict(sr.get("watcher") or {})
+    if sr.get("enabled") or watcher.get("connected"):
+        out.append({"from": "Self-Running", "on": bool(sr.get("enabled")),
+                    "connected": bool(watcher.get("connected")),
+                    "phase": str(watcher.get("phase") or ""),
+                    "message": str(watcher.get("message") or "")[:160],
+                    "host": str(watcher.get("host") or ""),
+                    "run_id": watcher.get("run_id") or "",
+                    "state": str(watcher.get("state") or "")})
+    for rep in tti_reports or []:
+        if rep.get("dry_run"):
+            continue
+        finished = _iso_epoch(rep.get("finished"))
+        if finished and now - finished > TTI_RECENT_S:
+            continue
+        pulse = _iso_epoch(rep.get("updated")) or _iso_epoch(rep.get("started"))
+        stale = (not finished) and pulse is not None and now - pulse > TTI_STALE_S
+        if stale and now - pulse > TTI_RECENT_S:
+            continue
+        rows = [x for x in (rep.get("rows") or []) if isinstance(x, Mapping)]
+        by: Dict[str, int] = {}
+        for x in rows:
+            k = tti_kind(x)
+            by[k] = by.get(k, 0) + 1
+        current = [] if stale else [x for x in rows if str(x.get("state") or "") in ("running", "resumed")]
+        out.append({"from": "TTI batch", "sheet": Path(str(rep.get("sheet") or "")).name,
+                    "started": rep.get("started"), "finished": rep.get("finished"),
+                    "updated": rep.get("updated"),
+                    "state": "finished" if finished else "stopped" if stale else "working",
+                    "rows": len(rows), "by_kind": by,
+                    "current": [{"row": x.get("row"), "drawing": x.get("drawing"),
+                                 "run_id": x.get("run_id")} for x in current][:3]})
+    return out
+
+
+def _iso_epoch(v: Any) -> Optional[float]:
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(str(v)).timestamp() if v else None
+    except (TypeError, ValueError):
+        return None
 
 
 def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, Any]],

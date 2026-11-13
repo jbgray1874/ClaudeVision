@@ -803,13 +803,16 @@ async function pumpSpeech(q){
       }
       if(!live()) break;
       if(res==='blocked'){ q.blocked=true; continue; }
-      if(res==='fallback'){ q.fallback=true; await new Promise(r=>speakLocal(item.text, r)); }
+      if(res==='fallback'){ q.fallback=true;
+        setVoice('device', VOICE_WHY || (USE_SERVER_VOICE()?'server voice unavailable':'natural voice not set up'));
+        await new Promise(r=>speakLocal(item.text, r)); }
     }
   }finally{ q.busy=false; }
 }
 // The natural voice for one piece of text, as a playable URL (null: use the
 // phone's voice). Recent pieces are kept, so 🔊 replays without a new fetch.
 const VOICE_CACHE=new Map();
+let VOICE_WHY='';
 function fetchVoice(text){
   if(VOICE_CACHE.has(text)) return VOICE_CACHE.get(text);
   const p=(async()=>{
@@ -818,9 +821,9 @@ function fetchVoice(text){
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({text: window.SDIVoice?window.SDIVoice.forSpeech(text):text})});
       const ct=(r.headers&&r.headers.get('content-type'))||'';
-      if(!r.ok||!ct.startsWith('audio/')){ diag('natural voice unavailable ('+r.status+')'); return null; }
+      if(!r.ok||!ct.startsWith('audio/')){ diag('natural voice unavailable ('+r.status+')'); VOICE_WHY='server voice refused (HTTP '+r.status+')'; return null; }
       return URL.createObjectURL(await r.blob());
-    }catch(e){ diag('natural voice failed'); return null; }
+    }catch(e){ diag('natural voice failed'); VOICE_WHY='server voice unreachable'; return null; }
   })();
   VOICE_CACHE.set(text, p);
   p.then(u=>{ if(!u) VOICE_CACHE.delete(text); });
@@ -840,7 +843,7 @@ function playUrl(url, text){
     guard=setTimeout(()=>fin('done'), Math.max(15000, text.length*110));
     let p;
     try{ p=AUDIO.play(); }catch(e){ fin('fallback'); return; }
-    if(p&&p.then) p.then(()=>diag('speaking (natural voice)')).catch(err=>{
+    if(p&&p.then) p.then(()=>{ diag('speaking (natural voice)'); setVoice('natural'); }).catch(err=>{
       diag('voice blocked: '+(err&&err.name||''));
       setState('Reply shown above — tap 🔊 to hear it.');
       fin('blocked');
@@ -930,6 +933,17 @@ function reportFailure(err){
 }
 
 function setState(t){ $('vcstate').textContent=t; $('dvstate').textContent=driveWords(t); }
+// WHICH VOICE SPOKE (JG, 11 Nov 2026): "natural voice" when the service's neural voice played,
+// "device voice" and why when the phone's own voice had to stand in.
+function setVoice(kind, why){
+  let el=$('vcvoice');
+  if(!el){ const st=$('vcstate'); if(!st||!st.parentNode) return;
+    el=document.createElement('div'); el.id='vcvoice';
+    el.style.cssText='font-size:12px;opacity:.75;margin-top:4px';
+    st.parentNode.insertBefore(el, st.nextSibling); }
+  el.textContent = kind==='natural' ? 'natural voice' : 'device voice'+(why?' ('+why+')':'');
+  el.setAttribute('data-voice', kind);
+}
 
 // Mostly the same words as the app's last reply = the phone heard its own
 // speaker. Short replies ("yes") are never treated as echo.

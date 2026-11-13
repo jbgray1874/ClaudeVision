@@ -291,6 +291,60 @@ def collect(engine_root: Path, dest: Path, before: Dict[str, float],
             _seen.add(key)
             _wanted.append(item)
 
+    # AND WHAT LIES BESIDE THE RUN'S OWN WORKBOOK, WHEREVER THAT IS (12 Nov 2026). A second
+    # runner's engine wrote its workbook, record, note and walkthrough into the main checkout's
+    # estimates folder; only the workbook was declared, so only the workbook was filed and
+    # three estimates went out with no note. src/own_record.beside_the_book names them.
+    _beside = 0
+    try:
+        import own_record as _orc_b                       # noqa: PLC0415  (path set just below)
+    except Exception:                                      # noqa: BLE001
+        try:
+            _own_record_rules()
+            import own_record as _orc_b                   # noqa: PLC0415
+        except Exception:                                  # noqa: BLE001
+            _orc_b = None
+    if _orc_b is not None:
+        try:
+            _mine, _why_mine = _orc_b.own_book([{"name": _i.name} for _i in _wanted],
+                                               drawing_number, started_at)
+            for _bk in [_i for _i in list(_wanted) if _mine and _i.name == _mine]:
+                # THE RUN'S OWN MANIFEST FIRST (run_manifest.py): what it says it wrote.
+                _listed: List[Path] = []
+                try:
+                    import run_manifest as _rm_b          # noqa: PLC0415
+                    _listed = _rm_b.listed(_bk)
+                    if _listed:
+                        log.append(f"[collect] the run's manifest {_rm_b.path_for(_bk).name} lists "
+                                   f"{len(_listed) - 1} file(s)")
+                    for _gone in _rm_b.absent(_bk):
+                        log.append(f"[collect] LISTED BY THE RUN BUT NOT ON DISK — {_gone}")
+                except Exception as _exc_m:                # noqa: BLE001
+                    log.append(f"[collect] the run's manifest could not be read: {_exc_m}")
+                for _sib in list(_listed) + list(_orc_b.beside_the_book(_bk, started_at)):
+                    if str(_sib).lower() not in _seen:
+                        _seen.add(str(_sib).lower())
+                        _wanted.append(_sib)
+                        _beside += 1
+        except Exception as _exc_b:                        # noqa: BLE001
+            log.append(f"[collect] could not look beside the workbook: {_exc_b}")
+    if _beside:
+        log.append(f"[collect] {_beside} more file(s) found beside this run's workbook, outside "
+                   f"the folders above")
+
+    # ANOTHER JOB'S FILES ARE NOT THIS RUN'S (11 Nov 2026). Whatever writes into this checkout
+    # after the last run finished shows up here as new. Where the files name this run's own
+    # workbook and another job's too, the other job's stay behind, and the log says which.
+    try:
+        _theirs = set(_own_record_rules()[2](
+            [{"name": _i.name} for _i in _wanted], drawing_number, started_at))
+    except Exception:                                      # noqa: BLE001
+        _theirs = set()
+    if _theirs:
+        log.append(f"[collect] left behind {len(_theirs)} file(s) named for another job, written "
+                   f"into this checkout during the run: {', '.join(sorted(_theirs)[:6])}")
+        _wanted = [_i for _i in _wanted if _i.name not in _theirs]
+
     _skipped_suffix = 0
     _copy_failures: List[str] = []
     for item in _wanted:
@@ -1612,7 +1666,8 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                     f"The {'pre-run' if pre_run else 'pack extract'} exited with code {code} and wrote "
                     f"{len(filed)} file(s) — the log above says why.", log, filed)
             return
-        _finish(requests, base, headers, run_id, runner_id, "done", "", log, filed)
+        _finish(requests, base, headers, run_id, runner_id, "done", "", log, filed,
+                drawing_number=job.get("drawing_number", ""), started_at=_run_started_at)
         return
 
     if code != 0:
@@ -1643,7 +1698,8 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
 
     file_a_copy(job, filed, log)          # D-617: and in the completed AI briefs area
     file_parity(job, filed, engine_root, engine_python, log)   # D-619: and the parity folder
-    _finish(requests, base, headers, run_id, runner_id, "done", "", log, filed)
+    _finish(requests, base, headers, run_id, runner_id, "done", "", log, filed,
+                drawing_number=job.get("drawing_number", ""), started_at=_run_started_at)
 
 
 # WHERE THE ENGINE PUTS ITS ANSWER. Tried in order; the first that holds a number wins.
@@ -1694,15 +1750,49 @@ def unit_cost_from(summary: Dict[str, Any]) -> Optional[float]:
     return None
 
 
-def _unit_cost_from_deliverables(deliverables: List[Dict[str, str]]) -> Optional[float]:
+def _own_record_rules():
+    """src/own_record.py's (books, own_record, other_jobs_files), from this checkout."""
+    _src = str(Path(__file__).resolve().parents[2] / "src")
+    if _src not in sys.path:
+        sys.path.insert(0, _src)
+    import own_record as _o                                # noqa: PLC0415
+    return _o.books, _o.own_record, _o.other_jobs_files
+
+
+def _price_jsons(deliverables: List[Dict[str, str]], drawing_number: str = "",
+                 started_at: float = 0.0, log: Optional[List[str]] = None) -> List[Dict[str, str]]:
+    """The JSON a run's price is read from: THE RECORD PINNED TO THIS RUN'S OWN WORKBOOK, and
+    nothing else where the files name a workbook at all (11 Nov 2026).
+
+    Self-Running showed 6364-01 at 12674-01-GA's prices and 12773-01-GA at 12674-01-GA's: the
+    price was read from the first .json in name order, and a JSON another job left in the
+    checkout sorts ahead of this run's. Newest-first would be the same guess with a different
+    winner. own_record names the run's workbook by its drawing and the time it was written, and
+    the record by that workbook; a run whose files name several jobs and not its own shows no
+    price. Only a run that filed no workbook at all falls back to the JSON it did file."""
+    try:
+        books, own_record = _own_record_rules()[:2]
+    except Exception as exc:                               # noqa: BLE001
+        # No rule, no price: the old first-file guess is what put one job's price on another.
+        if log is not None:
+            log.append(f"[price] NOT READ: the own-record rule could not be loaded ({exc})")
+        return []
+    if books(deliverables or []):
+        item, why = own_record(deliverables or [], drawing_number, started_at)
+        if log is not None:
+            log.append(f"[price] {'read from ' + why if item else 'NOT READ: ' + why}")
+        return [item] if item else []
+    return [i for i in (deliverables or []) if str(i.get("name") or "").lower().endswith(".json")]
+
+
+def _unit_cost_from_deliverables(deliverables: List[Dict[str, str]], drawing_number: str = "",
+                                 started_at: float = 0.0,
+                                 log: Optional[List[str]] = None) -> Optional[float]:
     """The summary among what was just filed. A miss is silent on purpose -- a run that
     produced no readable JSON is already reported by collect(), and saying it twice in
     different words helps nobody."""
     import json as _json
-    for item in deliverables or []:
-        name = str(item.get("name") or "")
-        if not name.lower().endswith(".json"):
-            continue
+    for item in _price_jsons(deliverables, drawing_number, started_at, log):
         try:
             with open(item["path"], "r", encoding="utf-8") as fh:
                 found = unit_cost_from(_json.load(fh))
@@ -1732,11 +1822,10 @@ def quantity_prices_from(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [{"quantity": q, "unit_gbp": out[q]} for q in sorted(out)] if len(out) > 1 else []
 
 
-def _quantity_prices_from_deliverables(deliverables: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+def _quantity_prices_from_deliverables(deliverables: List[Dict[str, str]], drawing_number: str = "",
+                                       started_at: float = 0.0) -> List[Dict[str, Any]]:
     import json as _json
-    for item in deliverables or []:
-        if not str(item.get("name") or "").lower().endswith(".json"):
-            continue
+    for item in _price_jsons(deliverables, drawing_number, started_at):
         try:
             with open(item["path"], "r", encoding="utf-8") as fh:
                 found = quantity_prices_from(_json.load(fh))
@@ -1908,16 +1997,19 @@ def pack_extract_outputs(log: List[str]) -> List[Dict[str, str]]:
 
 def _finish(requests, base: str, headers: Dict[str, str], run_id: str, runner_id: str,
             status: str, error: str, log: List[str],
-            deliverables: Optional[List[Dict[str, str]]] = None) -> None:
+            deliverables: Optional[List[Dict[str, str]]] = None,
+            drawing_number: str = "", started_at: float = 0.0) -> None:
     if error:
         log.append(error)
         print(error)
     body = {"runner_id": runner_id, "status": status, "error": error,
             "lines": [], "deliverables": deliverables or [],
-            "unit_cost_gbp": _unit_cost_from_deliverables(deliverables or []),
+            "unit_cost_gbp": _unit_cost_from_deliverables(deliverables or [], drawing_number,
+                                                          started_at, log),
             # AND THE PRICE AT EVERY QUANTITY ASKED FOR (D-610), so the page shows 1, 5 and 10
             # off, not one unit price for a run that priced three.
-            "quantity_prices": _quantity_prices_from_deliverables(deliverables or [])}
+            "quantity_prices": _quantity_prices_from_deliverables(deliverables or [], drawing_number,
+                                                                  started_at)}
     # The whole log goes with the completion, so a run whose progress posts were
     # lost to a blip still arrives complete rather than half-reported.
     body["lines"] = log

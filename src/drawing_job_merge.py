@@ -185,6 +185,26 @@ def dxf_can_rule_out_folding(path: Path, flat_pattern_detected: Any,
     return bool(dxf_declares_bend_layer(path))
 
 
+def shape_that_cannot_be_flat(part: Any) -> Optional[str]:
+    """The formed shape the part's own description names ("Z-BAR", "ANGLE", "CHANNEL"), where
+    its sheet gauge and metal make it a shape folded from sheet; None otherwise.
+
+    A DXF'S EMPTY BEND LAYER DOES NOT UNFOLD A Z-BAR (reviewer, 12 Nov 2026: "a missing DXF
+    bend layer must not silently erase stronger drawing/model evidence of folding"). A wall
+    fixed Z-bar was ruled "DXF flat pattern measured 0 bend lines — the part does not fold"
+    and charged no folding, while the unit fixed Z-bar beside it, whose bend text was read,
+    was folded. A SolidWorks export writes its bend layer into the layer table whether or not
+    it drew a line on it, so a declared, empty layer is weak; a part named for a shape that
+    cannot exist flat is strong. Never for a solid the model measured one thickness thick."""
+    if not isinstance(part, dict) or part.get("native_flat_solid"):
+        return None
+    try:
+        from formed_shape import formed_sheet_shape
+        return formed_sheet_shape(part)
+    except Exception:                                                    # noqa: BLE001
+        return None
+
+
 def drawing_export_reason(path: Path) -> Optional[str]:
     """Why this DXF is a DRAWING of a part rather than the part's flat pattern — or None.
 
@@ -853,6 +873,14 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             part.setdefault("review_flags", []).append(
                 f"DXF {dxf_path.name} carries no bend layer, so it cannot say whether this "
                 f"part folds. Folding left as the drawing states it — confirm.")
+        _shape_named = shape_that_cannot_be_flat(part) if _can_rule_out else None
+        if _shape_named:
+            _can_rule_out = False
+            part.setdefault("review_flags", []).append(
+                f"DXF {dxf_path.name} shows no bend lines, but the part is named "
+                f"{'an' if _shape_named[:1] in 'AEIOU' else 'a'} {_shape_named.lower()}, which "
+                f"cannot be flat: folding is kept and charged from the shape. Confirm the "
+                f"fold count.")
         if _can_rule_out:
             for _k in ("operations", "textual_operations"):
                 _ops = part.get(_k)
@@ -1270,6 +1298,36 @@ def member_number_from_filename(path: Path) -> str:
     return _m.group(1).lstrip("0") or "0" if _m else ""
 
 
+# A PIECE THE DRAWING OFFICE NAMED IN WORDS (12 Nov 2026). One carcass is exported as
+# "<part>_LHS_MF-MDF_18.0mm_REV F", "<part>_RHS_...", "<part>_TOP_...", "<part>_BASE_...". A left
+# and a right side share an outline, gauge and material, carry no member number, and were
+# clustered as one flat: 23 piece files became 18 costed children and five panels were never
+# bought or cut. The name between the part code and its stock is the piece.
+_PIECE_LABEL_REV = re.compile(r"[_\s-]*REV(?:ISION)?[_\s-]?(?:[A-Z]{1,2}|\d{1,2}|P\d{1,2})\s*$", re.I)
+_PIECE_LABEL_COPY = re.compile(r"(\s*-\s*copy(\s*\(\d+\))?|\s*\(\d+\)|[_\s-]copy\d*)$", re.I)
+_PIECE_LABEL_GAUGE = re.compile(r"\d+(?:\.\d+)?\s*MM\b", re.I)
+_NOT_A_PIECE = {"FLAT", "FLAT PATTERN", "PATTERN", "DXF", "CUT", "NEST", "PROFILE", "BLANK", "DEV",
+                "DEVELOPED", "DEVELOPMENT", "FINAL", "NEW", "OLD"}
+
+
+def piece_label_from_filename(path: Path) -> str:
+    """"…-03J_LHS_MF-MDF_18.0mm_REV F" -> "LHS"; "…-04J_TOP LOCATOR_MDF_…" -> "TOP LOCATOR";
+    "" when the name carries no worded piece between its part code and its stock."""
+    stem = _PIECE_LABEL_COPY.sub("", Path(path).stem)
+    stem = _PIECE_LABEL_REV.sub("", stem)
+    fields = [f.strip() for f in stem.split("_")]
+    if len(fields) < 2 or not re.search(r"\d", fields[0]):
+        return ""
+    words: List[str] = []
+    for f in fields[1:]:
+        if (not f or _PIECE_LABEL_GAUGE.search(f) or re.search(r"\d", f)
+                or material_from_drawing_text(f) is not None):
+            break
+        words.append(re.sub(r"\s+", " ", f).upper())
+    label = " ".join(words).strip()
+    return "" if not label or label in _NOT_A_PIECE or not re.search(r"[A-Z]", label) else label
+
+
 def _cluster_paths_by_bbox(paths: Sequence[Path]) -> List[Tuple[Optional[Tuple[float, float]], List[Path]]]:
     """Group paths that are the SAME PHYSICAL FLAT. One cluster = one thing that gets cut.
 
@@ -1285,6 +1343,10 @@ def _cluster_paths_by_bbox(paths: Sequence[Path]) -> List[Tuple[Optional[Tuple[f
     material come first and the outline breaks ties within them; a pack whose filenames carry
     neither is unchanged, because then every flat shares the one empty key and this is the old
     behaviour exactly.
+
+    AND A WORDED PIECE IS A PIECE (12 Nov 2026): see piece_label_from_filename. "_LHS_" and
+    "_RHS_" of one carcass never merge, whatever their outline; the same piece at two revisions
+    still does.
 
     AND THE SAME STOCK STILL LOST A PART. 12349-02's folder holds seven 01A flats and the
     estimate costed six: `-03` and one of the other 5 mm members share an outline, so with
@@ -1302,7 +1364,8 @@ def _cluster_paths_by_bbox(paths: Sequence[Path]) -> List[Tuple[Optional[Tuple[f
     for p in paths:
         bb = _dxf_bbox_wh(p)
         _stock = flat_stock_key(p)
-        key = (_stock[0], _stock[1], member_number_from_filename(p))
+        # ...and the piece's own worded name: a left and a right panel are two panels
+        key = (_stock[0], _stock[1], member_number_from_filename(p), piece_label_from_filename(p))
         placed = False
         for rep, members, rep_key in clusters:
             if rep_key != key:

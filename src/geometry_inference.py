@@ -119,6 +119,39 @@ def _has_geometry(part: Dict[str, Any]) -> bool:
     return False
 
 
+def measured_model_envelope(part: Dict[str, Any]) -> Optional[List[float]]:
+    """The part's own model envelope, largest side first, or None when no model measured it."""
+    bb = part.get("bbox_mm")
+    if not isinstance(bb, (list, tuple)) or len(bb) != 3:
+        return None
+    if "inference" in str(part.get("bbox_mm_source") or "").lower():
+        return None
+    try:
+        dims = sorted((float(x) for x in bb), reverse=True)
+    except (TypeError, ValueError):
+        return None
+    return dims if dims[-1] > 0 else None
+
+
+def _hold_on_the_measured_envelope(part: Dict[str, Any], env: List[float]) -> Dict[str, Any]:
+    """Record that the part's size is known and its construction is not.
+
+    An envelope says how much room the part takes. It does not say whether the part is one
+    board, a build-up of several, or a frame, so it is not a blank and no blank is written.
+    """
+    l, w, t = (round(x, 1) for x in env)
+    note = (f"Model measures {l:g} x {w:g} x {t:g} mm overall. That is the part's envelope, "
+            f"not a sheet blank: the pack does not say how it is built or from what "
+            f"thickness. Not priced until its construction is stated.")
+    part["model_envelope_unresolved"] = {"envelope_mm": [l, w, t], "note": note,
+                                         "source": str(part.get("bbox_mm_source") or "model")}
+    flags = part.setdefault("review_flags", [])
+    if isinstance(flags, list) and "model_envelope_construction_unstated" not in flags:
+        flags.append("model_envelope_construction_unstated")
+    return {"part": part.get("part_number"), "description": part.get("description"),
+            "envelope_mm": [l, w, t]}
+
+
 def _clear_inference_tags(part: Dict[str, Any]) -> None:
     """Remove stale provisional-inference tags when real DXF geometry wins."""
     part.pop("geometry_inferred", None)
@@ -257,6 +290,7 @@ def infer_missing_geometry(summary: Dict[str, Any], db=None) -> Dict[str, Any]:
     still_missing: List[str] = []
     refused_bought_in: List[Dict[str, Any]] = []
     refused_no_blank: List[Dict[str, Any]] = []
+    held_on_envelope: List[Dict[str, Any]] = []
 
     for part in parts:
         if _has_geometry(part):
@@ -333,6 +367,19 @@ def infer_missing_geometry(summary: Dict[str, Any], db=None) -> Dict[str, Any]:
                                  "dims": (hist["length"], hist["width"])})
             continue
 
+        # A PART ITS OWN MODEL MEASURED IS NOT GUESSED AT (both 12674 jobs, 12 Nov 2026).
+        # The base's model gives 2369.6 x 610 x 90 mm. One run costed it as a 350 x 250
+        # "typical tier" and the other as 2369.6 x 295.2 borrowed from a different panel.
+        # Both replaced a measurement with a guess, and each guess then drew a price. The
+        # reviewer: "Do not turn a model envelope into a sheet blank or use an arbitrary
+        # fallback price." So neither rule below runs for a measured part: its envelope is
+        # recorded, no blank is written, and it stays visibly unresolved.
+        env = measured_model_envelope(part)
+        if env:
+            held_on_envelope.append(_hold_on_the_measured_envelope(part, env))
+            still_missing.append(str(pn))
+            continue
+
         # 2. Sibling borrow within the job
         sib = _sibling_dims(part, geometried)
         if sib:
@@ -360,4 +407,5 @@ def infer_missing_geometry(summary: Dict[str, Any], db=None) -> Dict[str, Any]:
         still_missing.append(str(pn))
 
     return {"inferred": inferred_log, "still_missing": still_missing,
-            "refused_bought_in": refused_bought_in, "refused_no_blank": refused_no_blank}
+            "refused_bought_in": refused_bought_in, "refused_no_blank": refused_no_blank,
+            "held_on_envelope": held_on_envelope}

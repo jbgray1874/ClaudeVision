@@ -151,5 +151,5 @@ def test_only_a_finished_estimate_is_copied():
     done = RUNNER_SRC.split('"The engine finished without producing a workbook. "', 1)[1]
     done = done.split("# WHERE THE ENGINE PUTS ITS ANSWER.", 1)[0]
     assert done.index("file_a_copy(job, filed, log)") < done.index(
-        '_finish(requests, base, headers, run_id, runner_id, "done", "", log, filed)')
+        '_finish(requests, base, headers, run_id, runner_id, "done", "", log, filed,')
     assert RUNNER_SRC.count("file_a_copy(job, filed, log)") == 1

@@ -167,6 +167,27 @@
     for (var i = 0; i < all.length && want; i++) if (all[i].name === want) return all[i];
     return all[0] || null;
   }
+  // WHICH VOICE SPOKE, SAID BESIDE THE BUTTON (JG, 11 Nov 2026: "add the natural/device voice
+  // label to the pages"). The page falls back to the device's voice quietly when the server voice
+  // is refused, and a robotic reply looked like a regression nobody could see. The label says
+  // "natural voice" when the service's neural voice played, "device voice" with the reason when
+  // it did not.
+  var lastVoice = {kind: "", why: ""};
+  function markVoice(btn, kind, why) {
+    lastVoice = {kind: kind, why: why || ""};
+    if (!btn || !btn.parentNode) return;
+    var tag = btn.nextElementSibling;
+    if (!tag || !tag.classList || !tag.classList.contains("sdi-voice-src")) {
+      tag = document.createElement("span");
+      tag.className = "sdi-voice-src";
+      tag.style.cssText = "margin-left:8px;font-size:12px;opacity:.75;white-space:nowrap";
+      btn.parentNode.insertBefore(tag, btn.nextSibling);
+    }
+    tag.textContent = kind === "natural" ? "natural voice" : "device voice" + (why ? " (" + why + ")" : "");
+    tag.title = kind === "natural" ? "Spoken by the service's neural voice (" + (ST.speech_voice || "Azure") + ")"
+      : "The service's natural voice was not used: " + (why || "unknown") + ". This is the computer's or phone's own voice.";
+    tag.setAttribute("data-voice", kind);
+  }
   function reset(btn) {
     if (btn) { btn.textContent = btn.getAttribute("data-label") || "Listen"; btn.classList.remove("on"); }
   }
@@ -204,12 +225,15 @@
       if (!btn.getAttribute("data-label")) btn.setAttribute("data-label", btn.textContent);
       btn.textContent = "Stop"; btn.classList.add("on");
     }
-    if (!ST.speech_tts) return deviceVoice(text, btn);
+    if (!ST.speech_tts) {
+      markVoice(btn, "device", ST.speech_reason || "the service has no natural voice set up");
+      return deviceVoice(text, btn);
+    }
     if (!audio) { audio = new Audio(); audio.setAttribute("playsinline", ""); }
     var said = JSON.stringify({text: forSpeech(text).slice(0, 4000)});
     function audioFrom(r) {
       var type = r.headers.get("content-type") || "";
-      if (!r.ok || type.indexOf("audio") < 0) throw new Error("no server voice");
+      if (!r.ok || type.indexOf("audio") < 0) throw new Error("server voice refused (HTTP " + r.status + ")");
       return r.blob();
     }
     // THE ESTIMATING PAGES' OWN ROUTE FIRST (D-673): it is behind their own gate, so the e-mail
@@ -229,9 +253,16 @@
         if (playing !== (btn || null)) return;
         audio.src = URL.createObjectURL(blob);
         audio.onended = function () { if (playing === (btn || null)) stop(); };
-        return audio.play();
+        var p = audio.play();
+        if (p && p.then) return p.then(function () { markVoice(btn, "natural"); });
+        markVoice(btn, "natural");
+        return p;
       })
-      .catch(function () { if (playing === (btn || null)) deviceVoice(text, btn); });
+      .catch(function (err) {
+        if (playing !== (btn || null)) return;
+        markVoice(btn, "device", (err && err.message) || "server voice unavailable");
+        deviceVoice(text, btn);
+      });
   }
 
   // ── hearing ───────────────────────────────────────────────────────────────────────────
@@ -360,6 +391,8 @@
                      canListen: canListen, canSpeak: canSpeak,
                      forSpeech: forSpeech, bestVoice: bestVoice, useVoice: useVoice,
                      useKey: function (k) { KEY = String(k || ""); },
+                     markVoice: markVoice,
+                     lastVoice: function () { return lastVoice; },
                      voices: function () {
                        return rankedVoices().map(function (v) {
                          return {name: v.name, lang: v.lang, score: voiceScore(v)}; }); },
