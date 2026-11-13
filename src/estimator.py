@@ -16557,6 +16557,20 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         except Exception:                                        # noqa: BLE001
             pass
 
+        # A PIECE IS MADE ONCE FOR EVERY ONE OF ITS PART, IN ITS PART'S MATERIAL (6364-01).
+        try:
+            from drawing_job_merge import pieces_take_their_parts_count_and_material as _pieces
+            _took = _pieces(parts)
+            if _took:
+                summary.setdefault("ai_inference", {})["pieces_from_their_parts"] = _took
+                print("   [pieces] " + "; ".join(
+                    f"{t['piece']} of {t['of']}: "
+                    + ", ".join(f"{k} {v}" for k, v in t.items() if k not in ("piece", "of"))
+                    for t in _took[:8]), flush=True)
+        except Exception as _pieces_exc:                         # noqa: BLE001
+            print(f"   [pieces] counts and materials not taken from their parts: {_pieces_exc}",
+                  flush=True)
+
         # THE EDGES OF A MITRED BOX THAT SHOW (D-677): each bevelled piece of an edged box
         # is stamped with its outline less its mitred joints, before the edging line reads it.
         try:

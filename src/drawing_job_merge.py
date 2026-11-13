@@ -1835,6 +1835,78 @@ def inherit_parent_product(piece: Dict[str, Any], parent: Dict[str, Any]) -> Lis
     return got
 
 
+def pieces_take_their_parts_count_and_material(parts: Any) -> List[Dict[str, Any]]:
+    """A piece cut for a part is made once for every one of that part (6364-01, 13 Nov 2026).
+
+    The door is 3 off. Its three flats were each made a piece at quantity 1, "inferred", and
+    priced once: two doors' worth of material and cutting were never charged. One bin piece
+    carried no material at all, because its flat's file name states none, though the bin's own
+    sheet states the bin's material and gauge.
+
+    Run once every reader has finished and before anything is costed:
+
+      * a piece whose own count nobody established (still the 1 it was born with) takes its
+        part's count, because one of it goes into each;
+      * a piece with no material takes the material its part's own sheet states, and the
+        gauge with it when the piece states none. A piece that states its own is left alone.
+
+    Both are recorded on the piece with where they came from. Returns what changed.
+    """
+    import source_precedence as _sp
+    plist = [p for p in (parts or []) if isinstance(p, dict)]
+    by_pn = {_normalize_part_key(p.get("part_number")): p for p in plist if p.get("part_number")}
+    said: List[Dict[str, Any]] = []
+    for piece in plist:
+        parent_pn = str(piece.get("dxf_minted_piece_of") or "").strip()
+        parent = by_pn.get(_normalize_part_key(parent_pn)) if parent_pn else None
+        if parent is None or parent is piece:
+            continue
+        note: Dict[str, Any] = {"piece": piece.get("part_number"), "of": parent_pn}
+        try:
+            parent_q = int(float(parent.get("quantity") or 0))
+        except (TypeError, ValueError):
+            parent_q = 0
+        own_src = str(_sp.source_of(piece, "quantity") or "")
+        try:
+            own_q = int(float(piece.get("quantity") or 0))
+        except (TypeError, ValueError):
+            own_q = 0
+        if parent_q > 1 and own_q <= 1 and own_src in ("", "inference") \
+                and not piece.get("quantity_from_its_part"):
+            # through the arbitration door, at the standing of a bill row times its
+            # assembly's count: stronger than the 1 the piece was born with, weaker than a
+            # count a reader takes from the drawing or the model
+            if not _apply_field(piece, "quantity", parent_q, "bom_tree_per_unit"):
+                continue
+            piece["quantity_from_its_part"] = {
+                "part": parent_pn, "part_quantity": parent_q, "per_part": 1,
+                "basis": f"one of this piece in each {parent_pn}, and {parent_q} of those a unit"}
+            note["count"] = parent_q
+        if not str(piece.get("normalized_material") or "").strip():
+            mat = str(parent.get("normalized_material") or "").strip()
+            if mat and str(_sp.source_of(parent, "normalized_material") or "") not in ("", "inference"):
+                _stated = str(_sp.source_of(parent, "normalized_material") or "")
+                if not _apply_field(piece, "normalized_material", mat, _stated):
+                    continue
+                piece["material_from_its_part"] = {
+                    "part": parent_pn, "material": mat,
+                    "stated_by": str(_sp.source_of(parent, "normalized_material") or "")}
+                note["material"] = mat
+                parent_gauge = parent.get("normalized_thickness_mm")
+                if parent_gauge and not piece.get("normalized_thickness_mm") and _apply_field(
+                        piece, "normalized_thickness_mm", parent_gauge,
+                        str(_sp.source_of(parent, "normalized_thickness_mm") or "") or _stated):
+                    piece["material_from_its_part"]["thickness_mm"] = parent_gauge
+                    note["thickness_mm"] = parent_gauge
+                piece.setdefault("review_flags", []).append(
+                    f"material taken from {parent_pn}'s own sheet ({mat}"
+                    + (f", {parent_gauge:g} mm" if isinstance(parent_gauge, (int, float)) and "thickness_mm" in note else "")
+                    + "): this piece's flat states none. Confirm the gauge of this piece.")
+        if len(note) > 2:
+            said.append(note)
+    return said
+
+
 def inherit_product_onto_pieces(parts: Any) -> List[str]:
     """Every piece split from a part's numbered flats takes the part's product fields it lacks,
     once every reader has run (the decor may be read after the split). Returns the pieces
