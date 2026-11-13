@@ -2504,3 +2504,19 @@ Charlotte is checking how today's daily sales report hides the rebate by custome
 4. Current-year estimate.
 5. Referral register populated.
 6. The X3 set-up with Acuity.
+
+**13 Nov – e-mail to Charlotte drafted (in the chat):** the full explanation, how the calculator was proved, the estimate method, X3 tracking and confidentiality, and the questions. The questions are:
+- entity scope (beauty, hearing-care, Ireland);
+- pass-through identification;
+- above the top band;
+- settlement;
+- brand meaning;
+- collected-revenue source;
+- quarterly referral reporting owner.
+
+**Working today:** the calculator and the finance workbook (manual monthly figures can be typed in).
+
+**Waiting on:**
+- the revenue query results (baseline reconciliation, actuals);
+- Charlotte's answers;
+- the X3 set-up.
