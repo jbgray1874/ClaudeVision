@@ -647,6 +647,38 @@ def banded_length_mm(part: Any) -> Dict[str, Any]:
 _EDGING_OPS = ("edge_banding", "edgebanding")
 
 
+def assemblies_banded_on_their_members(parts: Any) -> Dict[str, List[str]]:
+    """Assemblies whose edging is the edging of the boards they are made of (11896-08-01-GA,
+    13 Nov 2026).
+
+    "EDGED ALL ROUND" is printed on the panel's title block and again on the title block of
+    the sub-assembly that holds it. Both were measured: the panel all round, 6.7 m, and the
+    sub-assembly's own outline all round, 9.0 m, twice. Edging is applied to a board's
+    edges. An assembly of boards has no edge of its own to band, so where a member board of
+    an assembly carries the banding, the assembly's outline is not banded as well.
+
+    Returns {assembly part number: [its banded member boards]}, upper case.
+    """
+    plist = [p for p in (parts or []) if isinstance(p, dict)]
+    by_pn = {str(p.get("part_number") or "").strip().upper(): p for p in plist}
+
+    def _banded(part: Dict[str, Any]) -> bool:
+        ops = [str(o).lower() for o in (part.get("textual_operations") or [])]
+        return bool(part.get("edging_route_words")) or "edge_banding" in ops \
+            or bool(part.get("_confirmed_banded_mm"))
+
+    out: Dict[str, List[str]] = {}
+    for pn, part in by_pn.items():
+        kids = [str(k).strip().upper() for k in (part.get("assembly_children") or [])
+                if str(k).strip()]
+        mine = sorted(k for k in kids
+                      if k in by_pn and not (by_pn[k].get("assembly_children") or [])
+                      and _banded(by_pn[k]))
+        if pn and mine:
+            out[pn] = mine
+    return out
+
+
 def _ops_of(part: Dict[str, Any]) -> List[str]:
     # AND THE OPERATIONS TAKEN OFF AN ASSEMBLY BECAUSE THEY BELONG TO ITS PIECES (D-679). The
     # route compiler moves edge_banding off 12203-65-01J into removed_operations: an assembly

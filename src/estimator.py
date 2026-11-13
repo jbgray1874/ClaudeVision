@@ -16622,6 +16622,12 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _stamp_words(parts, summary)
             except Exception:                                        # noqa: BLE001
                 pass
+            # AN ASSEMBLY OF BANDED BOARDS IS NOT BANDED AGAIN ON ITS OWN OUTLINE (11896-08-01).
+            try:
+                from edge_banding import assemblies_banded_on_their_members as _on_members
+                _edged_by_members = _on_members(parts)
+            except Exception:                                        # noqa: BLE001
+                _edged_by_members = {}
             _edge_parts: List[Tuple[str, float, str, Optional[float]]] = []
             _edge_boards: List[str] = []    # every board the gate admitted, for a per-unit
                                             # confirmation whose metres name no single part
@@ -16648,6 +16654,14 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                             "costing_material_family")):
                     continue
                 _pn_e = str(_p.get("part_number") or "").strip().upper()
+                if _pn_e in _edged_by_members:
+                    _p["_edging_on_its_members"] = list(_edged_by_members[_pn_e])
+                    _note_e = (f"edging not measured on this assembly's outline: it is the "
+                               f"edging of its board(s) {', '.join(_edged_by_members[_pn_e])}, "
+                               f"measured there")
+                    if _note_e not in (_p.get("review_flags") or []):
+                        _p.setdefault("review_flags", []).append(_note_e)
+                    continue
                 if _pn_e and _pn_e not in _edge_boards:
                     _edge_boards.append(_pn_e)
                 if _pn_e in _bm_per_part:
