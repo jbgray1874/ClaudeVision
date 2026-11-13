@@ -66,9 +66,59 @@ Step "restart the main runner" { & "$root\tools\start\restart-runner.ps1" }
 if (-not $NoSlot) {
     Step "update runner slot $Slot" { & "$root\tools\start\install-runner-slot.ps1" -Slot $Slot }
 }
+# THE WATCHER IS ENDED, ITS LOCK CLEARED, AND IT IS HEARD AGAIN BEFORE THIS SAYS DONE. On
+# 13 Nov 2026 this step stopped and started the task and printed nothing. A stopped watcher
+# cannot release its lock, the new one refuses a lock touched in the last ten minutes, and
+# the page said "no self-running watcher is connected" with every runner on the new build.
 Step "restart the Self-Running watcher" {
-    Stop-ScheduledTask -TaskName "SDI AI Estimate Self-Running" -ErrorAction SilentlyContinue
-    Start-ScheduledTask -TaskName "SDI AI Estimate Self-Running"
+    $taskName = "SDI AI Estimate Self-Running"
+    if (-not (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
+        Write-Host "  no '$taskName' task on this machine: nothing to restart" -ForegroundColor Yellow
+        return
+    }
+    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    $watchers = @(Get-CimInstance Win32_Process -Filter "Name like 'python%'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like "*self_running.py*" })
+    foreach ($w in $watchers) { Stop-Process -Id $w.ProcessId -Force -ErrorAction SilentlyContinue }
+    if ($watchers.Count) { Write-Host "  ended the watcher (pid $(($watchers | ForEach-Object { $_.ProcessId }) -join ', '))" }
+    Start-Sleep -Seconds 2
+    $ledger = Join-Path $root "output\live_enquiry\ledger.json"
+    $envFile = Join-Path $root ".env"
+    if (Test-Path $envFile) {
+        $ledgerEnv = Select-String -Path $envFile -Pattern '^\s*SDI_LIVE_ENQUIRY_LEDGER\s*=\s*(.+?)\s*$' |
+            Select-Object -First 1
+        if ($ledgerEnv) { $ledger = $ledgerEnv.Matches[0].Groups[1].Value.Trim('"') }
+    }
+    $lock = Join-Path (Split-Path -Parent $ledger) "live_enquiry.lock"
+    if (Test-Path $lock) {
+        $holder = ((Get-Content -LiteralPath $lock -ErrorAction SilentlyContinue) -split "\s+")[0]
+        if (-not ($holder -as [int]) -or -not (Get-Process -Id ([int]$holder) -ErrorAction SilentlyContinue)) {
+            Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+            Write-Host "  cleared the lock left by the watcher that was ended"
+        } else {
+            Write-Host "  the lock is held by pid $holder, which is still running: the watcher will refuse to start" -ForegroundColor Red
+            $global:LASTEXITCODE = 10
+            return
+        }
+    }
+    Start-ScheduledTask -TaskName $taskName
+    $heard = $false
+    $answered = $false
+    foreach ($try in 1..9) {
+        Start-Sleep -Seconds 5
+        try { $sr = Invoke-RestMethod -Uri "http://localhost:8071/api/estimate/self-running" -TimeoutSec 5 } catch { continue }
+        $answered = $true
+        if ($sr.watcher.connected -and $sr.watcher.seconds_since -le 20) { $heard = $true; break }
+    }
+    if ($heard) { Write-Host "  the watcher is connected (heard $($sr.watcher.seconds_since)s ago)" -ForegroundColor Green }
+    elseif (-not $answered) {
+        # NOT ASKED IS NOT "NOT RUNNING": a false alarm sends someone to mend a working watcher.
+        Write-Host "  started the task. 8071 did not answer the question, so the watcher is NOT CONFIRMED: read the estimating page" -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "  THE WATCHER WAS NOT HEARD in 45 seconds. Read output\live_enquiry\self_running.log" -ForegroundColor Red
+        $global:LASTEXITCODE = 10
+    }
 }
 Step "every service on this checkout" { & "$root\tools\start\check-services.ps1" -Ports 8071,8072 }
 
