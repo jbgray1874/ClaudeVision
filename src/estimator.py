@@ -602,6 +602,8 @@ def _part_cost_credibility(mfg: Optional[Dict[str, Any]], est_part: Dict[str, An
     # written for it, so whatever its material line shows is not a credible figure.
     if mfg.get("model_envelope_unresolved"):
         reasons.append("model_envelope_construction_unstated")
+    if mfg.get("quantity_unresolved"):
+        reasons.append("quantity_not_established")
 
     has_dxf = _part_has_part_dxf(mfg)
     gr = _safe_float((est_part.get("process_estimate") or {}).get("geometry_reliability"))
@@ -12232,10 +12234,24 @@ def _sanitise_part_quantity(part: Dict[str, Any]) -> int:
         return raw_qty
 
     if raw_qty > _MAX:
+        # A COUNT NOBODY READ IS NOT REPLACED BY ONE (6364-01, 12 Nov 2026). The bill tree
+        # produced 52 hank bushes from a drawing that calls for 4. This cap then "reset to 1"
+        # with a warning, and one bush was priced as though that were the answer. One is as
+        # unsupported as fifty-two. The line is still carried at one so it stays on the
+        # sheet, but it is marked: its quantity is not established, and its cost is not a
+        # figure to rely on until the count is read from the drawing or the model.
+        part["quantity_unresolved"] = {
+            "computed": raw_qty, "carried_at": 1, "limit": _MAX,
+            "source": _qsrc or "not recorded",
+            "note": (f"The quantity worked out for this line was {raw_qty}, over the limit of "
+                     f"{_MAX} a unit, and no reader counted it. It is carried at 1 and is NOT "
+                     f"a price for the quantity required."),
+        }
         part.setdefault("review_flags", []).append({
-            "severity": "warning",
+            "severity": "blocking",
             "flag": "quantity_capped",
-            "detail": f"qty {raw_qty} > MAX_PART_QTY_PER_UNIT ({_MAX}) — reset to 1",
+            "detail": (f"qty {raw_qty} > MAX_PART_QTY_PER_UNIT ({_MAX}): quantity NOT "
+                       f"ESTABLISHED, carried at 1 and unresolved"),
         })
         return 1
 
