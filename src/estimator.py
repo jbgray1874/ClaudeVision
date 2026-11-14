@@ -15196,6 +15196,29 @@ def _is_made_line(pe: Dict[str, Any]) -> bool:
     return bool(_ops & FABRICATION_OPS) and not is_bought_in(pe)
 
 
+_SECTION_STOCK_FORMS = frozenset({"tube", "box_section", "oval_tube", "section", "bar", "rod",
+                                  "wire", "angle", "channel"})
+
+
+def _stated_section_of(pe: Dict[str, Any], me: Dict[str, Any]) -> str:
+    """The section a part says it is cut from, in a few words, or "". Stock bought by its
+    section (tube, bar, wire) is established by that section, not by a sheet thickness."""
+    for holder in (pe, me):
+        ss = holder.get("section_stock") if isinstance(holder.get("section_stock"), dict) else {}
+        if _safe_float(ss.get("a")):
+            return " x ".join(f"{float(ss[k]):g}" for k in ("a", "b", "t")
+                              if _safe_float(ss.get(k))) + " section"
+    for holder in (me, pe):
+        if _safe_float(holder.get("wire_gauge_mm")):
+            return f"{float(holder['wire_gauge_mm']):g} mm wire"
+    form = str(me.get("stock_form") or pe.get("stock_form") or "").strip().lower()
+    if form in _SECTION_STOCK_FORMS and _safe_float(
+            (me.get("stock_estimate") or {}).get("section_length_mm")
+            or (me.get("stock_estimate") or {}).get("wire_length_mm")):
+        return form.replace("_", " ")
+    return ""
+
+
 def _made_part_material_allowance(pe: Dict[str, Any]) -> Optional[float]:
     """A PART WE MAKE IS NEVER PRICED AS A FINISHED ITEM (D-485).
 
@@ -15245,7 +15268,16 @@ def _made_part_material_allowance(pe: Dict[str, Any]) -> Optional[float]:
     # the fresh run the base arrived as "timber" from the model's applied material, with no
     # thickness and no size at all, passed, and was charged £6.24 from an answer about timber
     # of unknown gauge and unknown size. A material class with no gauge is not a construction.
-    _unstated = ([] if material else ["its material"]) + ([] if gauge else ["its thickness"])
+    #
+    # THE EVIDENCE ITS OWN COSTING METHOD NEEDS, NOT A THICKNESS ON EVERYTHING (reviewer,
+    # 14 Nov 2026: "Do not require thickness for every coded part ... Require the construction
+    # evidence needed by the applicable material-costing method"). Sheet and board are bought
+    # by gauge, so a sheet or board part needs its thickness. A part cut from section, tube,
+    # bar or wire is bought by its section, and one that states its section is established
+    # without a thickness. Bought-in lines never come here: they are priced as purchases.
+    _section = _stated_section_of(pe, me)
+    _unstated = ([] if material else ["its material"]) \
+        + ([] if (gauge or _section) else ["its thickness"])
     if _unstated and _coded:
         _size = f"{_bl:g} x {_bw:g} mm" if (_bl and _bw) else "no measured size"
         _need = " and ".join(_unstated)

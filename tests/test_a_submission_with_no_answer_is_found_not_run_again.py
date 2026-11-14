@@ -190,6 +190,30 @@ def test_a_submission_nobody_holds_stays_in_progress_and_nothing_else_is_queued(
     assert _job(share)["attempts"][-1]["run_id"] == "late1"
 
 
+def test_a_submission_never_answered_and_never_found_is_held_not_sent_again(share, monkeypatch):
+    """Reviewer: "Timeouts must never cause blind resubmission." """
+    portal = Portal(answers=("ok",))
+    _cycle(share, portal)
+    _ask_again_on_the_page(share)
+    portal.answers = ["nothing"]
+    _cycle(share, portal)
+    assert portal.asked.count("0360001") == 2
+    monkeypatch.setattr(ler, "QUEUEING_GRACE_SECONDS", -1)      # the grace has passed
+    portal.answers = ["ok"]
+    said = []
+    for _ in range(3):
+        _cycle(share, portal, said)
+    assert portal.asked.count("0360001") == 2, "an unanswered submission was sent again unasked"
+    job = _job(share)
+    assert job["attempts"][-1]["status"] == "error" and job["attempts"][-1]["unanswered_given_up"]
+    assert "page_rerun" not in job and "retry" not in job
+    assert any("HELD" in s for s in said) and any("not sent again on its own" in s for s in said), said
+    # A person asking again is what sends it.
+    _ask_again_on_the_page(share)
+    _cycle(share, portal)
+    assert portal.asked.count("0360001") == 3
+
+
 def test_a_refusal_still_takes_the_provisional_line_off(share):
     portal = Portal(answers=((400, "the pack has no drawing"),))
     _cycle(share, portal)

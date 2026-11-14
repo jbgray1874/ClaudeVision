@@ -135,3 +135,34 @@ def test_an_uncoded_line_keeps_todays_allowance(asked):
           "route_context": {"textual_operations": ["hole_machining", "diamond_polish"]}}
     assert E._made_part_material_allowance(pe) == 8.0 and len(asked) == 1
     assert "construction_not_established" not in pe
+
+
+# ── THE EVIDENCE ITS OWN COSTING METHOD NEEDS (reviewer, 14 Nov 2026) ──────────────────────
+def test_a_part_cut_from_a_stated_section_needs_no_sheet_thickness(monkeypatch):
+    """Tube, bar and wire are bought by their section. A made part that states its section is
+    established without a thickness, and keeps its allowance."""
+    calls = []
+    monkeypatch.setattr(E, "_rung4_researcher", lambda brief: (
+        calls.append(brief), _answer(4.0, "mild steel tube stock"))[1])
+    pe = _base(material="MILD_STEEL", thickness=None, length=None, width=None)
+    pe["section_stock"] = {"a": 30.0, "b": 30.0, "t": 2.0, "length_mm": 800.0}
+    assert E._made_part_material_allowance(pe) == 4.0
+    assert len(calls) == 1 and "construction_not_established" not in pe
+
+
+def test_the_same_part_with_no_section_and_no_thickness_is_not_priced(asked):
+    pe = _base(material="MILD_STEEL", thickness=None, length=None, width=None)
+    assert E._made_part_material_allowance(pe) is None and asked == []
+    assert pe["construction_not_established"]["missing"] == ["its thickness"]
+
+
+def test_a_line_the_make_or_buy_rule_calls_bought_never_reaches_this_safeguard(monkeypatch):
+    """A bought-in line is priced as a purchase. No thickness is asked of it."""
+    line = {"part_number": "FIXING1180", "description": "M6 x 30mm COUNTERSUNK BOLT (BZP)",
+            "quantity": 4, "is_bought_in": True, "page_roles": ["bought_in"],
+            "material_estimate": {}, "review_flags": []}
+    monkeypatch.setattr(E, "_resolve_part_system_cost",
+                        lambda pe: {"applied_unit_cost": 0.12, "result": {}})
+    assert E._is_made_line(line) is False
+    assert E._last_resort_lookup(line) == 0.12
+    assert "construction_not_established" not in line

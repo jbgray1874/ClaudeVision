@@ -178,7 +178,7 @@ def _settings(share):
 def test_the_preview_shows_a_waiting_rerun_as_ready_and_leaves_it_waiting(share):
     """Both jobs already ran. One has a Re-run waiting. The preview must show exactly that one
     as ready, start nothing, write nothing and take nothing."""
-    ask = {"drawing": "0360001", "customer": "M&S", "by": "JG", "at": "2026-11-14T10:00:00"}
+    ask = {"drawing": "0360001", "customer": "M&S", "by": "JG", "at": ler._now()}   # pressed now, after the lost run
     portal = Portal(runs=[_done_run("0360001"), dict(_done_run("0360002"), run_id="lost2")],
                     waiting=[ask])
     said = []
@@ -196,7 +196,7 @@ def test_a_rerun_for_a_job_the_ledger_lost_is_run_once_not_dropped(share):
     """The ledger holds nothing for the job; a service holds its finished run; a Re-run is
     waiting. The live cycle runs it once: the request finds the job, and the adopted run does
     not read as 'already done' over a person's Re-run."""
-    ask = {"drawing": "0360001", "customer": "M&S", "by": "JG", "at": "2026-11-14T10:00:00"}
+    ask = {"drawing": "0360001", "customer": "M&S", "by": "JG", "at": ler._now()}   # pressed now, after the lost run
     portal = Portal(runs=[_done_run("0360001"), dict(_done_run("0360002"), run_id="lost2")],
                     waiting=[ask])
     switch = sr.Switch(portal, say=lambda s: None)

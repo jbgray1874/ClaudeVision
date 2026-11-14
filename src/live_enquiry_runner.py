@@ -999,6 +999,12 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
     located = locate(row, sources)
     adopt_for_row(row, located, ledger)
     job = ledger["jobs"].get(key) or {}
+    # A request the adoption above has just used up is no longer a request: the run it became
+    # was found, or the submission was given up on and is held for a person.
+    if page_rerun and not job.get("page_rerun"):
+        page_rerun = False
+        rerun = bool(row.completed_column
+                     and completed_word(row.ai_completed) in config.LIVE_ENQUIRY_RERUN)
     attempts = job.get("attempts") or []
     # RE-RUN BEATS A BASELINE (D-642). A job marked as estimated by hand before the runner
     # existed read "done" before Re-Run was ever looked at, so typing Re-Run on its row did
@@ -1069,6 +1075,13 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
         d.status, d.reason = "held", (f"stopped by hand at {last.get('finished_at') or '?'} — "
                                       f"mark it Re-Run on the sheet, or `retry {row.drawing}`, "
                                       f"to run it again")
+        return d
+    if last.get("status") == "error" and last.get("unanswered_given_up") \
+            and not job.get("retry"):
+        d.status, d.reason = "held", (f"asked for at {last.get('queued_at') or '?'}; the service "
+                                      f"never answered and no service lists a run for it. It is "
+                                      f"not sent again on its own: press Re-run on the page, or "
+                                      f"`retry {row.drawing}`, once you have checked the grid")
         return d
     if same and last.get("status") == "done":
         if row.completed_column and last.get("sheet_marked"):
@@ -1563,9 +1576,14 @@ def adopt_for_row(row: EnquiryRow, located: Optional["Located"], ledger: Dict[st
                 t = _epoch_from_iso(a.get("queued_at"))
                 if a.get("status") == QUEUEING and not a.get("run_id") and t \
                         and time.time() - t > QUEUEING_GRACE_SECONDS:
-                    a.update(status="error", finished_at=_now(),
+                    a.update(status="error", finished_at=_now(), unanswered_given_up=True,
                              error=("asked for, but its answer was not recorded and no service "
                                     "holds a run for it: `retry` it if it should run"))
+                    # NEVER SENT AGAIN ON ITS OWN (reviewer, 14 Nov 2026: "Timeouts must never
+                    # cause blind resubmission ... A run not appearing immediately is not proof
+                    # it was rejected"). The request that asked for it is used up with it, so
+                    # the row is held for a person. A run that turns up later is still adopted.
+                    _request_answered_by(job, row, 0.0, True)
     ledger.setdefault("_adopted", []).extend(said)
     return said
 

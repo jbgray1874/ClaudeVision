@@ -248,7 +248,7 @@ def test_a_queueing_line_no_service_holds_is_held_not_requeued(share):
     portal = Portal(runs=[])                          # the services answered: none has it
     out = _cycle(share, portal)
     assert portal.started == []
-    assert out["counts"].get("failed") == 1, "said, and left for `retry`, never queued on its own"
+    assert out["counts"].get("held") == 1, "said, and left for a person, never queued on its own"
 
 
 # ── 4. THE PREVIEW SHOWS WHAT A LIVE CYCLE WOULD DO ────────────────────────────────────────
