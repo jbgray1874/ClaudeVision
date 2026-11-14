@@ -3500,9 +3500,37 @@ def build_part_graph(
             return 0.0
         _n = 0.0
         for _k, _kq in (children.get(_top) or {}).items():
-            _kq = number(_kq, 1.0) or 1.0
+            _kq = _counted_per_parent(_top, _k, number(_kq, 1.0) or 1.0)
             _n += _kq if _k == _target else _kq * _count_through(_k, _target, _seen + (_top,))
         return _n
+
+    def _counted_per_parent(_parent: str, _child: str, _edge_q: float) -> float:
+        """How many of _child ONE _parent holds: the count of a reader that counts instances
+        per parent (the SolidWorks model) where the child's record carries one, else the edge.
+
+        A TABLE'S TOTAL IS NOT A PER-PARENT COUNT (12773-01-GA, 14 Nov 2026). Each sheet of
+        that pack lists its parts flat, with totals: the shelf's sheet says 8 lock plates in
+        four shelves, the lower body's sheet says 4 in its two shelves, and the model counts
+        2 in each shelf. The edges took 8 as "per shelf", the test below compared 4 with
+        2 x 8 = 16, kept the body's direct row as an extra, and the plates were reached by
+        four paths: 16 + 4 + 16 + 4 = 40 charged against 8 in the product. Read at the
+        model's per-parent count, the body's 4 is exactly what its two shelves bring, the
+        direct row goes, and the plate is left under the shelf alone, where the cascade
+        already takes the model's count over the table's."""
+        _rec = records.get(_child) or {}
+        _split = _rec.get("quantity_by_parent")
+        if isinstance(_split, Mapping) and _split \
+                and rank(str(_rec.get("quantity_by_parent_source") or "")) > _edge_substitution_rank:
+            for _pk, _pv in _split.items():
+                if clean_part_number(str(_pk)) == clean_part_number(str(_parent)):
+                    _ppq = number(_pv, None)
+                    if _ppq and _ppq > 0:
+                        return _ppq
+        _own_q = number(_rec.get("quantity"), None)
+        if _own_q and _own_q > 0 \
+                and rank(str(source_of(_rec, "quantity") or "")) > _edge_substitution_rank:
+            return _own_q
+        return _edge_q
 
     # EVERY PARENT, NOT ONLY ONE TABLE. The 14:57 rerun kept 2 of each: the GA's edge to the
     # lighting assembly and its edge to the driver arrived from different reads, so no single
