@@ -435,6 +435,34 @@ def fingerprint(files: Sequence[Path]) -> str:
     return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:12]
 
 
+_A_KEPT_VERSION = re.compile(r"\s+v(\d+)$", re.IGNORECASE)
+
+
+def the_pack_among_its_versions(folders: Sequence[Path]) -> Optional[Path]:
+    """The folder to price where every folder is one pack or a version kept of it ("X",
+    "X v2", "X v3" - the names src/pack_store.py gives), else None and the caller holds.
+
+    A folder a person made wins (JG, 10 Nov 2026): it carries no pack manifest of ours and
+    holds a drawing. Exactly one such is the pack. None such, and the newest version is: that
+    is the one the store filed last. Two a person made is a question only a person answers."""
+    import pack_store as ps
+    numbered = []
+    for f in folders:
+        m = _A_KEPT_VERSION.search(f.name)
+        numbered.append((int(m.group(1)) if m else 1,
+                         (f.name[:m.start()] if m else f.name).strip().casefold(), f))
+    if len({base for _n, base, _f in numbered}) != 1 or \
+            len({n for n, _b, _f in numbered}) != len(numbered):
+        return None                 # not one pack's versions: different packs, or a clash
+    by_hand = [f for _n, _b, f in numbered if not (f / ps.MANIFEST).exists()
+               and any(p.suffix.lower() in DRAWING_EXTENSIONS for p in pack_files(f))]
+    if len(by_hand) == 1:
+        return by_hand[0]
+    if by_hand:
+        return None
+    return max(numbered)[2]
+
+
 @dataclass
 class Located:
     status: str                    # found | waiting | held
@@ -508,6 +536,18 @@ class LiveEnquiryShare:
                            client_folder_name=client_dir.name, source=self.name)
         where = "the root" if at_root else client_dir.name
         client_name = "" if at_root else client_dir.name
+        kept_versions = ""
+        if len(hits) > 1:
+            # ONE PACK AND THE VERSIONS KEPT OF IT ARE ONE PACK (JG, 13 Nov 2026). Three rows
+            # were held with "2 folders fit: X, X v2 - leave one". The second folder was the
+            # pack store's own: a changed pack is filed beside the old as "X vN" so nothing is
+            # lost, and the next read then met two folders and stopped. Nothing is deleted;
+            # the folder to price is chosen and said.
+            chosen = the_pack_among_its_versions(hits)
+            if chosen is not None:
+                kept_versions = (f"; {len(hits) - 1} other version(s) kept beside it and not "
+                                 f"read: {', '.join(h.name for h in hits if h != chosen)}")
+                hits = [chosen]
         if len(hits) > 1:
             return Located("held", f"{len(hits)} folders under {where} fit {row.drawing}: "
                                    f"{', '.join(h.name for h in hits)} — leave one",
@@ -521,7 +561,8 @@ class LiveEnquiryShare:
                                       f"(only files directly in the folder are read)",
                            folder=folder, client_folder_name=client_name, files=files,
                            source=self.name)
-        return Located("found", f"{len(drawings)} drawing(s) in {folder.name}{old_layout}",
+        return Located("found", f"{len(drawings)} drawing(s) in {folder.name}{old_layout}"
+                                f"{kept_versions}",
                        folder=folder, client_folder_name=client_name, files=files,
                        source=self.name)
 
@@ -544,6 +585,16 @@ class DesignShare:
         self._folders = folders
 
     def find(self, row: EnquiryRow) -> Optional[Located]:
+        import pack_resolver as pr
+        try:
+            return self._find(row)
+        except pr.PackCheckStalled as exc:
+            # AN UNCHECKED PACK IS NOT QUEUED, AND NOT TAKEN AS UNCHANGED (JG, 14 Nov 2026).
+            return Located("held", f"the pack for {row.drawing} could not be checked: {exc}. "
+                                   f"Nothing is queued from an unchecked pack; it is tried again "
+                                   f"on the next read", source=self.name)
+
+    def _find(self, row: EnquiryRow) -> Optional[Located]:
         import pack_resolver as pr
         import pack_store as ps
         if not str(row.drawing or "").strip():
@@ -603,6 +654,8 @@ class DesignShare:
             if not folders:
                 return None
             m = pr.resolve(row.drawing, folders, client=row.customer, lookup=lookup)
+        except pr.PackCheckStalled:
+            raise                   # unchecked: find() holds the job and says which file
         except Exception:                                                # noqa: BLE001
             return None             # the estimator's folder still stands as it is
         if m.get("status") in ("not found",):
@@ -723,25 +776,76 @@ def job_key(row: EnquiryRow) -> str:
     return f"{customer_key(row.customer)}|{drawing_key(row.drawing)}"
 
 
-def load_ledger(path: Path) -> Dict[str, Any]:
-    try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+# AN ATTEMPT SAVED BEFORE ITS RUN WAS ASKED FOR (queue_one): in progress, never "never run".
+QUEUEING = "queueing"
+
+
+class LedgerUnreadable(RuntimeError):
+    """The ledger is there but cannot be read as one. Nothing is queued while it is so."""
+
+
+# A LEDGER THAT CANNOT BE READ IS NOT AN EMPTY LEDGER (JG, 14 Nov 2026: "the grid shouldn't run
+# jobs that don't meet the criteria for running. this is a bug"). Overnight 13-14 Nov,
+# 11896-04-00-GA, 11896-02-01-GA, 11896-01-00-GA and 6364-02 were run again and again, with
+# Self-Running finally switched off, and not one of those runs was in the ledger. A failed read
+# here used to hand back an empty ledger. The cycle saved that over the real one at once and
+# planned from it, so every row with AICompleted still NO looked as if it had never run. A
+# Windows sharing violation, a read while the file was being replaced or a truncated file was
+# enough. Only a ledger that is not there at all is new. One that is there is read, tried
+# again while a lock passes, and otherwise refused with the reason. The cycle that asked
+# queues nothing and writes nothing.
+LEDGER_READ_TRIES = 5
+LEDGER_RETRY_SECONDS = 0.5
+
+
+def new_ledger() -> Dict[str, Any]:
+    return {"schema": LEDGER_SCHEMA, "jobs": {}, "quantities": {}}
+
+
+def load_ledger(path: Path, tries: int = LEDGER_READ_TRIES,
+                pause: float = LEDGER_RETRY_SECONDS) -> Dict[str, Any]:
+    path = Path(path)
+    if not path.exists():
+        return new_ledger()
+    why = ""
+    for n in range(max(1, tries)):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            why = f"{type(exc).__name__}: {exc}"
+            if n + 1 < tries:
+                time.sleep(pause)
+            continue
         if isinstance(data, dict) and data.get("schema") == LEDGER_SCHEMA:
             data.setdefault("jobs", {})
             data.setdefault("quantities", {})
             return data
-    except (OSError, ValueError):
-        pass
-    return {"schema": LEDGER_SCHEMA, "jobs": {}, "quantities": {}}
+        said = data.get("schema") if isinstance(data, dict) else type(data).__name__
+        raise LedgerUnreadable(f"{path} is not a Self-Running ledger (it says {said!r}); nothing "
+                               f"is queued, and nothing is written over it, until it is put right")
+    raise LedgerUnreadable(f"{path} could not be read after {tries} tries ({why}); nothing is "
+                           f"queued, and nothing is written over it, until it can be")
 
 
-def save_ledger(path: Path, ledger: Dict[str, Any]) -> None:
+def save_ledger(path: Path, ledger: Dict[str, Any], tries: int = LEDGER_READ_TRIES,
+                pause: float = LEDGER_RETRY_SECONDS) -> None:
+    """Written whole and swapped in, so a reader never sees half a ledger. The swap is tried
+    again while another process holds the file for a moment (a Windows sharing violation), and
+    only then fails, loudly: an attempt this could not record must not pass unsaid."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(ledger, indent=2, ensure_ascii=False, default=str),
+    kept = {k: v for k, v in ledger.items() if not str(k).startswith("_")}   # this cycle's only
+    tmp.write_text(json.dumps(kept, indent=2, ensure_ascii=False, default=str),
                    encoding="utf-8")
-    os.replace(tmp, path)               # never a half-written ledger
+    for n in range(max(1, tries)):
+        try:
+            os.replace(tmp, path)       # never a half-written ledger
+            return
+        except PermissionError:
+            if n + 1 >= tries:
+                raise
+            time.sleep(pause)
 
 
 def _now() -> str:
@@ -878,6 +982,7 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
             return Decision(row, "held", f"the same job as row {seen[key]}")
         seen[key] = row.row
     located = locate(row, sources)
+    adopt_for_row(row, located, ledger)
     job = ledger["jobs"].get(key) or {}
     attempts = job.get("attempts") or []
     # RE-RUN BEATS A BASELINE (D-642). A job marked as estimated by hand before the runner
@@ -909,6 +1014,14 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
                         f"`qty {row.drawing} 1,5,10`", located=located)
     fp = fingerprint(located.files)
     last = attempts[-1] if attempts else {}
+    if last.get("adopted") and not last.get("fingerprint"):
+        # AN ADOPTED RUN RAN THIS PACK if no file in it has changed since the run was queued.
+        try:
+            newest = max((Path(f).stat().st_mtime for f in located.files), default=0.0)
+        except OSError:
+            newest = float("inf")
+        if newest <= float(last.get("queued_epoch") or 0):
+            last["fingerprint"] = fp
     d = Decision(row, "ready", "first run", located=located, quantities=qty,
                  quantity_source=qsource, fingerprint=fp, last=last, rerun=rerun)
     # RE-RUN RUNS ONCE PER MARKING (D-608). Until AICompleted is written back the cell still
@@ -920,7 +1033,13 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
             d.reason = ("Re-Run asked for on the sheet (it was baselined as estimated by hand)"
                         if rerun_due else "the pack has changed since it was baselined")
         return d
-    same = last.get("fingerprint") == fp and list(last.get("quantities") or []) == qty
+    same = last.get("fingerprint") == fp and _same_quantities(last, qty)
+    if last.get("status") == QUEUEING:
+        # ASKED FOR, ANSWER NOT RECORDED: in progress until a service is found holding it.
+        d.status, d.reason = "running", (f"asked for at {last.get('queued_at')}; the service's "
+                                         f"answer was not recorded, so it is looked for on the "
+                                         f"services before anything else is queued")
+        return d
     if last.get("status") in {"queued", "running"}:
         d.status, d.reason = "running", f"queued as run {last.get('run_id')} at " \
                                         f"{last.get('queued_at')}"
@@ -964,7 +1083,7 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
                     f"({last['build'][:7]} → {_now_build[:7]}); running it again")
         return d
     tries = sum(1 for a in attempts if a.get("fingerprint") == fp
-                and list(a.get("quantities") or []) == qty and a.get("status") != "done"
+                and _same_quantities(a, qty) and a.get("status") != "done"
                 and not interrupted(a))
     if job.get("retry") or tries < config.LIVE_ENQUIRY_MAX_ATTEMPTS:
         d.reason = "retry asked for" if job.get("retry") else f"attempt {tries + 1}"
@@ -1008,7 +1127,8 @@ def baseline(rows: Sequence[EnquiryRow], sources: Sequence[Any], ledger: Dict[st
 
 
 def plan(rows: Sequence[EnquiryRow], sources: Sequence[Any],
-         ledger: Dict[str, Any]) -> List[Decision]:
+         ledger: Dict[str, Any],
+         progress: Optional[Callable[[EnquiryRow], None]] = None) -> List[Decision]:
     """Every row's decision, ready rows first by the date the estimate is wanted, or, on the
     AI Live Enquiry sheet, in the sheet's own order from the top."""
     seen: Dict[str, int] = {}
@@ -1017,7 +1137,11 @@ def plan(rows: Sequence[EnquiryRow], sources: Sequence[Any],
     for r in rows:
         if r.completed_column and completed_word(r.ai_completed) not in config.LIVE_ENQUIRY_RERUN:
             (ledger.get("jobs", {}).get(job_key(r)) or {}).pop("rerun_taken", None)
-    decisions = [decide(r, sources, ledger, seen) for r in rows]
+    decisions = []
+    for r in rows:
+        if progress is not None:
+            progress(r)                 # which job is being checked, said before its pack is read
+        decisions.append(decide(r, sources, ledger, seen))
     on_sheet = {job_key(r) for r in rows}
     for _k, _job in (ledger.get("jobs") or {}).items():
         if _job.get("page_rerun") and _k not in on_sheet:
@@ -1076,6 +1200,10 @@ class Portal:
     def status(self, run_id: str) -> Dict[str, Any]:
         return self._call("GET", f"/api/estimate/{run_id}")
 
+    def recent(self, limit: int = 300) -> Dict[str, Any]:
+        """The service's own runs, newest first (GET /api/estimate), as Grid Control lists them."""
+        return self._call("GET", f"/api/estimate?limit={int(limit)}")
+
     def abandon(self, run_id: str) -> Dict[str, Any]:
         return self._call("POST", f"/api/estimate/{run_id}/abandon", {})
 
@@ -1093,6 +1221,11 @@ class Portal:
     def dm_extract_status(self, job_id: str) -> Dict[str, Any]:
         """Where that extract has got to, and whether its pack is readable from the portal."""
         return self._call("GET", f"/api/estimate/dm/extract/{job_id}")
+
+    def self_running_view(self) -> Dict[str, Any]:
+        """The switch as the page shows it, with the Re-run requests still waiting. Read only:
+        unlike the beat, it takes nothing."""
+        return self._call("GET", "/api/estimate/self-running")
 
     def self_running(self, report: Dict[str, Any]) -> Dict[str, Any]:
         """Report to the portal's AI Estimate Self-Running switch and hear whether it is on
@@ -1187,7 +1320,7 @@ def price_words(attempt: Dict[str, Any]) -> str:
     price = validated_price(attempt)
     if price is not None:
         return f"£{price:,.2f}"
-    if (attempt or {}).get("status") in {"queued", "running", "claimed"}:
+    if (attempt or {}).get("status") in {"queued", "running", "claimed", QUEUEING}:
         return ""
     return NO_VALIDATED_PRICE
 
@@ -1255,6 +1388,124 @@ def _asked_in_turn(attempt: Dict[str, Any], portal: Portal,
     home = str(attempt.get("server") or "").rstrip("/")
     first = [p for p in every if getattr(p, "server", "") == home]
     return first + [p for p in every if p not in first]
+
+
+# THE GRID'S OWN RECORD DECIDES WHAT HAS RUN (JG, 14 Nov 2026: "the grid shouldn't run jobs that
+# don't meet the criteria for running. this is a bug"). The ledger is this watcher's memory, and
+# overnight 13-14 Nov it lost runs: 11896-04-00-GA, 11896-02-01-GA, 11896-01-00-GA and 6364-02
+# ran again and again, and none of those runs was in the ledger. Each service keeps every run it
+# was given, restart-safe (D-618), with who asked for it. So before anything is planned, every
+# service is asked for its runs. A Self-Running run that the ledger does not hold is written
+# into its job's history as an adopted attempt. The row then reads as running, done, failed or
+# stopped by what that run did, never as never run.
+ADOPT_RUN_LIST = 300
+QUEUEING_GRACE_SECONDS = 600
+
+
+def _iso_from_epoch(value: Any) -> str:
+    try:
+        return datetime.fromtimestamp(float(value)).isoformat(timespec="seconds")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return str(value or "")
+
+
+def _epoch_from_iso(value: Any) -> Optional[float]:
+    try:
+        return datetime.fromisoformat(str(value)[:19]).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_self_running(run: Dict[str, Any]) -> bool:
+    return str(run.get("source") or "").strip().lower().replace("_", "-").replace(" ", "-") \
+        .startswith("self-running")
+
+
+def gather_service_runs(ledger: Dict[str, Any], portal: Portal,
+                        others: Sequence[Portal] = ()) -> Dict[str, Any]:
+    """Every Self-Running run the services hold that this ledger does not, kept on the ledger for
+    this cycle only (a key starting "_" is never saved). `heard` says whether any service
+    answered: a list nobody gave is not evidence that a run is missing."""
+    every = [portal] + [p for p in others if p is not portal]
+    known = {str(a.get("run_id")) for j in (ledger.get("jobs") or {}).values()
+             for a in j.get("attempts") or [] if a.get("run_id")}
+    heard, found, ids = False, [], set()
+    for p in every:
+        try:
+            got = p.recent(ADOPT_RUN_LIST) or {}
+        except Exception:                                            # noqa: BLE001
+            continue                   # a service that did not answer, or a fake with no list
+        heard = True
+        for run in got.get("runs") or []:
+            rid = str(run.get("run_id") or "")
+            if not rid or rid in known or rid in ids or not _is_self_running(run):
+                continue
+            ids.add(rid)
+            found.append(dict(run, _server=getattr(p, "server", "")))
+    found.sort(key=lambda r: float(r.get("queued_at") or 0))
+    ledger["_service_runs"] = {"heard": heard, "runs": found}
+    return ledger["_service_runs"]
+
+
+def _same_quantities(attempt: Dict[str, Any], qty: Sequence[int]) -> bool:
+    got = [int(q) for q in (attempt.get("quantities") or []) if str(q).strip().lstrip("-").isdigit()]
+    if attempt.get("adopted"):
+        # the service keeps the breaks as it was given them; the order of the breaks is not a change
+        return bool(got) and bool(qty) and got[0] == qty[0] and sorted(got[1:]) == sorted(qty[1:])
+    return got == list(qty)
+
+
+def adopt_for_row(row: EnquiryRow, located: Optional["Located"], ledger: Dict[str, Any]) -> List[str]:
+    """Write this row's unrecorded service runs into its job, in time order. A "queueing" line
+    left by a save that failed after the run was queued is completed from the run it became."""
+    pool = ledger.get("_service_runs") or {}
+    runs = pool.get("runs") or []
+    want = drawing_key(row.drawing)
+    names = {customer_key(row.customer)}
+    if located is not None and located.client_folder_name:
+        names.add(customer_key(located.client_folder_name))
+    mine = [r for r in runs if drawing_key(r.get("drawing_number")) == want
+            and customer_key(r.get("client")) in names]
+    job = ledger["jobs"].get(job_key(row))
+    said: List[str] = []
+    if mine:
+        job = ledger["jobs"].setdefault(job_key(row), {
+            "customer": row.customer, "drawing": row.drawing, "attempts": []})
+    for run in mine:
+        runs.remove(run)
+        when = float(run.get("queued_at") or 0)
+        waiting = [a for a in job["attempts"] if a.get("status") == QUEUEING and not a.get("run_id")
+                   and (_epoch_from_iso(a.get("queued_at")) or 0) <= when + 60]
+        attempt = waiting[0] if waiting else {
+            "queued_at": _iso_from_epoch(when), "row": row.row, "folder": "",
+            "fingerprint": "", "marks_sheet": bool(row.completed_column),
+            "quantities": [int(run.get("units") or 0)] + [int(q) for q in run.get("quantity_breaks") or []],
+            "adopted": (f"run {run.get('run_id')} was found on {run.get('_server') or 'a service'} "
+                        f"and was missing from this ledger"),
+            "queued_epoch": when}
+        attempt.update(run_id=run.get("run_id"), server=run.get("_server") or attempt.get("server", ""),
+                       build=run.get("build") or attempt.get("build", ""))
+        if run.get("finished_at"):
+            attempt["finished_at"] = _iso_from_epoch(run.get("finished_at"))
+        _attempt_from(run, attempt)
+        if not waiting:
+            job["attempts"].append(attempt)
+        said.append(f"{row.drawing}: {attempt.get('adopted') or 'its queued line was completed'} "
+                    f"({attempt.get('status')})")
+    if job:
+        job["attempts"].sort(key=lambda a: str(a.get("queued_at") or ""))
+        # ASKED FOR, AND NO SERVICE HAS IT: said, and held as a failed try, never queued again
+        # on its own. Only when the services answered, and after a grace for a slow answer.
+        if pool.get("heard"):
+            for a in job["attempts"]:
+                t = _epoch_from_iso(a.get("queued_at"))
+                if a.get("status") == QUEUEING and not a.get("run_id") and t \
+                        and time.time() - t > QUEUEING_GRACE_SECONDS:
+                    a.update(status="error", finished_at=_now(),
+                             error=("asked for, but its answer was not recorded and no service "
+                                    "holds a run for it: `retry` it if it should run"))
+    ledger.setdefault("_adopted", []).extend(said)
+    return said
 
 
 def refresh_open_runs(ledger: Dict[str, Any], portal: Portal,
@@ -1327,24 +1578,44 @@ def poll_once(attempt: Dict[str, Any], portal: Portal, ledger: Dict[str, Any],
 def queue_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: Path,
               say: Callable[[str], None] = print,
               email_to: Optional[Sequence[str]] = None) -> Dict[str, Any]:
-    """Queue one row and record it in the ledger; does not wait. Refused: nothing recorded."""
+    """Queue one row and record it in the ledger; does not wait. Refused: nothing recorded.
+
+    WRITTEN BEFORE IT IS ASKED FOR (JG, 14 Nov 2026). The run used to be queued first and the
+    ledger saved after. When that save failed, the run existed with no record, and the next
+    read queued the job again. Now the attempt is saved as "queueing" first: if that save fails,
+    nothing is queued; if the answer is lost after the run was queued, the row reads as in
+    progress until the services are asked (adopt_unrecorded_runs), never as never run."""
     attempt: Dict[str, Any] = {
-        "queued_at": _now(), "status": "queued", "row": d.row.row,
+        "queued_at": _now(), "status": QUEUEING, "row": d.row.row,
         "folder": str(d.located.folder), "fingerprint": d.fingerprint,
         "quantities": list(d.quantities), "quantity_source": d.quantity_source,
         # A ROW ON THE AI LIVE ENQUIRY SHEET HAS AICompleted WRITTEN BACK when it finishes
         # (D-608a); kept on the attempt so a run that finishes while nobody waits on it is
         # still written on a later read.
         "marks_sheet": bool(d.row.completed_column),
+        "server": getattr(portal, "server", ""),
     }
-    started = portal.start(request_body(d, email_to))  # refused: nothing is recorded here
+    _known = job_key(d.row) in ledger["jobs"]
     job = ledger["jobs"].setdefault(job_key(d.row), {
         "customer": d.row.customer, "drawing": d.row.drawing, "attempts": []})
+    job["attempts"].append(attempt)
+    save_ledger(ledger_path, ledger)                   # fails: nothing has been queued
+    try:
+        started = portal.start(request_body(d, email_to))
+    except BaseException:
+        # REFUSED, OR NOT ANSWERED: the provisional line comes off, and the caller says why.
+        job["attempts"].remove(attempt)
+        if not _known and not job["attempts"]:
+            ledger["jobs"].pop(job_key(d.row), None)
+        try:
+            save_ledger(ledger_path, ledger)
+        except OSError:
+            pass                       # left "queueing": read as in progress, never re-queued
+        raise
+    attempt["status"] = "queued"
     attempt["run_id"] = started.get("run_id")
-    attempt["server"] = getattr(portal, "server", "")
     attempt["build"] = checkout_build()
     attempt["output_path"] = started.get("output_path")
-    job["attempts"].append(attempt)
     job.pop("retry", None)
     job.pop("page_rerun", None)                   # the page's Re-run is answered: once
     if d.rerun and completed_word(d.row.ai_completed) in config.LIVE_ENQUIRY_RERUN:
@@ -1542,6 +1813,7 @@ def scan(s: Dict[str, Any], ledger: Dict[str, Any]) -> List[Decision]:
 def _cycle(args: argparse.Namespace, s: Dict[str, Any], portal: Portal) -> None:
     ledger = load_ledger(s["ledger"])
     refresh_open_runs(ledger, portal)
+    gather_service_runs(ledger, portal)
     save_ledger(s["ledger"], ledger)
     decisions = scan(s, ledger)
     print(f"\n[{_now()}] {s['workbook']}")
@@ -1629,6 +1901,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     if args.command == "scan":
         ledger = load_ledger(s["ledger"])
+        # the services' own record, read only, so the table shows what a run would start
+        gather_service_runs(ledger, Portal(args.server, args.api_key))
         decisions = scan(s, ledger)
         print_plan(decisions)
         print(f"\nStatus table: {Path(s['ledger']).with_name('live_enquiry_status.csv')}")

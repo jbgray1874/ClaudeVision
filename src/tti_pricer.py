@@ -126,6 +126,27 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
             if any(re.search(rf"\b{w}", h, re.IGNORECASE) for w in words):
                 return c
         return None
+    # THE COST COLUMN IS THE ONE HEADED AI COST, WHEREVER IT SITS (reviewer, 13 Nov 2026).
+    # "Its AiCost header is in column P; the network copy previously used Q. Resolve each
+    # workbook's target by its header." --col-cost is where to write only when no column is
+    # headed AI Cost and the column it names carries no other header: a cost is never
+    # written under somebody else's heading.
+    _asked_c = col_index(cols["cost"])
+    _by_head = [c for c, h in heads.items() if re.match(r"^\s*ai\s*cost\b", h, re.IGNORECASE)]
+    cost_said = ""
+    if len(_by_head) > 1:
+        raise SystemExit(f"{sheet.name} ({ws.title}) has {len(_by_head)} columns headed AI Cost "
+                         f"({', '.join(_col_letter(c) for c in _by_head)}). Nothing is written "
+                         f"until one is left.")
+    if _by_head:
+        if _by_head[0] != _asked_c:
+            cost_said = (f"the AI Cost header is in column {_col_letter(_by_head[0])}, not "
+                         f"{cols['cost']}: column {_col_letter(_by_head[0])} is used")
+        cols = dict(cols, cost=_col_letter(_by_head[0]))
+    elif heads.get(_asked_c):
+        raise SystemExit(f"No column of {sheet.name} ({ws.title}) is headed AI Cost, and column "
+                         f"{cols['cost']} is headed '{heads[_asked_c]}'. Nothing is written "
+                         f"under another heading: add an AI Cost header or pass --col-cost.")
     desc_c = find("description", "item", "job")
     # THE LATEST FEEDBACK (JG, 10 Nov 2026): "quantity reduced from 5 to 3", "drawings existing
     # from Rome". A column headed Feedback is part of the job's brief, beside the Notes.
@@ -165,6 +186,7 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
                        "quantity": heads.get(qty_c) if qty_c else None,
                        "quantity_column": _col_letter(qty_c) if qty_c else None,
                        "drawing": heads.get(dcol), "cost": heads.get(col_index(cols["cost"]))},
+            "cost_column": cols["cost"], "cost_column_said": cost_said,
             "rows": out}
 
 
@@ -697,6 +719,9 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         a, _, b = args.rows.partition("-")
         rows = (int(a), int(b or a))
     data = read_rows(sheet, cols, rows, args.sheet_name)
+    if data.get("cost_column") and data["cost_column"] != args.col_cost:
+        print(f"[tti] {data.get('cost_column_said')}", flush=True)
+        args.col_cost = data["cost_column"]
     from drive_map import to_unc
     design = Path(to_unc(os.getenv("SDI_TTI_DESIGN_ROOT") or DEFAULT_DESIGN))
     proto = Path(to_unc(os.getenv("SDI_TTI_PROTOTYPE_ROOT") or DEFAULT_PROTOTYPE))
@@ -785,7 +810,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         if central_too and central and cost is not None:
             import tti_central
             res = tti_central.write(central, data["sheet"], r.get("drawing") or "", r["row"],
-                                    cost, drawing_ref)
+                                    cost, drawing_ref, quantity=r.get("quantity"))
             item["central"], item["central_ok"] = res.get("said"), bool(res.get("ok"))
 
     # THE TAB THE ROWS WERE READ FROM IS THE TAB WRITTEN TO, by name, never the active one.
@@ -804,9 +829,16 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     for r in data["rows"]:
         manifest = None
         found: Dict[str, Any] = {}
+        _stalled = ""
         if r["drawing"]:
-            found, manifest = pack_for(r["drawing"], listings, args.client)
-            if not found:
+            try:
+                found, manifest = pack_for(r["drawing"], listings, args.client)
+            except Exception as _exc:                                    # noqa: BLE001
+                if type(_exc).__name__ != "PackCheckStalled":
+                    raise
+                # AN UNCHECKED PACK IS HELD, NOT PRICED FROM A FOLDER GUESS (14 Nov 2026).
+                _stalled = str(_exc)
+            if not found and not _stalled:
                 found = find_drawings(r["drawing"], listings)
         item = {"row": r["row"], "drawing": r["drawing"], "drawing_cell": r.get("drawing_cell", r["drawing"]),
                 "quantity": r["quantity"],
@@ -832,6 +864,11 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         if not found and r["drawing"]:
             item["job_folders"] = job_folders(r["drawing"], listings)
         report["rows"].append(item)
+        if _stalled:
+            item.update(state="held: pack not checked", kind="not priced (pack not checked)",
+                        why=f"{_stalled}. Nothing is queued from an unchecked pack; run the row again")
+            save()
+            continue
         # ONLY THE ROWS WITH A DRAWING NUMBER (JG, 10 Nov 2026): "in effect the same as a normal
         # run: the client, the number of units, the drawing pack, the description". The rest are
         # listed, not priced.

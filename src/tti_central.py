@@ -39,8 +39,20 @@ _DRAWING_HEAD = re.compile(r"^\s*(drawing|dwg)\s*(no\.?|number|#)?\s*$", re.IGNO
 _COST_HEAD = re.compile(r"^\s*ai\s*cost\b", re.IGNORECASE)
 
 
+_QTY_HEAD = re.compile(r"^\s*(qty|quantity)\b", re.IGNORECASE)
+
+
+def _whole(v: Any) -> Optional[int]:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return int(f) if f == int(f) else None
+
+
 def plan(grid: Sequence[Sequence[Any]], drawing: str, row_hint: Optional[int],
-         ref: Callable[[str], str], first_row: int = 1, first_col: int = 1) -> Dict[str, Any]:
+         ref: Callable[[str], str], first_row: int = 1, first_col: int = 1,
+         quantity: Any = None) -> Dict[str, Any]:
     """Where the cost goes on the central sheet. `grid` is the sheet's used range as rows of
     values; `first_row`/`first_col` are the sheet coordinates of grid[0][0]. Returns
     {header_row, drawing_col, cost_col (None: to be added), next_col, row} in sheet
@@ -63,6 +75,21 @@ def plan(grid: Sequence[Sequence[Any]], drawing: str, row_hint: Optional[int],
             and ref(str(vals[dcol] or "")).upper() == want and want]
     if not hits:
         return {"error": f"no row on the central sheet carries {drawing}"}
+    # THE ROW MUST BE FOR THE QUANTITY THAT WAS PRICED (reviewer, 13 Nov 2026: "validate
+    # drawing and quantity"). Where the sheet has a Quantity column and the price was worked
+    # at a known quantity, a row for another quantity is not this price's row.
+    qcol = next((j for j, v in enumerate(heads) if _QTY_HEAD.match(str(v or ""))), None)
+    want_q = _whole(quantity)
+    if qcol is not None and want_q is not None:
+        def _row_q(sheet_row: int) -> Optional[int]:
+            vals = grid[sheet_row - first_row] or ()
+            return _whole(vals[qcol]) if len(vals) > qcol else None
+        same_q = [h for h in hits if _row_q(h) == want_q]
+        if not same_q:
+            seen = ", ".join(f"row {h}: {_row_q(h)}" for h in hits)
+            return {"error": f"{drawing} was priced at {want_q} off and the central sheet carries "
+                             f"it at another quantity ({seen}): not written"}
+        hits = same_q
     if len(hits) > 1:
         if row_hint in hits:
             hits = [row_hint]
@@ -82,7 +109,7 @@ def _same(a: Any, b: float) -> bool:
 
 
 def write(target: str, tab: str, drawing: str, row_hint: Optional[int], value: float,
-          ref: Callable[[str], str]) -> Dict[str, Any]:
+          ref: Callable[[str], str], quantity: Any = None) -> Dict[str, Any]:
     """Write `value` as the AI Cost of `drawing`'s row on the central sheet. Returns {ok, said}."""
     target = str(target or "").strip()
     if not target:
@@ -92,16 +119,16 @@ def write(target: str, tab: str, drawing: str, row_hint: Optional[int], value: f
         # A BUSY EXCEL IS ASKED AGAIN ("Call was rejected by callee", 11 Nov 2026).
         res: Dict[str, Any] = {}
         for i in range(EXCEL_TRIES):
-            res = _write_excel(target.split("?")[0], tab, drawing, row_hint, value, ref)
+            res = _write_excel(target.split("?")[0], tab, drawing, row_hint, value, ref, quantity)
             if res.get("ok") or not _busy(res.get("said")):
                 return res
             time.sleep(EXCEL_WAIT_S * (i + 1))
         return res
-    return _write_openpyxl(target, tab, drawing, row_hint, value, ref)
+    return _write_openpyxl(target, tab, drawing, row_hint, value, ref, quantity)
 
 
 def _write_excel(target: str, tab: str, drawing: str, row_hint: Optional[int], value: float,
-                 ref: Callable[[str], str]) -> Dict[str, Any]:
+                 ref: Callable[[str], str], quantity: Any = None) -> Dict[str, Any]:
     try:
         import win32com.client
     except Exception:                                                # noqa: BLE001
@@ -116,7 +143,7 @@ def _write_excel(target: str, tab: str, drawing: str, row_hint: Optional[int], v
         used = ws.UsedRange
         vals = used.Value
         grid = [list(r) for r in (vals if isinstance(vals, tuple) else ((vals,),))]
-        p = plan(grid, drawing, row_hint, ref, used.Row, used.Column)
+        p = plan(grid, drawing, row_hint, ref, used.Row, used.Column, quantity)
         if p.get("error"):
             return {"ok": False, "said": p["error"]}
         col = p["cost_col"]
@@ -155,7 +182,7 @@ def _write_excel(target: str, tab: str, drawing: str, row_hint: Optional[int], v
 
 
 def _write_openpyxl(target: str, tab: str, drawing: str, row_hint: Optional[int], value: float,
-                    ref: Callable[[str], str]) -> Dict[str, Any]:
+                    ref: Callable[[str], str], quantity: Any = None) -> Dict[str, Any]:
     import openpyxl
     try:
         wb = openpyxl.load_workbook(target)
@@ -163,7 +190,7 @@ def _write_openpyxl(target: str, tab: str, drawing: str, row_hint: Optional[int]
         return {"ok": False, "said": f"the central sheet could not be opened ({exc})"}
     ws = wb[tab] if tab and tab in wb.sheetnames else wb.active
     grid: List[List[Any]] = [[c.value for c in row] for row in ws.iter_rows()]
-    p = plan(grid, drawing, row_hint, ref)
+    p = plan(grid, drawing, row_hint, ref, quantity=quantity)
     if p.get("error"):
         return {"ok": False, "said": p["error"]}
     col, added = p["cost_col"], ""

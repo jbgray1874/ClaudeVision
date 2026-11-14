@@ -280,17 +280,57 @@ def sheets_of(assembly: str, ids: Iterable[str]) -> List[str]:
 
 # ── fingerprints ─────────────────────────────────────────────────────────────────────────
 
-def fingerprint(path: Path, size: int, mtime: float, full_below: int = 25 * 1024 * 1024) -> str:
+class PackCheckStalled(RuntimeError):
+    """A pack file did not finish reading in the time allowed. The pack is unchecked."""
+
+
+# A PACK FILE THAT WILL NOT READ IS SAID, NOT WAITED ON FOR EVER (JG, 14 Nov 2026). The
+# Self-Running preview sat silent on one file's read from the share until it was stopped by
+# hand: no file named, no time shown, no limit. A file's bytes are now read on a side thread.
+# While it reads, the file and the time so far are said every PACK_READ_SAY_SECONDS. Past
+# PACK_READ_SECONDS the read is given up and PackCheckStalled names the file. The caller holds
+# the job with that reason: a pack that could not be checked is never taken as unchanged, and
+# never fingerprinted by its size and date instead.
+PACK_READ_SECONDS = float(os.getenv("SDI_PACK_READ_SECONDS", "120") or 120)
+PACK_READ_SAY_SECONDS = 15.0
+
+
+def fingerprint(path: Path, size: int, mtime: float, full_below: int = 25 * 1024 * 1024,
+                budget: Optional[float] = None,
+                say: Optional[Callable[[str], None]] = None) -> str:
     """sha1 of the file's bytes below 25 MB, else of its size and time: what a later run compares."""
-    if size and size < full_below:
+    if not (size and size < full_below):
+        return f"stat:{size}:{int(mtime)}"
+    import threading
+    budget = PACK_READ_SECONDS if budget is None else budget
+    say = say or (lambda line: print(line, flush=True))
+    got: Dict[str, Any] = {}
+
+    def _read() -> None:
         try:
             h = hashlib.sha1()
             with open(path, "rb") as fh:
                 for chunk in iter(lambda: fh.read(1 << 20), b""):
                     h.update(chunk)
-            return "sha1:" + h.hexdigest()
-        except OSError:
-            pass
+            got["sha1"] = h.hexdigest()
+        except OSError as exc:
+            got["error"] = exc
+
+    worker = threading.Thread(target=_read, name="pack-read", daemon=True)
+    started = time.time()
+    worker.start()
+    while True:
+        worker.join(min(PACK_READ_SAY_SECONDS, max(0.05, budget - (time.time() - started))))
+        if not worker.is_alive():
+            break
+        waited = time.time() - started
+        if waited >= budget:
+            raise PackCheckStalled(
+                f"{Path(path).name} ({size / 1048576:.1f} MB, in {Path(path).parent}) did not "
+                f"finish reading in {budget:.0f} s: the share is slow or stalled")
+        say(f"   [pack] still reading {Path(path).name} ({size / 1048576:.1f} MB): {waited:.0f} s")
+    if "sha1" in got:
+        return "sha1:" + got["sha1"]
     return f"stat:{size}:{int(mtime)}"
 
 

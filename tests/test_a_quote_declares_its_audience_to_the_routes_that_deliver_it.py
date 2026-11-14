@@ -199,8 +199,12 @@ def test_every_route_that_delivers_a_file_is_covered():
     # /estimating/sdi-voice.js: the shared voice script, one fixed file of code with no job data
     # in it. Since 7 Nov 2026 (D-737), /estimating/wall: the wall monitor page, one fixed file
     # behind sign-in; what it shows comes from /api/estimate/wall, never from the file. None of
-    # them is a deliverable.
-    assert known_file_responses["app.py"] == 12, (
+    # them is a deliverable. Since 13 Nov 2026, /estimating/pack/<token>: the page that shows the
+    # drawing pack a run was given, one fixed file behind sign-in; its data and files come from
+    # /api/estimate/pack/<token>, never from the page.
+    # And /estimating/bundle/<token>: the page that shows one run's filed bundle, one fixed
+    # file behind sign-in; its data and files come from /api/estimate/bundle/<token>.
+    assert known_file_responses["app.py"] == 14, (
         f"a new file-serving route appeared in app.py ({known_file_responses['app.py']} "
         f"FileResponse calls, was 5) — does it need the release gate?")
     # estimate_routes.py: the drawings-print PDF, which is a drawing pack and not a quotation;
@@ -212,7 +216,13 @@ def test_every_route_that_delivers_a_file_is_covered():
     # 3 Nov 2026 (D-645) that route has two returns: a quotation the gate says is NOT
     # released is served inline, sandboxed and marked X-SDI-Quote-Release: portal — the
     # portal working copy to read, as /api/file serves it — never as a download.
-    assert known_file_responses["estimate_routes.py"] == 4, (
+    # And since 13 Nov 2026, /pack/{token}/file/{name}: one of the files of the drawing pack
+    # kept for a run, only as that pack's manifest lists it. A pack holds drawings and models;
+    # a quotation found in one is held by the same gate (two returns, as the walkthrough's).
+    # And /bundle/{token}/file/{name}: one of the files of a run's filed bundle on the share,
+    # by exact name. A bundle DOES hold the quotation, so this route carries the gate exactly
+    # as the walkthrough's does: two returns, the unreleased one inline and sandboxed.
+    assert known_file_responses["estimate_routes.py"] == 8, (
         f"a new file-serving route appeared in estimate_routes.py — does it need the gate?")
     routes_at = routes_src.index("def deliverable(")
     assert "quote_release.may_go_to_a_customer" in routes_src[routes_at:routes_at + 2600]
@@ -228,3 +238,18 @@ def test_the_engine_side_still_agrees_with_the_document(tmp_path):
         path = _write(record, tmp_path, name=f"j{expected}_quote.html")
         assert quote_state(record)["customer_releasable"] is expected
         assert quote_release.may_go_to_a_customer(path) is expected
+
+
+def test_the_pack_file_route_holds_a_quotation_by_the_same_gate():
+    routes_src = (ROOT / "sdi-intelligence-backend" / "estimate_routes.py").read_text(encoding="utf-8")
+    at = routes_src.index("def pack_file(")
+    body = routes_src[at:at + 2200]
+    assert "quote_release.may_go_to_a_customer" in body and "pack_link.file_for" in body
+
+
+def test_the_bundle_file_route_holds_a_quotation_by_the_same_gate():
+    routes_src = (ROOT / "sdi-intelligence-backend" / "estimate_routes.py").read_text(encoding="utf-8")
+    at = routes_src.index("def bundle_file(")
+    body = routes_src[at:at + 3200]
+    assert body.count("quote_release.may_go_to_a_customer") == 2, "local and relayed, both gated"
+    assert "bundle_link.file_for" in body and '"X-SDI-Quote-Release": "portal"' in body

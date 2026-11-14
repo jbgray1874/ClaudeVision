@@ -3315,6 +3315,7 @@ def _finalize_scan_summary(
                         f"its description")
                     continue
                 _p["part_number"] = None
+                _p["part_number_rejected"] = str(_bad)      # which bill code this record was
                 _p.setdefault("review_flags", []).append({
                     "severity": "warning",
                     "flag": "invalid_part_number",

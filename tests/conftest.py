@@ -58,3 +58,18 @@ def _no_price_cached_by_another_test():
                 cache.clear()
     yield
 
+
+# ── NO BUILD IDENTITY CACHED BY ONE TEST REACHES ANOTHER (14 Nov 2026) ────────────────────
+# build_stamp keeps "the source this process is running" in a module-level cache, computed
+# once: right for a run, wrong for the suite. A test that fakes git ("abc1234") and is the
+# first to compute it leaves that stamp for every later test, and on some orders the stale
+# runner tests then read their own healthy checkout as "STALE ENGINE ... this process
+# stamped abc1234". Seen on 12 Nov and again on 14 Nov, each time passing on the next order.
+@pytest.fixture(autouse=True)
+def _no_build_stamp_cached_by_another_test():
+    import sys as _sys
+    mod = _sys.modules.get("build_stamp")
+    if mod is not None and hasattr(mod, "_CACHE"):
+        mod._CACHE = None
+    yield
+

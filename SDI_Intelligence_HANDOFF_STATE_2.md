@@ -205,7 +205,163 @@ that cost reruns. They are generic and each has a regression test.
     field of the question plus provider, model and `CACHE_VERSION`. It has no age limit: open
     decision.
 
+**Quantity and identity rules added on 2026-11-13.** Each was found by replaying a record, not
+by rerunning a job.
+
+  * **A space in a model assembly's name is not a second assembly.** The drawing printed
+    `…-02GA`, the model named it `…-02 GA`; the product lost its edge to that sub-assembly and
+    its children were set aside as "outside the product". The model tree now joins on the
+    graph's own rule (white space only, exactly one record answering). A hyphen is still a
+    different code.
+  * **An assembly that shares a number with the part inside it is counted once.** The model's
+    bill counts by number. For an assembly row the count comes from the assembly tree
+    multiplied down from the product (`quantities_by_the_tree`).
+  * **A sheet that lists its own number is not its own parent** (`src/bom_tree.py`). A
+    self-row used to multiply at every depth: 26 plates and 52 bushes from a bill of 2 and 4.
+  * **A count nobody read is not replaced by one.** The quantity cap still carries an
+    uncounted quantity over the limit at 1, but marks it `quantity_unresolved`, flags it
+    blocking and never passes it as a credible figure. It used to "reset to 1" with a warning,
+    which hid the fault above.
+  * **One bill row is one record.** The scan keeps the code it rejected
+    (`part_number_rejected`); when that bill row is made a record, the nameless record of the
+    same row is withdrawn.
+  * **To check a quantity without a rerun:** replay the record's `document_analysis.bom_rows`
+    through `bom_tree.resolve_effective_quantities`, and walk
+    `solidworks_native.hierarchy` from the top assembly. Compare both with the costed
+    quantity. Read records with `python3 -I` and print only the fields needed.
+
+**The three calculators (2026-11-13).** Each is estimating's own workbook, named by a setting
+and never copied into the repository. Unset, unreadable or laid out differently, the engine
+prices as before and the run says why.
+
+| Calculator | Setting | State |
+|---|---|---|
+| AI Box | `SDI_BOX_CALCULATOR_XLSX` | Live source of box pricing, read from the shared estimating drive (`src/box_calculator_sheet.py`). A calculator result is not proof the carton is right: the packing inputs still have to be. |
+| AI Tube | `SDI_TUBE_CALCULATOR_XLSX` | `src/tube_calculator_sheet.py`. Its stock rows join the engine's tube and section price rows under their own part codes; a code it prices takes its price. Its cut, hole, slot and mitre rates are read and applied to nothing: open decision whether they replace the engine's tube-laser times. The sheet's own working area has every cost typed as 0. |
+| AI Print | `SDI_PRINT_CALCULATOR_XLSX` | `src/print_calculator_sheet.py`. Works the sheet's sums cell for cell and prices NO estimate line yet. To confirm first: scrap entered as -0.7 (charges 30% of the sheet cost), one set-up cost for six substrates, one-orientation yield, sheet sizes and costs typed again inside the formulas. |
+
+**Release `ddc6b5a0` (2026-11-13), the commit to deploy to both runners.** Full suite twice in
+random order on that exact commit in a clean checkout: 11,561 passed and 11,562 passed, 0
+failed (the one-test difference is the API-key skip described above). Test-merge into the
+portal copy clean. An earlier pass on this set failed one test, the README rule that every
+setting the engine reads is documented; the two calculator settings were added and the suite
+rerun. Nothing in this release is proved on a fresh run yet. Box costing is accepted by JG as
+an estimating allowance and is not a blocker. The five packs whose results this release should
+change, and which are worth one diagnostic rerun each: 6364-01, 12674-01-GA, 12674-02-GA,
+12773-01-GA, 11896-02-01-GA. The standing job-by-job checklist is on SCRUM-274; no item on it
+closes because a run finishes.
+
+**Corrections agreed with the reviewer on 2026-11-13. These supersede anything above that
+reads differently.**
+
+  * **Boxing and shipping are not blockers.** The AI Box calculator is accepted as an
+    estimating allowance. Packaging stays a line with its source recorded; it holds no job.
+  * **68-off on 11896-02-01-GA is a requested-quantity update, not a software fault.** That
+    pack runs at 1, 8 and 68. Every other job keeps its agreed quantities.
+  * **A TTI pilot run now is a test of the EXISTING estimating workflow.** It cannot prove
+    the new calculators: both are switched off, tube operation rates are applied to nothing,
+    and the print calculator prices no line.
+  * **No tube stock row is assumed to be 6.1 m.** The reader takes each row's stock length
+    from the row's own description (`stated_stock_length_m`). A row that states none, or two,
+    replaces no catalogue price and is listed by `rows_without_a_stated_length`. On the
+    workbook uploaded 13 Nov all 89 priced rows state 6.1 m and none is an exception.
+  * **Two categories, neither customer-ready by itself:** a job that needs software repair,
+    and a job that can go to estimating specifically for a rate or scope decision.
+  * **TTI weekend batch:** pilot rows are chosen from the current TTI tracker and shown
+    (row, drawing number, quantities) before anything is queued. The batch expands only after
+    the pilot proves correct pack selection, no duplicate charging and reliable `AiCost`
+    write-back. **Both tracker writers already exist and were extended on 13 Nov; do not
+    build a third.** `src/tti_central.py` writes the central SharePoint sheet (row by drawing
+    number, column by its `AI Cost`/`AiCost` header, one cell, read back) and now refuses a row
+    whose Quantity differs from the quantity priced. `src/tti_pricer.py` writes the network
+    copy and now takes its cost column from the same header, wherever it sits (P on one
+    workbook, Q on another); `--col-cost` applies only when no column carries that header and
+    the named column has no other heading. Not yet proved on the real tracker.
+  * **Deployment state is whatever the laptop last printed.** A pushed commit is not a
+    deployed one. As checked on the laptop on the evening of 13 Nov: both portals (8071,
+    8072) and both runners were on portal commit `030ffc98`, which already includes
+    `ddc6b5a0`, so the reader, quantity, duplicate-record and unfinished-price safeguards of
+    that release ARE live there. What was missing from it: the tube stock-length rule
+    (`7d3c5596`), the tracker-writer changes (`3d3df3f2`) and the bond rule below. An idle
+    snapshot is not permission to restart: check both runners are idle immediately before
+    any deployment. The server's portal is on older `00072f3f`; its work is paused and its
+    grid configuration is left as it is.
+  * **Two bonds that are two pieces of work are two charges (JG, 13 Nov 2026).** An
+    assembly-scope bond naming several participants is ONE event, homed where they meet, not
+    one per participant. A member's distinct bond does not suppress its assembly's bond:
+    the one-level rule stands a bond down only for the same printed evidence, or a reading
+    with none of its own. Source references, participants and quantity basis are kept.
+    Labour time and set-up sharing remain estimating decisions.
+
+Review copies sit in `C:\ClaudeVision\chatgptdropoff\AICalculators`; they are not the live
+sources. Order of work agreed with JG: weekly Live Enquiry recovery first, then Print and
+Tube, then the TTI jobs.
+
 ---
+
+### 13 Nov 2026 evening: the release went live, and two tooling faults it exposed (e95107df)
+
+- **Live.** Laptop checkout `65075d2a` contains `7f7f9790`. Both services and both runners report `65075d2`. The reruns of the weekly jobs started at 21:00 through Self-Running. A finished run is not acceptance: each record is checked against the standing list on SCRUM-274.
+- **"2 SEPARATE RUNNERS STARTED" was a false alarm** (`bc0efa8c`). `restart-runner.ps1` matched every runner process on the machine, so the main runner's restart ended slot 2 too and then counted slot 2's return as a second main runner. A restart now touches only the slot asked for, read from `--slot` on the command line. There was never a second starter.
+- **The publish left the watcher refused by its own lock** (`bc0efa8c`). A stopped watcher cannot release `live_enquiry.lock` and a new one refuses a lock touched in the last ten minutes. The publish step now ends leftover watcher processes, clears a lock whose holder has gone, will not remove one whose holder is alive, and waits to hear the watcher on 8071. Until that is deployed, `install-self-running-task.ps1` is the way to bring the watcher back.
+- **A pack and the versions kept of it are one pack** (`e95107df`). Rows were held with "2 folders fit: X, X v2 - leave one" because the pack store files a changed pack beside the old one. The share now chooses: a folder a person made (no pack manifest, drawings in it) wins; otherwise the newest version; two folders a person made are still held. Nothing is deleted. Held on this at the time: 11896-01-00-GA, 11896-04-00-GA, 11896-08-01-GA.
+- **Not proved on the laptop yet:** the two PowerShell changes could not be run in the cloud session. Their first proof is the next publish.
+- **Still a sheet change, not software:** 11896-02-01-GA runs at 1 and 8 until 68 is on its row.
+
+### 13 Nov 2026 late: the drawing pack, as kept, as read and as shown (48e9988b)
+
+JG's rulings: the review copy must be an identical, accurate copy; "supported" is not "read"; a
+kept file proves nothing about what was never gathered; no reruns to improve a review copy;
+every e-mail and filed covering note shows the pack the run was given.
+
+- **IGS and IGES are staged with the pack** (`700ae279`). Staging dropped them while the resolver gathered them. A selection of nothing but IGS is still refused.
+- **Three answers, never one flag** (`45f36517`). The kept pack's `completeness` holds `source_pack`, `copy` and `read`. `intended_handling` per file is what the engine does with that kind of file. What a run read is written from its own record under `read_on_runs`.
+- **Coverage of an unread IGS or STEP** needs a native model read on that run with the same file name or the same stated revision, and confirmed configurations. A drawing number alone establishes nothing.
+- **Recovery** is `tools\dropoff_recover.py`: preview by default, `--apply` writes a new version beside the pack from sources whose fingerprints still match. The original and its run evidence are not written to.
+- **E-mail and filed note** (`48e9988b`). Both carry, near the top: a link to the exact pack kept for the run (`/estimating/pack/<token>`, public portal address, behind sign-in), run id and pack version, each file's drawing number, revision, format and outcome, and PACK COMPLETENESS NOT PROVED with the reasons. Made at the one queueing place, so manual, Self-Running and TTI jobs all get it. Nothing is resent.
+- **Not proved yet:** no real e-mail sent with the section, no real kept pack opened through the link, off-site access not confirmed, the page not loaded in a browser. The first job after deploy is the proof.
+- **Limit:** the pack sits on the estimating laptop, so the link works while that laptop's service is up.
+- **Still open, not resolved by any of this:** SA01 and SA02 unread on 11896-02-01-GA; `6364-02-015A` missing.
+- **Agreed order:** let the running jobs finish; deploy when idle; check each record for missing parts, failed reads, wrong quantities and unpriced items; preview recovery of the four kept packs; rerun only estimates with an evidenced costing or scope fault.
+
+### Where a run's estimate pack is written (JG, 13 Nov 2026: keep it like this)
+
+- Main runner: `C:\ClaudeVision\output\estimates`. Slot 2: `C:\ClaudeVision-s2\output\estimates`.
+- This is deliberate (`227f6204`, 12 Nov): one shared folder is how prices and attachments crossed on 10 and 11 Nov. JG has ruled it stays, going forwards. Do not merge the folders.
+- A job that seems missing from one folder is in the other. The runner name on the job in Grid Control (ending `-s2` or not) and the run log's `[collect] looked in` line say which.
+- Every finished run is also filed to AISheets and the completed AI briefs area, whichever runner ran it.
+
+### 14 Nov 2026, after midnight: review verdict, rulings and the plan from here
+
+- **Reviewer's verdict on six of tonight's records:** better component coverage, none cleared as a corrected estimate. Recorded on SCRUM-274 as regression evidence.
+- **Two claimed fixes did not hold on a real run.** 6364-02 door pieces charged at 9, not 3 (`4931963e`): the count is the part's count times the per-part count from its own table, and one of those came out 3. The replay checked that step, not the charged line. 12674 bases still priced (£8.32, £6.24): `9f92c613` flags the base, it does not stop another fallback pricing it. Neither is diagnosed yet; both need the new records.
+- **A reader fix does not force a fresh model read.** Reuse checks models, failures and schema, not reader code. Reruns cannot prove reader fixes without Fresh read. Proposed making a reader change force a fresh read; awaiting JG's OK (costs SolidWorks time).
+- **Status words:** implemented, tested, deployed, proved on a real result. Only the last means fixed. Every costing fix gets a test from the saved record through to the charged workbook line.
+- **JG rulings:** `v2` is the correct pack where both folders came from the pack store. Each runner keeps its own estimates folder.
+- **Deployed:** `8541cc51` (laptop service `fbba4c3`). Pushed, not deployed: `3a6d404d`, one completed-estimates list on Grid Control with each bundle checked on the share and linked from the e-mail and note. Goes out with the first costing-fix release.
+- **Agreed job plan:** 11896-08-01-GA run once after the preview; 11896-01-00-GA optional diagnostic (running 00:07); 11896-02-01-GA waits for piece review and the China Red rate, then 1, 8 and 68 together; 11896-04-00-GA held for the sheet decision; the other seven not rerun. Self-Running stays off until the preview shows exactly which jobs would start.
+- **Next for the cloud session:** the eight `_record.json` files from 13 Nov, starting with the 6364-02 door pieces.
+
+### 14 Nov 2026 morning: door count, base guess, the live checkout switch, repeat runs, polishing
+
+Status words as agreed: implemented, tested, deployed, proved on a real result. Only the last means fixed.
+
+- **Door pieces ×9 found and fixed** (`566ec856`). A piece listed under its part read its per-part count from the part's own table (3), and the part graph multiplied that by the part's 3 again. The piece now keeps its per-part count, and the graph does the multiplying, once. Tested on the final charged quantity (door pieces 3, not 9); replayed on seven records, only the six door pieces move. Deployed in `f7236bc0`. Not yet proved on a fresh estimate.
+- **A drawn part whose construction nobody stated is not priced by a guess** (`d347ecbf`). The 12674 mounting bases (£8.32, £6.24) were priced by the market fallback from a measured size with no material and no thickness. A coded drawn part with no stated material, or no thickness for a measured blank, is now NOT PRICED with a manufacturing question. A safeguard, not a costing fix: both table estimates stay incomplete until the base's construction is established and costed. Deployed in `f7236bc0`.
+- **The live checkout was switched to another project's branch at 09:49:43.** A pasted `git checkout claude/eloquent-babbage-o9etz3` ran in `C:\ClaudeVision`. That branch is the Sage X3 and Access runbook work and holds no estimating page, so both services answered "sdi-estimating-intelligence.html is not next to app.py". Restored with `git switch claude/app-portal-main-2026` (`f7236bc0`); tracked files were clean, nothing lost. **Rule: `C:\ClaudeVision` runs the services and holds the portal branch only. Other work goes in its own worktree (e.g. `git worktree add C:\ClaudeVision-ops <branch>`).** Any job the main runner started between 09:49:43 and the restore ran on the wrong code and is void.
+- **Self-Running repeat runs: three faults found, fix pushed** (`20cbc620`, preview `d847094c`). Evidence: the ledger since 13 Nov 20:00 held one attempt each for 11896-08-01, 11896-08-02, 12773-01, 12674-01, 12674-02 and 12424-02, and none for the jobs that repeated (11896-04-00-GA, 11896-02-01-GA, 11896-01-00-GA, 6364-02). The TTI batch is ruled out: no tti_pricer process, and its files last written 11 Nov 19:32. Faults: an unreadable ledger was read as empty and saved over the real one; the run was queued before its attempt was saved; nothing asked the services what they had already run. Now: an unreadable ledger stops the cycle with the reason; the attempt is saved before the run is asked for; each cycle reads every service's run list and adopts any Self-Running run the ledger lacks. Tested (17 tests; 12 fail on the old code). The dry-run preview now reads the services too, so it shows exactly what a live cycle would start. Not deployed. The watcher stays disabled until it is.
+- **Still to confirm on the laptop:** `self_running.log` lines with "cycle failed", the ledger's total attempts and earliest date, and the services' run list with `source` for runs since 13 Nov 20:00. These say which of the three faults fired.
+- **12424 polishing charged on the insert and on its eight panels: fixed in code** (`54e6822a`). The insert's sheet says FINISH: POLISHED EDGES; that was charged on the insert as 31.7 minutes, timed from 15,864 mm of assembly-drawing line work (£17.48), while each panel was also polished on its own outline. config `EDGE_FINISH_OPERATIONS` now puts an edge finish on the members that carry it, whatever the evidence, and stands the assembly down with its reason. Replayed through the route compiler on seven saved records: 282 decisions, one changed. Not deployed. The unit-total change is to be read from the recalculated workbook in the combined replay, not taken as £17.48.
+- **Still open on SCRUM-274, unchanged by this:** the cam lock's two identities on 6364-01 (£18.66 and £0) and its inherited machining and polish; 12773-02-103 at 40 off; the 12424 contradictory quantity warnings and UPC sticker; 6364-01 boards at 5 mm MFC; welding at parent and child on 11896-08-02 and 11896-01-00; edging source unit EA against metres; PACKOUT TOPPER at 12 unpriced; the 11896-04-00 top-assembly choice. The record-dependent ones need the records ZIP.
+
+### 14 Nov 2026, late morning: deployed, and the settings file the branch switch took
+
+- **Deployed.** Laptop `26bb8e3a` contains `0d52f882`: the repeat-run fix and preview (`20cbc620`, `d847094c`), polishing (`54e6822a`), door count (`566ec856`), base safeguard (`d347ecbf`). Both services and both runners on `26bb8e3`; both runners check in to both services. Status: deployed, not proved on a real result.
+- **The branch switch also took the service's own settings file.** `claude/eloquent-babbage-o9etz3` tracks `sdi-intelligence-backend/.env`. On the portal branch that path is ignored, and git overwrites ignored files without asking: the checkout replaced the laptop's file with the branch's copy and the switch back deleted it. 8072 then would not start ("SDI_ALLOWED_ORIGINS is not set"). 909 laptop-only files at paths that branch tracks went the same way: a `venv` folder, Sage X3 files, old `.bak` copies, and five corpus files read only by offline ingest tools. None is used by estimating.
+- **Repair.** Rebuilt from the branch's copy (`0915153a`). Its database password was stale (SQL state 28000); the root `.env` password connected with the same server, database, user and driver. Only the service file's `SDI_DB_PASSWORD` line was removed, so the root value applies; backup in the user profile (`sdi-env-backups`). Database error cleared. The service has no defaults for server, database or user: never remove those lines.
+- **Access.** The API key is blank in the restored file, and "access gate is OFF" was already logged at the 09:42 start, before the switch. The runners send no key (none in the root `.env`, no environment variable, no `--api-key`) and the estimating page sends an empty one (`sdi-estimating-intelligence.html:1481`). Turning the key on is a separate change that needs every caller configured first. The restored file holds no Microsoft sign-in settings; public-route sign-in is a separate verification item. That branch on GitHub holds live service credentials in a committed `.env`: to be removed and the credentials rotated.
+- **Self-Running stays disabled** until its dry-run preview is checked. The publish stopped at the disabled task; `e6e36160` (pushed, not deployed) leaves a disabled task off and carries on.
+- **Next, diagnostic reruns, not acceptance**, started from the estimating page (Grid Control's Re-run hands a Self-Running job back to the disabled watcher): 6364-01 and 6364-02 (doors), 12424-02-GA (polishing), 12674-01-GA and 12674-02-GA (base). 11896-02-01-GA after the piece review and the China Red rate, at 1, 8 and 68.
 
 ## 1. WHAT THE PROJECT IS
 

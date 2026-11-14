@@ -159,7 +159,7 @@ def test_the_note_section_is_really_exercised_by_the_test_above(tmp_path):
 
 def test_one_call_serves_the_page_self_running_and_tti_after_the_run_exists():
     src = (BACKEND / "estimate_routes.py").read_text(encoding="utf-8")
-    call = src.index('_run_log_drop_off(run, folder, client, drawing, str(req.job_title or ""), _sources)')
+    call = src.index('_run_log_drop_off(run, folder, client, drawing, str(req.job_title or ""), _sources,')
     assert src.index("run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,") < call, \
         "the run id is known, so the manifest can name it"
     assert src.index('_pack_manifest = Path(folder) / "pack_manifest.json"') < call
@@ -236,3 +236,4 @@ def test_a_copy_that_fails_is_flagged_in_the_log_and_the_job_is_still_queued(er,
     assert run.status == "queued"
     assert any("WARNING: the review copy of this pack was NOT saved" in l for l in run.log)
     assert json.loads((Path(run.job_folder) / "PACK_DROPOFF.json").read_text())["saved"] is False
+

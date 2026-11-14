@@ -85,7 +85,7 @@ def recent_runs(ledger: Dict[str, Any], limit: int = RECENT_RUNS_SHOWN,
     for job in (ledger.get("jobs") or {}).values():
         for a in job.get("attempts") or []:
             when = str(a.get("finished_at") or a.get("queued_at") or "")
-            if a.get("status") not in ("queued", "running"):
+            if a.get("status") not in ("queued", "running", ler.QUEUEING):
                 try:
                     if datetime.fromisoformat(when[:19]) < edge:
                         continue
@@ -464,6 +464,17 @@ def apply_reruns(ledger: Dict[str, Any], asked: List[Dict[str, Any]],
     for r in asked:
         want = str(r.get("drawing") or "").strip().upper()
         cust = str(r.get("customer") or "").strip().upper()
+        # A REQUEST FOR A JOB THE LEDGER DOES NOT HOLD IS KEPT, NOT DROPPED (14 Nov 2026). The
+        # ledger lost jobs overnight; a Re-run pressed for one of them matched nothing here and
+        # vanished. With a customer named, the job's line is made so the read finds the request.
+        if want and cust and not any(
+                str(j.get("drawing") or "").strip().upper() == want
+                and str(j.get("customer") or "").strip().upper() == cust
+                for j in (ledger.get("jobs") or {}).values()):
+            ledger.setdefault("jobs", {}).setdefault(
+                f"{ler.customer_key(r.get('customer'))}|{ler.drawing_key(r.get('drawing'))}",
+                {"customer": str(r.get("customer")).strip(), "drawing": str(r.get("drawing")).strip(),
+                 "attempts": []})
         for job in (ledger.get("jobs") or {}).values():
             if str(job.get("drawing") or "").strip().upper() != want:
                 continue
@@ -486,6 +497,28 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
           others: Sequence[ler.Portal] = ()) -> Dict[str, Any]:
     """Read, collect, run. Returns what it did, for the log and the last beat."""
     ledger = ler.load_ledger(s["ledger"])
+    # WHAT THE SERVICES RAN, before anything is planned: a run the ledger lost is adopted, never
+    # queued again (JG, 14 Nov 2026). Read in a dry run too, so the preview shows exactly the
+    # jobs a live cycle would start: a read of each service's run list, nothing queued or saved.
+    ler.gather_service_runs(ledger, portal, others)
+    if dry_run:
+        # THE RE-RUNS WAITING ON THE PAGE ARE IN THE PREVIEW, AND LEFT WAITING (JG, 14 Nov 2026).
+        # A beat takes them; the preview reads the switch as the page does, which takes nothing,
+        # and applies them to this read only. Nothing here is saved.
+        waiting, seen_asks = [], set()
+        for p in [portal] + [o for o in others if o is not portal]:
+            try:
+                view = p.self_running_view() or {}
+            except Exception:                                        # noqa: BLE001
+                continue
+            for r in view.get("rerun_pending") or []:
+                key = (str(r.get("drawing")).upper(), str(r.get("customer")).upper())
+                if isinstance(r, dict) and key not in seen_asks:
+                    seen_asks.add(key)
+                    waiting.append(r)
+        say(f"   {len(waiting)} Re-run request(s) waiting on the page"
+            + (": " + ", ".join(str(r.get("drawing")) for r in waiting) if waiting else ""))
+        apply_reruns(ledger, waiting, say=say)
     if not dry_run:
         ler.refresh_open_runs(ledger, portal, others)
         apply_reruns(ledger, getattr(switch, "take_reruns", lambda: [])(), say=say)
@@ -495,7 +528,16 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
         ler.save_ledger(s["ledger"], ledger)
     sources = ler._sources(s["root"])
     switch.beat(report("reading the sheet", str(s["workbook"])))
-    decisions = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger)
+    _t0 = time.time()
+
+    def _checking(row: Any) -> None:
+        if str(getattr(row, "ai_check", "")).strip().upper() in {w.upper() for w in config.LIVE_ENQUIRY_ASKED} \
+                or ((ledger.get("jobs") or {}).get(ler.job_key(row)) or {}).get("page_rerun"):
+            say(f"   checking row {row.row}: {row.drawing} ({row.customer}) [{time.time() - _t0:.0f} s]")
+
+    decisions = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger, progress=_checking)
+    for _line in ledger.pop("_adopted", None) or []:
+        say(f"   from the services' own record: {_line}")
     # A PAGE RE-RUN FOR A ROW THAT HAS LEFT THE SHEET IS SAID, ONCE (JG, 11 Nov 2026: "otherwise I
     # need to manually re-run"), on the log and the page's beat, and then forgotten.
     for _job in (ledger.get("jobs") or {}).values():
@@ -795,8 +837,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--api-key", default=os.getenv("SDI_API_KEY", ""))
     ap.add_argument("--once", action="store_true", help="one cycle, then stop")
     ap.add_argument("--dry-run", action="store_true",
-                    help="read the sheet and say what it would collect and run; copies and "
-                         "queues nothing, and does not ask the portal")
+                    help="read the sheet and say what it would collect and run; copies, queues "
+                         "and saves nothing, and asks the services only what they have run")
     ap.add_argument("--log", default="")
     args = ap.parse_args(argv)
     if args.log:
@@ -814,7 +856,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         class _Silent(Switch):
             def beat(self, rep: Dict[str, Any]) -> bool:
                 return True
-        cycle(s, portal, _Silent(portal), dry_run=True)
+        cycle(s, portal, _Silent(portal), dry_run=True, others=portals[1:])
         return 0
 
     if not ler.take_lock(s["ledger"]):

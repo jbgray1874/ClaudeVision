@@ -1222,6 +1222,17 @@ PURCHASED_MATERIAL_WORDS = {"MAGNET": "MAGNET", "MAGNETS": "MAGNET",
 # it and the assembly stands down. Welds, powder and assembly events have their own rules.
 ONE_LEVEL_OPERATIONS = ("glue", "wet_spray", "cnc_routing", "cnc", "manual_labour_acrylic")
 
+# AN EDGE FINISH IS DONE TO THE PIECES' EDGES (JG and the reviewer, 14 Nov 2026: 12424-02-GA
+# "polishing is charged at 9, listing the parent assembly plus its eight pieces"). The insert's
+# sheet says FINISH: POLISHED EDGES, and that was charged on the insert as 31.7 minutes, timed
+# from 15.9 m of line work on its assembly drawing. Each of its eight acrylic panels was also
+# polished on its own outline. An assembly has no edges apart from its pieces'. Where an
+# assembly and its members both carry one of these, the members keep it, whatever the strength
+# of the evidence, and the assembly's statement of the finish stands as theirs. The row the
+# assembly gives up keeps its reason, and says to put it back if the shop also finishes the
+# bonded assembly.
+EDGE_FINISH_OPERATIONS = ("diamond_polish",)
+
 # AN EDGE THE SHEET SAYS THE CUTTER FINISHED NEEDS NO POLISH (D-447, the acrylic route). The
 # acrylic route diamond-polishes every acrylic part (the estimators' own sheets, corpus n=147,
 # say so), and that stands. Where a part's OWN finish or notes state that its edges are finished

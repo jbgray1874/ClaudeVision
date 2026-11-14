@@ -36,7 +36,8 @@ from pathlib import Path
 # The same tuple as staging.DRAWING_SUFFIXES; a test holds them together.
 # Not imported, because staging reads the service's configuration as it loads
 # and this must load wherever the private assistant does.
-DRAWINGS = (".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp")
+DRAWINGS = (".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp",
+            ".igs", ".iges")     # 14 Nov 2026: staging takes IGS models now, so these do too
 
 # Windows' reserved characters and control characters - estimate_routes'
 # _UNSAFE, the rule every other job folder on the share is named by.

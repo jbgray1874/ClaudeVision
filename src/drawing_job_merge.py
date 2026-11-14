@@ -1835,6 +1835,188 @@ def inherit_parent_product(piece: Dict[str, Any], parent: Dict[str, Any]) -> Lis
     return got
 
 
+def _piece_outline_mm(piece: Mapping[str, Any]) -> Optional[List[float]]:
+    """The two sides of a piece's own flat, smallest first, or None when nothing measured it."""
+    pairs = [(piece.get("overall_length_mm"), piece.get("overall_width_mm"))]
+    box = ((piece.get("normalized_geometry") or {}).get("bounding_box_flat_mm") or {})
+    pairs.append((box.get("length"), box.get("width")))
+    for a, b in pairs:
+        try:
+            a, b = float(a), float(b)
+        except (TypeError, ValueError):
+            continue
+        if a > 0 and b > 0:
+            return sorted((a, b))
+    return None
+
+
+def counts_from_the_parts_own_table(parts: Any, bom_rows: Any) -> Dict[str, Dict[str, Any]]:
+    """How many of each piece the part's own table calls for (12424-02-GA, 13 Nov 2026).
+
+    The insert's sheet lists its four panels by size with a quantity each: 2, 1, 2 and 3,
+    eight in all. Each panel's flat became a piece at quantity 1 and four were costed. The
+    sizes had been used to tell the flats apart and the quantities beside them were dropped.
+
+    A piece takes a row's quantity only when the match is beyond doubt: the row is uncoded,
+    sits under that part, prints a size whose two larger figures are the piece's own outline
+    (within 2 mm or 2%) and whose third, where the piece has a gauge, is that gauge (within
+    0.5 mm); and exactly one piece answers to that row and one row to that piece.
+    Returns {piece key: {"quantity", "row", "part"}}.
+    """
+    plist = [p for p in (parts or []) if isinstance(p, dict)]
+    by_parent: Dict[str, List[Dict[str, Any]]] = {}
+    for p in plist:
+        par = _normalize_part_key(p.get("dxf_minted_piece_of") or "")
+        if par:
+            by_parent.setdefault(par, []).append(p)
+    out: Dict[str, Dict[str, Any]] = {}
+    for par, pieces in by_parent.items():
+        rows = [r for r in (bom_rows or []) if isinstance(r, Mapping)
+                and _normalize_part_key(str(r.get("bom_parent") or "")) == par
+                and r.get("bom_parent_known") is not False
+                and not str(r.get("part_number") or "").strip()
+                and _SIZE_IN_WORDS.search(str(r.get("description") or ""))]
+        if not rows:
+            continue
+
+        def _miss(piece: Mapping[str, Any], row: Mapping[str, Any]) -> Optional[float]:
+            """How far the row's printed size is from the piece's outline, in mm, or None
+            when it is not within tolerance or the gauge differs."""
+            fig = sorted(float(x) for x in
+                         _SIZE_IN_WORDS.search(str(row["description"])).groups() if x)
+            side = _piece_outline_mm(piece)
+            if not side or len(fig) < 2:
+                return None
+            if not all(abs(a - b) <= max(2.0, 0.02 * b) for a, b in zip(side, fig[-2:])):
+                return None
+            try:
+                gauge = float(piece.get("normalized_thickness_mm"))
+            except (TypeError, ValueError):
+                gauge = None
+            if gauge is not None and len(fig) >= 3 and abs(fig[0] - gauge) > 0.5:
+                return None
+            return sum(abs(a - b) for a, b in zip(side, fig[-2:]))
+
+        # THE NEAREST ROW, AND ONLY WHEN IT IS THE NEAREST BOTH WAYS. Two of the insert's
+        # panels are 290 x 260 and 293 x 260: each is within tolerance of the other's row, so
+        # tolerance alone cannot tell them apart. Each piece goes to the row it fits best,
+        # provided no other piece fits that row as well and no other row fits it as well.
+        miss = {(pi, ri): m for pi, piece in enumerate(pieces) for ri, row in enumerate(rows)
+                for m in [_miss(piece, row)] if m is not None}
+        for (pi, ri), m in sorted(miss.items(), key=lambda kv: kv[1]):
+            rivals = [v for (a, b), v in miss.items()
+                      if (a == pi) != (b == ri) and v <= m + 1e-6]
+            if rivals:
+                continue
+            try:
+                n = int(float(rows[ri].get("quantity")))
+            except (TypeError, ValueError):
+                continue
+            if n >= 1:
+                out[_normalize_part_key(pieces[pi].get("part_number"))] = {
+                    "quantity": n, "row": str(rows[ri].get("description") or ""),
+                    "item": str(rows[ri].get("bom_item_no") or ""), "part": par}
+    return out
+
+
+def pieces_take_their_parts_count_and_material(parts: Any, bom_rows: Any = None
+                                                ) -> List[Dict[str, Any]]:
+    """A piece's count is how many go into ONE of its part; its material is its part's.
+
+    A PIECE'S OWN COUNT IS PER ONE OF ITS PART, NEVER A TOTAL (14 Nov 2026). Every piece is
+    listed under its part, and the part graph multiplies down: door x3 -> piece x1 = 3 per
+    product. The first version of this rule (13 Nov) read the piece's own 1 as "priced once",
+    wrote the door's 3 into it as a total, and the graph then took that 3 as per door: 6364-02's
+    door pieces were charged 9 each. The 12 Nov records show the graph had been charging 3 all
+    along. So the part's count is never written here. The only count taken is the part's own
+    table's figure for that piece (12424-02-GA: 2, 1, 2 and 3 panels in each insert), and only
+    for a piece that sits under its part, where the graph will multiply it.
+
+    One bin piece carried no material at all, because its flat's file name states none, though
+    the bin's own sheet states the bin's material and gauge. A piece with no material takes the
+    material its part's own sheet states, and the gauge with it when the piece states none. A
+    piece that states its own is left alone.
+
+    Run once every reader has finished and before anything is costed. Both are recorded on the
+    piece with where they came from. Returns what changed.
+    """
+    import source_precedence as _sp
+    plist = [p for p in (parts or []) if isinstance(p, dict)]
+    by_pn = {_normalize_part_key(p.get("part_number")): p for p in plist if p.get("part_number")}
+    said: List[Dict[str, Any]] = []
+    listed = counts_from_the_parts_own_table(plist, bom_rows)
+    for piece in plist:
+        parent_pn = str(piece.get("dxf_minted_piece_of") or "").strip()
+        parent = by_pn.get(_normalize_part_key(parent_pn)) if parent_pn else None
+        if parent is None or parent is piece:
+            continue
+        note: Dict[str, Any] = {"piece": piece.get("part_number"), "of": parent_pn}
+        try:
+            parent_q = int(float(parent.get("quantity") or 0))
+        except (TypeError, ValueError):
+            parent_q = 0
+        own_src = str(_sp.source_of(piece, "quantity") or "")
+        try:
+            own_q = int(float(piece.get("quantity") or 0))
+        except (TypeError, ValueError):
+            own_q = 0
+        _row = listed.get(_normalize_part_key(piece.get("part_number")))
+        per_part = int(_row["quantity"]) if _row else 1
+        parent_q = max(parent_q, 1)
+        _under = {_normalize_part_key(k) for k in (parent.get("assembly_children") or [])}
+        if _row and per_part > 1 and own_q <= 1 and own_src in ("", "inference") \
+                and not piece.get("quantity_from_its_part") \
+                and _normalize_part_key(piece.get("part_number")) in _under:
+            # through the arbitration door, at the standing of a bill row's count per its
+            # parent: stronger than the 1 the piece was born with, weaker than a count a
+            # reader takes from the drawing or the model
+            if not _apply_field(piece, "quantity", per_part, "bom_tree"):
+                continue
+            piece["quantity_from_its_part"] = {
+                "part": parent_pn, "part_quantity": parent_q, "per_part": per_part,
+                "basis": (f"{per_part} of this piece in each {parent_pn} (its own table, item "
+                          f"{_row['item']}: {_row['row']} x {per_part}); the part graph "
+                          f"multiplies by the {parent_q} of {parent_pn} in a unit")}
+            note["count_per_part"] = per_part
+        if not str(piece.get("normalized_material") or "").strip():
+            mat = str(parent.get("normalized_material") or "").strip()
+            if mat and str(_sp.source_of(parent, "normalized_material") or "") not in ("", "inference"):
+                _stated = str(_sp.source_of(parent, "normalized_material") or "")
+                if not _apply_field(piece, "normalized_material", mat, _stated):
+                    continue
+                piece["material_from_its_part"] = {
+                    "part": parent_pn, "material": mat,
+                    "stated_by": str(_sp.source_of(parent, "normalized_material") or "")}
+                note["material"] = mat
+                parent_gauge = parent.get("normalized_thickness_mm")
+                # THE GAUGE COMES DOWN ONLY WHERE THE PART'S GAUGE GOVERNS ITS PIECES. Where
+                # the part's other pieces state gauges of their own that differ from the
+                # part's (a bin with 5 mm and 3 mm panels under a sheet that prints one
+                # figure), the part's figure is not this piece's gauge and is not passed on.
+                _sib = {float(q.get("normalized_thickness_mm")) for q in plist
+                        if q is not piece and q.get("normalized_thickness_mm")
+                        and _normalize_part_key(q.get("dxf_minted_piece_of") or "")
+                        == _normalize_part_key(parent_pn)}
+                if _sib and (len(_sib) > 1 or abs(next(iter(_sib)) - float(parent_gauge or 0)) > 0.01):
+                    piece["material_from_its_part"]["gauge_not_taken"] = (
+                        f"{parent_pn}'s other pieces state "
+                        f"{', '.join(f'{g:g}' for g in sorted(_sib))} mm, so its "
+                        f"{parent_gauge if parent_gauge else 'unstated'} mm does not govern this piece")
+                    parent_gauge = None
+                if parent_gauge and not piece.get("normalized_thickness_mm") and _apply_field(
+                        piece, "normalized_thickness_mm", parent_gauge,
+                        str(_sp.source_of(parent, "normalized_thickness_mm") or "") or _stated):
+                    piece["material_from_its_part"]["thickness_mm"] = parent_gauge
+                    note["thickness_mm"] = parent_gauge
+                piece.setdefault("review_flags", []).append(
+                    f"material taken from {parent_pn}'s own sheet ({mat}"
+                    + (f", {parent_gauge:g} mm" if isinstance(parent_gauge, (int, float)) and "thickness_mm" in note else "")
+                    + "): this piece's flat states none. Confirm the gauge of this piece.")
+        if len(note) > 2:
+            said.append(note)
+    return said
+
+
 def inherit_product_onto_pieces(parts: Any) -> List[str]:
     """Every piece split from a part's numbered flats takes the part's product fields it lacks,
     once every reader has run (the decor may be read after the split). Returns the pieces

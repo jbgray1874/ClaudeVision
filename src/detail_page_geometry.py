@@ -2348,7 +2348,19 @@ def mint_missing_hand_records(parts: Any, bom_rows: Any) -> List[str]:
             # That is a software error, not an inference. The rows stay lines, so what they
             # cost to buy and fit stays on the estimate; the false hand, the borrowed stock
             # and the handed question go.
+            #
+            # ONE BILL ROW, ONE RECORD (6364-01, 12 Nov 2026). A reader made a record for the
+            # cam lock, its supplier code was rejected as text, and the record lived on with
+            # no number, a borrowed 829 x 639 blank and another sheet's drilling. This row
+            # was then minted beside it: three locks bought and three more "made". A record
+            # whose rejected code is this row's code IS this row, so it is withdrawn here.
+            _withdrawn = [p for p in parts if isinstance(p, dict) and not p.get("part_number")
+                          and p.get("part_number_rejected")
+                          and _key(p.get("part_number_rejected")) == _key(pn)]
+            for _w in _withdrawn:
+                parts.remove(_w)
             parts.append({
+                "withdrew_nameless_records": len(_withdrawn),
                 "part_number": pn,
                 "description": str(row.get("description") or "").strip() or pn,
                 "quantity": qty,

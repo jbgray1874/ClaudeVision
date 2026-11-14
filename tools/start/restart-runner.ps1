@@ -232,10 +232,19 @@ if ($task) {
 # is the one outcome worse than doing nothing.
 $restartAt = Get-Date
 Start-Sleep -Seconds 1
+# THIS SLOT'S RUNNER ONLY. On 13 Nov 2026 the main runner's restart ended slot 2's runner
+# as well, because every runner process matched; slot 2's task brought it straight back,
+# and the check below read the two as "2 SEPARATE RUNNERS STARTED" and stopped the publish
+# before slot 2 and the watcher were reached. A slot's runner carries "--slot N" on its
+# command line and the machine's own runner carries none (or "--slot 1").
+function Get-RunnerSlot($p) {
+    if ("$($p.CommandLine)" -match '--slot[\s=]+"?(\d+)') { return [int]$Matches[1] }
+    return 1
+}
 function Get-RunnerProcs {
     @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" `
           -ErrorAction SilentlyContinue |
-      Where-Object { $_.CommandLine -like '*sdi_estimate_runner*' })
+      Where-Object { $_.CommandLine -like '*sdi_estimate_runner*' -and (Get-RunnerSlot $_) -eq $Slot })
 }
 # GET-CIMINSTANCE ALREADY HANDS BACK A DATETIME. The WMI-string converter threw on it, the
 # catch returned nothing, and the "born after the restart" test below could therefore never

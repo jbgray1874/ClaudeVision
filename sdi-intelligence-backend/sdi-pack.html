@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drawing pack used</title>
+<!-- THE PACK A RUN WAS GIVEN (13 Nov 2026). Opened from the link in a finished estimate's
+     e-mail and filed covering note. It shows the pack kept for that one run: its files, their
+     drawing numbers, revisions and formats, what the run did with each, and what is missing
+     or unread. A version made later by recovery is shown under its own heading and is never
+     presented as what the run used. Internal. -->
+<style>
+  :root{ --bg:#0c0c0b; --panel:#141412; --line:#2b2b26; --ink:#f2f2ea; --muted:#b6b6a7;
+         --brand:#F6D946; --bad:#ff6b6b; --ok:#8fd694; }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f4f4f2; --panel:#ffffff; --line:#d9d8d3; --ink:#17171a; --muted:#5b5b63;
+           --brand:#8a6a00; --bad:#8a1f11; --ok:#1f6b2a; } }
+  body{ margin:0; background:var(--bg); color:var(--ink);
+        font:15px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+  main{ max-width:1100px; margin:0 auto; padding:20px 16px 60px; }
+  h1{ font-size:22px; margin:0 0 4px; } h2{ font-size:16px; margin:22px 0 8px; }
+  .muted{ color:var(--muted); } .bad{ color:var(--bad); font-weight:600; } .ok{ color:var(--ok); }
+  .panel{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:12px 0; }
+  table{ border-collapse:collapse; width:100%; } th,td{ text-align:left; padding:6px 10px 6px 0;
+        border-bottom:1px solid var(--line); vertical-align:top; font-size:14px; }
+  a{ color:var(--brand); } .scroll{ overflow-x:auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Drawing pack used</h1>
+  <p class="muted" id="ident"></p>
+  <div id="recovered"></div>
+  <div class="panel" id="completeness"></div>
+  <h2>Files in this pack</h2>
+  <div class="panel scroll"><table id="files"></table></div>
+  <div id="absent"></div>
+  <div id="later"></div>
+</main>
+<script>
+const API_KEY = "";                       // set if SDI_API_KEY is enabled, as on the estimating page
+const token = location.pathname.split("/").filter(Boolean).pop();
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const api = p => fetch(p, {headers: {"X-SDI-Key": API_KEY}});
+const WORDS = {source_pack: "Was everything the product needs found?",
+               copy: "Is every file that was found in this pack?",
+               read: "What did the run read?"};
+function part(name, c){
+  const p = (c || {})[name] || {};
+  const good = p.state === "complete";
+  return `<p><b>${esc(WORDS[name])}</b> <span class="${good ? "ok" : "bad"}">${esc(p.state || "not recorded")}</span><br>`
+       + `<span class="muted">${(p.because || []).map(esc).join("<br>")}</span></p>`;
+}
+api(`/api/estimate/pack/${encodeURIComponent(token)}`).then(async r => {
+  if (!r.ok) { document.getElementById("ident").innerHTML =
+      `<span class="bad">${esc((await r.json().catch(() => ({}))).detail || "This pack link could not be opened.")}</span>`; return; }
+  const v = await r.json();
+  document.getElementById("title").textContent = `Drawing pack used: ${v.drawing_number}`;
+  document.getElementById("ident").textContent =
+      `${v.client} · run ${v.run_id || "not recorded"} · pack version ${v.pack_version} · folder ${v.folder_name}`;
+  if (!v.available) { document.getElementById("completeness").innerHTML =
+      '<p class="bad">The pack kept for this run is no longer where it was saved.</p>'; return; }
+  if (v.this_is_a_recovered_pack) document.getElementById("recovered").innerHTML =
+      `<div class="panel"><p class="bad">RECOVERED REVIEW PACK. Made ${esc(v.recovery.at)} from ${esc(v.recovery.recovered_from)}.</p>`
+      + `<p>Files marked recovered were added afterwards and were NOT given to the earlier runs.</p></div>`;
+  const proved = ["source_pack", "copy", "read"].every(k => ((v.completeness || {})[k] || {}).state === "complete");
+  document.getElementById("completeness").innerHTML =
+      (proved ? "" : '<p class="bad">PACK COMPLETENESS NOT PROVED</p>')
+      + part("source_pack", v.completeness) + part("copy", v.completeness) + part("read", v.completeness);
+  document.getElementById("files").innerHTML =
+      "<tr><th>File</th><th>Drawing</th><th>Rev</th><th>Format</th><th>Intended handling</th><th>On this run</th></tr>"
+      + v.files.map(f => `<tr><td><a href="/api/estimate/pack/${encodeURIComponent(token)}/file/${f.name.split("/").map(encodeURIComponent).join("/")}">${esc(f.name)}</a>`
+          + `${f.recovered ? ' <span class="bad">(recovered later)</span>' : ""}</td>`
+          + `<td>${esc(f.drawing || "-")}</td><td>${esc(f.revision || "-")}</td><td>${esc(f.format)}</td>`
+          + `<td class="muted">${esc(f.intended_handling)}</td>`
+          + `<td class="${/^NOT READ|NO RECORD/.test(f.on_this_run) ? "bad" : ""}">${esc(f.on_this_run || (v.read_recorded ? "not mentioned" : "not recorded for this run"))}`
+          + `${f.why ? '<br><span class="muted">' + esc(f.why) + "</span>" : ""}</td></tr>`).join("");
+  const gaps = [];
+  if (v.not_in_this_copy.length) gaps.push("<h2>Found for the pack, not in this copy</h2><div class='panel'><table><tr><th>File</th><th>Reason</th></tr>"
+      + v.not_in_this_copy.map(a => `<tr><td>${esc(a.name)}</td><td class="muted">${esc(a.reason)}</td></tr>`).join("") + "</table></div>");
+  if (v.missing.length) gaps.push(`<h2>Called for by the drawings, no file found</h2><div class="panel bad">${v.missing.map(esc).join(", ")}</div>`);
+  if (v.unread_assemblies.length) gaps.push(`<h2>Assemblies not read for their parts</h2><div class="panel bad">${v.unread_assemblies.map(a => esc(typeof a === "string" ? a : (a.drawing || a.name || JSON.stringify(a)))).join(", ")}</div>`);
+  document.getElementById("absent").innerHTML = gaps.join("");
+  if (v.recovered_versions_made_later.length) document.getElementById("later").innerHTML =
+      "<h2>Recovered review packs made later</h2><div class='panel'><p class='muted'>These were made after this run and are not what it was given.</p>"
+      + v.recovered_versions_made_later.map(x => `<p><b>${esc(x.folder)}</b> made ${esc(x.at)}; added ${x.added.map(esc).join(", ") || "nothing"}`
+          + `${x.not_recovered.length ? "; could not recover " + x.not_recovered.map(esc).join(", ") : ""}</p>`).join("") + "</div>";
+});
+</script>
+</body>
+</html>

@@ -744,7 +744,11 @@ def test_a_made_part_allowance_is_one_parts_price_not_the_lines(monkeypatch):
     import estimator as E
     monkeypatch.setattr(E, "_rung4_researcher", lambda brief: _label_answer(
         price_gbp=3.50, item_priced="one folded steel bracket"))
+    # The bracket's material is stated: what this tests is that the allowance is one part's
+    # price, not the line's. Since 14 Nov a made part whose material nobody stated is not
+    # priced by a market guess at all (test_a_part_whose_construction_nobody_stated_...).
     pe = {"part_number": "J-CPT09", "description": "BRACKET", "quantity": 30,
+          "normalized_material": "MILD_STEEL",
           "assumed_job_quantity": 200, "review_flags": []}
     assert E._made_part_material_allowance(pe) == 3.50
 

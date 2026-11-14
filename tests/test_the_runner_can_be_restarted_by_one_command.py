@@ -407,3 +407,92 @@ def test_the_service_check_waits_out_the_stopped_runners_window(script):
     code = _code(script)
     loop = code[code.index("while ($asked -lt 90)"):code.index("if (-not $resp)")]
     assert "process_count -eq 1" in loop and "-not $mine.conflict" in loop
+
+
+# ── 13 Nov 2026: THE MAIN RUNNER'S RESTART ENDED SLOT 2 AND THEN CALLED IT A SECOND RUNNER ──
+import re as _re
+
+
+def _slot_of(command_line: str) -> int:
+    """The script's own rule, taken from its text and run here on real command lines."""
+    code = _SCRIPT_TEXT()
+    rule = _re.search(r"-match '([^']+)'\) \{ return \[int\]\$Matches\[1\] \}", code)
+    assert rule, "the slot rule is no longer where this test reads it"
+    hit = _re.search(rule.group(1), command_line)
+    return int(hit.group(1)) if hit else 1
+
+
+def _SCRIPT_TEXT() -> str:
+    return _PATH.read_text(encoding="utf-8")
+
+
+_MAIN = ('"C:\\ClaudeVision\\.venv\\Scripts\\pythonw.exe" "C:\\ClaudeVision\\tools\\runner\\'
+         'sdi_estimate_runner.py" --server "http://localhost:8071,http://localhost:8072"')
+_SLOT2 = ('"C:\\ClaudeVision\\.venv\\Scripts\\pythonw.exe" "C:\\ClaudeVision-s2\\tools\\runner\\'
+          'sdi_estimate_runner.py" --server "http://localhost:8071,http://localhost:8072" '
+          '--engine-root "C:\\ClaudeVision-s2" --engine-python "C:\\x\\pythonw.exe" --slot 2')
+
+
+def test_the_two_command_lines_of_13_november_are_two_different_slots():
+    assert _slot_of(_MAIN) == 1
+    assert _slot_of(_SLOT2) == 2
+    # the contrasting cases: a twentieth slot is not the second, and "--slot=3" is the third
+    assert _slot_of(_SLOT2.replace("--slot 2", "--slot 20")) == 20
+    assert _slot_of(_SLOT2.replace("--slot 2", "--slot=3")) == 3
+
+
+def test_a_restart_touches_only_its_own_slots_processes(script):
+    code = _code(script)
+    procs = code[code.index("function Get-RunnerProcs"):code.index("function Get-Started")]
+    assert "(Get-RunnerSlot $_) -eq $Slot" in procs, \
+        "every runner on the machine is ended and counted again, whichever slot was asked for"
+
+
+# ── AND THE WATCHER CAME BACK REFUSED BY ITS OWN OLD LOCK, WITH NOTHING PRINTED ──
+_PUBLISH = (_ROOT / "tools" / "start" / "publish-and-restart.ps1").read_text(encoding="utf-8")
+
+
+def _watcher_step() -> str:
+    start = _PUBLISH.index('Step "restart the Self-Running watcher"')
+    return _PUBLISH[start:_PUBLISH.index('Step "every service on this checkout"')]
+
+
+def test_the_publish_script_is_ascii_only():
+    assert all(ord(c) < 128 for c in _PUBLISH)
+
+
+def test_the_watchers_lock_is_cleared_before_it_is_started_again():
+    step = _watcher_step()
+    stop, clear, start = (step.index("Stop-ScheduledTask"), step.index("Remove-Item -LiteralPath $lock"),
+                          step.index("Start-ScheduledTask"))
+    assert stop < clear < start
+    assert "self_running.py" in step and "Stop-Process" in step[:clear], \
+        "a child the task's stop left behind still holds the lock"
+
+
+def test_a_lock_whose_holder_is_alive_is_not_removed():
+    step = _watcher_step()
+    guard = step[step.index("if (Test-Path $lock)"):step.index("Start-ScheduledTask")]
+    assert "Get-Process -Id ([int]$holder)" in guard and "still running" in guard
+    assert "$global:LASTEXITCODE = 10" in guard
+
+
+def test_the_watcher_is_heard_before_the_publish_says_done():
+    step = _watcher_step()
+    after = step[step.index("Start-ScheduledTask"):]
+    assert "/api/estimate/self-running" in after and "watcher.connected" in after
+    assert "WAS NOT HEARD" in after and "$global:LASTEXITCODE = 10" in after
+    assert "NOT CONFIRMED" in after, "a service that did not answer is not a dead watcher"
+
+
+def test_a_disabled_watcher_task_is_left_off_and_the_publish_goes_on():
+    """14 Nov 2026: Self-Running was off by disabling its task, and the publish stopped at
+    "The task is disabled" before reading back the services and the runners. A disabled task
+    is now said and left off; the old watcher is still ended and its lock still cleared."""
+    step = _watcher_step()
+    disabled = step.index('.State -eq "Disabled"')
+    assert step.index("Stop-Process") < disabled and step.index("if (Test-Path $lock)") < disabled
+    assert disabled < step.index("Start-ScheduledTask")
+    branch = step[disabled:step.index("Start-ScheduledTask")]
+    assert "left off" in branch and "return" in branch and "LASTEXITCODE" not in branch
+    assert "Enable-ScheduledTask" in branch

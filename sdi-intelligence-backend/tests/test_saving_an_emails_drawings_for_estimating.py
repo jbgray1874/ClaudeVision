@@ -220,10 +220,11 @@ class TheRouteTests(WithAFolder):
 
 class ThePageTests(unittest.TestCase):
     def test_it_offers_only_drawings(self):
+        # 14 Nov 2026: IGS models joined the list when staging began to take them
         self.assertIn("const DRAWINGS=['.pdf','.dxf','.dwg','.sldprt','.sldasm','.slddrw',"
-                      "'.step','.stp'];", PAGE)
+                      "'.step','.stp','.igs','.iges'];", PAGE)
         self.assertEqual(filing.DRAWINGS, ('.pdf', '.dxf', '.dwg', '.sldprt', '.sldasm',
-                                           '.slddrw', '.step', '.stp'))
+                                           '.slddrw', '.step', '.stp', '.igs', '.iges'))
 
     def test_it_posts_the_write_with_the_confirmation_header(self):
         self.assertIn("api('/file-for-estimating',", PAGE)

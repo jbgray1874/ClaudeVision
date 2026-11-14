@@ -51,6 +51,17 @@ LEAF_ONLY_OPERATIONS = frozenset({
 # packed. One rule per question; this one covers the case 11350 actually showed.
 SPECIFIC_JOINING_OPERATIONS = frozenset({"hardware_insertion"})
 
+def _same_event_key(decision: Any) -> str:
+    """What says two readings of a bond are one piece of work: the printed evidence they
+    quote, compared without case, spacing or punctuation. '' when a reading quotes none."""
+    return re.sub(r"[^a-z0-9]+", "", str(getattr(decision, "evidence", "") or "").lower())
+
+
+# An assembly-scope line naming several participants that the graph would split is ONE event
+# for these operations, homed at the lowest assembly that holds them all: an assemble, and a
+# bond. Welding is left to the weld-parent rule (one rule per question).
+_ONE_EVENT_WHERE_ITS_PARTS_MEET = frozenset({"assembly", "glue", "gluing", "bonding"})
+
 ASSEMBLY_EVENT_OPERATIONS = frozenset({
     "welding", "dress_welds", "powder_coating", "assembly", "handling",
     "hardware_insertion",
@@ -5827,8 +5838,16 @@ def compile_job_route(
                 # 102's own assembly already fitted both. A line naming one assembly is that
                 # assembly's build, and keeps the substitution above; a line naming several
                 # things is one event where they meet, which the hierarchy names.
+                # A BOND BETWEEN SEVERAL THINGS IS ONE EVENT, AS AN ASSEMBLE IS (6364-01, 13 Nov
+                # 2026). The bin assembly's sheet prints "HINGES TO BE BONDED TO MAIN BODY AND
+                # DOOR". The read gave it as one assembly-scope glue naming the hinge, the bin
+                # and the door. The bin and the door each have pieces of their own, so each
+                # became a target and the hinge a third: one sentence, charged on the bin and
+                # again on the door at the door's count, each with its own set-up. A bond
+                # joins its participants where they meet, so it is homed there, once.
                 _meet = (_lowest_common_assembly(participants, graph["parents"], kinds)
-                         if operation == "assembly" and len(targets) > 1 else "")
+                         if operation in _ONE_EVENT_WHERE_ITS_PARTS_MEET and len(targets) > 1
+                         else "")
                 if _meet:
                     issues.append({
                         "code": "assembly_route_homed_where_its_parts_meet",
@@ -8377,6 +8396,10 @@ def _withhold_duplicate_level_ops(decisions: Sequence[Any], graph: Mapping[str, 
         return []
     ops = {str(o).lower() for o in (getattr(_cfg, "ONE_LEVEL_OPERATIONS", None)
                                     or ("glue", "wet_spray", "cnc_routing", "cnc", "manual_labour_acrylic"))}
+    # THE PIECES' OWN EDGES (config EDGE_FINISH_OPERATIONS): charged on the members that carry
+    # it, never on the assembly as well, whichever side's evidence is the stronger.
+    edge_ops = {str(o).lower() for o in (getattr(_cfg, "EDGE_FINISH_OPERATIONS", None) or ())}
+    ops |= edge_ops
     kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "") for n in (graph.get("nodes") or [])}
     children = graph.get("children") or {}
 
@@ -8418,11 +8441,42 @@ def _withhold_duplicate_level_ops(decisions: Sequence[Any], graph: Mapping[str, 
         if kinds.get(_tid) != "assembly":
             continue
         below = [(k, dd) for k in _descendants(_tid) for dd in by_target.get((k, _op), []) if dd.status == REQUIRED]
+        # A MEMBER'S OWN BOND IS NOT THE ASSEMBLY'S BOND (JG, 13 Nov 2026: "two charges ...
+        # based on the physical work"). A door carries "bond door jamb to door body", once a
+        # door. Its assembly carries "hinges bonded to main body and door", once an assembly.
+        # Two pieces of work, and this rule made them one because both are glue and one sits
+        # under the other. For a bond, a member's reading stands the assembly's down only
+        # when it is the same event: the same printed evidence, or a reading that has none of
+        # its own to tell it apart. A member's distinct bond leaves the assembly's alone.
+        if _op in _ONE_EVENT_WHERE_ITS_PARTS_MEET and _op != "assembly":
+            _mine = _same_event_key(d)
+            below = [(k, dd) for k, dd in below
+                     if not _mine or not _same_event_key(dd) or _same_event_key(dd) == _mine]
         if not below:
+            continue
+        words = _op.replace("_", " ")
+        if _op in edge_ops:
+            kept = ", ".join(sorted({k for k, _ in below}))
+            _said = str(getattr(d, "evidence", "") or "").strip()
+            for k, dd in below:
+                dd.reason = ((f"{dd.reason}; " if dd.reason else "")
+                             + f"the {words} is also stated for {_tid} ({d.source}"
+                             + (f": '{_said[:80]}'" if _said else "") + ")")
+            d.status = NOT_APPLICABLE
+            d.reason = ((f"{d.reason}; " if d.reason else "")
+                        + f"{words} is an edge finish, done to each piece's own edges: charged "
+                          f"once, on the member(s) that carry it ({kept}), each on its own "
+                          f"outline; this assembly's statement of it ({d.source}) stands as "
+                          f"theirs — PROVISIONAL: if the shop also finishes the bonded "
+                          f"assembly, both are real and this row should be put back")
+            d.field_provenance["status"] = "operation_charged_at_one_level"
+            withheld.append(_tid)
+            if issues is not None:
+                issues.append({"code": "operation_charged_at_one_level", "operation": _op,
+                               "part": _tid, "kept_on": kept})
             continue
         parent_s = _strength(d)
         child_s = max(_strength(dd) for _, dd in below)
-        words = _op.replace("_", " ")
         if parent_s > child_s:
             # the assembly's evidence is the stronger (its sheet states the finish; the members
             # carry an inference): the members stand down

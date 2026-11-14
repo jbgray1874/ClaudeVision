@@ -602,6 +602,8 @@ def _part_cost_credibility(mfg: Optional[Dict[str, Any]], est_part: Dict[str, An
     # written for it, so whatever its material line shows is not a credible figure.
     if mfg.get("model_envelope_unresolved"):
         reasons.append("model_envelope_construction_unstated")
+    if mfg.get("quantity_unresolved"):
+        reasons.append("quantity_not_established")
 
     has_dxf = _part_has_part_dxf(mfg)
     gr = _safe_float((est_part.get("process_estimate") or {}).get("geometry_reliability"))
@@ -1176,6 +1178,25 @@ def _fetch_catalogue_section_rows() -> Optional[List[Any]]:
             cn.close()
         except Exception:
             pass
+    # THE AI TUBE CALCULATOR, WHERE ESTIMATING KEEPS IT (13 Nov 2026). When
+    # SDI_TUBE_CALCULATOR_XLSX names the workbook, its stock rows price their own part codes.
+    # Unset or unreadable, the catalogue rows are used exactly as before.
+    try:
+        import tube_calculator_sheet as _tube_calc
+        rows, _tube_said = _tube_calc.merged_with(rows)
+        _SECTION_ROWS_CACHE["tube_calculator"] = _tube_said
+        if _tube_said.get("used"):
+            print(f"   [tube] {_tube_said['rows']} stock price(s) from the AI Tube calculator "
+                  f"({len(_tube_said['replaced'])} replace a catalogue price, "
+                  f"{len(_tube_said['added'])} are new): {_tube_said['path']}", flush=True)
+            if _tube_said.get("not_used_no_stated_length"):
+                print(f"   [tube] {len(_tube_said['not_used_no_stated_length'])} calculator row(s) "
+                      f"state no stock length and price nothing: "
+                      f"{', '.join(_tube_said['not_used_no_stated_length'][:8])}", flush=True)
+        elif _tube_calc.configured_path():
+            print(f"   [tube] AI Tube calculator NOT used: {_tube_said.get('why_not')}", flush=True)
+    except Exception as _tube_exc:                                   # noqa: BLE001
+        print(f"   [tube] AI Tube calculator not read ({_tube_exc}); catalogue prices used", flush=True)
     _SECTION_ROWS_CACHE["rows"] = rows
     return rows
 
@@ -12232,10 +12253,24 @@ def _sanitise_part_quantity(part: Dict[str, Any]) -> int:
         return raw_qty
 
     if raw_qty > _MAX:
+        # A COUNT NOBODY READ IS NOT REPLACED BY ONE (6364-01, 12 Nov 2026). The bill tree
+        # produced 52 hank bushes from a drawing that calls for 4. This cap then "reset to 1"
+        # with a warning, and one bush was priced as though that were the answer. One is as
+        # unsupported as fifty-two. The line is still carried at one so it stays on the
+        # sheet, but it is marked: its quantity is not established, and its cost is not a
+        # figure to rely on until the count is read from the drawing or the model.
+        part["quantity_unresolved"] = {
+            "computed": raw_qty, "carried_at": 1, "limit": _MAX,
+            "source": _qsrc or "not recorded",
+            "note": (f"The quantity worked out for this line was {raw_qty}, over the limit of "
+                     f"{_MAX} a unit, and no reader counted it. It is carried at 1 and is NOT "
+                     f"a price for the quantity required."),
+        }
         part.setdefault("review_flags", []).append({
-            "severity": "warning",
+            "severity": "blocking",
             "flag": "quantity_capped",
-            "detail": f"qty {raw_qty} > MAX_PART_QTY_PER_UNIT ({_MAX}) — reset to 1",
+            "detail": (f"qty {raw_qty} > MAX_PART_QTY_PER_UNIT ({_MAX}): quantity NOT "
+                       f"ESTABLISHED, carried at 1 and unresolved"),
         })
         return 1
 
@@ -15187,6 +15222,49 @@ def _made_part_material_allowance(pe: Dict[str, Any]) -> Optional[float]:
     what = str(pe.get("description") or pe.get("part_number") or "").strip()
     if not what:
         return None
+    # A PART WHOSE CONSTRUCTION NOBODY STATED IS NOT PRICED BY ASKING THE MARKET TO GUESS IT
+    # (12674-01-GA and 12674-02-GA, 13 Nov 2026). Both bases reached here measured, 2369.6 x
+    # 295.2 and 350 x 250, one with no material and no thickness, the other "timber" with no
+    # thickness. The question then asked for "sheet stock ... its size is not known" and the
+    # answers, £8 and £6 for a board of unknown kind and gauge, were charged as the base. A
+    # figure for stock nobody specified is a guess about what the part is made of, not a
+    # price for it. What is missing is asked for, and the line stays an honest gap until it
+    # is given. A part with its material known and no size still gets D-485's allowance; a
+    # sized part with its material and gauge known nests and never reaches here.
+    #
+    # ONLY A PART WITH A DRAWING NUMBER OF ITS OWN. A line with no code is a row of words, and
+    # on these packs those are hardware the make-or-buy test missed: 6364's cam locks, whose
+    # supplier prefix was rejected as a part number, carry a hole and a polish from their parent
+    # and so read as made. They keep today's allowance here, flagged as before; that they are
+    # read as made at all is its own fault, to be fixed where make-or-buy is decided.
+    _coded = bool(str(pe.get("part_number") or "").strip())
+    _bl = _safe_float(me.get("blank_length_mm"))
+    _bw = _safe_float(me.get("blank_width_mm"))
+    _unstated = ([] if material else ["its material"]) + \
+        (["its thickness"] if (not gauge and _bl and _bw) else [])
+    if _unstated and _coded:
+        _size = f"{_bl:g} x {_bw:g} mm" if (_bl and _bw) else "no measured size"
+        _need = " and ".join(_unstated)
+        pe["construction_not_established"] = {"missing": _unstated, "measured": _size,
+                                               "material": material or None,
+                                               "thickness_mm": gauge}
+        pe.setdefault("review_flags", []).append(
+            f"{pe.get('part_number') or what}: NOT PRICED — construction not established: "
+            f"{_need} not stated ({_size}"
+            + (f", {material.replace('_', ' ').lower()}" if material else "")
+            + "). No material allowance is guessed for stock nobody specified; give the "
+              "material and thickness, or a confirmed allowance, and it is costed")
+        try:
+            source_precedence.raise_manufacturing_question(
+                pe,
+                f"Construction of {pe.get('part_number') or what} ({what}): {_need} not stated",
+                f"the line is not priced; measured {_size}",
+                "state the material and thickness this part is made from, or confirm an "
+                "allowance for it",
+                "estimator.construction_not_established")
+        except Exception:                                            # noqa: BLE001
+            pass
+        return None
     stock = " ".join(x for x in (material.replace("_", " ").lower(),
                                  f"{gauge:g} mm" if gauge else "") if x) or "sheet"
     if _faced in ("MFMDF", "MFC"):
@@ -16522,6 +16600,20 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         except Exception:                                        # noqa: BLE001
             pass
 
+        # A PIECE IS MADE ONCE FOR EVERY ONE OF ITS PART, IN ITS PART'S MATERIAL (6364-01).
+        try:
+            from drawing_job_merge import pieces_take_their_parts_count_and_material as _pieces
+            _took = _pieces(parts, (summary.get("document_analysis") or {}).get("bom_rows"))
+            if _took:
+                summary.setdefault("ai_inference", {})["pieces_from_their_parts"] = _took
+                print("   [pieces] " + "; ".join(
+                    f"{t['piece']} of {t['of']}: "
+                    + ", ".join(f"{k} {v}" for k, v in t.items() if k not in ("piece", "of"))
+                    for t in _took[:8]), flush=True)
+        except Exception as _pieces_exc:                         # noqa: BLE001
+            print(f"   [pieces] counts and materials not taken from their parts: {_pieces_exc}",
+                  flush=True)
+
         # THE EDGES OF A MITRED BOX THAT SHOW (D-677): each bevelled piece of an edged box
         # is stamped with its outline less its mitred joints, before the edging line reads it.
         try:
@@ -16573,6 +16665,12 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _stamp_words(parts, summary)
             except Exception:                                        # noqa: BLE001
                 pass
+            # AN ASSEMBLY OF BANDED BOARDS IS NOT BANDED AGAIN ON ITS OWN OUTLINE (11896-08-01).
+            try:
+                from edge_banding import assemblies_banded_on_their_members as _on_members
+                _edged_by_members = _on_members(parts)
+            except Exception:                                        # noqa: BLE001
+                _edged_by_members = {}
             _edge_parts: List[Tuple[str, float, str, Optional[float]]] = []
             _edge_boards: List[str] = []    # every board the gate admitted, for a per-unit
                                             # confirmation whose metres name no single part
@@ -16599,6 +16697,14 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                             "costing_material_family")):
                     continue
                 _pn_e = str(_p.get("part_number") or "").strip().upper()
+                if _pn_e in _edged_by_members:
+                    _p["_edging_on_its_members"] = list(_edged_by_members[_pn_e])
+                    _note_e = (f"edging not measured on this assembly's outline: it is the "
+                               f"edging of its board(s) {', '.join(_edged_by_members[_pn_e])}, "
+                               f"measured there")
+                    if _note_e not in (_p.get("review_flags") or []):
+                        _p.setdefault("review_flags", []).append(_note_e)
+                    continue
                 if _pn_e and _pn_e not in _edge_boards:
                     _edge_boards.append(_pn_e)
                 if _pn_e in _bm_per_part:
