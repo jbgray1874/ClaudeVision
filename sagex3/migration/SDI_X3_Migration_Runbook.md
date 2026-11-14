@@ -3048,3 +3048,65 @@ SDI has **three kinds of rebate**. They are separate, and each needs its own dat
 - It is still one attachment.
 
 **Lesson:** checking the inputs isn't enough. Recalculate the outputs under each plausible rule and say plainly whether the posted figure is right, and what would change it.
+
+### 22.17 BEFORE THE NEXT RE-EXTRACT (week of 16 Nov) – checklist, so nothing from 12–14 Nov is missed
+
+**Read this first on the day.** Every item below changed after the Run 4 extract of 4 Nov. Rule 1 still applies: live data, extracted on the day, every file rebuilt.
+
+**A. On SDILive, before extracting (our own `migration.` objects only, never Access's tables):**
+1. **Run the 12 Nov `sql/views_v2.sql`.** This is the change that gives **BISY** its agreed document numbers (19.13, agreed with Ethan):
+   - Document (B) = `PT_PRIMARY`, the Access transaction number. It's unique and contains nothing made up;
+   - SourceDocument (N) = the supplier's reference `PT_HEADER_REF`, falling back to `PT_HEADER_REF2` and then `PT_PRIMARY` if that's blank;
+   - Comments2 = the PO number `PT_ORDER_NUMBER`, blank if there isn't one;
+   - Line = 1 on every row.
+
+   **Check first** that the live `migration.vw_BISX_V2` on the server is the repo version. On 12 Nov the server view differed from `sql/views_v2.sql`, so compare before running.
+2. **After running it, check:** `SELECT TOP 5 Document, SourceDocument, Comments2 FROM migration.vw_BISX_V2`. Document must be all digits, and no Document may equal its SourceDocument.
+3. `sql/add_new_accounts_to_xref.sql` only if new customers or suppliers have been created since 4 Nov. Its checks show how many were added.
+
+**B. Extract (on the day):**
+4. `rebuild/sql/extract_transactions.sql`: save the **whole** output. Its CHECK "as at" line sets the accounting date.
+5. Products, BOMs and routes are re-extracted and rebuilt by `rebuild/run.py` **first**. New parts since 4 Nov exist: the 13 Nov Live Orders run found 51 works orders with no BOM / route in the 4 Nov set.
+
+**C. Build (19.14):**
+6. `scripts/run_transactions.py` **without `SWAP_BISY`**. `SWAP_BISY=1` was only for the old 4 Nov extract.
+   - The accounting date defaults to the extract's own "as at" date, so there is no 31/10 hard-coding.
+   - The build **stops** if any item is dated after it (the BRW500 failure).
+7. Pass the run's own inputs, never the defaults:
+   - `--bins <run>/extract/bins.txt`;
+   - `--bom` = this run's rebuilt BOM set;
+   - `--routes` = this run's rebuilt routes.
+8. **BISY checks** in `build_bicy_bisy.py`: every Document is all digits and unique, none equals N, and Line = 1. On an old extract the build stops with "a Document is not an Access transaction number", which is correct.
+9. BICY is unchanged: still the order number, with suffixes. Ethan has been asked about using ST_PRIMARY instead; **not changed**.
+
+**D. Before Ethan imports:**
+10. **ACCCOD** back from Claire (`deliver/Finance_Customer_Accounting_Codes.xlsx`: STD / EU / ID). Then put it into YA004BPC column Q and reload customers **before** BICY.
+11. The aged debtors / creditors sign-off is compared **as at the extract moment**, not 31/10. Use the run's control totals.
+12. The master-data fix lists (Run 3) are still to be cleared.
+13. Send Ethan **every file** (rule 1e), and say this is the run with the new BISY document numbers.
+
+**E. Other things waiting, not part of the migration run:**
+- **Charlotte's self-refreshing rebate workbook (REP-23):** waiting on James's go-ahead.
+  - It needs **read-only SQL access to SDILive for Charlotte's Windows login** (IT or Acuity).
+  - Design:
+    - a Sales tab refreshed from the ledger;
+    - a Schemes tab with the rules (accounts, year, banded / retrospective, tiers);
+    - her sheets and Summary by formula;
+    - a Checks tab.
+  - It must reproduce October's £-for-£ provision check before she gets it.
+  - Finance only: Finance folder, never in git.
+- **Live Orders:** refresh `LO_PRODUCTS` / `LO_BOMS` / `LO_ROUTES` from this run's rebuilt set.
+
+**F. Git on James's PC: never check out this branch in `C:\ClaudeVision`.**
+- On 14 Nov, `git checkout claude/eloquent-babbage-o9etz3` in the working folder swapped James's estimating code for `main`'s version and estimating stopped working. Nothing was lost; going back to his own branch restores it.
+- The branch only **adds** `sagex3/` (plus three `.gitignore` lines). James's folder was on another branch with its own work.
+- **On James's PC, `origin` is a different remote. This branch lives on the `jbg` remote.**
+- Use a separate folder:
+  ```
+  git worktree add C:\ClaudeVision_X3 claude/eloquent-babbage-o9etz3
+  cd C:\ClaudeVision_X3
+  git pull jbg claude/eloquent-babbage-o9etz3
+  ```
+  Or unzip the update zip into that folder.
+
+**Lesson:** before giving any git command for James's PC, ask which branch and remote his folder uses. Default to a separate worktree, never his working folder.
