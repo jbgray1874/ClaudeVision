@@ -51,3 +51,39 @@ def test_a_line_counted_once_is_asked_so_a_spare_is_not_lost():
                                       "counted once, through LA"))
     qc = [d for d in job["decisions_required"] if d["kind"] == "quantity_check"]
     assert len(qc) == 1 and "costed once" in qc[0]["issue"]
+
+
+# ── SEVERAL ROUTES THE MODEL COUNTS TO THE SAME TOTAL (11896-01-00-GA, 14 Nov 2026) ────────
+TWO_LEGS = ["GA x1 -> FRAME x1 -> LEG-RH x1 -> PP x2 = 2", "GA x1 -> FRAME x1 -> LEG-LH x1 -> PP x2 = 2"]
+
+
+def _with_model_count(summary, total, source="solidworks_api"):
+    summary["estimate_summary"]["part_estimates"][0].update(
+        quantity_total_per_unit=total, quantity_total_per_unit_source=source)
+    return summary
+
+
+def _asked(summary):
+    return [d for d in cf.costed_job(summary)["decisions_required"] if d["kind"] == "quantity_check"]
+
+
+def test_two_routes_the_model_counts_to_the_sheets_total_are_not_asked():
+    assert not _asked(_with_model_count(_summary(2, 4, TWO_LEGS), 4))
+
+
+def test_two_routes_the_model_counts_differently_are_still_asked():
+    qc = _asked(_with_model_count(_summary(2, 4, TWO_LEGS), 2))
+    assert len(qc) == 1 and "states 2" in qc[0]["issue"] and "costs 4" in qc[0]["issue"]
+
+
+def test_two_routes_with_no_model_count_are_still_asked():
+    assert len(_asked(_summary(2, 4, TWO_LEGS))) == 1
+
+
+def test_a_total_that_is_not_the_models_own_count_does_not_silence_the_question():
+    assert len(_asked(_with_model_count(_summary(2, 4, TWO_LEGS), 4, source="bom_table"))) == 1
+
+
+def test_a_note_that_a_row_was_dropped_or_added_is_asked_even_when_the_model_agrees():
+    s = _with_model_count(_summary(2, 4, TWO_LEGS, note="a table row was added to the cascade"), 4)
+    assert len(_asked(s)) == 1

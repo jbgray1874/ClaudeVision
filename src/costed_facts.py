@@ -4060,6 +4060,24 @@ def costed_job(source: Any) -> Dict[str, Any]:
             continue
         if len(_trails) == 1 and not str(_node.get("qty_note") or ""):
             continue
+        # SEVERAL ROUTES THE MODEL ITSELF COUNTS TO THE SAME TOTAL ARE NOT A QUESTION
+        # (11896-01-00-GA, 14 Nov 2026). The leg spigot is 2 in each of two welded legs and
+        # the end cap 1 in each; the sheet costs 4 and 2, the model's own whole-product count
+        # is 4 and 2, and the review list still asked "its BOM row states 2, the sheet costs
+        # 4" while printing the two routes that add up to it. A warning the sheet contradicts
+        # teaches people to skip warnings. Where the count comes by more than one route, no
+        # note says a row was dropped or added, and the SolidWorks model's count of the part
+        # in one product equals what the sheet costs, the cascade did its job. A second route
+        # the model does not count (12312's driver, listed on a table and in a sub-assembly)
+        # is still asked.
+        if len(_trails) > 1 and not str(_node.get("qty_note") or ""):
+            _prec_q = next((p for p in job_parts(source)
+                            if str(p.get("part_number") or "").upper() == _ident), {})
+            _model_tot = _num(_prec_q.get("quantity_total_per_unit"))
+            if (_model_tot is not None and abs(_model_tot - _eff) < 1e-9
+                    and str(_prec_q.get("quantity_total_per_unit_source") or "")
+                    .lower().startswith("solidworks")):
+                continue
         _each = _money_of(_line) / _eff if _eff else 0.0
         decisions.append({
             "part": _line["part_number"], "kind": "quantity_check",

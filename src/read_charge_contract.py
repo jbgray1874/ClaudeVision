@@ -826,6 +826,22 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                      bad or f"charged on {host}, which carries it ({', '.join(sorted({l['title'] for l in rows}))})",
                      rows)
                 return
+        # AN EDGE FINISH STATED ON AN ASSEMBLY IS CHARGED ON ITS MEMBERS (12424-02-GA,
+        # 14 Nov 2026). The route charges polished edges on the pieces whose edges they are,
+        # each on its own outline, and stands the assembly's own row down (route_compiler,
+        # EDGE_FINISH_OPERATIONS). The ledger then said "the read names it and no calculated
+        # row charges it" beside eight charged polish rows. Where members carry the finish,
+        # it is covered by them, and they are named.
+        if op in set(_cfg("EDGE_FINISH_OPERATIONS", ()) or ()):
+            _members = [_pn(c) for c in (rec.get("assembly_children") or []) if _pn(c)]
+            _on = {m: book.charged_rows(m, fam) for m in _members} if fam else {}
+            _carried = [m for m, r in _on.items() if r]
+            if _carried:
+                rows = [l for m in _carried for l in _on[m]]
+                done(item, COVERED,
+                     f"charged on its members, each on its own edges ({', '.join(_carried)})",
+                     rows)
+                return
         if op in ("hole_machining", "drilling"):
             rows = book.charged_rows(pn, _cfg("READ_PROFILE_CUTS", ()))
             if rows:
@@ -877,7 +893,30 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                 why = rows[0].get("unpriced_reason") or "no price"
                 done(item, UNRESOLVED, f"on the sheet with {why}", [{"cell": rows[0].get("charged_cell")}])
             else:
-                done(item, UNRESOLVED, "no material row on the calculated sheet")
+                # AN ASSEMBLY'S MATERIAL IS ITS MEMBERS' (11896-01-00-GA, 14 Nov 2026). The two
+                # welded legs and the welded cross bar were each reported "no material row on
+                # the calculated sheet" while the tube, caps and spigots they are made of were
+                # all charged. A weldment the engine costs through its members is covered
+                # when every member it lists has a material row that charges; a member with
+                # none is named, so the gap is the member's and not the assembly's.
+                _pe = book.costs.get(pn) or {}
+                _method = str((_pe.get("material_estimate") or {}).get("cost_method") or "")
+                _kids = [_pn(c) for c in ((book.records.get(pn) or {}).get("assembly_children")
+                                          or _pe.get("assembly_children") or []) if _pn(c)]
+                if _method == "weldment_parent_material_in_children" and _kids:
+                    _rows = {k: (book.material.get(k) or []) for k in _kids}
+                    _bare = [k for k, r in _rows.items() if not (money(r) or 0) > 0]
+                    if not _bare:
+                        done(item, COVERED,
+                             f"an assembly: its material is on its members' rows "
+                             f"({', '.join(_kids)})",
+                             [{"cell": r[0].get("charged_cell")} for r in _rows.values() if r])
+                    else:
+                        done(item, UNRESOLVED,
+                             f"an assembly costed through its members, and "
+                             f"{', '.join(_bare)} has no material row that charges")
+                else:
+                    done(item, UNRESOLVED, "no material row on the calculated sheet")
         part_state[item["id"]] = out_items[-1]["state"]
 
     def fact(item: Mapping[str, Any]) -> None:
