@@ -486,11 +486,12 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
           others: Sequence[ler.Portal] = ()) -> Dict[str, Any]:
     """Read, collect, run. Returns what it did, for the log and the last beat."""
     ledger = ler.load_ledger(s["ledger"])
+    # WHAT THE SERVICES RAN, before anything is planned: a run the ledger lost is adopted, never
+    # queued again (JG, 14 Nov 2026). Read in a dry run too, so the preview shows exactly the
+    # jobs a live cycle would start: a read of each service's run list, nothing queued or saved.
+    ler.gather_service_runs(ledger, portal, others)
     if not dry_run:
         ler.refresh_open_runs(ledger, portal, others)
-        # WHAT THE SERVICES RAN, before anything is planned: a run the ledger lost is adopted,
-        # never queued again (JG, 14 Nov 2026).
-        ler.gather_service_runs(ledger, portal, others)
         apply_reruns(ledger, getattr(switch, "take_reruns", lambda: [])(), say=say)
         # A YES THAT COULD NOT BE WRITTEN LAST TIME IS TRIED FIRST (D-608a), before the sheet
         # is read, so a row it reaches reads YES and is not asked.
@@ -800,8 +801,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--api-key", default=os.getenv("SDI_API_KEY", ""))
     ap.add_argument("--once", action="store_true", help="one cycle, then stop")
     ap.add_argument("--dry-run", action="store_true",
-                    help="read the sheet and say what it would collect and run; copies and "
-                         "queues nothing, and does not ask the portal")
+                    help="read the sheet and say what it would collect and run; copies, queues "
+                         "and saves nothing, and asks the services only what they have run")
     ap.add_argument("--log", default="")
     args = ap.parse_args(argv)
     if args.log:
@@ -819,7 +820,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         class _Silent(Switch):
             def beat(self, rep: Dict[str, Any]) -> bool:
                 return True
-        cycle(s, portal, _Silent(portal), dry_run=True)
+        cycle(s, portal, _Silent(portal), dry_run=True, others=portals[1:])
         return 0
 
     if not ler.take_lock(s["ledger"]):

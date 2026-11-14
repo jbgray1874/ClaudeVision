@@ -249,3 +249,22 @@ def test_a_queueing_line_no_service_holds_is_held_not_requeued(share):
     out = _cycle(share, portal)
     assert portal.started == []
     assert out["counts"].get("failed") == 1, "said, and left for `retry`, never queued on its own"
+
+
+# ── 4. THE PREVIEW SHOWS WHAT A LIVE CYCLE WOULD DO ────────────────────────────────────────
+def test_a_dry_run_reads_the_services_so_the_preview_matches_a_live_cycle(share):
+    """Self-Running goes back on only after the preview shows exactly which jobs would start.
+    A preview that does not read the services would list a job the grid already ran as ready."""
+    portal = Portal(runs=[_service_run("done")])
+    out = sr.cycle({"root": share["root"], "ledger": share["ledger"], "workbook": share["workbook"]},
+                   portal, Switch(), dry_run=True, say=lambda s: None)
+    assert portal.started == []
+    assert out["counts"].get("ready", 0) == 0 and out["counts"].get("done") == 1
+    assert not share["ledger"].exists(), "a preview writes nothing"
+
+
+def test_a_dry_run_still_shows_a_job_nobody_has_run_as_ready(share):
+    portal = Portal(runs=[])
+    out = sr.cycle({"root": share["root"], "ledger": share["ledger"], "workbook": share["workbook"]},
+                   portal, Switch(), dry_run=True, say=lambda s: None)
+    assert portal.started == [] and out["counts"].get("ready") == 1

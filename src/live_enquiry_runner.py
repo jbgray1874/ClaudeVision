@@ -1879,6 +1879,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
     if args.command == "scan":
         ledger = load_ledger(s["ledger"])
+        # the services' own record, read only, so the table shows what a run would start
+        gather_service_runs(ledger, Portal(args.server, args.api_key))
         decisions = scan(s, ledger)
         print_plan(decisions)
         print(f"\nStatus table: {Path(s['ledger']).with_name('live_enquiry_status.csv')}")
