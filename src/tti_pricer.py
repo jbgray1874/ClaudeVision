@@ -829,9 +829,16 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     for r in data["rows"]:
         manifest = None
         found: Dict[str, Any] = {}
+        _stalled = ""
         if r["drawing"]:
-            found, manifest = pack_for(r["drawing"], listings, args.client)
-            if not found:
+            try:
+                found, manifest = pack_for(r["drawing"], listings, args.client)
+            except Exception as _exc:                                    # noqa: BLE001
+                if type(_exc).__name__ != "PackCheckStalled":
+                    raise
+                # AN UNCHECKED PACK IS HELD, NOT PRICED FROM A FOLDER GUESS (14 Nov 2026).
+                _stalled = str(_exc)
+            if not found and not _stalled:
                 found = find_drawings(r["drawing"], listings)
         item = {"row": r["row"], "drawing": r["drawing"], "drawing_cell": r.get("drawing_cell", r["drawing"]),
                 "quantity": r["quantity"],
@@ -857,6 +864,11 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         if not found and r["drawing"]:
             item["job_folders"] = job_folders(r["drawing"], listings)
         report["rows"].append(item)
+        if _stalled:
+            item.update(state="held: pack not checked", kind="not priced (pack not checked)",
+                        why=f"{_stalled}. Nothing is queued from an unchecked pack; run the row again")
+            save()
+            continue
         # ONLY THE ROWS WITH A DRAWING NUMBER (JG, 10 Nov 2026): "in effect the same as a normal
         # run: the client, the number of units, the drawing pack, the description". The rest are
         # listed, not priced.

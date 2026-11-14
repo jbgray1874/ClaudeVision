@@ -586,6 +586,16 @@ class DesignShare:
 
     def find(self, row: EnquiryRow) -> Optional[Located]:
         import pack_resolver as pr
+        try:
+            return self._find(row)
+        except pr.PackCheckStalled as exc:
+            # AN UNCHECKED PACK IS NOT QUEUED, AND NOT TAKEN AS UNCHANGED (JG, 14 Nov 2026).
+            return Located("held", f"the pack for {row.drawing} could not be checked: {exc}. "
+                                   f"Nothing is queued from an unchecked pack; it is tried again "
+                                   f"on the next read", source=self.name)
+
+    def _find(self, row: EnquiryRow) -> Optional[Located]:
+        import pack_resolver as pr
         import pack_store as ps
         if not str(row.drawing or "").strip():
             return None
@@ -644,6 +654,8 @@ class DesignShare:
             if not folders:
                 return None
             m = pr.resolve(row.drawing, folders, client=row.customer, lookup=lookup)
+        except pr.PackCheckStalled:
+            raise                   # unchecked: find() holds the job and says which file
         except Exception:                                                # noqa: BLE001
             return None             # the estimator's folder still stands as it is
         if m.get("status") in ("not found",):
@@ -1115,7 +1127,8 @@ def baseline(rows: Sequence[EnquiryRow], sources: Sequence[Any], ledger: Dict[st
 
 
 def plan(rows: Sequence[EnquiryRow], sources: Sequence[Any],
-         ledger: Dict[str, Any]) -> List[Decision]:
+         ledger: Dict[str, Any],
+         progress: Optional[Callable[[EnquiryRow], None]] = None) -> List[Decision]:
     """Every row's decision, ready rows first by the date the estimate is wanted, or, on the
     AI Live Enquiry sheet, in the sheet's own order from the top."""
     seen: Dict[str, int] = {}
@@ -1124,7 +1137,11 @@ def plan(rows: Sequence[EnquiryRow], sources: Sequence[Any],
     for r in rows:
         if r.completed_column and completed_word(r.ai_completed) not in config.LIVE_ENQUIRY_RERUN:
             (ledger.get("jobs", {}).get(job_key(r)) or {}).pop("rerun_taken", None)
-    decisions = [decide(r, sources, ledger, seen) for r in rows]
+    decisions = []
+    for r in rows:
+        if progress is not None:
+            progress(r)                 # which job is being checked, said before its pack is read
+        decisions.append(decide(r, sources, ledger, seen))
     on_sheet = {job_key(r) for r in rows}
     for _k, _job in (ledger.get("jobs") or {}).items():
         if _job.get("page_rerun") and _k not in on_sheet:
@@ -1204,6 +1221,11 @@ class Portal:
     def dm_extract_status(self, job_id: str) -> Dict[str, Any]:
         """Where that extract has got to, and whether its pack is readable from the portal."""
         return self._call("GET", f"/api/estimate/dm/extract/{job_id}")
+
+    def self_running_view(self) -> Dict[str, Any]:
+        """The switch as the page shows it, with the Re-run requests still waiting. Read only:
+        unlike the beat, it takes nothing."""
+        return self._call("GET", "/api/estimate/self-running")
 
     def self_running(self, report: Dict[str, Any]) -> Dict[str, Any]:
         """Report to the portal's AI Estimate Self-Running switch and hear whether it is on
