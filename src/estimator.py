@@ -10717,6 +10717,36 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # the standard (_customer_finish_standard) from the same customer name the workbook
     # header prints; a customer not in the table keeps the shop default exactly as before.
     _cfs = part.get("_customer_finish_standard")
+    # THE CUSTOMER'S STANDARD GOVERNS EVERY INFERENCE OF DRESSING, NOT ONLY THIS FUNCTION'S
+    # (11896-08-02-GA and 11896-01-00-GA, 14 Nov 2026). "TTI none (no weld dressing)" stopped
+    # the engine adding Dress Welds below, and the top assembly's line said so. The four
+    # welded sub-assemblies under it were still charged dressing, Estimate rows 177 to 180,
+    # £68.93 a unit on 08-02, because theirs arrived from the pack read as an inference
+    # ("Dress is not printed. One dressing per upright") and nothing here looked at it. An
+    # inferred dressing is the same inference whoever made it. Where the customer's standard
+    # is no dressing and the dressing on this part is inferred, not stated, it is ruled out
+    # with the standard as its reason, so the route cannot put it back. A drawing that
+    # states dressing is still charged.
+    if isinstance(_cfs, dict) and _cfs.get("dress_visible_welds") is False \
+            and "dress_welds" in ops:
+        _dress_src = str((part.get("operation_sources") or {}).get("dress_welds") or "").lower()
+        # ONLY A DRESSING RECORDED AS AN INFERENCE. One with no recorded source may be the
+        # drawing's own words, and the drawing outranks a customer default: it is kept.
+        if "infer" in _dress_src or _dress_src.startswith("override_rule"):
+            ops = [o for o in ops if o != "dress_welds"]
+            _why_nd = (f"{_cfs.get('customer')}'s own standard is no weld dressing — "
+                       f"'{_cfs.get('statement')}' ({_cfs.get('stated_by')}, "
+                       f"{_cfs.get('stated_on')}); the dressing on this part was inferred, "
+                       f"not stated on the drawing")
+            part.setdefault("operations_ruled_out", {})["dress_welds"] = _why_nd
+            # THE RULING STANDS AS A PERSON'S STANDING RULE: above any inference or pack
+            # reading, below what the drawing itself states. Unranked, the route reads it as
+            # "unknown" and the inferred dressing it rules on outvotes it.
+            part.setdefault("operation_ruling_sources", {})["dress_welds"] = "estimator_inferred"
+            _flag_nd = (f"weld dressing NOT charged: {_why_nd}. A drawing that states "
+                        f"dressing would still be charged")
+            if _flag_nd not in (part.get("review_flags") or []):
+                part.setdefault("review_flags", []).append(_flag_nd)
     # NOT AFTER A WELD THE DRAWING RULED OUT. 12527-22-101's own sheet states spot welds, and
     # arc welding is ruled out on it with that reason; the op still reached this list from
     # another reader, and the M&S standard put Dress Welds back on a spot-welded riser.

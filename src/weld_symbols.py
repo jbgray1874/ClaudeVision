@@ -860,6 +860,23 @@ def sheet_weld_note(notes: Any) -> Dict[str, Any]:
     return {}
 
 
+def _without_rows_naming_other_parts(notes: Any, other_codes: Iterable[Any]) -> str:
+    """The sheet's notes with each parts-list row that names another part removed: the code,
+    its description, and the quantity that ends the row. Pure."""
+    text = " ".join(str(notes or "").upper().split())
+    if not text:
+        return ""
+    codes = sorted({str(c).strip().upper() for c in other_codes or () if str(c or "").strip()},
+                   key=len, reverse=True)
+    for code in codes:
+        if len(code) < 4 or code not in text:
+            continue
+        # code, then a description of words and punctuation, then the row's quantity
+        text = re.sub(re.escape(code) + r"(?![\w-])\s+[A-Z0-9 &/.,()'\-]{0,90}?\s+\d{1,4}(?![\w.-])",
+                      " ", text)
+    return " ".join(text.split())
+
+
 def apply_sheet_weld_notes(parts: Sequence[Dict[str, Any]],
                            by_part: Mapping[str, Mapping[str, Any]]) -> List[str]:
     """A weld NOTE on a part's own sheet states the weld, as a symbol or FINISH: WELDED does.
@@ -880,7 +897,18 @@ def apply_sheet_weld_notes(parts: Sequence[Dict[str, Any]],
         part = by_pn.get(pn)
         if part is None:
             continue
-        hit = sheet_weld_note(facts.get("notes"))
+        # A PARTS-LIST ROW NAMING ANOTHER DRAWING SAYS THAT DRAWING IS WELDED, NOT THIS ONE
+        # (11896-08-02-GA and 11896-01-00-GA, 14 Nov 2026). Each top sheet's table lists its
+        # sub-assemblies by name: "11896-08-02-101 LHS UPRIGHT - WELDED ASSEMBLY 1". Every
+        # WELDED on the sheet is in one of those rows. The top assembly, which is bolted,
+        # was stamped "WELDED per its own sheet's note" and charged a weld of its own
+        # (Estimate row 160, £39.27 on 08-02) on top of each sub-assembly's. The rows that
+        # name another part of this job are taken out before the sheet's notes are read; a
+        # note in the sheet's own words, and a sheet whose own title says it is welded, still
+        # state the weld.
+        hit = sheet_weld_note(_without_rows_naming_other_parts(
+            facts.get("notes"), [p.get("part_number") for p in parts or ()
+                                 if isinstance(p, dict) and _clean_pn(p.get("part_number")) != pn]))
         if not hit:
             continue
         ruled = part.get("operations_ruled_out") or {}
