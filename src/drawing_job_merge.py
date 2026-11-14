@@ -1921,21 +1921,24 @@ def counts_from_the_parts_own_table(parts: Any, bom_rows: Any) -> Dict[str, Dict
 
 def pieces_take_their_parts_count_and_material(parts: Any, bom_rows: Any = None
                                                 ) -> List[Dict[str, Any]]:
-    """A piece cut for a part is made once for every one of that part (6364-01, 13 Nov 2026).
+    """A piece's count is how many go into ONE of its part; its material is its part's.
 
-    The door is 3 off. Its three flats were each made a piece at quantity 1, "inferred", and
-    priced once: two doors' worth of material and cutting were never charged. One bin piece
-    carried no material at all, because its flat's file name states none, though the bin's own
-    sheet states the bin's material and gauge.
+    A PIECE'S OWN COUNT IS PER ONE OF ITS PART, NEVER A TOTAL (14 Nov 2026). Every piece is
+    listed under its part, and the part graph multiplies down: door x3 -> piece x1 = 3 per
+    product. The first version of this rule (13 Nov) read the piece's own 1 as "priced once",
+    wrote the door's 3 into it as a total, and the graph then took that 3 as per door: 6364-02's
+    door pieces were charged 9 each. The 12 Nov records show the graph had been charging 3 all
+    along. So the part's count is never written here. The only count taken is the part's own
+    table's figure for that piece (12424-02-GA: 2, 1, 2 and 3 panels in each insert), and only
+    for a piece that sits under its part, where the graph will multiply it.
 
-    Run once every reader has finished and before anything is costed:
+    One bin piece carried no material at all, because its flat's file name states none, though
+    the bin's own sheet states the bin's material and gauge. A piece with no material takes the
+    material its part's own sheet states, and the gauge with it when the piece states none. A
+    piece that states its own is left alone.
 
-      * a piece whose own count nobody established (still the 1 it was born with) takes its
-        part's count, because one of it goes into each;
-      * a piece with no material takes the material its part's own sheet states, and the
-        gauge with it when the piece states none. A piece that states its own is left alone.
-
-    Both are recorded on the piece with where they came from. Returns what changed.
+    Run once every reader has finished and before anything is costed. Both are recorded on the
+    piece with where they came from. Returns what changed.
     """
     import source_precedence as _sp
     plist = [p for p in (parts or []) if isinstance(p, dict)]
@@ -1960,20 +1963,21 @@ def pieces_take_their_parts_count_and_material(parts: Any, bom_rows: Any = None
         _row = listed.get(_normalize_part_key(piece.get("part_number")))
         per_part = int(_row["quantity"]) if _row else 1
         parent_q = max(parent_q, 1)
-        if parent_q * per_part > 1 and own_q <= 1 and own_src in ("", "inference") \
-                and not piece.get("quantity_from_its_part"):
-            # through the arbitration door, at the standing of a bill row times its
-            # assembly's count: stronger than the 1 the piece was born with, weaker than a
-            # count a reader takes from the drawing or the model
-            if not _apply_field(piece, "quantity", parent_q * per_part, "bom_tree_per_unit"):
+        _under = {_normalize_part_key(k) for k in (parent.get("assembly_children") or [])}
+        if _row and per_part > 1 and own_q <= 1 and own_src in ("", "inference") \
+                and not piece.get("quantity_from_its_part") \
+                and _normalize_part_key(piece.get("part_number")) in _under:
+            # through the arbitration door, at the standing of a bill row's count per its
+            # parent: stronger than the 1 the piece was born with, weaker than a count a
+            # reader takes from the drawing or the model
+            if not _apply_field(piece, "quantity", per_part, "bom_tree"):
                 continue
             piece["quantity_from_its_part"] = {
                 "part": parent_pn, "part_quantity": parent_q, "per_part": per_part,
-                "basis": (f"{per_part} of this piece in each {parent_pn}"
-                          + (f" (its own table, item {_row['item']}: {_row['row']} x {per_part})"
-                             if _row else "")
-                          + f", and {parent_q} of those a unit")}
-            note["count"] = parent_q * per_part
+                "basis": (f"{per_part} of this piece in each {parent_pn} (its own table, item "
+                          f"{_row['item']}: {_row['row']} x {per_part}); the part graph "
+                          f"multiplies by the {parent_q} of {parent_pn} in a unit")}
+            note["count_per_part"] = per_part
         if not str(piece.get("normalized_material") or "").strip():
             mat = str(parent.get("normalized_material") or "").strip()
             if mat and str(_sp.source_of(parent, "normalized_material") or "") not in ("", "inference"):
