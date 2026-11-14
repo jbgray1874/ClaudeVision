@@ -416,7 +416,18 @@ def test_the_page_script_parses():
     node = shutil.which("node")
     if not node:
         pytest.skip("node is not installed here")
-    blocks = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", _page(), re.S)
+    found = re.findall(r"<script(\s[^>]*)?>(.*?)</script>", _page(), re.S)
+    # A SCRIPT LOADED BY src HAS NO BODY TO PARSE HERE (14 Nov 2026). The portal branch's page
+    # loads the shared voice script, which counted as a fourth, empty block. Those are named
+    # instead, so a new one still cannot arrive unnoticed, and the file each names is parsed too.
+    loaded = [m.group(1) for attrs, _ in found for m in [re.search(r'src="([^"]+)"', attrs or "")] if m]
+    assert set(loaded) <= {"/estimating/sdi-voice.js"}, (
+        f"the page loads a script this does not know: {loaded} - name it here and check it parses")
+    for src in loaded:
+        js = Path(__file__).resolve().parents[1] / "sdi-intelligence-backend" / src.rsplit("/", 1)[1]
+        proc = subprocess.run([node, "--check", str(js)], capture_output=True, text=True)
+        assert proc.returncode == 0, f"{src} does not parse:\n{proc.stderr[:600]}"
+    blocks = [body for attrs, body in found if 'src="' not in (attrs or "")]
     assert blocks, "the page has no script block at all"
     # THREE SINCE 2026-08-27: the sidebar toggle, the page's own script, and the theme/size
     # controls added when this page gained a light mode. Deliberate, and the count is updated

@@ -301,7 +301,7 @@ class TheEmailsQuestionScreenTests(unittest.TestCase):
     set, and the question itself is a POST nobody had put on the list."""
 
     GUARD = APP.split("async def _public_surface_guard", 1)[1].split("\n# ──", 1)[0]
-    TOKEN = "AbCdEfGhIjKlMnOpQrStUv"
+    TOKEN = "AbCdEfGhIjKlMnOpQrStUv"      # a made-up placeholder in a walkthrough link's shape, not a real one
 
     def test_a_question_from_the_email_page_is_allowed(self):
         self.assertTrue(surface.post_allowed(f"/api/estimate/walkthrough/{self.TOKEN}/ask"))

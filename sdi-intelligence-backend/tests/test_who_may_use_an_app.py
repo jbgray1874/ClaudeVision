@@ -162,7 +162,7 @@ class TheRefusalSaysWhichWallTests(unittest.TestCase):
     def test_no_refusal_ever_prints_what_is_in_the_setting(self):
         """It names the setting. Printing its contents would hand a stranger
         the object IDs of everybody who IS allowed."""
-        secret = "11111111-2222-3333-4444-555555555555"
+        secret = "11111111-2222-3333-4444-555555555555"     # a made-up placeholder, nobody's object ID
         for user in (person("x"), person("x", ["b"]), person(kind="service")):
             said = access.why_refused("APP", user, {"APP": secret})
             with self.subTest(user=user.get("kind")):

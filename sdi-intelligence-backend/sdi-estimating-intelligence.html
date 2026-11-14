@@ -392,7 +392,6 @@
   <span>Collapse</span>
 </button>
 </nav>
-<script src="/estimating/sdi-voice.js"></script>
 <script>(function(){
   var b=document.body, t=document.getElementById("sdinav-toggle"), K="sdi.nav.collapsed";
   if(!t) return;
@@ -411,6 +410,9 @@
   t.addEventListener("click", function(){ set(!b.classList.contains("nav-collapsed")); });
 })();</script>
 <!-- SDI-SIDEBAR:END -->
+<!-- The shared voice script. Outside the generated sidebar block above: _inject_sidebar.py
+     rewrites everything between its two markers, and would have taken this line out. -->
+<script src="/estimating/sdi-voice.js"></script>
 
 <div class="wrap">
 

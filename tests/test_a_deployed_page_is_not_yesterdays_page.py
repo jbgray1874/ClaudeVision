@@ -48,7 +48,11 @@ def test_each_page_route_refuses_to_be_cached(route, handler):
     forgotten on the third fails here instead of on somebody's screen."""
     source = _app()
     start = source.index(handler)
-    body = source[start:start + 700]
+    # THE WHOLE HANDLER, to the blank lines that end it. This read a fixed 700 characters, and on
+    # the portal branch /estimating grew a phone hand-over above its FileResponse: the header was
+    # there, past the cut, and the test failed on a page that was served correctly (14 Nov 2026).
+    end = source.find("\n\n\n", start)
+    body = source[start:end if end != -1 else len(source)]
     assert "_PAGE_HEADERS" in body, (
         f"{route} serves a document with no cache header — a browser will decide for itself "
         f"how long to keep it, and after a deploy it keeps the old one")
