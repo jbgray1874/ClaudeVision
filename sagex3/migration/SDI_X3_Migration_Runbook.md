@@ -3086,7 +3086,9 @@ SDI has **three kinds of rebate**. They are separate, and each needs its own dat
 13. Send Ethan **every file** (rule 1e), and say this is the run with the new BISY document numbers.
 
 **E. Other things waiting, not part of the migration run:**
-- **Charlotte's self-refreshing rebate workbook (REP-23):** waiting on James's go-ahead.
+- **Charlotte's self-refreshing rebate workbook (REP-23): BUILT 14 Nov.** Attachment 2 of her email; the builder `qr_work/build_provision_wb.py` is in the private finance folder.
+  - It reproduces the October provision check for every scheme, to the penny.
+  - Still to come: her answers, entered as settings.
   - It needs **read-only SQL access to SDILive for Charlotte's Windows login** (IT or Acuity).
   - Design:
     - a Sales tab refreshed from the ledger;
@@ -3110,3 +3112,16 @@ SDI has **three kinds of rebate**. They are separate, and each needs its own dat
   Or unzip the update zip into that folder.
 
 **Lesson:** before giving any git command for James's PC, ask which branch and remote his folder uses. Default to a separate worktree, never his working folder.
+
+**14 Nov – self-refreshing provision workbook built (REP-23, finance only, private folder).**
+- **What it is:** formulas only.
+  - Paste the read-only query output on the Sales tab and pick the as-at month.
+  - Settings for each scheme: year start, banded or retrospective, the month the previous year was settled, the date a new scheme began. Tiers and accounts (include Y/N) are settings too. Manual adjustments must carry a reason.
+  - Output: Summary (provision, movement for the accrual journal, prior-year balances, checks) and Monthly in Finance's layout.
+- **Proved:**
+  - Recalculated in LibreOffice: October equals the provision check's ledger-based banded figures for every scheme, to the penny.
+  - A pasted header or dashed line is ignored.
+  - Changing the as-at month works.
+- **Sent to Charlotte** as attachment 2, with the check workbook.
+- **For Charlotte to refresh it herself:** her Windows login needs read-only access to SDILive (IT / Acuity). Until then, James runs the query.
+- **Lesson:** build the tool so the user's answers become settings, not formula edits. Prove it against the agreed check before it goes out.
