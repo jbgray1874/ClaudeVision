@@ -8396,6 +8396,10 @@ def _withhold_duplicate_level_ops(decisions: Sequence[Any], graph: Mapping[str, 
         return []
     ops = {str(o).lower() for o in (getattr(_cfg, "ONE_LEVEL_OPERATIONS", None)
                                     or ("glue", "wet_spray", "cnc_routing", "cnc", "manual_labour_acrylic"))}
+    # THE PIECES' OWN EDGES (config EDGE_FINISH_OPERATIONS): charged on the members that carry
+    # it, never on the assembly as well, whichever side's evidence is the stronger.
+    edge_ops = {str(o).lower() for o in (getattr(_cfg, "EDGE_FINISH_OPERATIONS", None) or ())}
+    ops |= edge_ops
     kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "") for n in (graph.get("nodes") or [])}
     children = graph.get("children") or {}
 
@@ -8450,9 +8454,29 @@ def _withhold_duplicate_level_ops(decisions: Sequence[Any], graph: Mapping[str, 
                      if not _mine or not _same_event_key(dd) or _same_event_key(dd) == _mine]
         if not below:
             continue
+        words = _op.replace("_", " ")
+        if _op in edge_ops:
+            kept = ", ".join(sorted({k for k, _ in below}))
+            _said = str(getattr(d, "evidence", "") or "").strip()
+            for k, dd in below:
+                dd.reason = ((f"{dd.reason}; " if dd.reason else "")
+                             + f"the {words} is also stated for {_tid} ({d.source}"
+                             + (f": '{_said[:80]}'" if _said else "") + ")")
+            d.status = NOT_APPLICABLE
+            d.reason = ((f"{d.reason}; " if d.reason else "")
+                        + f"{words} is an edge finish, done to each piece's own edges: charged "
+                          f"once, on the member(s) that carry it ({kept}), each on its own "
+                          f"outline; this assembly's statement of it ({d.source}) stands as "
+                          f"theirs — PROVISIONAL: if the shop also finishes the bonded "
+                          f"assembly, both are real and this row should be put back")
+            d.field_provenance["status"] = "operation_charged_at_one_level"
+            withheld.append(_tid)
+            if issues is not None:
+                issues.append({"code": "operation_charged_at_one_level", "operation": _op,
+                               "part": _tid, "kept_on": kept})
+            continue
         parent_s = _strength(d)
         child_s = max(_strength(dd) for _, dd in below)
-        words = _op.replace("_", " ")
         if parent_s > child_s:
             # the assembly's evidence is the stronger (its sheet states the finish; the members
             # carry an inference): the members stand down
