@@ -331,6 +331,17 @@ every e-mail and filed covering note shows the pack the run was given.
 - A job that seems missing from one folder is in the other. The runner name on the job in Grid Control (ending `-s2` or not) and the run log's `[collect] looked in` line say which.
 - Every finished run is also filed to AISheets and the completed AI briefs area, whichever runner ran it.
 
+### 14 Nov 2026, after midnight: review verdict, rulings and the plan from here
+
+- **Reviewer's verdict on six of tonight's records:** better component coverage, none cleared as a corrected estimate. Recorded on SCRUM-274 as regression evidence.
+- **Two claimed fixes did not hold on a real run.** 6364-02 door pieces charged at 9, not 3 (`4931963e`): the count is the part's count times the per-part count from its own table, and one of those came out 3. The replay checked that step, not the charged line. 12674 bases still priced (£8.32, £6.24): `9f92c613` flags the base, it does not stop another fallback pricing it. Neither is diagnosed yet; both need the new records.
+- **A reader fix does not force a fresh model read.** Reuse checks models, failures and schema, not reader code. Reruns cannot prove reader fixes without Fresh read. Proposed making a reader change force a fresh read; awaiting JG's OK (costs SolidWorks time).
+- **Status words:** implemented, tested, deployed, proved on a real result. Only the last means fixed. Every costing fix gets a test from the saved record through to the charged workbook line.
+- **JG rulings:** `v2` is the correct pack where both folders came from the pack store. Each runner keeps its own estimates folder.
+- **Deployed:** `8541cc51` (laptop service `fbba4c3`). Pushed, not deployed: `3a6d404d`, one completed-estimates list on Grid Control with each bundle checked on the share and linked from the e-mail and note. Goes out with the first costing-fix release.
+- **Agreed job plan:** 11896-08-01-GA run once after the preview; 11896-01-00-GA optional diagnostic (running 00:07); 11896-02-01-GA waits for piece review and the China Red rate, then 1, 8 and 68 together; 11896-04-00-GA held for the sheet decision; the other seven not rerun. Self-Running stays off until the preview shows exactly which jobs would start.
+- **Next for the cloud session:** the eight `_record.json` files from 13 Nov, starting with the 6364-02 door pieces.
+
 ## 1. WHAT THE PROJECT IS
 
 SDI Intelligence is a Python engine at `C:\ClaudeVision\src\` that reads PDF + DXF engineering
