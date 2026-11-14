@@ -2917,6 +2917,7 @@ def recipients_get(x_sdi_key: Optional[str] = Header(default=None)):
     _check_key(x_sdi_key)
     out = estimate_email.saved_recipients()
     out["smtp_configured"] = estimate_email.smtp_configured()
+    out["sending"] = estimate_email.sending_state()
     return out
 
 
@@ -2927,6 +2928,7 @@ def recipients_set(req: RecipientsRequest, x_sdi_key: Optional[str] = Header(def
     _check_key(x_sdi_key)
     out = estimate_email.save_recipients(req.recipients)
     out["smtp_configured"] = estimate_email.smtp_configured()
+    out["sending"] = estimate_email.sending_state()
     return out
 
 

@@ -133,6 +133,43 @@ def smtp_configured() -> bool:
     return bool(s["host"] and s["sender"])
 
 
+def sending_state() -> Dict[str, Any]:
+    """Whether a finished estimate can be e-mailed from this service, by which sender, and
+    if not, exactly what is missing.
+
+    THE PAGE SAID "SMTP is not configured on this server, so nothing can be sent yet" WHILE
+    ESTIMATES WERE BEING SENT (14 Nov 2026). There are two senders: the SDI Intelligence
+    mailbox through Microsoft Graph (SDI_ESTIMATE_FROM with the app registration), tried
+    first, and SMTP. The page asked about SMTP alone, so a service set up for the mailbox
+    told people nothing could be sent, and on the day the settings really were lost nobody
+    could tell the true warning from the false one. This answers for both, and names the
+    settings by name only when something is missing. No value is ever returned."""
+    mailbox = graph_sender()
+    missing: List[str] = []
+    if mailbox:
+        try:
+            import auth
+            missing = [n for n, v in (("SDI_CLIENT_ID", auth.CLIENT_ID),
+                                      ("SDI_CLIENT_SECRET", auth.CLIENT_SECRET)) if not v]
+        except Exception as exc:                                     # noqa: BLE001
+            missing = [f"the sign-in module ({type(exc).__name__})"]
+        if not missing:
+            return {"can_send": True, "sender": f"the mailbox {mailbox}",
+                    "smtp_configured": smtp_configured(), "missing": []}
+    if smtp_configured():
+        return {"can_send": True, "sender": f"SMTP as {smtp_settings()['sender']}",
+                "smtp_configured": True,
+                "missing": missing, "note": (f"the mailbox {mailbox} cannot be used: "
+                                             f"{', '.join(missing)} not set" if missing else "")}
+    if mailbox:
+        why = f"the mailbox {mailbox} is named but {', '.join(missing)} is not set"
+    else:
+        why = "neither SDI_ESTIMATE_FROM (the mailbox) nor SMTP_HOST and SMTP_FROM is set"
+        missing = ["SDI_ESTIMATE_FROM", "SMTP_HOST", "SMTP_FROM"]
+    return {"can_send": False, "sender": "", "smtp_configured": False, "missing": missing,
+            "why": why}
+
+
 # A cap, because a mail server will refuse a large message in a way that loses the whole
 # send rather than one attachment. The note then says which files were left out and where
 # they are, which is more use than a bounce.

@@ -1547,10 +1547,21 @@ async function loadRecipients(){
     if(!r.ok) return;
     const d = await r.json();
     if(!emailTo.value) emailTo.value = (d.recipients || []).join(", ");
-    emailHint.textContent = d.smtp_configured
-      ? ("Default from " + (d.source || "the saved list") + ".")
-      : "SMTP is not configured on this server, so nothing can be sent yet — "
-        + "the estimate will still be filed.";
+    /* BOTH SENDERS, AND THE SAVED LIST SAID PLAINLY (14 Nov 2026). The hint asked about SMTP
+       alone and said "nothing can be sent" on a service that sends from the mailbox. It
+       now says which sender will be used, what is missing by name when none can, and
+       whether a default list is saved: Self-Running e-mails the SAVED list, not this box. */
+    const s = d.sending || {can_send: !!d.smtp_configured, sender: d.smtp_configured ? "SMTP" : "",
+                            why: "SMTP is not configured on this server"};
+    const saved = (d.recipients || []).length;
+    const list = saved
+      ? ("Saved default list: " + saved + " address" + (saved === 1 ? "" : "es") + ".")
+      : "NO DEFAULT LIST IS SAVED: Self-Running estimates are filed and e-mailed to nobody. "
+        + "Type the addresses and press Save as the default list.";
+    emailHint.textContent = s.can_send
+      ? ("Sent from " + s.sender + ". " + list)
+      : ("NOTHING CAN BE E-MAILED from this service: " + (s.why || "no sender is set")
+         + ". The estimate will still be filed. " + list);
     emailHint.className = "hint";
   }catch(e){ /* the page works perfectly well without this */ }
 }
@@ -1568,6 +1579,10 @@ emailSave && emailSave.addEventListener("click", async () => {
       ? ("Saved " + (d.recipients || []).length + ". NOT saved, these are not addresses: "
          + d.rejected.join(", "))
       : ("Saved as the default: " + (d.recipients || []).join(", "));
+    /* Saving a list does not make it deliverable: say so on the same line. */
+    if(d.sending && !d.sending.can_send)
+      emailHint.textContent += " — BUT NOTHING CAN BE E-MAILED from this service: "
+        + (d.sending.why || "no sender is set") + ".";
     emailTo.value = (d.recipients || []).join(", ");
   }catch(e){ emailHint.textContent = "Could not reach the server to save that list."; }
 });
