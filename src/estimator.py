@@ -15222,6 +15222,49 @@ def _made_part_material_allowance(pe: Dict[str, Any]) -> Optional[float]:
     what = str(pe.get("description") or pe.get("part_number") or "").strip()
     if not what:
         return None
+    # A PART WHOSE CONSTRUCTION NOBODY STATED IS NOT PRICED BY ASKING THE MARKET TO GUESS IT
+    # (12674-01-GA and 12674-02-GA, 13 Nov 2026). Both bases reached here measured, 2369.6 x
+    # 295.2 and 350 x 250, one with no material and no thickness, the other "timber" with no
+    # thickness. The question then asked for "sheet stock ... its size is not known" and the
+    # answers, £8 and £6 for a board of unknown kind and gauge, were charged as the base. A
+    # figure for stock nobody specified is a guess about what the part is made of, not a
+    # price for it. What is missing is asked for, and the line stays an honest gap until it
+    # is given. A part with its material known and no size still gets D-485's allowance; a
+    # sized part with its material and gauge known nests and never reaches here.
+    #
+    # ONLY A PART WITH A DRAWING NUMBER OF ITS OWN. A line with no code is a row of words, and
+    # on these packs those are hardware the make-or-buy test missed: 6364's cam locks, whose
+    # supplier prefix was rejected as a part number, carry a hole and a polish from their parent
+    # and so read as made. They keep today's allowance here, flagged as before; that they are
+    # read as made at all is its own fault, to be fixed where make-or-buy is decided.
+    _coded = bool(str(pe.get("part_number") or "").strip())
+    _bl = _safe_float(me.get("blank_length_mm"))
+    _bw = _safe_float(me.get("blank_width_mm"))
+    _unstated = ([] if material else ["its material"]) + \
+        (["its thickness"] if (not gauge and _bl and _bw) else [])
+    if _unstated and _coded:
+        _size = f"{_bl:g} x {_bw:g} mm" if (_bl and _bw) else "no measured size"
+        _need = " and ".join(_unstated)
+        pe["construction_not_established"] = {"missing": _unstated, "measured": _size,
+                                               "material": material or None,
+                                               "thickness_mm": gauge}
+        pe.setdefault("review_flags", []).append(
+            f"{pe.get('part_number') or what}: NOT PRICED — construction not established: "
+            f"{_need} not stated ({_size}"
+            + (f", {material.replace('_', ' ').lower()}" if material else "")
+            + "). No material allowance is guessed for stock nobody specified; give the "
+              "material and thickness, or a confirmed allowance, and it is costed")
+        try:
+            source_precedence.raise_manufacturing_question(
+                pe,
+                f"Construction of {pe.get('part_number') or what} ({what}): {_need} not stated",
+                f"the line is not priced; measured {_size}",
+                "state the material and thickness this part is made from, or confirm an "
+                "allowance for it",
+                "estimator.construction_not_established")
+        except Exception:                                            # noqa: BLE001
+            pass
+        return None
     stock = " ".join(x for x in (material.replace("_", " ").lower(),
                                  f"{gauge:g} mm" if gauge else "") if x) or "sheet"
     if _faced in ("MFMDF", "MFC"):
