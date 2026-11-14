@@ -371,7 +371,8 @@ def test_the_latest_feedback_goes_into_the_brief(tmp_path):
     wb.save(p)
     r = tp.read_rows(p, {"drawing": "L", "notes": "G", "thumbs": ["I", "J"], "cost": "Q"})["rows"][0]
     assert r["feedback"] == "quantity reduced from 5 to 3"
-    assert "Latest feedback: quantity reduced from 5 to 3." in tp.brief_for(r)
+    # said under the sheet's own heading (14 Nov 2026: Previous and Latest are both read)
+    assert "Latest Feedback: quantity reduced from 5 to 3." in tp.brief_for(r)
 
 
 def test_the_pack_line_names_what_the_pack_lacks_or_that_its_references_were_unchecked():

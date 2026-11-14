@@ -151,6 +151,15 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
     # THE LATEST FEEDBACK (JG, 10 Nov 2026): "quantity reduced from 5 to 3", "drawings existing
     # from Rome". A column headed Feedback is part of the job's brief, beside the Notes.
     fb_c = find("feedback")
+    # EVERY FEEDBACK COLUMN, EACH UNDER ITS OWN HEADING (JG and the reviewer, 14 Nov 2026). The
+    # tracker now has Previous Feedback in G and Latest Feedback in H. Only the first column
+    # headed Feedback was read, so H never reached the brief (row 7's red-door instruction was
+    # lost), and whatever was read was labelled "Latest feedback" whichever column it came from.
+    # Each is now read and said under the sheet's own heading. The notes column is said under
+    # its heading too when that heading is a feedback one, and is not then repeated.
+    notes_c = col_index(cols["notes"])
+    notes_label = heads.get(notes_c) if re.search(r"feedback", heads.get(notes_c) or "", re.IGNORECASE) else ""
+    fb_cols = [c for c, h in sorted(heads.items()) if re.search(r"\bfeedback", h, re.IGNORECASE) and c != notes_c]
     # THE NUMBER OF UNITS (JG, 10 Nov 2026: "column N Quantity"). --col-qty names the column;
     # without it the header that says Qty / Quantity is used.
     qty_c = col_index(cols["qty"]) if cols.get("qty") else find("qty", "quantity")
@@ -171,6 +180,8 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
         notes = str(ws.cell(r, col_index(cols["notes"])).value or "").strip()
         desc = str(ws.cell(r, desc_c).value or "").strip() if desc_c else ""
         feedback = str(ws.cell(r, fb_c).value or "").strip() if fb_c else ""
+        feedbacks = [[heads[c], str(ws.cell(r, c).value or "").strip()] for c in fb_cols]
+        feedbacks = [f for f in feedbacks if f[1]]
         if not (drawing or notes or desc or pics.get(r)):
             continue
         try:
@@ -178,14 +189,16 @@ def read_rows(sheet: Path, cols: Dict[str, str], rows: Optional[Tuple[int, int]]
         except (TypeError, ValueError):
             qty = 1
         out.append({"row": r, "drawing": drawing_ref(drawing), "drawing_cell": drawing, "notes": notes, "description": desc,
-                    "feedback": feedback,
+                    "feedback": feedback, "feedbacks": feedbacks, "notes_label": notes_label,
                     "quantity": max(1, qty), "pictures": pics.get(r, []),
                     "cost_before": ws.cell(r, col_index(cols["cost"])).value})
     return {"sheet": ws.title, "header_row": header_row,
             "header": {"description": heads.get(desc_c) if desc_c else None,
                        "quantity": heads.get(qty_c) if qty_c else None,
                        "quantity_column": _col_letter(qty_c) if qty_c else None,
-                       "drawing": heads.get(dcol), "cost": heads.get(col_index(cols["cost"]))},
+                       "drawing": heads.get(dcol), "cost": heads.get(col_index(cols["cost"])),
+                       "notes": heads.get(notes_c),
+                       "feedback": [f"{_col_letter(c)}: {heads[c]}" for c in fb_cols]},
             "cost_column": cols["cost"], "cost_column_said": cost_said,
             "rows": out}
 
@@ -506,8 +519,11 @@ def brief_for(r: Dict[str, Any]) -> str:
     if r.get("description"):
         parts.append(f"Description: {r['description']}.")
     if r.get("notes"):
-        parts.append(f"Notes: {r['notes']}.")
-    if r.get("feedback"):
+        parts.append(f"{r.get('notes_label') or 'Notes'}: {r['notes']}.")
+    if "feedbacks" in r:
+        for _head, _text in r["feedbacks"]:
+            parts.append(f"{_head}: {_text}.")
+    elif r.get("feedback"):
         parts.append(f"Latest feedback: {r['feedback']}.")
     parts.append(f"Quantity: {r['quantity']}.")
     return " ".join(parts)
@@ -826,7 +842,43 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             if _r["quantity"] not in qtys_of[_r["drawing"]]:
                 qtys_of[_r["drawing"]].append(_r["quantity"])
     runs_of: Dict[str, Dict[str, Any]] = {}
+    # TWO RUNNERS, TWO JOBS AT ONCE (JG, 14 Nov 2026: "we want two at once.. we have two
+    # runners"). The batch queued a job and waited for it, so the second runner sat idle
+    # through every tracker batch. With --at-once N (SDI_TTI_AT_ONCE) up to N runs are open
+    # together. Everything that writes (the tracker cell, the ledger, the copies) is still done
+    # by this one process, one finished run at a time, so no two writers meet. A later row for
+    # a drawing still in flight waits for that run and takes its break, as before.
+    at_once = max(1, int(getattr(args, "at_once", 1) or 1))
+    in_flight: List[List[Any]] = []
+
+    def _finish(item, r, manifest, st) -> None:
+        _finish_body(item, r, manifest, st, args=args, sheet=sheet, data=data, writer=writer,
+                     priced=priced, runs_of=runs_of, extras=extras, record=record, save=save)
+
+    def _finish_one(drawing: str = "") -> None:
+        """Wait until one open run ends (the named drawing's, when given) and write it back."""
+        while True:
+            for entry in list(in_flight):
+                _item, _r, _manifest, _deadline = entry
+                if drawing and _r.get("drawing") != drawing:
+                    continue
+                try:
+                    _st = portal.status(_item["run_id"]) or {}
+                except Exception:                                    # noqa: BLE001
+                    _st = {}
+                if str(_st.get("status") or "") not in ("done", "error", "cancelled", "failed", "abandoned"):
+                    if time.time() < _deadline:
+                        continue
+                    _st = {"status": "timeout"}
+                in_flight.remove(entry)
+                _finish(_item, _r, _manifest, _st)
+                return
+            _waiting(30)
+
     for r in data["rows"]:
+        # A ROW FOR A DRAWING STILL RUNNING WAITS FOR IT: its cost may be that run's break.
+        if r.get("drawing") and any(x[1].get("drawing") == r["drawing"] for x in in_flight):
+            _finish_one(r["drawing"])
         manifest = None
         found: Dict[str, Any] = {}
         _stalled = ""
@@ -1071,7 +1123,29 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             item.update(state="running", run_id=started.get("run_id"))
             record(item, r, manifest)
             save()
+            if at_once > 1:
+                # KEPT IN FLIGHT: the next row is looked at while this one runs; it is written
+                # back, on this one thread, when it ends. Never more than `at_once` open.
+                in_flight.append([item, r, manifest, time.time() + 4 * 3600])
+                while len(in_flight) >= at_once:
+                    _finish_one()
+                continue
             st = wait_for(portal, item["run_id"], sleep=_waiting)
+        _finish(item, r, manifest, st)
+    while in_flight:
+        _finish_one()
+    report["finished"] = datetime.now().isoformat(timespec="seconds")
+    if writer is not None:
+        report["written_by"] = writer.how
+        report["backup"] = str(writer.backup) if writer.backup else None
+    save()
+    return report
+
+
+def _finish_body(item, r, manifest, st, *, args, sheet, data, writer, priced, runs_of, extras,
+                 record, save) -> None:
+    """One ended run: its cost, the tracker cell, the read-back, the copies, the ledger line."""
+    if True:
         cost = unit_cost_of(st, r["quantity"])
         item.update(state=str(st.get("status")), unit_cost=cost, output=st.get("output_path") or st.get("output"),
                     quality=st.get("quality") or None, review=st.get("review") or None)
@@ -1109,12 +1183,6 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             extras(item, r, manifest, item.get("output"), cost)
         record(item, r, manifest)
         save()
-    report["finished"] = datetime.now().isoformat(timespec="seconds")
-    if writer is not None:
-        report["written_by"] = writer.how
-        report["backup"] = str(writer.backup) if writer.backup else None
-    save()
-    return report
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1143,6 +1211,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="submit again a row whose earlier run failed because its runner stopped "
                          "answering; only once that process is confirmed ended")
     ap.add_argument("--col-qty", default="", help="the number of units, e.g. N; default the column headed Qty / Quantity")
+    ap.add_argument("--at-once", type=int, default=int(os.getenv("SDI_TTI_AT_ONCE", "1") or 1),
+                    help="how many estimates are open together, one per Grid Runner (default 1; "
+                         "2 with two runners). The tracker is still written by this one process")
     ap.add_argument("--dry-run", action="store_true", help="find the drawings and say what would run; nothing queued or written")
     ap.add_argument("--server", default=os.getenv("SDI_SERVER", "http://localhost:8072"))
     ap.add_argument("--api-key", default=os.getenv("SDI_API_KEY", ""))
