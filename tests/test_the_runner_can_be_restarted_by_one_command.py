@@ -483,3 +483,16 @@ def test_the_watcher_is_heard_before_the_publish_says_done():
     assert "/api/estimate/self-running" in after and "watcher.connected" in after
     assert "WAS NOT HEARD" in after and "$global:LASTEXITCODE = 10" in after
     assert "NOT CONFIRMED" in after, "a service that did not answer is not a dead watcher"
+
+
+def test_a_disabled_watcher_task_is_left_off_and_the_publish_goes_on():
+    """14 Nov 2026: Self-Running was off by disabling its task, and the publish stopped at
+    "The task is disabled" before reading back the services and the runners. A disabled task
+    is now said and left off; the old watcher is still ended and its lock still cleared."""
+    step = _watcher_step()
+    disabled = step.index('.State -eq "Disabled"')
+    assert step.index("Stop-Process") < disabled and step.index("if (Test-Path $lock)") < disabled
+    assert disabled < step.index("Start-ScheduledTask")
+    branch = step[disabled:step.index("Start-ScheduledTask")]
+    assert "left off" in branch and "return" in branch and "LASTEXITCODE" not in branch
+    assert "Enable-ScheduledTask" in branch

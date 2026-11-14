@@ -101,6 +101,15 @@ Step "restart the Self-Running watcher" {
             return
         }
     }
+    # A DISABLED TASK IS LEFT OFF, AND SAID (14 Nov 2026). Self-Running was switched off by
+    # disabling its task while repeat runs were traced; the next publish then stopped here on
+    # "The task is disabled" and never read back the services or the runners. Any watcher left
+    # running from the old build has been ended above, and its lock cleared; nothing is started.
+    if ((Get-ScheduledTask -TaskName $taskName).State -eq "Disabled") {
+        Write-Host "  '$taskName' is disabled, so it is left off: the old watcher is ended and nothing is started." -ForegroundColor Yellow
+        Write-Host "  To turn it back on, after its dry run is checked: Enable-ScheduledTask -TaskName '$taskName'" -ForegroundColor Yellow
+        return
+    }
     Start-ScheduledTask -TaskName $taskName
     $heard = $false
     $answered = $false
