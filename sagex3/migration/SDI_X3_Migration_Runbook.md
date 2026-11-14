@@ -2964,3 +2964,17 @@ Charlotte sent Finance's month-end **quantity rebate provision workbook**. It is
 - James runs `quantity_rebates_sales.sql` (read-only, private finance folder), so every typed month can be reconciled to Access.
 - Then we build the provision run: one parameter table per scheme, the same sheets and summary, and the movement for the journal.
 - This lesson goes with the others: **finance rebate data stays in the private folder, whatever the scheme.**
+
+**14 Nov, reconciled.** James ran `quantity_rebates_sales.sql`. We compared every monthly sales figure typed on Finance's workbook (Jan–Oct 2026) with the Access sales ledger (invoices less credit notes, ex VAT).
+- **Where a cell holds a straight ledger figure, Access matches to the penny:** 115 of 137 typed cells. The scheme-year totals carried forward from 2025 also match exactly.
+- **The other cells are of two kinds:**
+  - deliberate adjustments in formulas (a rebate credit note added back, "less VAT" deductions, prior-year moves, year-end deductions);
+  - a few unexplained differences (one typo'd account code, one possible typing slip).
+- **Accounts the workbook leaves out:** Access has accounts for the same customer groups that aren't on the workbook, some with material sales. They're listed for Finance to say in or out.
+
+The finance-only check workbook (28 questions) is in the private finance folder only.
+
+**Design rules to agree before the monthly sales come from the ledger:**
+1. **Rebate credit notes must not reduce qualifying sales.** We need a way to identify them in Access and X3, e.g. a nominal code or a product.
+2. **Adjustments need a reason that can be recorded.** Each exclusion or move becomes a rule or a logged manual line, not an edit inside a formula.
+3. **Each scheme gets an explicit list of accounts.**
