@@ -75,17 +75,43 @@ def test_the_same_base_with_its_material_and_gauge_stated_is_priced(asked):
     assert len(asked) == 1 and "construction_not_established" not in pe
 
 
-def test_a_part_with_its_material_known_and_no_size_keeps_its_allowance(asked):
-    """D-485 stands: the market prices the raw stock for one part of a stated material."""
-    pe = _base(material="MILD_STEEL", length=None, width=None)
+def test_a_part_with_its_material_and_gauge_known_and_no_size_keeps_its_allowance(asked):
+    """D-485 stands: the market prices the raw stock for one part of a stated material and
+    gauge that has no size to nest."""
+    pe = _base(material="MFC", thickness=18.0, length=None, width=None)
     assert E._made_part_material_allowance(pe) == 8.0 and len(asked) == 1
+
+
+def test_timber_with_no_thickness_and_no_size_is_not_priced(asked):
+    """12674-01-GA, 14 Nov 2026 15:46, build 684ba00: the base arrived as TIMBER from the
+    model's applied material, thickness null, blank null, and was charged £6.00 (£6.24 with
+    scrap) as "AI ESTIMATE - INDICATIVE". The first form of the safeguard only asked for a
+    thickness where a blank had been measured."""
+    pe = _base(material="TIMBER", length=None, width=None)
+    pe["material_source"] = "solidworks_applied_material"
+    assert E._made_part_material_allowance(pe) is None and asked == []
+    assert pe["construction_not_established"]["missing"] == ["its thickness"]
+    assert any("NOT PRICED" in f and "no measured size" in f for f in pe["review_flags"])
+
+
+def test_that_base_through_the_last_resort_pass_carries_no_material_charge(asked):
+    """The fields the workbook's material cell is filled from: after the pass that priced it
+    on the real run, the base has no material cost and no market basis."""
+    pe = _base(material="TIMBER", length=None, width=None)
+    rescued = E.apply_last_resort_prices([pe], E._last_resort_lookup)
+    me = pe["material_estimate"]
+    assert rescued == 0 and asked == []
+    assert not (me.get("cost_per_part_gbp") or me.get("unit_material_cost_gbp")
+                or me.get("extended_material_cost_gbp"))
+    assert me.get("cost_method") != "last_resort_market_indication"
+    assert "last_resort" not in str(pe.get("costing_basis"))
 
 
 def test_a_bracket_with_no_material_is_not_priced_by_a_guess(asked):
     pe = {"part_number": "J-CPT09", "description": "BRACKET", "quantity": 30,
           "assumed_job_quantity": 200, "review_flags": []}
     assert E._made_part_material_allowance(pe) is None and asked == []
-    assert pe["construction_not_established"]["missing"] == ["its material"]
+    assert pe["construction_not_established"]["missing"] == ["its material", "its thickness"]
 
 
 def test_through_the_last_resort_pass_the_base_stays_a_gap_and_says_so(asked):

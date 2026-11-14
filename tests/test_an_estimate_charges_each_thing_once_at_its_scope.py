@@ -748,7 +748,7 @@ def test_a_made_part_allowance_is_one_parts_price_not_the_lines(monkeypatch):
     # price, not the line's. Since 14 Nov a made part whose material nobody stated is not
     # priced by a market guess at all (test_a_part_whose_construction_nobody_stated_...).
     pe = {"part_number": "J-CPT09", "description": "BRACKET", "quantity": 30,
-          "normalized_material": "MILD_STEEL",
+          "normalized_material": "MILD_STEEL", "normalized_thickness_mm": 2.0,
           "assumed_job_quantity": 200, "review_flags": []}
     assert E._made_part_material_allowance(pe) == 3.50
 

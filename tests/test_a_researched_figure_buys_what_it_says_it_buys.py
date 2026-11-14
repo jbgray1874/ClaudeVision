@@ -86,8 +86,11 @@ def test_the_family_clash_is_read_from_the_answers_own_words():
 
 
 def _spine():
+    # its gauge is stated: since 14 Nov a coded part with no thickness is not priced by the
+    # market at all (test_a_part_whose_construction_nobody_stated_...); these tests are about
+    # what the answer describes, not about that.
     return {"part_number": "12678-01-02J", "description": "SPINE", "quantity": 1,
-            "normalized_material": "MDF"}
+            "normalized_material": "MDF", "normalized_thickness_mm": 18.0}
 
 
 def test_an_allowance_answered_about_another_material_is_refused(monkeypatch):

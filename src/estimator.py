@@ -15240,8 +15240,12 @@ def _made_part_material_allowance(pe: Dict[str, Any]) -> Optional[float]:
     _coded = bool(str(pe.get("part_number") or "").strip())
     _bl = _safe_float(me.get("blank_length_mm"))
     _bw = _safe_float(me.get("blank_width_mm"))
-    _unstated = ([] if material else ["its material"]) + \
-        (["its thickness"] if (not gauge and _bl and _bw) else [])
+    # THE THICKNESS IS WANTED WHETHER OR NOT A SIZE WAS MEASURED (12674-01-GA, 14 Nov 2026).
+    # The first form of this asked for the thickness only where a blank had been measured. On
+    # the fresh run the base arrived as "timber" from the model's applied material, with no
+    # thickness and no size at all, passed, and was charged £6.24 from an answer about timber
+    # of unknown gauge and unknown size. A material class with no gauge is not a construction.
+    _unstated = ([] if material else ["its material"]) + ([] if gauge else ["its thickness"])
     if _unstated and _coded:
         _size = f"{_bl:g} x {_bw:g} mm" if (_bl and _bw) else "no measured size"
         _need = " and ".join(_unstated)
