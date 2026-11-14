@@ -85,7 +85,7 @@ def recent_runs(ledger: Dict[str, Any], limit: int = RECENT_RUNS_SHOWN,
     for job in (ledger.get("jobs") or {}).values():
         for a in job.get("attempts") or []:
             when = str(a.get("finished_at") or a.get("queued_at") or "")
-            if a.get("status") not in ("queued", "running"):
+            if a.get("status") not in ("queued", "running", ler.QUEUEING):
                 try:
                     if datetime.fromisoformat(when[:19]) < edge:
                         continue
@@ -488,6 +488,9 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     ledger = ler.load_ledger(s["ledger"])
     if not dry_run:
         ler.refresh_open_runs(ledger, portal, others)
+        # WHAT THE SERVICES RAN, before anything is planned: a run the ledger lost is adopted,
+        # never queued again (JG, 14 Nov 2026).
+        ler.gather_service_runs(ledger, portal, others)
         apply_reruns(ledger, getattr(switch, "take_reruns", lambda: [])(), say=say)
         # A YES THAT COULD NOT BE WRITTEN LAST TIME IS TRIED FIRST (D-608a), before the sheet
         # is read, so a row it reaches reads YES and is not asked.
@@ -496,6 +499,8 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     sources = ler._sources(s["root"])
     switch.beat(report("reading the sheet", str(s["workbook"])))
     decisions = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger)
+    for _line in ledger.pop("_adopted", None) or []:
+        say(f"   from the services' own record: {_line}")
     # A PAGE RE-RUN FOR A ROW THAT HAS LEFT THE SHEET IS SAID, ONCE (JG, 11 Nov 2026: "otherwise I
     # need to manually re-run"), on the log and the page's beat, and then forgotten.
     for _job in (ledger.get("jobs") or {}).values():
