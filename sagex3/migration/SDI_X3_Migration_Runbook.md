@@ -3030,3 +3030,21 @@ SDI has **three kinds of rebate**. They are separate, and each needs its own dat
 - **Check account scope against the ledger by prefix, not just the user's list.** Missing accounts can be material.
 - **Finance-only rebate data stays in the private folder**, whatever the scheme: no names or figures in git, Jira, the register or emails to anyone but Finance.
 - **A covering note sends one explained file**: never the user's own workbook back, and never raw extracts.
+
+**14 Nov, provision check (REP-23, finance only).** We recalculated each scheme's October provision three ways:
+1. from Finance's own typed sales;
+2. from Access on a banded basis;
+3. from Access on a retrospective basis.
+
+**Results:**
+- **(1) agrees with Finance's provision to the penny for every scheme.** The workbook's arithmetic is right.
+- **(2) differs only through the formula adjustments and slips already listed.** Most of the difference is one scheme's adjustments.
+- **(3) shows the real exposure is the method.** One scheme was settled retrospectively last year, but it is accrued banded during the year. Two other schemes' closed-year amounts are held on a banded basis, and retrospective settlement would roughly double them.
+
+**Changes to the covering note:**
+- An "In short" block at the top, with five priority questions and a reply-by date of **Wed 25 Nov** (so November can run in parallel).
+- A provision-check section.
+- The check workbook gains a "Provision check" tab.
+- It is still one attachment.
+
+**Lesson:** checking the inputs isn't enough. Recalculate the outputs under each plausible rule and say plainly whether the posted figure is right, and what would change it.
