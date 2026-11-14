@@ -4,6 +4,7 @@ commercial lines and the report — and check it, in minutes, before another lon
     python tools/replay_saved_job.py output/json/8188-08.json
     python tools/replay_saved_job.py output/json/8188-08.json --facts docs/briefs/8188-08.facts.json
     python tools/replay_saved_job.py output/json/8188-08.json --offline
+    python tools/replay_saved_job.py output/json/8188-08.json --workbook --row 8188-08-01J
 
 WHY. Fixes passed narrow tests and then missed the stage that built the finished workbook:
 the doubled insert was minted in the workbook's own canonicalisation, downstream of every
@@ -25,6 +26,13 @@ WHAT IT DOES NOT DO. It does not re-read the drawings (a fix to a reader needs a
 does not open the Excel template, so the sheet's own formulas — nest yields, the totals, the
 quantity-break recalculation — are not evaluated: money printed here is the engine's figure,
 not the workbook's. The book is still the proof; this says whether a run is worth starting.
+
+WITH --workbook it goes one stage further (14 Nov 2026: "reproduce this exact record through
+to Estimate!M11, not just the intermediate part calculation"). The replayed record is written
+into the estimate template by the run's own writer, into a book of its own under the replay
+folder, and the rows that name --row are printed cell by cell as the writer left them. A cell
+holding a formula is shown as its formula beside the cells it reads: the template's sums are
+worked by Excel when the book is opened, not here.
 
 NOTHING IS OVERWRITTEN. Output goes to output/replay/<job>_replay.json and
 output/replay/<job>_replay_report.html; the saved record is only read.
@@ -223,6 +231,43 @@ def _print_evidence(summary: Dict[str, Any]) -> None:
     print(f"  {'gauge decision on ' + ', '.join(map(str, guilty)) if guilty else 'none'}")
 
 
+def workbook_rows(book_path: str, wanted: str = "") -> List[Dict[str, Any]]:
+    """The material rows of the Estimate sheet in a written book, as the writer left them:
+    {"row", "cells": {"C11": value, ...}}. With `wanted`, only the rows where some cell names
+    it. A formula is returned as its text; nothing is worked out here."""
+    import openpyxl
+    import wb_populate
+    cm = wb_populate.CELL_MAP
+    ws = openpyxl.load_workbook(book_path, data_only=False)[cm["estimate_sheet"]]
+    want = _sq(wanted)
+    out: List[Dict[str, Any]] = []
+    # The slots of each material block, not the labels and headings between them.
+    slots = [r for k in ("bom", "tube", "steel", "other_sheet")
+             for r in range(int(cm[k]["first_row"]), int(cm[k]["last_row"]) + 1)]
+    for r in slots:
+        cells = {c.coordinate: c.value for c in ws[r][2:14] if c.value not in (None, "")}
+        if not any(not str(v).startswith("=") for v in cells.values()):
+            continue                      # nothing was written on it: the template's own formulas
+        if want and not any(want in _sq(v) for v in cells.values()):
+            continue
+        out.append({"row": r, "cells": cells})
+    return out
+
+
+def write_workbook(summary: Dict[str, Any], job: str, out_dir: Path) -> Optional[str]:
+    """The replayed record written into the template by the run's own writer, into a folder
+    of the replay's own. None when the template cannot be reached (the writer says why)."""
+    import wb_populate
+    books = out_dir / "books"
+    books.mkdir(parents=True, exist_ok=True)
+    kept = wb_populate.CELL_MAP["output_dir"]
+    wb_populate.CELL_MAP["output_dir"] = str(books)
+    try:
+        return wb_populate.populate_workbook(summary, f"{job}_replay")
+    finally:
+        wb_populate.CELL_MAP["output_dir"] = kept
+
+
 def main(argv: Optional[Iterable[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("summary", type=Path, help="the saved record, e.g. output/json/<job>.json")
@@ -230,6 +275,11 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     ap.add_argument("--out", type=Path, default=ROOT / "output" / "replay")
     ap.add_argument("--offline", action="store_true",
                     help="do not ask SDI Live or the researcher (SDI_OFFLINE=1)")
+    ap.add_argument("--workbook", action="store_true",
+                    help="also write the replayed record into the estimate template and print "
+                         "the material rows the writer left")
+    ap.add_argument("--row", default="",
+                    help="with --workbook: print only the rows that name this code or text")
     a = ap.parse_args(list(argv) if argv is not None else None)
     if a.offline:
         os.environ["SDI_OFFLINE"] = "1"
@@ -278,6 +328,26 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     except Exception as exc:                                         # noqa: BLE001
         print(f"\nreport NOT built ({type(exc).__name__}: {exc})")
     print(f"record: {out_json}")
+    if a.workbook:
+        book = write_workbook(summary, job, a.out)
+        if not book:
+            print("\nWORKBOOK NOT WRITTEN: the template could not be reached (see above). "
+                  "The rows below cannot be shown; nothing is claimed about the sheet.")
+        else:
+            print(f"\nworkbook: {book}")
+            rows = workbook_rows(book, a.row)
+            print(f"ESTIMATE ROWS as the writer left them"
+                  + (f", naming '{a.row}'" if a.row else "") + f": {len(rows)}")
+            for row in rows:
+                print(f"  row {row['row']}")
+                for ref, val in row["cells"].items():
+                    kind = "formula" if str(val).startswith("=") else "written"
+                    print(f"      {ref:<6} {kind:<8} {str(val)[:150]}")
+            if a.row and not rows:
+                print(f"  no material row names '{a.row}': it is not charged on a material "
+                      f"row of this book")
+            print("  A formula cell is worked by Excel when the book is opened. A row whose "
+                  "price cell is empty charges nothing through it.")
     print(f"REPLAY COMPLETE: {a.summary} on build {summary['replay_build']}")
     print("note: the final workbook charge (the sheet's nest and formulas) is verified only "
           "on the book — a passing replay is the ticket to run it, not a substitute for it")
