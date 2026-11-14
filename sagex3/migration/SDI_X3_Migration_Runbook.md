@@ -2927,3 +2927,40 @@ James ran `live_orders.sql` in SSMS (Results to Text, tab-delimited) and uploade
 - Dave's auto-reply: off 13 Nov, back Mon 16 Nov.
 
 The register has been rebuilt (as at 13 Nov): REP-00, REP-05, REP-11–17, REP-22, REP-23, EST-01, EST-10 and LO-00 updated.
+
+### 22.15 Finance's quantity-rebate provision workbook (14 Nov) – REP-23 widened to every rebate scheme (finance only)
+
+Charlotte sent Finance's month-end **quantity rebate provision workbook**. It is **finance only**, so the customer names, rates and values are **not** recorded here, in Jira or in the register. The workbook is kept in the private finance folder.
+
+**What it is:**
+- One sheet per rebate customer (eight schemes, including the partner scheme and its referral bonus), plus a summary.
+- Each sheet holds:
+  - net sales by month, typed in by customer account;
+  - the cumulative total for the scheme year;
+  - a tier table;
+  - the provision required;
+  - the monthly movement.
+- The summary carries every scheme, plus unreleased prior-year balances, to **one accrual nominal**.
+
+**What it gives us:**
+- **The full list of rebate schemes.** REP-23 widens from one partner to a single provision run that covers every scheme.
+- **The typed monthly sales come from the sales ledger.** The partner sheet's four month cells match our Access ledger extract **to the penny** (invoices less credit notes, ex VAT). So the typing can be replaced by a query: Access now, X3 after go-live.
+- **It answers two partner-scheme questions:**
+  - Finance includes two of the group's accounts, the pass-through account, and a third brand whose account is still "??". The Ireland and hearing-care accounts are not included.
+  - The scheme year starts in September.
+
+**Questions for Finance:**
+- Scheme years differ by customer. Confirm each one.
+- For each scheme, is the rate **banded** (each rate only on its band) or **retrospective** (the step rate on the whole year)? The sheets use both.
+- One tier table has a lower rate in its first band than in its second.
+- One customer's band formulas don't match its own tier table (no effect this scheme year).
+- One summary row is typed in, not linked to its sheet.
+- Two accounts are marked "Less VAT".
+- Two further customers are noted but have no sheet.
+- What happens to the prior-year balances (release or settle)?
+- REP-22's 6% scheme isn't in this workbook.
+
+**Next:**
+- James runs `quantity_rebates_sales.sql` (read-only, private finance folder), so every typed month can be reconciled to Access.
+- Then we build the provision run: one parameter table per scheme, the same sheets and summary, and the movement for the journal.
+- This lesson goes with the others: **finance rebate data stays in the private folder, whatever the scheme.**
