@@ -1207,6 +1207,7 @@ def _lookup_catalogue_section_stock_rate(
     wall_t_mm: Optional[float],
     own_part_number: Optional[str] = None,
     refused: Optional[List[Dict[str, Any]]] = None,
+    shape: str = "",
 ) -> Optional[Dict[str, Any]]:
     """The £/m SDI Live's catalogue buys this exact profile at as STOCK LENGTH (D-387), or None."""
     if not (side_a_mm and side_b_mm and wall_t_mm):
@@ -1215,7 +1216,7 @@ def _lookup_catalogue_section_stock_rate(
     if rows is None:
         return None
     return _select_catalogue_section_stock_rate(rows, side_a_mm, side_b_mm, wall_t_mm,
-                                                own_part_number, refused=refused)
+                                                own_part_number, refused=refused, shape=shape)
 
 
 # Words in a catalogue description that name a MADE thing, not a stock section. Config may
@@ -1372,20 +1373,84 @@ _SECTION_LEN_M_RE = re.compile(r"(?<![\dxX.])(\d{1,2}(?:\.\d+)?)\s*M(?:TR|ETRE|E
 _SECTION_PER_METRE_UOMS_DEFAULT = ("M", "MTR", "METRE", "METER", "LM", "PER M", "PER METRE")
 
 
+# A ROUND OR SQUARE TUBE IS WRITTEN WITH TWO NUMBERS (14 Nov 2026). Estimating's tube sheet
+# lists 89 stock rows; 55 of them are "ERW ROUND 19.05 x 1.2mm", "ERW SQUARE 30 x 1.5mm",
+# "28.58 O.D x 1.20", "34.93 DIA x 2mm": one size and a wall. The profile reader wanted three
+# numbers, so none of those rows priced anything and their parts fell to a global rate.
+_SECTION_TWO_NUMBER_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(?:MM)?\s*(?:O\.?D\.?|DIA\.?)?\s*[xX]\s*(\d+(?:\.\d+)?)(?!\s*(?:MM)?\s*[xX]\s*\d)")
+_SECTION_ROUND_RE = re.compile(r"\bROUND\b|\bCHS\b|\bO\.?D\b|\bDIA\b")
+_SECTION_OVAL_RE = re.compile(r"\bFSO\b|\bOVAL\b")
+_SECTION_SQUARE_RE = re.compile(r"\bSQUARE\b|\bSHS\b")
+_SECTION_BOX_RE = re.compile(r"\bSQUARE\b|\bSHS\b|\bRECT(?:ANGULAR)?\b|\bRHS\b|\bBOX\b")
+
+
+def _section_row_shape(desc: Any) -> str:
+    """"round", "oval" or "box" where a catalogue description says which, else "".
+
+    ONE SIZE IN TWO SHAPES IS TWO ITEMS. The tube sheet lists "ERW RECT. 40 x 20 x 1.5mm" at
+    £25.92 and "ERW FSO 40 x 20 x 1.5mm" at £10.00 a length. Read by size alone they were one
+    profile, and a part of either shape was priced at the middle of the two."""
+    du = str(desc or "").upper()
+    if _SECTION_OVAL_RE.search(du):
+        return "oval"
+    if _SECTION_ROUND_RE.search(du):
+        return "round"
+    if _SECTION_BOX_RE.search(du):
+        return "box"
+    return ""
+
+
+def _section_row_exact_sides(desc: Any) -> Optional[Tuple[float, float]]:
+    """(lo side, hi side) as the row writes them, not rounded: 15.88 stays 15.88."""
+    du = str(desc or "").upper()
+    pm = _SECTION_PROFILE_RE.search(du)
+    if pm:
+        d = sorted(float(pm.group(i)) for i in (1, 2, 3))
+        return d[1], d[2]
+    tm = _SECTION_TWO_NUMBER_RE.search(du)
+    if tm and (_SECTION_ROUND_RE.search(du) or _SECTION_SQUARE_RE.search(du)):
+        return float(tm.group(1)), float(tm.group(1))
+    return None
+
+
+def _section_form_shape(form: Any) -> str:
+    """The same three shapes, from a part's own section form (CHS, SHS, RHS, OVAL, FSO)."""
+    f = str(form or "").strip().upper()
+    if f in ("OVAL", "FSO"):
+        return "oval"
+    if f in ("CHS",):
+        return "round"
+    if f in ("SHS", "RHS"):
+        return "box"
+    return ""
+
+
 def _section_row_profile(desc: str) -> Optional[Tuple[int, int, float]]:
-    """(lo side, hi side, wall) read from a catalogue description, or None."""
-    pm = _SECTION_PROFILE_RE.search(str(desc or "").upper())
-    if not pm:
+    """(lo side, hi side, wall) read from a catalogue description, or None. Three numbers are
+    two sides and a wall. Two numbers are one size and a wall, on a row that says it is round
+    or square; a row with no wall ("SQUARE 25 X 25MM") prices nothing."""
+    du = str(desc or "").upper()
+    pm = _SECTION_PROFILE_RE.search(du)
+    if pm:
+        d = sorted([round(float(pm.group(1))), round(float(pm.group(2))), float(pm.group(3))])
+        return round(d[1]), round(d[2]), d[0]
+    if not (_SECTION_ROUND_RE.search(du) or _SECTION_SQUARE_RE.search(du)):
         return None
-    d = sorted([round(float(pm.group(1))), round(float(pm.group(2))), float(pm.group(3))])
-    return round(d[1]), round(d[2]), d[0]
+    tm = _SECTION_TWO_NUMBER_RE.search(du)
+    if not tm:
+        return None
+    size, wall = float(tm.group(1)), float(tm.group(2))
+    if size <= 0 or wall <= 0 or 2 * wall >= size:
+        return None
+    return round(size), round(size), wall
 
 
 def _select_catalogue_section_stock_rate(rows: Any, side_a_mm: Optional[float],
                                          side_b_mm: Optional[float], wall_t_mm: Optional[float],
                                          own_part_number: Optional[str] = None,
-                                         refused: Optional[List[Dict[str, Any]]] = None
-                                         ) -> Optional[Dict[str, Any]]:
+                                         refused: Optional[List[Dict[str, Any]]] = None,
+                                         shape: str = "") -> Optional[Dict[str, Any]]:
     """The £/m the catalogue's STOCK LENGTHS of this exact profile sell at, or None (D-387).
     Pure: rows in, rate out.
 
@@ -1420,6 +1485,11 @@ def _select_catalogue_section_stock_rate(rows: Any, side_a_mm: Optional[float],
         prof = _section_row_profile(desc)
         if not prof or not (prof[0] == _lo and prof[1] == _hi and abs(prof[2] - wall_t_mm) < 0.3):
             continue
+        # THE SHAPE TOO, WHERE BOTH SAY IT: a round row does not price a square of its size,
+        # nor an oval a rectangle. A row or a part that names no shape is matched as before.
+        _row_shape = _section_row_shape(desc)
+        if shape and _row_shape and _row_shape != shape:
+            continue
         _why = _catalogue_row_is_a_made_part(code, desc, own_part_number)
         if _why:
             if refused is not None:
@@ -1447,11 +1517,46 @@ def _select_catalogue_section_stock_rate(rows: Any, side_a_mm: Optional[float],
             rate = _cost / (cat_len / 1000.0)
             basis = f"{code} '{desc.strip()}' GBP {_cost:.2f} per {cat_len:g} mm length"
         found.append({"part_code": str(code or ""), "description": desc.strip(),
+                      "_exact": _section_row_exact_sides(desc), "_wall": prof[2],
                       "unit_price_gbp": _cost, "supplier": str(supplier or "").strip(),
                       "uom": str(uom or "").strip(), "catalogue_length_mm": cat_len,
                       "rate_gbp_per_m": round(rate, 4), "basis": basis})
     if not found:
         return None
+    # THE NEAREST SIZE, NOT EVERY SIZE THAT ROUNDS TO IT (14 Nov 2026). Sides are matched to
+    # the millimetre, so 15.88 and 16 mm round tube, or 25 and 25.4 mm square, were one
+    # profile and the part took the middle of two different tubes' prices. A 1.22 and a 1.5 mm
+    # wall were one gauge the same way. Where the rows write their own sizes, only those
+    # nearest the part's sides and wall are kept.
+    _plo, _phi = sorted([float(side_a_mm), float(side_b_mm)])
+    _dist = {id(x): max(abs(x["_exact"][0] - _plo), abs(x["_exact"][1] - _phi),
+                        abs(float(x["_wall"]) - float(wall_t_mm)))
+             for x in found if x.get("_exact")}
+    if _dist:
+        _near = min(_dist.values())
+        found = [x for x in found if id(x) in _dist and _dist[id(x)] <= _near + 0.02] \
+            or found
+    for x in found:
+        x.pop("_exact", None)
+        x.pop("_wall", None)
+    # ESTIMATING'S OWN TUBE SHEET STANDS, AND TWO OF ITS ROWS THAT DISAGREE PRICE NOTHING
+    # (reviewer, 14 Nov 2026: "Keep conflicting rates ... unresolved — no averaging or
+    # arbitrary selection"). The sheet lists some tubes twice at different prices (one square
+    # at £7.93 and £15.00 a length). The middle of two prices is nobody's price. Where the
+    # sheet's rows for this tube agree, they are the rate; where they disagree, no rate comes
+    # from them and the caller is told which rows, so the question reaches estimating.
+    try:
+        from tube_calculator_sheet import SOURCE as _TUBE_SHEET
+    except Exception:                                                # noqa: BLE001
+        _TUBE_SHEET = "AI Tube calculator"
+    _sheet_rows = [x for x in found if x["supplier"] == _TUBE_SHEET]
+    if _sheet_rows:
+        _sr = [x["rate_gbp_per_m"] for x in _sheet_rows]
+        _sheet_rows.sort(key=lambda x: (x["rate_gbp_per_m"], x["part_code"]))
+        if max(_sr) > min(_sr) * 1.005:
+            return {"rate_gbp_per_m": None, "rows": _sheet_rows, "conflict": True,
+                    "suppliers": [_TUBE_SHEET]}
+        found = _sheet_rows
     found.sort(key=lambda x: (x["rate_gbp_per_m"], x["part_code"]))
     _rates = [x["rate_gbp_per_m"] for x in found]
     _n = len(_rates)
@@ -8851,13 +8956,33 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             _stock_refused: List[Dict[str, Any]] = []
             _stock = (_lookup_catalogue_section_stock_rate(
                 side_a_mm, side_b_mm, wall_t_mm, own_part_number=part.get("part_number"),
-                refused=_stock_refused) if _hollow else None)
+                refused=_stock_refused,
+                shape=_section_form_shape(_section_form(_ss))) if _hollow else None)
             for _rf in _stock_refused:
                 _msg = (f"catalogue row {_rf['code']} '{_rf['description']}' was not used to "
                         f"price this section: {_rf['why']} — another drawing's made part "
                         f"prices only that item. If it is plain stock, confirm it")
                 if _msg not in (part.get("review_flags") or []):
                     part.setdefault("review_flags", []).append(_msg)
+            if _stock and _stock.get("conflict"):
+                _named = "; ".join(
+                    f"{x['part_code']} '{x['description']}' at GBP {x['unit_price_gbp']:.2f}"
+                    for x in _stock["rows"][:4])
+                _msg = (f"AI TUBE CALCULATOR ROWS DISAGREE: {_named}. They name this tube and "
+                        f"give different prices, so neither is used and nothing is averaged. "
+                        f"The section is priced below from the held rate meanwhile. NON-FIRM: "
+                        f"estimating to say which row stands, or correct the sheet")
+                if _msg not in (part.get("review_flags") or []):
+                    part.setdefault("review_flags", []).append(_msg)
+                try:
+                    source_precedence.raise_manufacturing_question(
+                        part,
+                        f"Which AI Tube calculator row prices {part.get('part_number') or 'this tube'}?",
+                        f"none: {_named}; priced from the held section rate meanwhile",
+                        "say which row stands, or correct the calculator sheet",
+                        "estimator.tube_calculator_rows_disagree")
+                except Exception:                                    # noqa: BLE001
+                    pass
             if _stock and _safe_float(_stock.get("rate_gbp_per_m")):
                 _rate_m = float(_stock["rate_gbp_per_m"])
                 _stock_unit = unit_length_m * _rate_m * waste_factor
