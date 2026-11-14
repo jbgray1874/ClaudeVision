@@ -2978,3 +2978,55 @@ The finance-only check workbook (28 questions) is in the private finance folder 
 1. **Rebate credit notes must not reduce qualifying sales.** We need a way to identify them in Access and X3, e.g. a nominal code or a product.
 2. **Adjustments need a reason that can be recorded.** Each exclusion or move becomes a rule or a logged manual line, not an edit inside a formula.
 3. **Each scheme gets an explicit list of accounts.**
+
+### 22.16 Rebates – where everything stands (14 Nov): REP-22 (Claire / Nick) and REP-23 + quantity rebates (Charlotte, finance only)
+
+SDI has **three kinds of rebate**. They are separate, and each needs its own data rules:
+
+| | REP-22 Rebate rolling report | REP-23 partnership rebate | REP-23 quantity-rebate provisions |
+|---|---|---|---|
+| Who | Claire Newall, Nick Garrish (Charlotte copied) | Charlotte (finance only) | Charlotte (finance only) |
+| What | 6% on the sales of a fixed list of 22 goalpost / branded-bay parts, any customer, 12 rolling months | One key account's agreement: banded tiers, a bonus above a baseline, referral rewards | Finance's month-end provision for **every** customer rebate scheme, to one accrual nominal |
+| Basis | **Invoice lines** (TBI_TBL × COR_TBL), month = order line's **customer due date** | Net invoiced (and collected) by account, group's financial year | Net sales ledger by account and month (invoices − credit notes, ex VAT), each scheme's own year |
+| Proved | **To the penny** against Claire's November report (12 Nov) | Calculator agrees with every worked example in the agreement | **115 of 137** typed monthly cells = Access to the penny; carried-forward totals exact (14 Nov) |
+| Built | `sagex3/reports/rebate/` (SQL, builder, web app port 8765) | `sagex3/reports/partner_rebate/` (calculator, model builder; generic) | Read-only SQL + reconciliation (private finance folder) |
+| Sent | Write-up + HTML / xlsx to Claire and Nick, **13 Nov** | Email + finance-only model to Charlotte, **13 Nov** | Check workbook + covering note to Charlotte: **ready 14 Nov** |
+| Waiting on | Claire: the HHA01 due-date move, the HHA-INSTALL credit / re-invoice, flat 6% as a separate agreement, the part list (other GA variants) | Charlotte: entity scope, pass-through share, baseline source, collected vs invoiced, above top band, settlement | Charlotte: 28 cell questions, account scope, method / year / tiers per scheme, rebate credit notes, prior-year balances |
+
+**REP-22 in detail (not finance-only; names were already in this runbook):**
+- The rebate is a flat 6%, paid to the retailer. It is **not** the per-customer rebate % in Access (CU_USRNUM1 is 0 for every customer on the report).
+- The run date sets the 13-month window. The month basis can be `due` (default; matches Claire), `invoice` or `order`.
+- The web app keeps every run.
+- The two line differences don't change the totals. Both are with Claire (email 7).
+- Charlotte has been asked whether this 6% is accounted for outside the quantity-rebate workbook, because it isn't in it.
+- **X3:** the same logic on X3 invoice lines, through the API app or a request. Prove it against the Access run first.
+
+**Quantity rebates (generic: the detail is in `finance_private/REBATES_FINANCE_NOTES.md`):**
+- **Eight schemes in Finance's workbook:**
+  - one flat-rate scheme;
+  - banded tier schemes with different scheme years;
+  - one scheme that steps retrospectively at year end;
+  - the partnership scheme and its referral bonus.
+- The summary also carries unreleased prior-year balances.
+- **Access already holds a per-customer rebate % (CU_USRNUM1).** For the flat-rate scheme it is set to that scheme's rate, and the daily invoiced-sales view nets it off. Charlotte is asked whether every flat rate should be held that way. In X3 that becomes a customer field or a price / discount structure.
+- **What the reconciliation found:**
+  - deliberate formula adjustments: a rebate credit note added back, "less VAT" deductions on two accounts, prior-year moves, a year-end deduction, one reversed sale;
+  - slips: a typo'd account code, one month typed £26.7k high on one scheme;
+  - accounts of the same customer groups missing from the sheets (one is material).
+- **The covering note:** one attachment only, the check workbook. Charlotte already has her own workbook and the partnership model.
+  - Five sections: adjustments, slips, account scope, rules per scheme, balances and the 6% scheme.
+  - The open partnership questions from 13 Nov are repeated.
+  - It asks for a 30-minute walk-through, or answers in the workbook's Answer column.
+
+**The provision run to build (after Charlotte's answers), REP-23:**
+1. **One parameter table per scheme:** account list, scheme year, method (banded or retrospective), tier table, caps, bonus or baseline, referral rules.
+2. **Monthly sales from the ledger:** Access SL_TRANSACTIONS now, X3 invoices after go-live. Rebate credit notes are excluded, and adjustments are logged as rules or manual lines with a reason.
+3. **Output in Finance's own layout:** a sheet per scheme and the Summary, with provision required, the monthly movement for the accrual journal, prior-year balances, and a checks tab listing unclassified items.
+4. **Finance only:** private folder now. In X3, finance-only rights and an accrual account the AMs can't see, kept off the AM sales report.
+
+**Lessons (rebates):**
+- **Prove each report against the user's own figures, cell by cell, before automating.** Typed sheets hide judgement calls (credit notes added back, VAT taken off net figures, year-end deductions). Each becomes an explicit rule.
+- **Rebate credit notes must not reduce the sales a rebate is calculated on.** We need an identifier for them in Access and X3.
+- **Check account scope against the ledger by prefix, not just the user's list.** Missing accounts can be material.
+- **Finance-only rebate data stays in the private folder**, whatever the scheme: no names or figures in git, Jira, the register or emails to anyone but Finance.
+- **A covering note sends one explained file**: never the user's own workbook back, and never raw extracts.
