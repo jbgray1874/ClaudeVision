@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import os
 import socket
+import traceback
 import sys
 import time
 from collections import Counter
@@ -655,6 +656,8 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
     _wait = wait if wait is not None else {"sleep": sleep_and_beat,
                                            "poll_seconds": JOB_POLL_SECONDS}
     tried: set = set()
+    not_started: Dict[str, str] = {}      # job key -> the service's own reason it did not start
+    look_again: Dict[str, bool] = {}      # a submission is unanswered: read again in a minute
     ran: List[Dict[str, Any]] = []
     at_once = max(1, int(getattr(config, "SELF_RUNNING_AT_ONCE", 1) or 1))
     # ITS OWN JOBS STILL ON THE PORTAL COUNT AGAINST THE LIMIT (JG, 10 Nov 2026). A watcher
@@ -735,13 +738,45 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
                     attempt = ler.queue_one(nxt, portal, ledger, s["ledger"], say=say,
                                             email_to=email_to)
                 except ler.PortalError as exc:
-                    if exc.status in (0, 503):
+                    if exc.status == 0:
+                        # NO ANSWER IS NOT NO (14 Nov 2026): the services are asked whether
+                        # they hold the run before anything is concluded. Found, it is waited
+                        # on and the next free slot is filled. Not found, nothing more is
+                        # queued this cycle and the sheet is read again in a minute.
+                        found = None
+                        try:
+                            found = ler.find_unanswered(nxt, portal, others, ledger, s["ledger"])
+                        except Exception as _exc:                     # noqa: BLE001
+                            say(f"   (the services could not be asked about {nxt.row.drawing}: "
+                                f"{type(_exc).__name__}: {_exc})")
+                        if found:
+                            say(f"   {nxt.row.drawing}: the submission was not answered, but "
+                                f"{found.get('server') or 'a service'} holds it as run "
+                                f"{found.get('run_id')} ({found.get('status')}); waiting on it")
+                            in_flight.append([nxt, found, clock()
+                                              + config.LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES * 60])
+                            _show(nxt)
+                            switch.beat(_running())
+                            continue
+                        say(f"   {nxt.row.drawing}: the submission was not answered and no "
+                            f"service lists it yet — {exc.message}. Nothing more is queued "
+                            f"until it is found; looking again in a minute")
+                        look_again["soon"] = True
+                        stop_filling = True
+                        break
+                    if exc.status == 503:
                         say(f"   stopped: {exc.message}")
                         stop_filling = True
                         break
                     if exc.status == 409:
-                        say(f"   {nxt.row.drawing}: already queued or running on the portal "
-                            f"— left to it")
+                        # THE SERVICE'S OWN REASON, NOT A GUESS AT IT (14 Nov 2026). A 409 is
+                        # "this job is already running" and also "its staged folder is held
+                        # open by another program"; 6364-01 sat requested behind the second
+                        # while this line said the first, so nobody looked for the open file.
+                        say(f"   {nxt.row.drawing}: not started — {exc.message}")
+                        not_started[ler.job_key(nxt.row)] = (
+                            f"{nxt.row.drawing} ({nxt.row.customer}) was not started: "
+                            f"{exc.message}")
                         continue
                     job = ledger["jobs"].setdefault(ler.job_key(nxt.row), {
                         "customer": nxt.row.customer, "drawing": nxt.row.drawing,
@@ -769,7 +804,8 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
                     ran.append(attempt)
                     price = attempt.get("engine_price_gbp")
                     say(f"   {d.row.drawing}: {attempt['status']}"
-                        + (f" — £{price:,.2f} a unit at {d.quantities[0]} off" if price else "")
+                        + (f" — £{price:,.2f} a unit{ler.at_first_quantity(d, attempt)}"
+                           if price else "")
                         + (f" — {attempt.get('error')}" if attempt.get("error") else ""))
                     after_each(d, attempt)
                     ended = True
@@ -816,6 +852,8 @@ def cycle(s: Dict[str, Any], portal: ler.Portal, switch: Switch, dry_run: bool =
             say(f"   (the sheet could not be read again after {nxt.row.drawing}: "
                 f"{type(exc).__name__}: {exc}; carrying on with the last read)")
     out["ran"] = ran
+    out["not_started"] = list(not_started.values())
+    out["look_again_soon"] = bool(look_again.get("soon"))
     after = ler.plan(ler.read_sheet(s["workbook"]), sources, ledger)
     ler.write_status(after, s["ledger"])
     out["counts"] = counts(after)
@@ -876,11 +914,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ler._touch_lock(s["ledger"])
             pressed = bool(switch.last.get("run_now")) or bool(getattr(switch, "reruns", []))
             if on and (pressed or time.time() >= next_cycle):
+                done: Dict[str, Any] = {}
+                _failed = False
                 try:
                     done = cycle(s, portal, switch, others=portals)
                     msg = (f"read the sheet: {', '.join(f'{v} {k}' for k, v in sorted(done['counts'].items()))}"
                            f"; collected {sum(1 for c in done['collected'] if c.get('status') == 'copied')}"
                            f" pack(s); ran {len(done['ran'])}")
+                    # A JOB ASKED FOR AND NOT STARTED IS SAID ON THE PAGE, WITH ITS REASON, not
+                    # left "requested" with free runners beside it (14 Nov 2026).
+                    for _why in done.get("not_started") or []:
+                        msg += f"; NOT STARTED: {_why}"
                     print(f"\n[{ler._now()}] {msg}", flush=True)
                     nxt = datetime.now() + timedelta(minutes=config.LIVE_ENQUIRY_POLL_MINUTES)
                     switch.beat(report("waiting", msg, counts=done["counts"],
@@ -891,10 +935,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 except SystemExit:
                     raise
                 except Exception as exc:                              # noqa: BLE001
-                    msg = f"cycle failed: {type(exc).__name__}: {exc}"
+                    # WHERE IT FAILED, IN THE SAME LINE (14 Nov 2026): "IndexError: list index
+                    # out of range" named no place, and its cause had to be traced by reading.
+                    _tb = traceback.extract_tb(exc.__traceback__)
+                    _at = (f" at {Path(_tb[-1].filename).name}:{_tb[-1].lineno} "
+                           f"({_tb[-1].name})") if _tb else ""
+                    msg = f"cycle failed: {type(exc).__name__}: {exc}{_at}"
                     print(f"\n[{ler._now()}] {msg}", flush=True)
                     switch.beat(report("error", msg))
+                    _failed = True
                 next_cycle = time.time() + config.LIVE_ENQUIRY_POLL_MINUTES * 60
+                # A SUBMISSION WITH NO ANSWER, OR A CYCLE THAT FAILED, IS NOT LEFT FOR THE NEXT
+                # FULL WAIT (14 Nov 2026): requested jobs sat for twenty minutes beside a free
+                # runner. The sheet is read again in a minute, or two after a failure.
+                if done.get("look_again_soon"):
+                    next_cycle = time.time() + 60
+                elif _failed:
+                    next_cycle = time.time() + 120
                 if args.once:
                     return 0
             elif args.once:

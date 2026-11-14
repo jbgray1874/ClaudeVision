@@ -853,6 +853,21 @@ def _now() -> str:
 
 
 # ── THE DECISION ─────────────────────────────────────────────────────────────────────
+def at_first_quantity(d: Any, attempt: Optional[Dict[str, Any]] = None) -> str:
+    """" at N off" for the line that reports a finished job, or "" when no quantity is known.
+
+    THE REPORT OF A FINISHED JOB NEVER FAILS THE CYCLE (14 Nov 2026, 16:26:44: "cycle failed:
+    IndexError: list index out of range"). A job picked up already running, after the watcher
+    was restarted, is a decision with no quantities of its own: they are on the attempt that
+    queued it. The line read the decision's first quantity, raised as the job finished, and
+    everything after it was skipped: the sheet was not marked for that job and the rest of the
+    cycle was lost."""
+    for qty in ((attempt or {}).get("quantities"), getattr(d, "quantities", None)):
+        if qty:
+            return f" at {list(qty)[0]} off"
+    return ""
+
+
 @dataclass
 class Decision:
     row: EnquiryRow
@@ -1455,6 +1470,52 @@ def _same_quantities(attempt: Dict[str, Any], qty: Sequence[int]) -> bool:
     return got == list(qty)
 
 
+def _request_answered_by(job: Dict[str, Any], row: EnquiryRow, run_queued_epoch: float,
+                         was_asked_for_here: bool) -> None:
+    """A RUN FOUND ON A SERVICE CONSUMES THE REQUEST IT ANSWERS, ONCE (14 Nov 2026). The
+    request is cleared when the run is queued (queue_one). A run whose answer was lost never
+    reached that line, so the Re-run stayed in the ledger and would have run the job again as
+    soon as the found run finished.
+
+    A run this watcher asked for (its "queueing" line) answers whatever asked for it. A run
+    found with no line of ours answers a page Re-run only when it was queued after the Re-run
+    was pressed: an older run is not the answer to a newer request."""
+    if was_asked_for_here:
+        job.pop("retry", None)
+        job.pop("page_rerun", None)
+        if completed_word(row.ai_completed) in config.LIVE_ENQUIRY_RERUN:
+            job["rerun_taken"] = True
+        return
+    asked = job.get("page_rerun")
+    if not asked:
+        return
+    try:
+        asked_at = float(asked)
+    except (TypeError, ValueError):
+        asked_at = _epoch_from_iso(asked) or 0.0
+    if run_queued_epoch and run_queued_epoch >= asked_at - 60:
+        job.pop("page_rerun", None)
+        job.pop("retry", None)
+
+
+def find_unanswered(d: "Decision", portal: Portal, others: Sequence[Portal],
+                    ledger: Dict[str, Any], ledger_path: Path) -> Optional[Dict[str, Any]]:
+    """The run a submission became when its answer never came back, or None. The services are
+    asked for their own runs; one that matches this row completes the "queueing" line, which
+    is then waited on like any job this watcher queued."""
+    gather_service_runs(ledger, portal, others)
+    adopt_for_row(d.row, d.located, ledger)
+    ledger.pop("_adopted", None)
+    job = (ledger.get("jobs") or {}).get(job_key(d.row)) or {}
+    live = [a for a in job.get("attempts") or []
+            if a.get("run_id") and a.get("status") in {"queued", "running"}]
+    try:
+        save_ledger(ledger_path, ledger)
+    except OSError:
+        pass
+    return live[-1] if live else None
+
+
 def adopt_for_row(row: EnquiryRow, located: Optional["Located"], ledger: Dict[str, Any]) -> List[str]:
     """Write this row's unrecorded service runs into its job, in time order. A "queueing" line
     left by a save that failed after the run was queued is completed from the run it became."""
@@ -1490,6 +1551,7 @@ def adopt_for_row(row: EnquiryRow, located: Optional["Located"], ledger: Dict[st
         _attempt_from(run, attempt)
         if not waiting:
             job["attempts"].append(attempt)
+        _request_answered_by(job, row, when, bool(waiting))
         said.append(f"{row.drawing}: {attempt.get('adopted') or 'its queued line was completed'} "
                     f"({attempt.get('status')})")
     if job:
@@ -1602,11 +1664,20 @@ def queue_one(d: Decision, portal: Portal, ledger: Dict[str, Any], ledger_path: 
     save_ledger(ledger_path, ledger)                   # fails: nothing has been queued
     try:
         started = portal.start(request_body(d, email_to))
-    except BaseException:
-        # REFUSED, OR NOT ANSWERED: the provisional line comes off, and the caller says why.
-        job["attempts"].remove(attempt)
-        if not _known and not job["attempts"]:
-            ledger["jobs"].pop(job_key(d.row), None)
+    except BaseException as exc:
+        # NOT ANSWERED IS NOT REFUSED (14 Nov 2026). 6364-02's submission timed out while the
+        # service was still staging its pack; the service then accepted it. The provisional
+        # line was taken off as if it had been refused, the Re-run request stayed in the
+        # ledger, and the watcher stopped dispatching with a runner free. Only an answer that
+        # says no takes the line off. With no answer the line stays "queueing": the row reads
+        # as in progress, the services are asked whether they hold the run, and the request
+        # is consumed by the run it became (adopt_for_row), never run a second time.
+        if isinstance(exc, PortalError) and exc.status != 0:
+            job["attempts"].remove(attempt)
+            if not _known and not job["attempts"]:
+                ledger["jobs"].pop(job_key(d.row), None)
+        else:
+            attempt["unanswered"] = str(getattr(exc, "message", "") or exc)[:300]
         try:
             save_ledger(ledger_path, ledger)
         except OSError:
@@ -1666,8 +1737,7 @@ def run_ready(decisions: Sequence[Decision], portal: Portal, ledger: Dict[str, A
                 say(f"   stopped: {exc.message}")
                 break
             if exc.status == 409:
-                say(f"   {d.row.drawing}: already queued or running on the portal — "
-                    f"left to it")
+                say(f"   {d.row.drawing}: not started — {exc.message}")
                 continue
             job = ledger["jobs"].setdefault(job_key(d.row), {
                 "customer": d.row.customer, "drawing": d.row.drawing, "attempts": []})
@@ -1682,7 +1752,7 @@ def run_ready(decisions: Sequence[Decision], portal: Portal, ledger: Dict[str, A
         done.append(attempt)
         price = validated_price(attempt)
         say(f"   {d.row.drawing}: {attempt['status']}"
-            + (f" — £{price:,.2f} a unit at {d.quantities[0]} off" if price
+            + (f" — £{price:,.2f} a unit{at_first_quantity(d, attempt)}" if price
                else f" — {NO_VALIDATED_PRICE}" if attempt["status"] in {"done", "error"} else "")
             + (f" — {attempt.get('error')}" if attempt.get("error") else ""))
         if after_each is not None:
