@@ -15572,6 +15572,13 @@ def _bought_in_candidate_for(part: Dict[str, Any], no_ops_except_handling: bool,
             cand = True
     except Exception:                                                # noqa: BLE001
         pass
+    # AN ASSEMBLY THAT LISTS ITS MEMBERS IS NEVER A PURCHASE, BY ANY TEST (11896-02-01-GA,
+    # 14 Nov 2026). The authority above already refuses a parent; the older test at the top
+    # did not, and an assembly has no operations of its own beyond handling, so it passed as
+    # "nothing is done to it, so it is bought". Two wall-panel sub-assemblies were each charged
+    # £10.00 from a catalogue row on top of the panel and Z-bars they are made of.
+    if part.get("assembly_children"):
+        cand = False
     return cand
 
 
@@ -16118,7 +16125,8 @@ def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
         return 0
     _q = _job_order_quantity(summary)
     _keep = ("bom_parent", "bom_parents", "printed_code", "is_bought_in", "page_roles",
-             "source", "owning_assembly", "supplied_by_third_party")
+             "source", "owning_assembly", "supplied_by_third_party",
+             "assembly_children", "is_assembly_parent", "is_sub_assembly")
     # THE DRAWING'S SCOPE APPLIES TO A LATE RECORD TOO. estimate_document asks
     # third_party_supply which lines another party supplies before it costs anything; this
     # pass costed the records the reconcile added afterwards and never asked. 12567-01's
@@ -16159,6 +16167,44 @@ def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
         except Exception as _sz_exc:                                 # noqa: BLE001
             print(f"   [size] late two-unit sizes not resolved ({type(_sz_exc).__name__}: "
                   f"{_sz_exc})", flush=True)
+        # A LATE ROW FOR AN ASSEMBLY OF THIS JOB IS THAT ASSEMBLY (11896-02-01-GA, 14 Nov
+        # 2026). The table reader added rows for SA01 and SA02, each a wall panel sub-assembly
+        # the model and the drawing already hold with its members (a panel and three Z-bars,
+        # every one charged). The late rows knew none of that, wore the table's bought-in
+        # role, and were priced as purchases: £10.00 each on top of their own members. A late
+        # record whose code is one of the job's assemblies takes that assembly's members and
+        # standing before it is costed, so the make-or-buy rule sees a parent, not an article.
+        try:
+            def _code(_v: Any) -> str:
+                return re.sub(r"[\s_]", "", str(_v or "")).upper()
+            _asm_by_code = {
+                _code(_w.get("part_number")): _w
+                for _w in ((summary.get("manufacturing_writeup") or {}).get("parts") or [])
+                if isinstance(_w, dict) and _w.get("part_number")
+                and (_w.get("assembly_children") or _w.get("is_assembly_parent"))}
+            for _r in _late:
+                _w = _asm_by_code.get(_code(_r.get("part_number")))
+                if _w is None or _r.get("assembly_children"):
+                    continue
+                _kids = [str(c) for c in (_w.get("assembly_children") or []) if str(c or "").strip()]
+                if not _kids:
+                    continue
+                _r["assembly_children"] = _kids
+                _r["is_assembly_parent"] = True
+                if _w.get("is_sub_assembly"):
+                    _r["is_sub_assembly"] = True
+                _r["is_bought_in"] = False
+                _r["page_roles"] = [x for x in (_r.get("page_roles") or [])
+                                    if str(x) != "bought_in"] or ["detail"]
+                _r.setdefault("review_flags", []).append(
+                    f"{_r.get('part_number')} is an assembly of this job's own parts "
+                    f"({', '.join(_kids)}): its cost is its members' and its assembly work, "
+                    f"so the table's row for it takes no purchase price")
+                print(f"   [late] {_r.get('part_number')} is this job's assembly of "
+                      f"{', '.join(_kids)}: not priced as a purchase", flush=True)
+        except Exception as _asm_exc:                                # noqa: BLE001
+            print(f"   [late] assembly standing not carried to late records "
+                  f"({type(_asm_exc).__name__}: {_asm_exc})", flush=True)
         try:
             from third_party_supply import mark_third_party_supplied
             _tp = mark_third_party_supplied(_late, summary)
