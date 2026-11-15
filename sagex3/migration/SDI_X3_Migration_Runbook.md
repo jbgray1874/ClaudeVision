@@ -3206,3 +3206,22 @@ Then go to the API once Acuity has given us the template and the access.
 - **Never** `W:\Production`.
 
 (The AI estimating runner lives outside this repo copy. This is only a record of the rule.)
+
+### 22.22 Estimating import and Live Enquiry – James's direction (15 Nov)
+
+**Estimating import.**
+- **How it works today (James):** Dave copies and pastes from his estimating sheet into an **import spreadsheet with macros**, runs a few macros, and "the database is updated".
+- **What we've seen:** the `IMPORT.xls` we have (10 and 13 Nov copies, MD5 02f980…) **contains no macros at all**: no VBA project. So the macro spreadsheet is a **different file**, probably an .xlsm or an add-in.
+- **Questions for Dave:** which file it is, and **which database its macros write to**. Sage X3 isn't live yet, so today it's presumably Access SupplyChain or X3 TEST.
+- **Target:** the same flow into X3. The estimate goes through our converter (`est_to_x3.py`, proved on a real estimate) and comes out as X3's product / BOM / route import files. Stage 2 loads them through the API.
+- **Needed:** a copy of the macro workbook. With it, its macros are read and their steps reproduced, so nothing Dave's process does is missed. This was already asked in email 4 (Q2–Q3); the copy of the file is the quickest answer.
+
+**Live Enquiry → recreated in Sage X3 (opportunities).**
+- **Approach (James):** understand the data Access SupplyChain holds for enquiries, then map it onto X3.
+- **Step 1, done:** `sagex3/live_enquiry/live_enquiry_discovery.sql` is read-only (SELECTs only). It returns:
+  - tables and views whose names point to enquiries, quotes, estimates, prospects, opportunities, projects or CRM, with row counts;
+  - every column with such a name on any table;
+  - 5 sample rows from the 15 largest candidates.
+- **James to run it** (Results to Text, tab-delimited) and upload the .rpt.
+- **Step 2:** map the fields found against X3's opportunity (customer / prospect, description, value, dates, probability, stage "Identified" → "Won or lost", project on a win). The X3 field names must come from Acuity's opportunity template (OPP-01, asked 13 Nov).
+- **Step 3:** build the stage-1 converter, the same pattern as estimating: Access enquiries → X3 opportunity import file with checks. Then go to the API.
