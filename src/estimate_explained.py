@@ -4016,6 +4016,20 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
 
     # 7 ─ the drawing pack, in full
     add("<h3>7. The drawing pack</h3>")
+    # THIS SECTION IS NOT THE LIST OF THE PACK, AND NOW SAYS SO (JG, 15 Nov 2026: "why are the
+    # html report e-mails missing loads of drawings?"). Its table has one row per costed part
+    # with a sheet of its own, about a dozen on a pack of 65 files, and it comes first, so it
+    # read as the pack with most of it missing. The count of every file read opens it, and the
+    # full list is named.
+    try:
+        import drawings_statement as _ds7
+        _n7 = _ds7.count_line(_ds7.statement(g["scan_doc"]))
+    except Exception:                                            # noqa: BLE001
+        _n7 = ""
+    if _n7:
+        add(f"<p><b>{_e(_n7)}</b> Every one is listed by name under <b>Drawings used, and drawings "
+            f"believed missing</b>, further down. The table in this section is narrower: one row "
+            f"for each costed part that has a drawing sheet of its own.</p>")
     # WHAT THE PACK COST US, SAID OUT LOUD. James's rule: when the engine has to code
     # around a pack — a drawing export staged as a flat, a stray file, a BOM line with no
     # drawing — the e-mail says so, or the drawing office never hears it and every pack

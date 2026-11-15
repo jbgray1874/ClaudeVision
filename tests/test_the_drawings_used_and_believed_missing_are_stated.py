@@ -111,5 +111,22 @@ def test_the_report_page_and_the_email_carry_the_same_statement(tmp_path):
     for u in st["used"]:
         assert u["name"] in page and u["name"] in mail
     assert "5000-01-GA_Unit.DWG" in page and "In the pack and not read" in mail
+    # THE DRAWING PACK SECTION SAYS HOW MANY FILES WERE READ AND WHERE THE FULL LIST IS (JG,
+    # 15 Nov 2026: "why are the html report e-mails missing loads of drawings?"): its own
+    # table is one row per costed part with a sheet, and read as the pack with most missing.
+    count = ds.count_line(st)
+    assert count and str(len(st["used"])) in count
+    section = mail[mail.index("7. The drawing pack"):]
+    assert section.index(count) < section.index("Drawings used, and drawings believed missing")
+    assert "one row for each costed part" in section
+    assert mail.count(count) == 2, "the count opens the pack section and heads the full list"
     # the statement sits above the calculator section, which stays at the bottom
     assert mail.index("Drawings used, and drawings believed missing") < mail.index("Produced by SDI")
+
+
+def test_the_count_names_each_kind_of_file_and_is_silent_when_nothing_was_recorded():
+    st = {"used": [{"name": "a.pdf", "kind": "PDF"}, {"name": "b.dxf", "kind": "DXF"},
+                   {"name": "c.dxf", "kind": "DXF"}]}
+    assert ds.count_line(st) == "3 files were read for this estimate: 1 PDF, 2 DXF."
+    assert ds.count_line({"used": [{"name": "a.pdf", "kind": "PDF"}]}).startswith("1 file was read")
+    assert ds.count_line({"used": []}) == "" and ds.count_line(ds.statement({"parts": []})) == ""

@@ -150,6 +150,19 @@ def statement(record: Any) -> Dict[str, Any]:
     return out
 
 
+def count_line(st: Dict[str, Any]) -> str:
+    """'64 files were read for this estimate: 13 PDF, 15 DXF, 36 MODEL.' '' when not recorded."""
+    used = st.get("used") or []
+    if not used:
+        return ""
+    kinds: Dict[str, int] = {}
+    for u in used:
+        kinds[str(u.get("kind") or "file")] = kinds.get(str(u.get("kind") or "file"), 0) + 1
+    n = len(used)
+    return (f"{n} file{'' if n == 1 else 's'} {'was' if n == 1 else 'were'} read for this estimate: "
+            + ", ".join(f"{c} {k}" for k, c in kinds.items()) + ".")
+
+
 def used_html(st: Dict[str, Any]) -> str:
     if not st.get("used"):
         return f"<p>{_e(NOT_RECORDED)}</p>"
@@ -185,12 +198,15 @@ def missing_html(st: Dict[str, Any]) -> str:
 def html(st: Dict[str, Any], heading: str = "h3") -> str:
     """Both halves under one heading, for the covering e-mail."""
     return (f"<{heading}>Drawings used, and drawings believed missing</{heading}>"
-            "<p><b>Drawings used in this estimate</b></p>" + used_html(st)
+            "<p><b>Drawings used in this estimate</b></p>"
+            + (f"<p>{_e(count_line(st))}</p>" if count_line(st) else "") + used_html(st)
             + not_read_html(st) + missing_html(st))
 
 
 def text(st: Dict[str, Any]) -> str:
     lines: List[str] = ["DRAWINGS USED IN THIS ESTIMATE"]
+    if count_line(st):
+        lines.append(count_line(st))
     lines += [f"- {u['name']} ({u['kind']}): {u['what']}" for u in st.get("used") or []] \
         or [NOT_RECORDED]
     if st.get("not_read"):
