@@ -3199,14 +3199,31 @@ Then go to the API once Acuity has given us the template and the access.
 
 **Also on Dave's sheet and already covered:** WO Suggestions; department hours (work-centre hours and load by week); the black week break lines (the board sorts by due date; week grouping is a display choice for LO-01). Comments, Prog and Tube req stay typed by Production (LO-01).
 
-### 22.21 RULE (James, 15 Nov): which drawing folders each tool searches – never Production
+### 22.21 RULE (James, 15 Nov): drawing sources – corrected
 
-- **TTi (prototype work):** search the **Design** and **Prototype** folders only, e.g. `W:\Prototype\TTi\…`.
-- **The AI runner (AI estimating):** search the **Design** folder only.
-- **Never search `W:\Production`.** That was never asked for.
-- **The mistake:** `src/live_enquiry_collector.py` (written in July) hard-codes `PRODUCTION_ROOT=W:\Production`, and the 14–15 Nov advice repeated it. That's why the 12736 pack missed the top-level GA and the design drawings. Production was the wrong place to look.
-- **Fix (waiting on James's go):**
-  - replace `PRODUCTION_ROOT` with the folder rules above, using the exact Design path from James;
-  - flag any pack with no top-level GA PDF as "GA missing", not complete.
-- **Nothing was deleted by any tool:** the collector only copies, and nothing in the repo deletes drawing files.
-- **Lesson:** check a tool's folder roots against James's rule before giving advice or building on it. Don't repeat what old code does.
+| Entry point | Drawing discovery |
+|---|---|
+| **TTi** | **Design first**, then **Prototype** as the fallback |
+| **AI runner** | **Design only**, including supplementary drawings |
+| Both | **No index dependency. No Production search, ever.** |
+
+**What went wrong on 12736 (James's own diagnosis):**
+- Discovery **found** the top-level PDF in Prototype: `12736-00-01`, the assembly PDF in the screenshot.
+- The saved pack was **reused as "unchanged"**.
+- Staging reported that PDF as unavailable, and **the estimate went ahead without it**.
+- So the failure is in pack reuse and staging, not in where we search. Adding another search area would not have fixed it.
+
+**My errors on 15 Nov, withdrawn:**
+1. I brought in Production.
+2. I assumed the top-level drawing ends in "-GA". It doesn't: here it is `12736-00-01`.
+3. I said no code deletes drawing files. That isn't supported: staging clears the copied inputs inside its own staging folder. That says nothing either way about W:.
+4. I proposed a broad recursive search. **Don't run it.**
+
+The draft collector change was **reverted, never committed and never pushed**.
+
+**The fix to make, in the code that ran 12736.** That's the staging / pack-reuse code on James's PC, which isn't in the repo copy here (it holds the July code).
+- **Before reusing a pack as "unchanged",** check that every file the discovery selected is present in staging.
+- **If the selected top-level drawing is missing from the staged pack, stop the estimate** with a clear message. It must never go ahead without it.
+- Keep the source rules above exactly.
+
+**Lesson:** don't diagnose from old code or a screenshot. Read the run's own discovery and staging reports first, and never give blanket assurances.
