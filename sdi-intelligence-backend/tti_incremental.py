@@ -312,6 +312,14 @@ class Store:
             if record['status'] != 'preview':
                 raise ReviewRequired('Preview already consumed; reconcile its task instead of submitting again')
             plan = json.loads(record['payload'])
+            # A BOUNDED-BATCH PREVIEW IS RUN BY ITS OWN ROUTE, AND NOTHING IS PRICED OVER AN UNREVIEWED BATCH
+            # (tti_batch_controls, 15 Nov 2026): the review gate holds for this button too.
+            if plan.get('control') == 'tti_batch_controls.v1':
+                raise ReviewRequired('Use the batch-controls route for this bounded preview')
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tti_batch_review'").fetchone():
+                if db.execute('SELECT 1 FROM tti_batch_review WHERE tracker=? AND reviewed_at IS NULL',
+                              (plan['tracker'],)).fetchone():
+                    raise ReviewRequired('Previous batch still needs review')
             if self.clock() - plan['created'] > max_age or self.clock() < plan['created']:
                 raise ReviewRequired('Preview expired; scan again')
             if snapshot_digest(current_rows) != plan['snapshot']:

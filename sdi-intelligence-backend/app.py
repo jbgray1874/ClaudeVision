@@ -621,6 +621,18 @@ def estimating_voice_script():
     return JSONResponse(status_code=404, content={"detail": "sdi-voice.js is not next to app.py"})
 
 
+# THE TTI BATCH CONTROLS' PAGE SCRIPT (15 Nov 2026): static, no job data and no key in it; it
+# calls the page's own authenticated helper.
+_TTI_BATCH_JS = Path(__file__).with_name("tti-batch-controls.js")
+
+
+@app.get("/estimating/tti-batch-controls.js")
+def estimating_tti_batch_script():
+    if _TTI_BATCH_JS.exists():
+        return FileResponse(str(_TTI_BATCH_JS), media_type="text/javascript", headers=_PAGE_HEADERS)
+    return JSONResponse(status_code=404, content={"detail": "tti-batch-controls.js is not next to app.py"})
+
+
 # THE TECHNICAL DESIGN WORKFLOW MAPS. Two standalone pages from Technical Design (full and
 # compact), served from workflows/ beside this file so they travel with the portal to every
 # box it runs on. A fixed list, not a path parameter read from disk: nothing a URL names can

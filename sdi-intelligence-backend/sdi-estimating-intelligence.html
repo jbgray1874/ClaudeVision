@@ -1083,6 +1083,16 @@
         <input id="ttiRows" placeholder="rows, e.g. 134,137 or 5-12 (blank: all)" style="flex:1;min-width:160px">
         <select id="ttiMethod"><option value="both">Full estimate</option><option value="targeted">Targeted</option><option value="deterministic">Drawing reader only (test)</option></select>
       </div>
+      <div style="display:flex;gap:14px;margin:8px 0;flex-wrap:wrap;align-items:center">
+        <label class="note" style="margin:0">Run the next <input id="ttiNext" type="number" min="1" max="50" placeholder="5" style="width:60px"> jobs not yet run</label>
+        <label class="note" style="margin:0">starting at sheet row <input id="ttiFrom" type="number" min="1" placeholder="top" style="width:70px"></label>
+        <input id="ttiDrawings" placeholder="or only these drawings, e.g. 12181-00-GA" style="flex:1;min-width:200px">
+      </div>
+      <p class="note" style="margin:0 0 8px"><b>Next jobs</b> are taken in sheet order: a drawing number, no cost in the cell, no earlier
+        attempt on record, not held. Leave the rows box empty when you use it. Two run at once; each result is saved as it finishes.
+        To price <b>one job</b>, name its row or its drawing.</p>
+      <label class="note" style="display:block;margin:0 0 8px"><input id="ttiAgain" type="checkbox"> <b>Run the named rows again.</b>
+        Only for rows that already finished. A new estimate is made; the earlier estimate and its files are kept; the AI cost is replaced when the new one finishes.</label>
       <button class="btn-run btn-measure" id="ttiFind" type="button">Find drawings only (changes nothing)</button>
       <button class="btn-run" id="ttiGo" type="button">Price the sheet and fill AICost</button>
       <p class="note" id="ttiStatus"></p>
@@ -1096,6 +1106,40 @@
       <button class="btn-run" id="ttiChgRun" type="button" disabled>Price the changes</button>
       <p class="note" id="ttiChgStatus"></p>
       <div id="ttiChgOut" class="sub" style="margin-top:8px;font-size:13px"></div>
+      <hr style="margin:14px 0;opacity:.3">
+      <!-- BOUNDED BATCHES BY PERMANENT ROW ID (package of 15 Nov 2026). Rows, Preview and Review
+           answer; Run stays off until the master tracker carries AI Row IDs and the safeguards
+           the service names are proved. Script: /estimating/tti-batch-controls.js -->
+      <section id="ttiCtl" aria-labelledby="ttiCtlTitle">
+        <h3 id="ttiCtlTitle" style="margin:0 0 6px">TTI batches on the master tracker (by permanent row)</h3>
+        <p class="note">Choose the next group in sheet order, or deliberately rerun completed rows. Maximum two jobs run at once. Every result is saved separately.
+          <b>Not in use yet:</b> it needs the AI Row ID column on the master tracker. Until then use the boxes above.</p>
+        <button class="btn-run btn-measure" id="ttiCtlLoad" type="button">Refresh row status</button>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin:12px 0">
+          <label>Action <select id="ttiCtlMode"><option value="next">Next unrun jobs</option><option value="rerun">Rerun selected completed rows</option></select></label>
+          <label>Jobs in next batch <input id="ttiCtlCount" type="number" value="5" min="1" max="50" style="width:65px"></label>
+          <label>Start from sheet row <input id="ttiCtlStart" type="number" value="1" min="1" max="1048576" style="width:90px"></label>
+        </div>
+        <p class="note" id="ttiCtlNextHelp">Blank/no-pack, held, completed and uncertain rows are skipped and explained. Changing the starting row never resets completed history.</p>
+        <div id="ttiCtlRerunFields" hidden>
+          <label>Why rerun? <input id="ttiCtlReason" maxlength="2000" style="width:70%" placeholder="For example: corrected timber costing"></label>
+          <p><label><input id="ttiCtlReplace" type="checkbox"> Replace the selected rows’ previous AI costs after successful runs; keep previous estimates and history.</label></p>
+        </div>
+        <button class="btn-run btn-measure" id="ttiCtlPreview" type="button">Preview selection (starts nothing)</button>
+        <button class="btn-run" id="ttiCtlRun" type="button" disabled>Run reviewed selection</button>
+        <p class="note" id="ttiCtlStatus" role="status" aria-live="polite">Refresh row status to begin. Pricing stays disabled until the required integrations are proved.</p>
+        <div id="ttiCtlSelection"></div>
+        <div style="max-height:360px;overflow:auto"><table class="tbl"><thead><tr><th>Rerun</th><th>Row</th><th>Drawing</th><th>Qty</th><th>Status</th><th>Reason</th></tr></thead><tbody id="ttiCtlRows"></tbody></table></div>
+        <fieldset id="ttiCtlReview" hidden>
+          <legend>Review the previous batch before the next</legend>
+          <p>Finished does not mean approved. Record corrections and outstanding estimating questions.</p>
+          <label><input id="ttiCtlOutputs" type="checkbox"> Required saved outputs checked</label>
+          <label><input id="ttiCtlCosts" type="checkbox"> Charges, model reads and missing costs reviewed</label>
+          <p><label>Review notes <textarea id="ttiCtlNotes" maxlength="4000" rows="3" style="width:90%"></textarea></label></p>
+          <button class="btn-run" id="ttiCtlReviewed" type="button">Record review</button>
+        </fieldset>
+        <p class="note">This control does not send estimates to clients. Recovery of an uncertain run is separate from rerunning it.</p>
+      </section>
     </section>
   </div>
 
@@ -3734,7 +3778,9 @@ async function ttiStart(dry){
   if(!dry && !confirm("Price every chosen row and write each unit cost into column P (AICost) of the sheet?\n\nClose the workbook in Excel first.")) return;
   $("ttiStatus").textContent = "starting…"; $("ttiOut").innerHTML = "";
   const r = await api("/api/estimate/tti/run", {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({sheet: $("ttiSheet").value.trim(), rows: $("ttiRows").value.trim(), method: $("ttiMethod").value, dry_run: !!dry})});
+    body: JSON.stringify({sheet: $("ttiSheet").value.trim(), rows: $("ttiRows").value.trim(), method: $("ttiMethod").value, dry_run: !!dry,
+      next: Number($("ttiNext").value) || 0, from_row: Number($("ttiFrom").value) || 0,
+      drawings: $("ttiDrawings").value.trim(), run_again: $("ttiAgain").checked})});
   const j = await r.json().catch(() => ({}));
   if(!r.ok){ $("ttiStatus").textContent = "Not started: " + (j.detail || r.status); return; }
   const poll = async () => { const s = await api(j.status_url); if(s.ok) ttiRender(await s.json()); };
@@ -5340,6 +5386,7 @@ refreshSelf();
 setInterval(refreshSelf, 20000);
 
 </script>
+<script src="/estimating/tti-batch-controls.js"></script>
 
 <script>
 /* Theme and page size — the same behaviour, and deliberately the SAME STORAGE KEYS, as the

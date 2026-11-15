@@ -418,6 +418,10 @@ def test_the_page_script_parses():
         pytest.skip("node is not installed here")
     blocks = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", _page(), re.S)
     assert blocks, "the page has no script block at all"
+    # A SCRIPT LOADED FROM A FILE has no body here; it is named, and checked by its own test
+    # (the TTI batch controls, 15 Nov 2026: tests/test_tti_batch_controls_page_script.py).
+    assert re.findall(r'<script\s+src="([^"]+)"', _page()) == ["/estimating/tti-batch-controls.js"]
+    blocks = [b for b in blocks if b.strip()]
     # THREE SINCE 2026-08-27: the sidebar toggle, the page's own script, and the theme/size
     # controls added when this page gained a light mode. Deliberate, and the count is updated
     # rather than loosened — the assertion exists so a new block cannot arrive unchecked, and

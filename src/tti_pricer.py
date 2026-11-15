@@ -909,6 +909,123 @@ def load_ledger(path: Optional[Path]) -> Dict[str, Any]:
         return {}
 
 
+def ledger_folders() -> List[Path]:
+    """Every folder a batch keeps a ledger in: the command line's (output/tti), the services'
+    shared state folder, and any named in SDI_TTI_LEDGER_DIRS."""
+    out = [ROOT / "output" / "tti"]
+    try:
+        _b = str(ROOT / "sdi-intelligence-backend")
+        if _b not in sys.path:
+            sys.path.append(_b)      # after src: the engine's own modules are found first
+        import estimate_email
+        out.append(estimate_email.state_dir() / "tti")
+    except Exception:                                                    # noqa: BLE001
+        pass
+    out += [Path(x.strip()) for x in os.getenv("SDI_TTI_LEDGER_DIRS", "").split("|") if x.strip()]
+    return out
+
+
+def load_ledgers(path: Optional[Path], folders: Optional[Iterable[Path]] = None
+                 ) -> Tuple[Dict[str, Any], List[str]]:
+    """ONE HISTORY FOR A SHEET, WHEREVER THE BATCH WAS STARTED (15 Nov 2026). The command line
+    kept its ledger in output/tti and the page's button kept its own in the state folder, so a
+    row the one had sent, and whose outcome was not known, looked never-run to the other. The
+    ledger of this sheet in every such folder is read; a row is taken from the one that wrote
+    it last. Returns (ledger, what was taken from elsewhere)."""
+    ledger = load_ledger(path)
+    said: List[str] = []
+    if path is None:
+        return ledger, said
+    for folder in (ledger_folders() if folders is None else folders):
+        other = Path(folder) / path.name
+        try:
+            if other.resolve() == path.resolve() or not other.is_file():
+                continue
+        except OSError:
+            continue
+        took = 0
+        for key, entry in load_ledger(other).items():
+            mine = ledger.get(key)
+            if not isinstance(entry, dict):
+                continue
+            if mine is None or str(entry.get("updated") or "") > str(mine.get("updated") or ""):
+                ledger[key] = entry
+                took += 1
+        if took:
+            said.append(f"{took} row(s) of history taken from {other}")
+    return ledger, said
+
+
+def numbers_in(text: Any) -> List[int]:
+    return sorted({int(x) for x in re.findall(r"\d+", str(text or ""))})
+
+
+def next_rows(rows: List[Dict[str, Any]], ledger: Dict[str, Any], from_row: int = 0,
+              held_rows: Iterable[int] = (), held_drawings: Iterable[str] = ()
+              ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """THE NEXT ROWS NOT YET RUN, IN SHEET ORDER (JG, 15 Nov 2026: "set the number of jobs we
+    want to run next based on where we are on the sheet list"). A row is next when it has a
+    drawing number, no cost in its cell, no earlier attempt of any kind on record, and is not
+    held. Every other row from the starting row on is returned with its reason; an earlier
+    attempt is never retried by being "next": it is named with --rows."""
+    held_rows = {int(x) for x in held_rows}
+    held_drawings = {str(d).strip().upper() for d in held_drawings if str(d).strip()}
+    seen = {}
+    for e in ledger.values():
+        if isinstance(e, dict) and e.get("row") is not None:
+            seen.setdefault((int(e["row"]), str(e.get("drawing") or "").upper()), e)
+    out: List[Dict[str, Any]] = []
+    passed: List[Dict[str, Any]] = []
+    for r in rows:
+        if r["row"] < int(from_row or 0):
+            continue
+        drawing = str(r.get("drawing") or "").upper()
+        before = seen.get((int(r["row"]), drawing))
+        why = ("no drawing number" if not drawing else
+               "held: this row is on the hold list" if r["row"] in held_rows else
+               "held: this drawing is on the hold list" if drawing in held_drawings else
+               "has a cost" if r.get("cost_before") not in (None, "") else
+               (f"an earlier attempt is on record ({before.get('state')}"
+                + (f", run {before.get('run_id')}" if before.get("run_id") else "")
+                + f"); name it with --rows {r['row']} to carry it on") if before else "")
+        if why:
+            passed.append({"row": r["row"], "drawing": r.get("drawing") or "", "why": why})
+        else:
+            out.append(r)
+    return out, passed
+
+
+def claim_one_writer(task: str) -> str:
+    """ONE WRITER ON THE TRACKER, THE COMMAND LINE INCLUDED (15 Nov 2026). The page's buttons
+    refused a second batch through a claim in the shared state folder; a batch started from a
+    command window took no claim, so the page could start another beside it. '' when this
+    process now holds the claim, else what to say."""
+    try:
+        _b = str(ROOT / "sdi-intelligence-backend")
+        if _b not in sys.path:
+            sys.path.append(_b)      # after src: the engine's own modules are found first
+        import estimate_email
+        import tti_batch_lock
+    except Exception as exc:                                             # noqa: BLE001
+        return f"the one-writer claim could not be loaded ({exc})"
+    try:
+        tti_batch_lock.claim(estimate_email.state_dir() / "tti" / "batch.lock", task, os.getpid())
+    except tti_batch_lock.Busy as exc:
+        return str(exc)
+    except OSError as exc:
+        return f"the one-writer claim could not be written ({exc})"
+    return ""
+
+
+def release_one_writer() -> None:
+    try:
+        import estimate_email
+        import tti_batch_lock
+        tti_batch_lock.release(estimate_email.state_dir() / "tti" / "batch.lock", os.getpid())
+    except Exception:                                                    # noqa: BLE001
+        pass
+
+
 def row_key(r: Dict[str, Any]) -> str:
     return f"{r['row']}|{(r.get('drawing') or '').upper()}|{r.get('quantity')}"
 
@@ -1096,6 +1213,14 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         if _absent:
             print(f"[tti] row(s) {', '.join(map(str, _absent))} named in --rows are not job rows "
                   f"of this sheet and are left out", flush=True)
+    _only = {d.strip().upper() for d in str(getattr(args, "drawings", "") or "").split(",") if d.strip()}
+    if _only:
+        # THE DRAWINGS NAMED, AND ONLY THEM: one job, or a few, picked by number.
+        _have = {str(r.get("drawing") or "").upper() for r in data["rows"]}
+        data["rows"] = [r for r in data["rows"] if str(r.get("drawing") or "").upper() in _only]
+        if _only - _have:
+            print(f"[tti] drawing(s) {', '.join(sorted(_only - _have))} named in --drawings are on no "
+                  f"job row of this sheet and are left out", flush=True)
     assign_run_keys(data["rows"])
     if data.get("cost_column") and data["cost_column"] != args.col_cost:
         print(f"[tti] {data.get('cost_column_said')}", flush=True)
@@ -1149,8 +1274,29 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                               "rows": []}
 
     lpath = ledger_path(sheet, status_path)
-    ledger = load_ledger(lpath)
+    ledger, _elsewhere = load_ledgers(lpath, getattr(args, "ledger_folders", None) or ())
     report["ledger"] = str(lpath) if lpath else None
+    for _line in _elsewhere:
+        print(f"[tti] ledger: {_line}", flush=True)
+    _next = max(0, int(getattr(args, "next", 0) or 0))
+    _sent = 0
+    _again = bool(getattr(args, "run_again", False))
+    if _next:
+        data["rows"], _passed = next_rows(
+            data["rows"], ledger, int(getattr(args, "from_row", 0) or 0),
+            numbers_in(getattr(args, "hold_rows", "")),
+            str(os.getenv("SDI_TTI_HOLD_OUT", "")).split(","))
+        report["next"] = {"asked": _next, "from_row": int(getattr(args, "from_row", 0) or 0),
+                          "passed_over": _passed}
+        _by: Dict[str, int] = {}
+        for _p in _passed:
+            _by[_p["why"].split(" (")[0].split(":")[0]] = _by.get(_p["why"].split(" (")[0].split(":")[0], 0) + 1
+        print(f"NEXT {_next}: the next {_next} row(s) not yet run, in sheet order"
+              + (f", from row {report['next']['from_row']}" if report["next"]["from_row"] else "")
+              + ". Passed over: " + ("; ".join(f"{n} {k}" for k, n in _by.items()) or "none"), flush=True)
+        for _p in _passed:
+            if _p["why"].startswith(("held", "an earlier")):
+                print(f"{'':<6}row {_p['row']} {_p['drawing']}: {_p['why']}", flush=True)
 
     def save() -> None:
         # THE BATCH'S PULSE (SCRUM-271 review): Grid Control calls a batch stopped when this has
@@ -1175,6 +1321,10 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     def record(item: Dict[str, Any], r: Dict[str, Any], manifest: Optional[Dict[str, Any]]) -> None:
         """The row's line in the ledger: pack, run, workbook, cost, assumptions, write-back."""
         e = ledger.setdefault(row_key(r), {})
+        if e.get("run_id") and item.get("run_id") and e["run_id"] != item["run_id"]:
+            # A ROW RUN AGAIN KEEPS ITS EARLIER RUN ON RECORD: nothing of it is overwritten.
+            e.setdefault("earlier", []).append({k: e.get(k) for k in (
+                "run_id", "state", "unit_cost", "workbook", "written", "updated", "pack_key", "approval")})
         e.update({"row": r["row"], "drawing": r.get("drawing"), "quantity": r.get("quantity"),
                   "pack_key": pack_key(manifest), "pack_status": (manifest or {}).get("status"),
                   "inputs": item.get("inputs") or e.get("inputs"),
@@ -1261,6 +1411,9 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             _waiting(30)
 
     for r in data["rows"]:
+        if _next and _sent >= _next:
+            report["next"]["stopped_before_row"] = r["row"]
+            break
         # A ROW FOR A DRAWING STILL RUNNING WAITS FOR IT: its cost may be that run's break.
         if r.get("drawing") and any(x[1].get("drawing") == r["drawing"] for x in in_flight):
             _finish_one(r["drawing"])
@@ -1450,6 +1603,18 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         # result, or a changed pack, is submitted again.
         _prev = ledger.get(row_key(r)) or {}
         st = None
+        if _again and not (str(_prev.get("state")) == "done" and _prev.get("unit_cost") is not None
+                           and _prev.get("run_id")):
+            # RUN AGAIN IS FOR A ROW THAT FINISHED (JG, 15 Nov 2026: "re run a row we already
+            # have ran"). A row never run is simply run; one whose last attempt failed, is still
+            # going or has an unknown outcome is recovered, which is a different thing.
+            item.update(state="held: not a finished row",
+                        why=("this row has no finished run on record"
+                             + (f" (its last attempt: {_prev.get('state')})" if _prev else "")
+                             + "; --run-again starts a new estimate only for a row that finished. "
+                               "Nothing was sent"))
+            save()
+            continue
         _wo = bool(getattr(args, "write_only", False))
         _moved = changed_inputs(_prev.get("inputs"), item["inputs"])
         if _wo and _moved and _prev.get("run_id"):
@@ -1486,7 +1651,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 record(item, r, manifest)
                 save()
                 st = wait_for(portal, item["run_id"], sleep=_waiting)
-            elif _ps == "done" and unit_cost_of(_pst, r["quantity"]) is not None:
+            elif _ps == "done" and unit_cost_of(_pst, r["quantity"]) is not None and not _again:
                 item.update(run_id=_prev["run_id"], resumed=f"run {_prev['run_id']} from an earlier batch already finished; its result is used")
                 st = _pst
         if st is None and _wo and _prev.get("unit_cost") is not None:
@@ -1583,6 +1748,10 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 save()
                 continue
             item.update(state="running", run_id=started.get("run_id"))
+            _sent += 1
+            if _again and _prev.get("run_id") and _prev["run_id"] != item["run_id"]:
+                item["run_again"] = (f"run again by request; the earlier run {_prev['run_id']} "
+                                     f"({_prev.get('unit_cost')}) and its files are kept")
             record(item, r, manifest)
             save()
             if at_once > 1:
@@ -1655,6 +1824,18 @@ def build_parser() -> argparse.ArgumentParser:
                          "its own drawing index, then stop; nothing is priced")
     ap.add_argument("--sheet-name", default="", help="the tab; default the active one")
     ap.add_argument("--rows", default="", help="sheet rows to price: a range (5-12), a list (134,137) or both")
+    ap.add_argument("--next", type=int, default=0, metavar="N",
+                    help="price the next N rows not yet run, in sheet order: a drawing number, no cost, "
+                         "no earlier attempt on record, not held. Rows that find no pack are listed and "
+                         "do not count. Stops once N estimates are started")
+    ap.add_argument("--from-row", type=int, default=0, help="with --next: start looking at this sheet row")
+    ap.add_argument("--hold-rows", default=os.getenv("SDI_TTI_HOLD_ROWS", ""),
+                    help="with --next: sheet rows never taken as next (e.g. 136,99,126)")
+    ap.add_argument("--drawings", default="", help="only the rows for these drawing numbers (comma separated)")
+    ap.add_argument("--run-again", action="store_true",
+                    help="start a NEW estimate for rows that already finished, named with --rows or "
+                         "--drawings. The earlier estimate, its files and its run stay on record; the "
+                         "cost cell is replaced when the new run finishes")
     ap.add_argument("--walk-live", action="store_true",
                     help="list both drawing areas live when the index cannot be used (hours on a VPN)")
     ap.add_argument("--use-index", action="store_true",
@@ -1739,12 +1920,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "tracker's https address from Excel's File > Info > Copy path), or pass "
                              "--central-sheet \"\" to run without it.")
         args.central_sheet = ""
+    if args.run_again:
+        if not (str(args.rows or "").strip() or str(args.drawings or "").strip()) or args.next:
+            _parser.error("--run-again needs the rows or drawings named (--rows / --drawings), and not --next")
+        args.replace_costs = True
+    if args.next and str(args.rows or "").strip():
+        _parser.error("--next chooses the rows itself; give --from-row, not --rows")
+    if args.next:
+        args.drawings_only = True
     portal = None
     if not args.dry_run:
+        _busy = claim_one_writer(Path(args.status_file).stem if args.status_file else "command line")
+        if _busy:
+            raise SystemExit(f"{_busy} Nothing was queued or written.")
+        args.ledger_folders = ledger_folders()
         import live_enquiry_runner as ler
         portal = ler.Portal(args.server, args.api_key, timeout=600)
     status = Path(args.status_file) if args.status_file else (ROOT / "output" / "tti" / "last_tti_run.json")
-    rep = run_batch(args, portal, status)
+    try:
+        rep = run_batch(args, portal, status)
+    finally:
+        if not args.dry_run:
+            release_one_writer()
     ro = rep["roots"]
     for k in ("design", "prototype"):
         state = f"{ro[k + '_folders']} folder(s)" if ro[k + "_readable"] else "NOT READABLE from this window"

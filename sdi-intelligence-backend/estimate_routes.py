@@ -1428,6 +1428,10 @@ class TTIRequest(BaseModel):
     sheet_name: str = ""
     at_once: int = 2
     drawings_only: bool = True
+    next: int = 0                # the next N rows not yet run, in sheet order
+    from_row: int = 0
+    drawings: str = ""           # only these drawing numbers
+    run_again: bool = False      # a new estimate for named rows that already finished
 
 
 # THE ROWS THE BATCH ITSELF ACCEPTS (15 Nov 2026): a row, a range, a list, or a mix
@@ -1443,7 +1447,8 @@ def _tti_lock_file() -> Path:
 
 def _tti_batch_args(sheet: Path, method: str, server: str, status: Path, rows: str = "",
                     sheet_name: str = "", dry_run: bool = False, at_once: int = 2,
-                    drawings_only: bool = True) -> List[str]:
+                    drawings_only: bool = True, next_n: int = 0, from_row: int = 0,
+                    drawings: str = "", run_again: bool = False) -> List[str]:
     """The batch's command line, the same for the sheet button and the changes button: the rows
     named exactly, two estimates open at most (one per Grid Runner), and only rows that carry a
     drawing number priced; the rest are listed, never estimated from their notes unasked."""
@@ -1458,6 +1463,14 @@ def _tti_batch_args(sheet: Path, method: str, server: str, status: Path, rows: s
         args += ["--sheet-name", sheet_name]
     if dry_run:
         args.append("--dry-run")
+    if next_n:
+        args += ["--next", str(int(next_n))]
+        if from_row:
+            args += ["--from-row", str(int(from_row))]
+    if drawings:
+        args += ["--drawings", re.sub(r"\s*[,;]\s*", ",", drawings.strip())]
+    if run_again:
+        args.append("--run-again")
     return args
 
 
@@ -1581,11 +1594,22 @@ def tti_run(req: TTIRequest, request: Request, x_sdi_key: Optional[str] = Header
         raise HTTPException(400, f"Unknown method {req.method!r}.")
     if req.rows and not _TTI_ROWS.fullmatch(req.rows):
         raise HTTPException(400, "Rows are sheet rows, ranges or both, e.g. 134,137 or 5-12.")
+    if req.drawings and not re.fullmatch(r"[\w .,;-]{1,400}", req.drawings):
+        raise HTTPException(400, "Drawings are drawing numbers separated by commas, e.g. 12181-00-GA.")
+    if not 0 <= int(req.next or 0) <= 50 or int(req.from_row or 0) < 0:
+        raise HTTPException(400, "Next is a whole number of jobs from 1 to 50.")
+    if req.next and (req.rows or req.run_again):
+        raise HTTPException(400, "Next chooses the rows itself: leave the rows box empty, and "
+                                 "run a row again by naming it.")
+    if req.run_again and not (req.rows or req.drawings):
+        raise HTTPException(400, "Run again needs the rows or drawings named. Nothing was started.")
     tid = uuid.uuid4().hex[:8]
     status = _tti_status_file(tid)
     server = str(request.base_url).rstrip("/")
     args = _tti_batch_args(sheet, req.method, server, status, rows=req.rows, sheet_name=req.sheet_name,
-                           dry_run=req.dry_run, at_once=req.at_once, drawings_only=req.drawings_only)
+                           dry_run=req.dry_run, at_once=req.at_once, drawings_only=req.drawings_only,
+                           next_n=req.next, from_row=req.from_row, drawings=req.drawings,
+                           run_again=req.run_again)
     _tti_spawn(args, status, x_sdi_key, writes=not req.dry_run, tid=tid)
     _TTI_TASKS[tid] = {"sheet": str(sheet), "dry_run": req.dry_run, "started_at": time.time()}
     return {"task_id": tid, "status_url": f"/api/estimate/tti/{tid}", "dry_run": req.dry_run}
@@ -1680,6 +1704,54 @@ def _tti_changes_router() -> APIRouter:
 
 
 router.include_router(_tti_changes_router())
+
+
+# ── BOUNDED BATCHES AND DELIBERATE RERUNS BY PERMANENT ROW ID (package of 15 Nov 2026) ──────
+# "set the number of jobs we want to run next based on where we are on the sheet list ... a
+# re-run ... so that we can re run a row we already have ran" (JG). Rows, Preview and Review
+# answer; RUN IS OFF and stays off until the seven capabilities the controller names are built
+# and proved (cost written by row ID, the checked pack pinned, one locked writer, ...). The
+# submit below therefore never starts anything. Same store, tracker and reconcile as the
+# changes button, so both see one reservation and one review gate.
+def _tti_batch_submit_not_built(*_a: Any, **_k: Any) -> Dict[str, Any]:
+    raise RuntimeError("The bounded-batch submit is not built; nothing was started.")
+
+
+_TTI_BATCH_CONTROLS: Dict[str, Any] = {}
+
+
+class _TTIBatchControls:
+    """The controller, made on first use where the state folder then is (it opens the store)."""
+
+    def __getattr__(self, name: str) -> Any:
+        import tti_batch_controls
+        import tti_batch_lock
+        import tti_changes
+        where = str(estimate_email.state_dir() / "tti")
+        controls = _TTI_BATCH_CONTROLS.get(where)
+        if controls is None:
+            store = _TTIChangesStore()
+            held = tuple(h.strip() for h in os.getenv("SDI_TTI_HOLD_OUT", "").split(",") if h.strip())
+            controls = _TTI_BATCH_CONTROLS[where] = tti_batch_controls.BatchControls(
+                store,
+                snapshot=tti_changes.make_snapshot(lambda: _ENGINE_PYTHON, _REPO_ROOT,
+                                                   lambda: estimate_email.state_dir() / "tti"),
+                submit=_tti_batch_submit_not_built, busy=_tti_busy,
+                reconcile=tti_changes.make_reconcile(
+                    store, _tti_status_of, lambda: tti_batch_lock.holder(_tti_lock_file())),
+                enabled=lambda: False, capabilities=(),
+                **({"held_drawings": held} if held else {}))
+        return getattr(controls, name)
+
+
+def _tti_batches_router() -> APIRouter:
+    import tti_batch_controls_routes
+    import tti_changes
+    return tti_batch_controls_routes.make_router(
+        _TTIBatchControls(), check_key=_check_key, allowed_trackers=(tti_changes.TRACKER_ID,))
+
+
+router.include_router(_tti_batches_router())
 
 
 @router.get("/wall")

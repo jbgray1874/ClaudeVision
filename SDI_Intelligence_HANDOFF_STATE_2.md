@@ -76,6 +76,28 @@ estimate. A second click or an uncertain reply never makes a duplicate, across b
 `SDI_TTI_CHANGES_RUN` stays unset until all five are proved. "Price the sheet" on the page runs
 the same batch as the command line and is the first button to move to; it has no take-up.
 
+**Choosing what runs (15 Nov 2026, JG: "set the number of jobs we want to run next based on
+where we are on the sheet list ... re run a row we already have ran").** Two layers:
+
+  * WORKS ON THE SHEET AS IT IS (batch and "Price the sheet" button): `--next N` takes the next N
+    rows not yet run in sheet order (a drawing number, no cost, no earlier attempt on record, not
+    in `--hold-rows` / `SDI_TTI_HOLD_ROWS` / `SDI_TTI_HOLD_OUT`); a row that finds no pack is
+    listed and uses no place; `--from-row` moves where looking starts; `--drawings` names jobs by
+    number; `--run-again` with rows or drawings named makes a NEW estimate for a row that
+    FINISHED, keeps the earlier run in the ledger under `earlier`, and replaces the cost when the
+    new run ends. A failed or unknown attempt is never "run again": that is recovery
+    (`--take-up`, `--resubmit-lost`). The command line now takes the same one-writer claim as the
+    page (`state\tti\batch.lock`) and a sheet's ledger is read from every folder a batch keeps
+    one in. Tested, not yet deployed or proved.
+  * BY PERMANENT ROW ID (reviewed package `tti_batch_controls`, routes
+    `/api/estimate/tti/batches/{rows,preview,run,review}`, the lower panel in the TTI card): next
+    N, deliberate rerun with a reason, and a review gate before the next batch. RUN IS OFF and its
+    submit raises: it needs the AI Row ID column on the master and the seven capabilities the
+    controller names (`stable_id_writeback`, `locked_writer`, `pack_input_pinning`,
+    `durable_idempotent_submit`, `row_isolation`, `versioned_outputs`, `per_row_persistence`).
+    Do not pass capability names to make the button clickable. A "Review / rerun" hyperlink
+    column in the tracker (`#tti-row-id=<id>`) selects a row on the page and starts nothing.
+
 **Costing questions open on 12181-00-GA (run e2639e873262), for estimating, not to be guessed:**
 timber cut from length sits on the Other Sheet row, which cannot price it (how does SDI price
 timber sections?); two plywood pieces from files `_1_PLY` / `_2_PLY` under a part stated 18 mm

@@ -83,3 +83,17 @@ def claim(path: Path, task_id: str, pid: int, alive: Callable[[Any], bool] = pid
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps({"task_id": task_id, "pid": int(pid), "started": now()}), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def release(path: Path, pid: int) -> None:
+    """Give the claim up, if it is this process's. Another batch's claim is never removed."""
+    path = Path(path)
+    try:
+        held = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if isinstance(held, dict) and int(held.get("pid") or 0) == int(pid):
+        try:
+            path.unlink()
+        except OSError:
+            pass
