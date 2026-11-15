@@ -265,49 +265,130 @@ def _mtime(p: Path) -> float:
     return _MTIME[k]
 
 
-def area_listings(design: Path, proto: Path, walk_live: bool = False
+def batch_roots() -> Tuple[Path, Path]:
+    """The two folders this batch finds its drawings in: its client's Design and Prototype areas."""
+    from drive_map import to_unc
+    return (Path(to_unc(os.getenv("SDI_TTI_DESIGN_ROOT") or DEFAULT_DESIGN)),
+            Path(to_unc(os.getenv("SDI_TTI_PROTOTYPE_ROOT") or DEFAULT_PROTOTYPE)))
+
+
+def scoped_index_path(client: str = "TTI") -> Path:
+    """THE BATCH'S OWN INDEX (JG, 15 Nov 2026: "we only need TTI indexed... why are we indexing
+    all clients"). The batch reads two folders. The only index it could use was the one of every
+    customer on the share, some 230,000 folders and hours over a VPN to make. This one holds the
+    batch's two folders and nothing else; --refresh-index makes it. SDI_TTI_INDEX moves it."""
+    named = os.getenv("SDI_TTI_INDEX", "").strip().strip('"')
+    if named:
+        return Path(named)
+    tag = re.sub(r"[^a-z0-9]+", "_", str(client or "tti").lower()).strip("_") or "tti"
+    return ROOT / "output" / f"drawing_index_{tag}" / "index.json.gz"
+
+
+def refresh_scoped_index(client: str = "TTI", say: Any = None) -> int:
+    """List the batch's two folders, and only those, into its own index. 0 when both were read."""
+    sys.path.insert(0, str(HERE))
+    import drawing_index as di
+    say = say or (lambda line: print(line, flush=True))
+    design, proto = batch_roots()
+    path = scoped_index_path(client)
+    cfg = di.settings()
+    say(f"[tti] listing this batch's two folders only, into {path}")
+    say(f"[tti]   {design}")
+    say(f"[tti]   {proto}")
+    s = di.refresh([design, proto], path, cfg["depth"], full=False, progress=say,
+                   recent_days=cfg["recent_days"])
+    for r, v in s["roots"].items():
+        say(f"{r}  {'readable' if v.get('readable') else 'NOT READABLE from this window'}")
+    last = s["last"]
+    say(f"{s['folders']} folder(s), {s['drawings']} drawing file(s); listed {last.get('listed')}, "
+        f"reused {last.get('reused')}, resumed from a stopped listing {last.get('resumed', 0)}, "
+        f"dormant (not checked) {last.get('dormant', 0)}, unreadable {last.get('unreadable')} "
+        f"in {last.get('seconds')} s")
+    ok = all(v.get("readable") for v in s["roots"].values())
+    if not ok:
+        say("[tti] A folder could not be read from this window, so the batch will not use this "
+            "index. Check the share is reachable and run --refresh-index again.")
+    return 0 if ok else 2
+
+
+def _index_at(di: Any, index_file: Path) -> Tuple[Optional[Dict[str, Any]], Optional[Path]]:
+    try:
+        db = di.db_path(index_file)
+        if not db.exists() and index_file.exists():
+            di.build_db(di.load(index_file) or {}, db)              # once, from the index already built
+        return (di.db_meta(db), db) if db.exists() else (None, None)
+    except Exception:                                                    # noqa: BLE001
+        return None, None
+
+
+def area_listings(design: Path, proto: Path, walk_live: bool = False, client: str = "TTI"
                   ) -> Tuple[List[Tuple[str, List[Path]]], str]:
-    """The folders of both areas, from the drawing index where it is fresh and covers them,
-    else walked live; and which of the two it was, said on the status and the console."""
+    """The folders of both areas: from the batch's own index where it is fresh and covers them,
+    else from the index of the whole share where that is, else walked live only when asked; and
+    which of the three it was, said on the status and the console."""
     try:
         sys.path.insert(0, str(HERE))
         import drawing_index as di
         cfg = di.settings()
-        db = di.db_path(cfg["path"])
-        if not db.exists() and cfg["path"].exists():
-            di.build_db(di.load(cfg["path"]) or {}, db)          # once, from the index already built
-        idx = di.db_meta(db) if db.exists() else None
     except Exception:                                                    # noqa: BLE001
-        idx, cfg, di, db = None, None, None, None
-    if idx and di.is_fresh(idx, cfg["max_hours"]) and di.covers(idx, design) and di.covers(idx, proto):
-        out = []
-        for area, root in (("design", design), ("prototype", proto)):
-            folders = []
-            for folder, files in di.db_folders_under(db, root):
-                folders.append(folder)
-                _FILES[str(folder)] = sorted(f for f, _s, _m in files)
-                for f, s, m in files:
-                    _MTIME[str(f)] = m
-                    _SIZE[str(f)] = s
-            out.append((area, folders))
-        return out, f"drawing index built {datetime.fromtimestamp(idx['built_at']).isoformat(timespec='minutes')}"
-    why = ("no drawing index" if not idx else "the drawing index is stale" if not di.is_fresh(idx, cfg["max_hours"])
-           else "the drawing index does not cover these folders")
+        di, cfg = None, None
+    seen: List[Tuple[str, Dict[str, Any], Path]] = []
+    if di is not None:
+        for label, index_file in (("batch's own drawing index", scoped_index_path(client)),
+                                  ("drawing index", cfg["path"])):
+            idx, db = _index_at(di, index_file)
+            if idx is None:
+                continue
+            seen.append((label, idx, db))
+            if not (di.is_fresh(idx, cfg["max_hours"]) and di.covers(idx, design) and di.covers(idx, proto)):
+                continue
+            out = []
+            for area, root in (("design", design), ("prototype", proto)):
+                folders = []
+                for folder, files in di.db_folders_under(db, root):
+                    folders.append(folder)
+                    _FILES[str(folder)] = sorted(f for f, _s, _m in files)
+                    for f, s, m in files:
+                        _MTIME[str(f)] = m
+                        _SIZE[str(f)] = s
+                out.append((area, folders))
+            # "drawing index" opens the source either way: the batch reads its rows from the
+            # lookup database whenever the source starts with those words.
+            return out, (f"drawing index built {datetime.fromtimestamp(idx['built_at']).isoformat(timespec='minutes')}"
+                         + (" (this batch's own two folders)" if label != "drawing index" else ""))
+
+    def _why(idx: Dict[str, Any]) -> str:
+        return "is stale" if not di.is_fresh(idx, cfg["max_hours"]) else "does not cover these folders"
+
+    why = "; ".join(f"the {label} {_why(idx)}" for label, idx, _db in seen) or "no drawing index"
     # AN INDEX THAT CANNOT BE USED STOPS THE BATCH; IT DOES NOT START A TEN-HOUR LISTING IN
     # SILENCE (15 Nov 2026). A refresh that ran while the share was away marked both areas
-    # unreadable. The batch then listed every folder of both areas itself, some 230,000 over
-    # a VPN, printing nothing: one dry run sat for ten hours and a two-row run would have done
-    # the same. Where an index exists, the batch now says why it cannot use it, how to put
-    # that right in minutes, and stops. --walk-live asks for the long listing by name. With
-    # no index at all there is nothing to refresh, so the areas are listed, and said so.
-    if idx and not walk_live:
+    # unreadable. The batch then listed every folder of both areas itself over a VPN, printing
+    # nothing: one dry run sat for ten hours and a two-row run would have done the same. Where
+    # an index exists, the batch says why it cannot use it, how to put that right, and stops.
+    # THE REMEDY IS THE BATCH'S OWN TWO FOLDERS, NOT EVERY CUSTOMER: the remedy first given was
+    # the whole-share refresh, which ran for hours listing customers this batch never reads.
+    # --walk-live asks for the listing inside the run by name. With no index at all there is
+    # nothing to refresh, so the two folders are listed, and said so.
+    if seen and not walk_live:
+        held = ""
+        try:
+            n = sum(len(di.db_folders_under(seen[0][2], root, include_archive=True)) for root in (design, proto))
+            if n:
+                held = f"The last listing of them held {n} folder(s).\n"
+        except Exception:                                                # noqa: BLE001
+            held = ""
         raise IndexNotUsable(
             f"The drawing index cannot be used: {why}. Nothing was listed, queued or written.\n"
-            f"Refresh it (minutes): python src\\drawing_index.py --build\n"
-            f"It must print both drawing areas as 'readable'. Then run this again.\n"
-            f"To list both areas live instead (about 230,000 folders, hours on a VPN), add --walk-live.")
-    print(f"[tti] LISTING BOTH DRAWING AREAS LIVE ({why}). On the real share this is some "
-          f"230,000 folders and takes hours; progress is printed as it goes.", flush=True)
+            f"List this batch's own two folders, and only those: python src\\tti_pricer.py --refresh-index\n"
+            f"  {design}\n  {proto}\n"
+            f"{held}"
+            f"It must print both as 'readable'. A listing that is stopped carries on where it left "
+            f"off when run again. Then run this again.\n"
+            f"To list the two folders live inside this run instead, add --walk-live.")
+    print(f"[tti] LISTING THIS BATCH'S TWO DRAWING FOLDERS LIVE ({why}). Over a VPN this can take "
+          f"hours; progress is printed as it goes. python src\\tti_pricer.py --refresh-index lists "
+          f"them once and keeps the result.", flush=True)
     return [("design", list_folders(design)), ("prototype", list_folders(proto))], f"walked live ({why})"
 
 
@@ -832,9 +913,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     if data.get("cost_column") and data["cost_column"] != args.col_cost:
         print(f"[tti] {data.get('cost_column_said')}", flush=True)
         args.col_cost = data["cost_column"]
-    from drive_map import to_unc
-    design = Path(to_unc(os.getenv("SDI_TTI_DESIGN_ROOT") or DEFAULT_DESIGN))
-    proto = Path(to_unc(os.getenv("SDI_TTI_PROTOTYPE_ROOT") or DEFAULT_PROTOTYPE))
+    design, proto = batch_roots()
     _FILES.clear()
     _MTIME.clear()
     _SIZE.clear()
@@ -844,7 +923,8 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                          f"would be priced without its drawings. Nothing was queued or written. Set "
                          f"SDI_DRIVE_MAP (W=\\\\server\\share) or the two SDI_TTI_*_ROOT settings, and run "
                          f"--dry-run until rows show their folders.")
-    listings, source = area_listings(design, proto, walk_live=bool(getattr(args, "walk_live", False)))
+    listings, source = area_listings(design, proto, walk_live=bool(getattr(args, "walk_live", False)),
+                                     client=str(getattr(args, "client", "") or "TTI"))
     _DB_ROWS.clear()
     if source.startswith("drawing index"):
         _DB_ROWS.append(True)
@@ -1284,7 +1364,10 @@ def _finish_body(item, r, manifest, st, *, args, sheet, data, writer, priced, ru
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--sheet", required=True)
+    ap.add_argument("--sheet", default="", help="the tracker workbook (needed for everything but --refresh-index)")
+    ap.add_argument("--refresh-index", action="store_true",
+                    help="list this batch's own Design and Prototype folders, and only those, into "
+                         "its own drawing index, then stop; nothing is priced")
     ap.add_argument("--sheet-name", default="", help="the tab; default the active one")
     ap.add_argument("--rows", default="", help="sheet rows to price: a range (5-12), a list (134,137) or both")
     ap.add_argument("--walk-live", action="store_true",
@@ -1342,7 +1425,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         import config  # noqa: F401  (loads .env)
     except Exception:                                                    # noqa: BLE001
         pass
-    args = build_parser().parse_args(argv)
+    _parser = build_parser()
+    args = _parser.parse_args(argv)
+    if args.refresh_index:
+        return refresh_scoped_index(args.client)
+    if not str(args.sheet or "").strip():
+        _parser.error("--sheet is required")
     # THE CENTRAL SHEET IS AN ADDRESS OR A FILE, CHECKED BEFORE ANYTHING RUNS (11 Nov 2026): the
     # setting held the PowerShell lines that were meant to set it ("cd C:\ClaudeVision
     # Add-Content .env ..."), and the batch would have handed that to Excel row after row.

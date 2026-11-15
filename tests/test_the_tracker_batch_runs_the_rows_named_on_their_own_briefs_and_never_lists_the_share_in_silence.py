@@ -155,7 +155,10 @@ def test_an_index_whose_areas_were_unreadable_stops_the_batch_and_says_how_to_me
     with pytest.raises(SystemExit) as stop:
         tp.area_listings(design, proto)
     said = str(stop.value)
-    assert "does not cover" in said and "drawing_index.py --build" in said and "--walk-live" in said
+    # THE REMEDY IS THE BATCH'S OWN TWO FOLDERS (JG, 15 Nov 2026: "we only need TTI indexed...
+    # why are we indexing all clients"): the whole-share refresh first named here ran for hours.
+    assert "does not cover" in said and "tti_pricer.py --refresh-index" in said and "--walk-live" in said
+    assert "drawing_index.py --build" not in said and str(design) in said and str(proto) in said
     assert walked == [], "the share was listed although the index could not be used"
 
 
@@ -172,7 +175,7 @@ def test_walk_live_lists_the_areas_and_says_it_is_doing_so(tmp_path, monkeypatch
     _index(monkeypatch, tmp_path, readable=False).extend([design, proto])
     listings, source = tp.area_listings(design, proto, walk_live=True)
     assert source.startswith("walked live") and listings[0][1], "the design area was not listed"
-    assert "LISTING BOTH DRAWING AREAS LIVE" in capsys.readouterr().out
+    assert "LISTING THIS BATCH'S TWO DRAWING FOLDERS LIVE" in capsys.readouterr().out
 
 
 def test_a_fresh_index_that_covers_both_areas_is_used_and_nothing_is_listed(tmp_path, monkeypatch):

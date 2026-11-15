@@ -21,6 +21,13 @@ the index as it was, sub-folders included, without being listed again; only chan
 a listing. A file edited in place does not change its folder's time, so its size and date can lag
 until the weekly full listing (SDI_DRAWING_INDEX_FULL_DAYS, 7).
 
+SEVERAL FOLDERS AT ONCE, AND A STOPPED LISTING CARRIES ON (15 Nov 2026). Over the VPN one folder
+takes about 150 ms to answer, so SDI_DRAWING_INDEX_WORKERS (8) folders are asked together, level
+by level, in one order whatever the number, so the index made is the same. Progress is saved as
+it goes to index.json.gz.partial, which is never an index; the next listing of the same roots
+takes what it holds as listed, and it is removed when a listing completes. NOTHING ON THE SHARE
+IS EVER WRITTEN, MOVED OR REMOVED: folders are listed and file names, sizes and dates read.
+
 WHERE IT IS KEPT. SDI_DRAWING_INDEX (output\\drawing_index\\index.json.gz), compressed, written
 whole and swapped in, so a reader never sees half of one. An index older than
 SDI_DRAWING_INDEX_MAX_HOURS (26) is stale, and a reader walks the share instead and says so.
@@ -88,6 +95,54 @@ def save(path: Path, index: Dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+# ── a stopped listing is not lost (15 Nov 2026) ──────────────────────────────────────────
+# The index is written once, when a listing ends. Two full listings stopped part-way saved
+# nothing, and a "quick" refresh then listed 150,000 folders afresh over four hours with the
+# same all-or-nothing ending. Progress is now saved as it goes to a PARTIAL file beside the
+# index. It is never the index: its schema is its own, so load(), is_fresh(), covers() and every
+# reader refuse it. The next listing of the same roots takes each folder it holds as already
+# listed, and the file is removed when a listing completes.
+PARTIAL_SCHEMA = "drawing_index.partial.v1"
+PARTIAL_TRUST_HOURS = 12.0      # a folder listed this recently is taken as listed, unasked
+PARTIAL_KEEP_DAYS = 7.0         # older than this, a partial file is ignored
+
+
+def partial_path(index_path: Path) -> Path:
+    return index_path.with_name(index_path.name + ".partial")
+
+
+def _roots_key(roots: Iterable[Any], depth: int) -> str:
+    return json.dumps([sorted(os.path.normcase(os.path.normpath(str(r))) for r in roots), int(depth)])
+
+
+def load_partial(index_path: Path, roots: Iterable[Any], depth: int, now: float) -> Dict[str, Any]:
+    """{"started", "folders"} of an unfinished listing of these same roots, or {} (none, another
+    listing's, too old, or unreadable)."""
+    try:
+        with gzip.open(partial_path(index_path), "rt", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError, EOFError):
+        return {}
+    if not isinstance(data, dict) or data.get("schema") != PARTIAL_SCHEMA \
+            or data.get("key") != _roots_key(roots, depth) or not isinstance(data.get("folders"), dict):
+        return {}
+    started = float(data.get("started") or 0)
+    if now - started > PARTIAL_KEEP_DAYS * 86400:
+        return {}
+    return {"started": started, "folders": data["folders"]}
+
+
+def save_partial(index_path: Path, roots: Iterable[Any], depth: int, started: float,
+                 folders: Dict[str, Any]) -> None:
+    p = partial_path(index_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.tmp")
+    with gzip.open(tmp, "wt", encoding="utf-8") as fh:
+        json.dump({"schema": PARTIAL_SCHEMA, "key": _roots_key(roots, depth), "started": started,
+                   "folders": folders}, fh, separators=(",", ":"))
+    os.replace(tmp, p)
+
+
 def _list(folder: Path) -> Optional[Dict[str, Any]]:
     dirs: List[str] = []
     files: List[List[Any]] = []
@@ -123,15 +178,24 @@ def full_listing_running(index_path: Path, max_hours: float = 16.0) -> bool:
 def refresh(roots: List[Path], path: Path, depth: int = 10, full: bool = False,
             full_days: float = 0.0, now: Optional[float] = None,
             progress: Optional[Any] = None, every: int = 2000, recent_days: float = 90.0,
-            top_levels: int = 2) -> Dict[str, Any]:
+            top_levels: int = 2, workers: Optional[int] = None, save_every: int = 2000) -> Dict[str, Any]:
     """Bring the index up to date and save it; the summary of what was done.
 
     A QUICK REFRESH (the hourly one) checks only the top levels (clients, their job folders) and
     folders that changed in the last `recent_days`: a new job appears as a new folder near the
     top, and work goes on inside recently changed ones. A dormant folder is taken from the last
     index unchecked; the resolver re-lists a chosen job's folders live, so nothing is priced on
-    a stale listing, and a full listing (--full, overnight) catches the rest."""
+    a stale listing, and a full listing (--full, overnight) catches the rest.
+
+    `workers` folders are asked of the share at once (SDI_DRAWING_INDEX_WORKERS, 8; 1 is one at a
+    time). Every `save_every` folders newly listed, progress is saved to the partial file."""
     now = now if now is not None else time.time()
+    if workers is None:
+        try:
+            workers = int(os.getenv("SDI_DRAWING_INDEX_WORKERS") or 8)
+        except ValueError:
+            workers = 8
+    workers = max(1, min(32, int(workers)))
     if not full and full_listing_running(path):
         # THE FULL LISTING IS RUNNING (overnight, ~10 hours): it writes the index when it ends, so a
         # quick refresh now would only race it. The index as it stands is reported instead.
@@ -144,7 +208,8 @@ def refresh(roots: List[Path], path: Path, depth: int = 10, full: bool = False,
         lock.parent.mkdir(parents=True, exist_ok=True)
         lock.write_text(f"{os.getpid()} {datetime.now().isoformat(timespec='seconds')}\n", encoding="utf-8")
     try:
-        return _refresh(roots, path, depth, full, full_days, now, progress, every, recent_days, top_levels)
+        return _refresh(roots, path, depth, full, full_days, now, progress, every, recent_days, top_levels,
+                        workers, save_every)
     finally:
         if full:
             try:
@@ -153,64 +218,129 @@ def refresh(roots: List[Path], path: Path, depth: int = 10, full: bool = False,
                 pass
 
 
+def _visit(job: Tuple[Path, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]
+           ) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """One folder asked of the share: ("reused" | "resumed" | "listed" | "unreadable", record).
+    `prev` is the folder as the last index held it (None: not to be reused), `saved` as an
+    unfinished listing held it. Either stands when the folder's own time has not changed."""
+    f, prev, saved = job
+    try:
+        mt = round(f.stat().st_mtime, 1)
+    except OSError:
+        return "unreadable", None
+    if prev is not None and prev.get("mtime") == mt:
+        return "reused", prev
+    if saved is not None and saved.get("mtime") == mt:
+        return "resumed", saved
+    got = _list(f)
+    if got is None:
+        return "unreadable", None
+    return "listed", dict(got, mtime=mt)
+
+
 def _refresh(roots: List[Path], path: Path, depth: int, full: bool, full_days: float, now: float,
-             progress: Optional[Any], every: int, recent_days: float, top_levels: int) -> Dict[str, Any]:
+             progress: Optional[Any], every: int, recent_days: float, top_levels: int,
+             workers: int = 1, save_every: int = 2000) -> Dict[str, Any]:
     old = load(path) or {}
     old_folders: Dict[str, Any] = old.get("folders") or {}
     if not full and full_days and old.get("full_at") and now - float(old["full_at"]) > full_days * 86400:
         full = True
     recent = now - recent_days * 86400
+    partial = load_partial(path, roots, depth, now)
+    saved: Dict[str, Any] = partial.get("folders") or {}
+    # The partial file keeps the time its FIRST listing began, however often it is resumed, so
+    # "listed this recently" is never said of a folder listed before that.
+    began = float(partial.get("started") or now)
+    trusted = bool(saved) and now - began <= PARTIAL_TRUST_HOURS * 3600
     folders: Dict[str, Any] = {}
     stats = {"listed": 0, "reused": 0, "unreadable": 0}
     roots_out: Dict[str, Any] = {}
     started = time.time()
-    for root in roots:
-        readable = root.is_dir()
-        roots_out[str(root)] = {"readable": readable}
-        if not readable:
-            # An unreadable root keeps what was last known of it, marked so, rather than
-            # emptying the index because the share was briefly away.
-            for k, v in old_folders.items():
-                if _under(k, str(root)):
-                    folders[k] = v
-            continue
-        stack: List[Tuple[Path, int]] = [(root, 0)]
-        while stack:
-            f, lvl = stack.pop()
-            key = str(f)
-            prev = old_folders.get(key)
-            if prev is not None and not full and lvl > top_levels and float(prev.get("mtime") or 0) < recent:
-                folders[key] = prev                     # dormant: kept as last listed, not checked
-                stats["dormant"] = stats.get("dormant", 0) + 1
-                if lvl < depth:
-                    stack.extend((f / d, lvl + 1) for d in prev.get("dirs") or [])
-                continue
+    said = [0]
+    unsaved = [0]
+
+    def _tell(key: str) -> None:
+        if progress and every and len(folders) // every > said[0]:
+            said[0] = len(folders) // every
+            progress(f"  ... {len(folders)} folder(s), listed {stats['listed']}, reused {stats['reused']}, "
+                     + (f"resumed {stats['resumed']}, " if stats.get("resumed") else "")
+                     + f"{round(time.time() - started)} s, now in {key}")
+
+    def _keep() -> None:
+        if save_every and unsaved[0] >= save_every:
+            unsaved[0] = 0
             try:
-                mt = round(f.stat().st_mtime, 1)
+                save_partial(path, roots, depth, began, folders)
             except OSError:
-                stats["unreadable"] += 1
+                pass                                    # progress not saved; the listing goes on
+
+    pool = None
+    if workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="drawing-index")
+    try:
+        for root in roots:
+            readable = root.is_dir()
+            roots_out[str(root)] = {"readable": readable}
+            if not readable:
+                # An unreadable root keeps what was last known of it, marked so, rather than
+                # emptying the index because the share was briefly away.
+                for k, v in old_folders.items():
+                    if _under(k, str(root)):
+                        folders[k] = v
                 continue
-            if prev is not None and not full and prev.get("mtime") == mt:
-                rec = prev
-                stats["reused"] += 1
-            else:
-                got = _list(f)
-                if got is None:
-                    stats["unreadable"] += 1
-                    continue
-                rec = dict(got, mtime=mt)
-                stats["listed"] += 1
-            folders[key] = rec
-            if progress and len(folders) % every == 0:
-                progress(f"  ... {len(folders)} folder(s), listed {stats['listed']}, reused {stats['reused']}, "
-                         f"{round(time.time() - started)} s, now in {key}")
-            if lvl < depth:
-                stack.extend((f / d, lvl + 1) for d in rec.get("dirs") or [])
+            # LEVEL BY LEVEL, IN ONE ORDER WHATEVER THE NUMBER OF WORKERS: the folders of a level
+            # are asked of the share together and taken in the order they were found, so one
+            # worker and eight make the same index.
+            level: List[Tuple[Path, int]] = [(root, 0)]
+            while level:
+                nxt: List[Tuple[Path, int]] = []
+                for at in range(0, len(level), 256):
+                    chunk = level[at:at + 256]
+                    done: List[Any] = [None] * len(chunk)
+                    ask: List[int] = []
+                    jobs = []
+                    for i, (f, lvl) in enumerate(chunk):
+                        key = str(f)
+                        prev = old_folders.get(key)
+                        if prev is not None and not full and lvl > top_levels \
+                                and float(prev.get("mtime") or 0) < recent:
+                            done[i] = ("dormant", prev)        # kept as last listed, not checked
+                        elif trusted and key in saved:
+                            done[i] = ("resumed", saved[key])  # listed within hours: not asked again
+                        else:
+                            ask.append(i)
+                            jobs.append((f, None if full else prev, saved.get(key)))
+                    got = list(pool.map(_visit, jobs)) if pool is not None else [_visit(j) for j in jobs]
+                    for i, res in zip(ask, got):
+                        done[i] = res
+                    for (f, lvl), res in zip(chunk, done):
+                        how, rec = res
+                        if rec is None:
+                            stats["unreadable"] += 1
+                            continue
+                        stats[how] = stats.get(how, 0) + 1
+                        if how == "listed":
+                            unsaved[0] += 1
+                        key = str(f)
+                        folders[key] = rec
+                        _tell(key)
+                        if lvl < depth:
+                            nxt.extend((f / d, lvl + 1) for d in rec.get("dirs") or [])
+                    _keep()
+                level = nxt
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=True, cancel_futures=True)
     index = {"schema": SCHEMA, "built_at": now, "full_at": now if full else old.get("full_at") or now,
              "roots": roots_out, "depth": depth, "folders": folders,
-             "last": dict(stats, seconds=round(time.time() - started, 1), full=full)}
+             "last": dict(stats, seconds=round(time.time() - started, 1), full=full, workers=workers)}
     save(path, index)
     build_db(index, db_path(path))
+    try:
+        partial_path(path).unlink()                     # the listing completed: nothing to resume
+    except OSError:
+        pass
     return summary(index)
 
 
@@ -420,7 +550,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
         last = s["last"]
         print(f"{s['folders']} folder(s), {s['drawings']} drawing file(s); listed {last.get('listed')}, "
-              f"reused {last.get('reused')}, dormant (not checked) {last.get('dormant', 0)}, unreadable "
+              f"reused {last.get('reused')}, resumed from a stopped listing {last.get('resumed', 0)}, "
+              f"dormant (not checked) {last.get('dormant', 0)}, unreadable "
               f"{last.get('unreadable')} in {last.get('seconds')} s{' (full)' if last.get('full') else ''} "
               f"-> {cfg['path']} and {db_path(cfg['path']).name}", flush=True)
     if args.convert:
