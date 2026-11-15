@@ -549,6 +549,9 @@ DEFAULT_COPY_TO = (r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\Live Enq
                    r"\completed AI briefs\TTI\TTI_Amsterdam-Conference")
 
 
+SUPPORTING_SHEETS = ("_boms_and_routes", "_pricing_variance", "_source_drawing_data")
+
+
 def copy_to_conference(dest: str, output: Any, manifest: Optional[Dict[str, Any]],
                        drawing: str) -> List[str]:
     """The run's spreadsheets and its GA's PDF, copied into `dest`. A file already there with the
@@ -566,8 +569,13 @@ def copy_to_conference(dest: str, output: Any, manifest: Optional[Dict[str, Any]
     if out is not None and out.is_file() and out.suffix.lower() in (".xlsx", ".xlsm"):
         picks.append((out, out.name))
     elif out is not None and out.is_dir():
+        # ONLY THE ESTIMATE AND THE GA (JG, 15 Nov 2026): "ONLY the GA PDF and the s/sheet estimate"
+        # go to the conference folder. A run's folder also holds the spreadsheets that support the
+        # estimate (boms and routes, pricing variance, source drawing data); those stay with the
+        # full extract and are not copied here.
         picks += [(f, f.name) for f in sorted(out.iterdir())
-                  if f.is_file() and f.suffix.lower() in (".xlsx", ".xlsm") and not f.name.startswith("~$")]
+                  if f.is_file() and f.suffix.lower() in (".xlsx", ".xlsm") and not f.name.startswith("~$")
+                  and not f.stem.lower().endswith(SUPPORTING_SHEETS)]
     if manifest:
         import pack_resolver as pr
         ga = next((x for x in manifest.get("members") or []

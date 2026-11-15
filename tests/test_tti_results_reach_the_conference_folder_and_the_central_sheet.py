@@ -192,3 +192,26 @@ def test_the_central_sheet_is_tried_again_while_excel_is_busy(monkeypatch):
     monkeypatch.setattr(tc, "EXCEL_WAIT_S", 0.0)
     monkeypatch.setattr(tc, "_write_excel", lambda *a: answers.pop(0))
     assert tc.write("https://x.sharepoint.com/T.xlsx", "Milwaukee", "D", 5, 1.0, tp.drawing_ref)["ok"]
+
+
+def test_only_the_estimate_and_the_ga_go_to_the_conference_folder(tmp_path):
+    """JG, 15 Nov 2026: "ONLY the GA PDF and the s/sheet estimate". A run's folder also holds the
+    spreadsheets that support the estimate; they stay with the full extract."""
+    out = tmp_path / "run"
+    out.mkdir()
+    for name in ("12181-00-GA_20261115_151603.xlsx", "12181-00-GA_boms_and_routes.xlsx",
+                 "12181-00-GA_pricing_variance.xlsx", "12181-00-GA_source_drawing_data.xlsx",
+                 "12181-00-GA_report.html"):
+        (out / name).write_bytes(b"x" + name.encode())
+    ga = tmp_path / "share" / "12181-00-GA_DEMO_REV A.PDF"
+    ga.parent.mkdir()
+    ga.write_bytes(b"%PDF")
+    manifest = {"drawing": "12181-00-GA", "revision": "A",
+                "members": [{"drawing": "12181-00-GA", "revision": "A",
+                             "files": [{"path": str(ga), "format": "pdf"}]},
+                            {"drawing": "12181-01-GA", "files": [{"path": str(ga), "format": "pdf"}]}]}
+    dest = tmp_path / "conference"
+    got = tp.copy_to_conference(str(dest), out, manifest, "12181-00-GA")
+    assert sorted(f.name for f in dest.iterdir()) == ["12181-00-GA_20261115_151603.xlsx", "12181-00-GA_GA_revA.pdf"]
+    assert len(got) == 2
+    assert len(list(out.iterdir())) == 5, "the full extract is left whole"
