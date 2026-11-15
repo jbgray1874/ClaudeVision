@@ -5,9 +5,10 @@ print process, sheet size, set-up cost, run cost per sheet) and one working line
 panel's length and width into parts per sheet and a cost per part.
 
 This module reads the substrate table and works the sheet's own sums, cell for cell, so its
-answer can be compared with Excel's. It is NOT yet a source of any charge on an estimate:
-the sheet as it stands carries figures estimating has to confirm first, and each is reported
-by `points_to_confirm` rather than corrected here:
+answer can be compared with Excel's. Since 15 Nov 2026 src/print_costing.py charges a part
+stated printed from that working, PROVISIONALLY. The sheet as it stands carries figures
+estimating has to confirm, and each is reported by `points_to_confirm` and raised as a question
+on the estimate rather than corrected here:
 
   * scrap is entered as -0.7, which charges 30% of the sheet cost per part;
   * only one substrate carries a set-up cost;

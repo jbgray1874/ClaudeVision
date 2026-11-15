@@ -12517,6 +12517,34 @@ def apply_production_substitutions(part: Dict[str, Any]) -> None:
 
 
 def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> Dict[str, Any]:
+    """One part costed. A PRINTED PART IS THEN SETTLED AGAINST THE AI PRINT CALCULATOR (JG, 15
+    Nov 2026: "well it should ... estimating have been waiting for this"): src/print_costing.py
+    prices it from estimating's own sheet where the part's substrate and measured size are on
+    it, and otherwise leaves the price it had and says why. One price, never both."""
+    _printed_before = None
+    try:
+        import print_costing as _print_costing
+        if _print_costing.printed_basis(part) is not None \
+                and str(part.get("source") or "") != _print_costing.SOURCE_KEY:
+            import copy as _copy_print
+            _printed_before = _copy_print.deepcopy(part)
+    except Exception:                                                # noqa: BLE001
+        _printed_before = None
+    _estimate = _estimate_part_costed(part, job_quantity)
+    if _printed_before is not None:
+        try:
+            _estimate = _print_costing.settle(
+                _printed_before, _estimate,
+                job_quantity or _printed_before.get("assumed_job_quantity")
+                or getattr(config, "DEFAULT_JOB_QUANTITY", 180),
+                lambda _line, _q: _estimate_part_costed(_line, _q), _bought_in_part_stub)
+        except Exception as _print_exc:                              # noqa: BLE001
+            print(f"   [print] {part.get('part_number')}: AI Print calculator not applied "
+                  f"({type(_print_exc).__name__}: {_print_exc}); the line is as costed", flush=True)
+    return _estimate
+
+
+def _estimate_part_costed(part: Dict[str, Any], job_quantity: Optional[int] = None) -> Dict[str, Any]:
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     quantity = _sanitise_part_quantity(part)
     # Sanitisation of the part's OWN quantity (None/0/negative -> 1), not a new observation,
@@ -12730,7 +12758,8 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         part["costing_basis"] = "sdi_bom_code_estimator_to_price"
         return part
     if (
-        (_preset_src in ("prose_recogniser_layer2", "llm_note_scan", "sdi_bom_code_udef_priced")
+        (_preset_src in ("prose_recogniser_layer2", "llm_note_scan", "sdi_bom_code_udef_priced",
+                         "ai_print_calculator")
          or part.get("_layer2_recognised") or part.get("_note_scan"))
         and _preset_unit is not None
     ):

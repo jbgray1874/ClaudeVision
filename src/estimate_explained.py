@@ -2913,7 +2913,181 @@ def calculator_inputs_html(commercial_lines: Any) -> str:
                       "then it uses the copy in <code>src/config.py</code>. ")
                    + "To check the arithmetic, put the box size and quantity into the sheet: "
                    "it gives the same panel counts, pair costs and TOTAL.</p>")
+    out.extend(_print_calculator_html([c for c in calcs if c.get("calculator") == "print"],
+                                      _P, _STEP, _WORK, g, money, num))
+    out.extend(_tube_calculator_html([c for c in calcs if c.get("calculator") == "tube"],
+                                     _P, money, num))
     return "\n".join(out)
+
+
+def part_calculator_lines(scan_doc: Any) -> List[Dict[str, Any]]:
+    """THE CALCULATORS THAT PRICE PARTS, as lines the calculator section reads (JG, 15 Nov
+    2026: "we need to add a section to the bottom of the html page below the boxing ss
+    calculator section that again goes in the e-mail at the bottom").
+
+    The box calculator's record rides on its commercial line. The print and tube calculators
+    price parts, so their records are read from the run's own part estimates: every printed
+    part's print record, and every part whose stock price is a row of the AI Tube calculator.
+    Read from the record, so every runner and a later reprint say the same thing."""
+    if not isinstance(scan_doc, dict):
+        return []
+    es = scan_doc.get("estimate_summary") if isinstance(scan_doc.get("estimate_summary"), dict) else {}
+    parts = [p for p in (es.get("part_estimates") or scan_doc.get("part_estimates") or [])
+             if isinstance(p, dict)]
+    out: List[Dict[str, Any]] = []
+    prints = [dict(p["print_calculator"]) for p in parts
+              if isinstance(p.get("print_calculator"), dict)]
+    if prints:
+        out.append({"code": "PRINT", "calculator_inputs": prints})
+    tubes: List[Dict[str, Any]] = []
+    for p in parts:
+        mat = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
+        stock = mat.get("stock_estimate") if isinstance(mat.get("stock_estimate"), dict) else {}
+        rows = [r for r in (stock.get("catalogue_rows") or [])
+                if isinstance(r, dict) and str(r.get("supplier") or "") == "AI Tube calculator"]
+        if not rows or str(mat.get("supplier") or "") != "AI Tube calculator":
+            continue
+        tubes.append({"part_number": p.get("part_number"), "description": p.get("description"),
+                      "quantity": p.get("quantity"), "rows": rows,
+                      "rate_gbp_per_m": mat.get("rate_gbp_per_m"),
+                      "cut_length_mm": stock.get("section_length_mm"),
+                      "waste_factor": mat.get("waste_factor_applied"),
+                      "unit_gbp": mat.get("unit_material_cost_gbp")})
+    if tubes:
+        out.append({"code": "TUBE", "calculator_inputs": [
+            {"calculator": "tube", "title": "Tube calculator", "lines": tubes}]})
+    return out
+
+
+def _print_calculator_html(recs: List[Dict[str, Any]], _P: str, _STEP: str, _WORK: str,
+                           g: Any, money: Any, num: Any) -> List[str]:
+    """The AI Print calculator's working for each printed part, in plain words."""
+    if not recs:
+        return []
+    try:
+        from print_calculator_sheet import GUTTER_MM as _gut, WIDTH_TRIM_MM as _trim
+    except Exception:                                                # noqa: BLE001
+        _gut, _trim = 10.0, 5.0
+    used = [r for r in recs if r.get("applied")]
+    order = sum(num(r.get("order_gbp")) for r in used)
+    out: List[str] = [
+        f"<h4>Print calculator &mdash; {len(used)} printed part{'' if len(used) == 1 else 's'} "
+        f"priced" + (f" ({money(order)} for the order)" if used else "") + "</h4>",
+        _P + "<b>What it is.</b> The cost of a printed panel, worked out the way the "
+        "<b>AI PRINT CALCULATOR</b> sheet does it. The sheet holds one row for each printed "
+        "material: the size of the sheet it is printed on, and what one printed and cut sheet "
+        "costs. It works out how many of the part fit on one sheet, shares the sheet&rsquo;s "
+        "cost between them, and adds a share of the set-up cost for the order.</p>",
+        _P + "<b>These prices are provisional.</b> The sheet is worked exactly as it stands. "
+        "Where the sheet leaves something open, it is listed below as a question for "
+        "estimating and is on the estimate&rsquo;s decisions list. Nothing on the sheet has "
+        "been corrected by the engine.</p>"]
+    path = next((str(r.get("path")) for r in recs if r.get("path")), "")
+    if path:
+        out.append(_P + f"<b>Where the figures come from.</b> <code>{_e(path)}</code>, read "
+                   "at the start of this run.</p>")
+    for r in used:
+        L, W = num(r.get("length_mm")), num(r.get("width_mm"))
+        sheet_mm = [num(v) for v in (r.get("sheet_mm") or [0, 0])][:2]
+        sl, sw = (sheet_mm + [0, 0])[:2]
+        across = int((sw - _trim) / (W + 2 * _gut)) if W else 0
+        along = int(sl / (L + 2 * _gut)) if L else 0
+        per, run, scrap = int(num(r.get("parts_per_sheet"))), num(r.get("run_cost_per_sheet_gbp")), \
+            num(r.get("scrap"))
+        printed, per_unit = num(r.get("quantity_printed")), num(r.get("qty_per_unit"), 1.0)
+        out.append(f"<p style=\"margin:16px 0 4px\"><b>{_e(r.get('part_number'))} "
+                   f"{_e(r.get('description'))} &mdash; {money(r.get('total_gbp'))} each</b></p>")
+        out.append(_P + f"It is printed because its drawing says "
+                   f"&ldquo;{_e(r.get('printed_said'))}&rdquo;. Its material is "
+                   f"{_e(r.get('material'))}"
+                   + (f" at {g(r.get('gauge_mm'))} mm" if r.get("gauge_mm") else "")
+                   + f", which is the sheet&rsquo;s row <b>{_e(r.get('substrate'))}</b> "
+                   f"({_e(r.get('process'))}). Its size is {g(L)} &times; {g(W)} mm, from "
+                   f"{_e(r.get('size_source'))}"
+                   + (". The part does not fit the sheet the way the calculator lays it, so it "
+                      "is worked turned" if r.get("turned") else "") + ".</p>")
+        out.append(_STEP + "Step 1. How many fit on one sheet.</b></p>")
+        out.append(_WORK + f"across: ({g(sw)} &minus; {g(_trim)}) &divide; ({g(W)} + {g(2 * _gut)}) "
+                   f"= {across}<br>along: {g(sl)} &divide; ({g(L)} + {g(2 * _gut)}) = {along}<br>"
+                   f"{across} &times; {along} = <b>{per} to a sheet</b></p>")
+        out.append(_STEP + "Step 2. The cost of one part from the sheet.</b></p>")
+        out.append(_WORK + f"{money(run)} a sheet &divide; {per} &times; (100% + {scrap:.0%}) "
+                   f"= <b>{money(r.get('cost_per_part_gbp'), 4)}</b></p>")
+        out.append(_STEP + "Step 3. The set-up, shared over the parts printed.</b></p>")
+        out.append(_WORK + f"{g(per_unit)} per unit &times; {g(r.get('order_qty'))} units = "
+                   f"{g(printed)} printed<br>{money(r.get('setup_gbp'))} &divide; {g(printed)} = "
+                   f"<b>{money(r.get('setup_share_gbp'), 4)}</b></p>")
+        out.append(_STEP + "Step 4. The price of one part.</b></p>")
+        out.append(_WORK + f"{money(r.get('cost_per_part_gbp'), 4)} + "
+                   f"{money(r.get('setup_share_gbp'), 4)} = <b>{money(r.get('total_gbp'))} each"
+                   f"</b>, {money(r.get('per_unit_gbp'))} per unit, "
+                   f"{money(r.get('order_gbp'))} for the order</p>")
+        wd = r.get("withdrawn") if isinstance(r.get("withdrawn"), dict) else {}
+        out.append(_P + "<b>What it replaces.</b> The sheet&rsquo;s cost is headed "
+                   "&ldquo;print &amp; cut&rdquo;, so it is taken to hold the material, the "
+                   "print and the cut. The engine&rsquo;s own figures for this part are "
+                   f"withdrawn: material {money(wd.get('material_gbp'))} each and labour "
+                   f"{money(wd.get('labour_gbp'))} each. The part is charged once.</p>")
+    points: List[str] = []
+    for r in recs:
+        for pt in r.get("points_to_confirm") or []:
+            if pt not in points:
+                points.append(pt)
+    if used and points:
+        out.append(_P + "<b>For estimating to confirm on the sheet.</b></p><ul>"
+                   + "".join(f"<li>{_e(pt)}</li>" for pt in points) + "</ul>")
+    rest = [r for r in recs if not r.get("applied")]
+    if rest:
+        out.append(_P + "<b>Not priced by the print calculator.</b></p><ul>" + "".join(
+            f"<li><b>{_e(r.get('part_number'))}</b> {_e(r.get('description'))}: "
+            f"{_e(r.get('why_not') or 'no reason recorded')}."
+            + (f" It is charged at {_e(r.get('charged_instead'))}." if r.get("charged_instead")
+               else "") + "</li>" for r in rest) + "</ul>")
+    out.append(_P + "<b>How to check or change it.</b> Open the AI PRINT CALCULATOR sheet, "
+               "choose the material, and type the part&rsquo;s length, width and the quantity "
+               "printed. It gives the same parts per sheet and the same TOTAL. To change a "
+               "figure, change it in the sheet and save it: the next run reads it.</p>")
+    return out
+
+
+def _tube_calculator_html(recs: List[Dict[str, Any]], _P: str, money: Any, num: Any) -> List[str]:
+    """Which lines took their stock price from the AI Tube calculator, and the sum for each."""
+    lines = [ln for r in recs for ln in (r.get("lines") or []) if isinstance(ln, dict)]
+    if not lines:
+        return []
+    out: List[str] = [
+        f"<h4>Tube calculator &mdash; {len(lines)} line{'' if len(lines) == 1 else 's'} priced "
+        "from its stock prices</h4>",
+        _P + "<b>What it is.</b> The <b>AI TUBE CALCULATOR</b> sheet lists the tube and section "
+        "estimating buys, each with its stock length and its price for one length. Where a "
+        "part is cut from one of those sections, its material is priced from that row: the "
+        "price of one length, divided by the length, gives a price per metre, and the part is "
+        "charged for the metres it uses plus the waste allowance.</p>"]
+    rows: List[List[Any]] = []
+    for ln in lines:
+        stock = (ln.get("rows") or [{}])[0]
+        metres = num(ln.get("cut_length_mm")) / 1000.0
+        rows.append([
+            f"{ln.get('part_number') or ''} {ln.get('description') or ''}".strip(),
+            f"{stock.get('part_code') or ''} {stock.get('description') or ''}".strip(),
+            money(stock.get("unit_price_gbp")),
+            f"{num(stock.get('catalogue_length_mm')) / 1000.0:g} m",
+            money(ln.get("rate_gbp_per_m"), 4),
+            f"{metres:.3f} m",
+            f"{num(ln.get('waste_factor'), 1.0):g}",
+            money(ln.get("unit_gbp")),
+        ])
+    out.append(_table(["Part", "Stock row on the sheet", "Price for one length",
+                       "Stock length", "Price per metre", "Length used", "Waste factor",
+                       "Material each"], rows, numeric={2, 3, 4, 5, 6, 7}))
+    out.append(_P + "<b>The sum for each line.</b> price per metre &times; length used &times; "
+               "waste factor = material each. Only the stock price comes from the sheet. "
+               "Cutting, holes and slots are costed by the engine&rsquo;s own rates, not by "
+               "this sheet.</p>")
+    out.append(_P + "<b>How to check or change it.</b> Find the stock row named above in the "
+               "AI TUBE CALCULATOR sheet. To change a price, change it there and save it: the "
+               "next run reads it.</p>")
+    return out
 
 
 def _setup_and_run(labour_rows: List[Dict[str, Any]], order_qty: Any = 1) -> Dict[str, Any]:
@@ -3971,9 +4145,27 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     # of the read ledger with what the read said. The e-mail repeats; it does not decide.
     add(release_section_html(record, g.get("scan_doc") or {}))
 
+    # THE DRAWINGS USED AND THE ONES BELIEVED MISSING (JG, 15 Nov 2026: "we identify the
+    # drawings used in the estimate and we make a statement about what we think are drawings
+    # that are missing and would have helped the estimate"). Built from the run's record by
+    # the one reader the report page also uses (src/drawings_statement.py).
+    try:
+        import drawings_statement as _drawings_statement
+        if isinstance(g.get("scan_doc"), dict):
+            add(_drawings_statement.html(_drawings_statement.statement(g["scan_doc"])))
+    except Exception:                                                # noqa: BLE001
+        pass
+
     # AI ESTIMATOR CALCULATOR INPUTS — at the bottom, the full working of each calculator the
     # engine ran on the estimators' own figures (the box calculator first).
     _calc_html = calculator_inputs_html(_commercial)
+    try:
+        _part_calcs = part_calculator_lines(g.get("scan_doc"))
+    except Exception:                                                # noqa: BLE001
+        _part_calcs = []
+    if _part_calcs:
+        # the print and tube calculators price parts; their blocks go below the box calculator
+        _calc_html = calculator_inputs_html(list(_commercial) + _part_calcs)
     if _calc_html:
         add(_calc_html)
 

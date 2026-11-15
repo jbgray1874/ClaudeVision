@@ -1909,24 +1909,12 @@ directly — what was clear, and where the engine had to work around them.</p>
 {weaknesses}"""
 
 
-def _files_read_section(summary: Dict[str, Any]) -> str:
-    """4.1 — THE DRAWINGS THIS NUMBER CAME FROM, NAMED.
-
-    The pack was recorded and never shown. `job_source_pdfs` was in the summary and the report
-    used it for counts and filename hygiene; `cad_inputs` held the files that were present and
-    NOT read. Neither was ever put in front of the estimator, so the one document people
-    actually read could not answer "which drawings produced this?" — six weeks later, when
-    somebody asks, that is the whole question.
-
-    It matters more since staging, not less. Selection now genuinely decides what is priced, so
-    a drawing left off the list is absent from the estimate and there was nothing on paper
-    saying which ones were on it. A short list is also the fastest way to catch the expensive
-    mistake — a pack that is missing a part — because a person who knows the job reads six
-    filenames and sees the seventh is not there.
-
-    Files present and NOT read are named beside the ones that were. A DWG nobody could convert
-    is not a neutral fact: it is geometry that was in the folder and did not reach the number.
-    """
+def files_read_rows(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """Every file the run recorded, each with what read it and what it gave: the rows of
+    the report's table. ONE READER (15 Nov 2026): the report and the covering e-mail's
+    drawings statement (src/drawings_statement.py) both list these rows, so the two cannot
+    name different files. {"rows": [(name, kind, what)], "unread", "sw_files", "sw_ran",
+    "readers"}."""
     read = [str(p.get("name") or p) if isinstance(p, dict) else str(p)
             for p in (summary.get("job_source_pdfs") or [])]
     cad = summary.get("cad_inputs") or {}
@@ -2005,6 +1993,31 @@ def _files_read_section(summary: Dict[str, Any]) -> str:
     for n in unread:
         rows.append((n, "—", "PRESENT, NOT READ — contributed nothing"))
 
+    return {"rows": rows, "unread": unread, "sw_files": [str(n) for n in (cad.get("solidworks") or [])],
+            "sw_ran": _sw_ran, "readers": _readers}
+
+
+def _files_read_section(summary: Dict[str, Any]) -> str:
+    """4.1 — THE DRAWINGS THIS NUMBER CAME FROM, NAMED.
+
+    The pack was recorded and never shown. `job_source_pdfs` was in the summary and the report
+    used it for counts and filename hygiene; `cad_inputs` held the files that were present and
+    NOT read. Neither was ever put in front of the estimator, so the one document people
+    actually read could not answer "which drawings produced this?" — six weeks later, when
+    somebody asks, that is the whole question.
+
+    It matters more since staging, not less. Selection now genuinely decides what is priced, so
+    a drawing left off the list is absent from the estimate and there was nothing on paper
+    saying which ones were on it. A short list is also the fastest way to catch the expensive
+    mistake — a pack that is missing a part — because a person who knows the job reads six
+    filenames and sees the seventh is not there.
+
+    Files present and NOT read are named beside the ones that were. A DWG nobody could convert
+    is not a neutral fact: it is geometry that was in the folder and did not reach the number.
+    """
+    _fr = files_read_rows(summary)
+    rows, unread, _sw_ran, _readers = _fr["rows"], _fr["unread"], _fr["sw_ran"], _fr["readers"]
+    cad = summary.get("cad_inputs") or {}
     if not rows:
         # Silence would read as "no drawings", which is never true of a job that produced a
         # number. Say that the record is missing, not that the pack was.
@@ -2044,7 +2057,17 @@ def _files_read_section(summary: Dict[str, Any]) -> str:
             f'the run were not read.</p>'
             f'<table><thead><tr><th>File</th><th>Type</th><th>What read it, and what it '
             f'contributed</th></tr>'
-            f'</thead><tbody>{body}</tbody></table>{note}')
+            f'</thead><tbody>{body}</tbody></table>{note}{_believed_missing_html(summary)}')
+
+
+def _believed_missing_html(summary: Dict[str, Any]) -> str:
+    """The drawings we believe are missing, under the list of the ones used (JG, 15 Nov 2026).
+    The same statement the covering e-mail carries: src/drawings_statement.py."""
+    try:
+        import drawings_statement as _ds
+        return _ds.missing_html(_ds.statement(summary))
+    except Exception:                                                # noqa: BLE001
+        return ""
 
 
 def _render_readers_panel(readers: List[Dict[str, Any]]) -> str:
