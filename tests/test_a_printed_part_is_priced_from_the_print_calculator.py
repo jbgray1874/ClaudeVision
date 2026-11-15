@@ -143,6 +143,42 @@ def test_a_part_with_its_own_catalogue_price_keeps_it(tmp_path):
     assert "own catalogue row" in out["print_calculator"]["why_not"]
 
 
+def test_a_catalogue_sheet_price_for_the_board_is_not_the_printed_parts_own_price(tmp_path):
+    """15 Nov 2026, 12181-04-04G: a graphic stated "PRINTED, FULL" on 5 mm Foamex. Its board was
+    priced from the catalogue's sheet rate, that was taken for the part's own catalogue price,
+    and the print went uncharged and unasked."""
+    board = {"unit_material_cost_gbp": 3.09, "sheet_price_gbp": 68.6, "cost_method": "sheet_rate_live_udef",
+             "price_source": {"source_class": "catalogue", "source_note": "plain stock at 5 mm"}}
+    out = pc.settle(_part(), _estimate(material_estimate=dict(board)), 10, _cost, _stub, read=_book(tmp_path))
+    assert out["print_calculator"]["applied"] is True, "the stated print was not priced"
+    assert "own catalogue" not in str(out["print_calculator"].get("why_not"))
+    # a substrate the sheet does not hold: the print is still not silently free
+    est = _estimate(material_estimate=dict(board))
+    out = pc.settle(_part(normalized_material="CORREX"), est, 10, _cost, _stub, read=_book(tmp_path))
+    assert out is est and out["print_calculator"]["applied"] is False
+    assert any("no print cost is in its price" in str(q.get("issue")) for q in out["manufacturing_questions"])
+
+
+def test_a_trade_name_finds_the_row_of_the_material_it_is_sold_as(tmp_path):
+    """Foamex is foamed PVC. At the sheet's own gauge it is priced; at another gauge it is not,
+    and the question carries what the print would be on the row it nearly is."""
+    read = _book(tmp_path)
+    row = next(s for s in read["substrates"] if "PVC" in s["name"].upper())
+    gauge = float(row["name"].split("mm")[0])
+    assert pc.substrate_for(read, "FOAMEX", gauge)[0] is row
+    none, why = pc.substrate_for(read, "FOAMEX", gauge + 2)
+    assert none is None and row["name"] in why and f"{gauge + 2:g} mm" in why
+    est = _estimate()
+    out = pc.settle(_part(normalized_material="FOAMEX", normalized_thickness_mm=gauge + 2), est, 10,
+                    _cost, _stub, read=read)
+    assert out is est and out["print_calculator"]["applied"] is False
+    q = next(q for q in out["manufacturing_questions"] if "no print cost is in its price" in q["issue"])
+    assert row["name"] in q["assumption"] and "not charged, because the gauge differs" in q["assumption"]
+    assert out["print_calculator"]["on_the_other_gauge"]["total_gbp"] > 0
+    # the contrast: a material the sheet does not hold under any name is still not a substrate
+    assert pc.substrate_for(read, "CORREX", gauge) == (None, "'CORREX' is not a substrate on the print calculator")
+
+
 def test_a_part_only_named_a_graphic_is_asked_about_and_not_charged(tmp_path):
     part = _part(normalized_finish="SCRAPED EDGES", description="GRAPHIC LENS")
     out = pc.settle(part, _estimate(), 10, _cost, _stub, read=_book(tmp_path))

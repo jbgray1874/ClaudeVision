@@ -3168,14 +3168,34 @@ def costed_job(source: Any) -> Dict[str, Any]:
         # not a rate — said from the costing pass's own sentence on the line.
         _gauge = next((f for f in (l.get("review_flags") or [])
                        if "confirm the board gauge" in str(f)), "")
+        # THE ENGINE'S OWN FIGURE IS SAID, WITH WHY IT IS NOT CHARGED (15 Nov 2026). A timber
+        # frame, a dowel block and two plywood pieces each "carried no price" beside engine
+        # material figures of £5.90, £12.00 and £3.95: worked from the model's weight, and not
+        # charged because no gauge is stated for the sheet row to nest on. "Supply a rate" was
+        # the wrong ask and "whatever it is worth" hid a figure the record already held.
+        _eng = None
+        try:
+            _eng = float(l.get("engine_ext_gbp") or l.get("engine_unit_gbp") or 0) or None
+        except (TypeError, ValueError):
+            _eng = None
+        _no_gauge = l.get("block") == "other_sheet" and not l.get("thickness_mm")
         decisions.append({
             "part": l["part_number"], "kind": "missing_price",
-            "issue": f"{l['part_number']} carries no price",
-            "assumption": "held at £0 — the unit cost is understated by whatever it is worth",
+            "issue": (f"{l['part_number']} is charged £0: the engine works its material at "
+                      f"£{_eng:.2f} a unit" + (", but no gauge is stated for it, so the sheet row "
+                                               "cannot nest it and prices nothing" if _no_gauge else
+                                               ", and that figure did not reach the charged row")
+                      if _eng else f"{l['part_number']} carries no price"),
+            "assumption": (f"held at £0 — the unit cost is understated by about £{_eng:.2f}, the "
+                           f"engine's own figure, which is not a charge" if _eng else
+                           "held at £0 — the unit cost is understated by whatever it is worth"),
             "action": ("enter the per-unit figure" if l["kind"] == "commercial"
                        else (f"confirm the board gauge from the drawing — {_gauge}"
-                             if _gauge else "supply a rate or a supplier quote")),
-            "owner": l["price_origin"]["owner"], "gbp_at_stake": None})
+                             if _gauge else
+                             "state the gauge (or the section, for timber cut from length) and the row "
+                             "prices; or enter the figure" if _eng and _no_gauge else
+                             "supply a rate or a supplier quote")),
+            "owner": l["price_origin"]["owner"], "gbp_at_stake": _eng})
     # ── WHAT THE TALLY COULD NOT SEE, FROM THE RESOLVERS THAT ALREADY SEE IT (D-324) ──
     # The tally built its list from priced lines only, so an item with NO line — 12645's
     # shutters, reached and absent — was counted nowhere, and the reached-item check that

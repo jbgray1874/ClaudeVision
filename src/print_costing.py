@@ -106,13 +106,28 @@ def _words(text: Any) -> set:
     return {w for w in re.findall(r"[A-Z]+", str(text or "").upper()) if w != "MM"}
 
 
+# A TRADE NAME IS THE MATERIAL IT IS SOLD AS. A drawing says FOAMEX; the print sheet's row says
+# "Foamed PVC". They are the same board, and a part was told its material "is not a substrate
+# on the print calculator" on the name alone (12181-04-04G, 15 Nov 2026).
+_SOLD_AS: Dict[str, Tuple[str, ...]] = {"FOAMEX": ("FOAMED", "PVC")}
+
+
+def rows_named(read: Dict[str, Any], material: Any) -> List[Dict[str, Any]]:
+    """The sheet's rows for this material, whatever their gauge."""
+    want = _words(material)
+    if not want:
+        return []
+    wants = [want] + [set(v) for k, v in _SOLD_AS.items() if k in want]
+    return [s for s in (read.get("substrates") or [])
+            if any(w <= _words(s.get("name")) for w in wants)]
+
+
 def substrate_for(read: Dict[str, Any], material: Any, gauge_mm: Any
                   ) -> Tuple[Optional[Dict[str, Any]], str]:
     """(the sheet's row for this material and gauge, "") or (None, why there is not one)."""
-    want = _words(material)
-    if not want:
+    if not _words(material):
         return None, "the part states no material"
-    named = [s for s in (read.get("substrates") or []) if want <= _words(s.get("name"))]
+    named = rows_named(read, material)
     if not named:
         return None, f"'{material}' is not a substrate on the print calculator"
     gauge = _f(gauge_mm)
@@ -155,6 +170,21 @@ def work(part: Dict[str, Any], order_qty: Any, read: Optional[Dict[str, Any]] = 
     row, why = substrate_for(read, material, gauge)
     if row is None:
         rec["why_not"] = why
+        # THE FIGURE ON THE ROW IT NEARLY IS. Where the sheet holds this material at one other
+        # gauge only, the print worked on that row is given beside the question, so estimating
+        # sees what the answer is worth. It is not charged: whether a board of another gauge
+        # prints at that figure is theirs to say.
+        _others = rows_named(read, material)
+        _l, _w, _where = measured_size(part)
+        if len(_others) == 1 and _l:
+            _printed = (_f(part.get("quantity")) or 1.0) * (_f(order_qty) or 1.0)
+            _alt = sheet.as_the_sheet_works_it(read, _others[0]["name"], _l, _w, _printed)
+            if not _alt.get("ok") and _l != _w:
+                _alt = sheet.as_the_sheet_works_it(read, _others[0]["name"], _w, _l, _printed)
+            if _alt.get("ok"):
+                rec["on_the_other_gauge"] = {"substrate": _others[0]["name"],
+                                             "total_gbp": round(float(_alt["total_gbp"]), 2),
+                                             "parts_per_sheet": _alt["parts_per_sheet"]}
         return rec
     rec.update(substrate=row["name"], process=row.get("process"), sheet_mm=list(row["sheet_mm"]),
                run_cost_per_sheet_gbp=row["run_cost_per_sheet_gbp"])
@@ -194,6 +224,13 @@ def _own_catalogue_price(estimate: Any) -> str:
         return ""
     mat = estimate.get("material_estimate") if isinstance(estimate.get("material_estimate"), dict) else {}
     src = mat.get("price_source") if isinstance(mat.get("price_source"), dict) else {}
+    # A SUBSTRATE'S SHEET PRICE IS NOT THE PRINTED PART'S OWN PRICE (15 Nov 2026). A graphic
+    # stated "PRINTED, FULL" on 5 mm Foamex was priced for its board from the catalogue's sheet
+    # rate, and that was taken for the part's own catalogue price: the print went uncharged and
+    # unasked. Only a price for the PIECE is the part's own; a sheet or area rate buys the
+    # board the print goes on.
+    if _f(mat.get("sheet_price_gbp")) or str(mat.get("cost_method") or "").startswith("sheet_rate"):
+        return ""
     if _f(mat.get("unit_material_cost_gbp")) and str(src.get("source_class") or "") == "catalogue":
         return str(src.get("source_note") or src.get("source_name") or "a catalogue row")
     return ""
@@ -257,8 +294,12 @@ def settle(original: Dict[str, Any], estimate: Any, order_qty: Any,
         _flag(estimate, f"print: {pn} is stated printed ('{basis['said']}') and the AI Print "
                         f"calculator prices no print for it: {rec['why_not']}. No print is in "
                         f"this line's price")
+        _alt = rec.get("on_the_other_gauge") or {}
         _ask(estimate, f"{pn} is printed and no print cost is in its price: {rec['why_not']}",
-             "the line carries its material and cutting only, with no print",
+             "the line carries its material and cutting only, with no print"
+             + (f". On the calculator's {_alt['substrate']} row the print would be "
+                f"{_gbp(_alt['total_gbp'])} each ({_alt['parts_per_sheet']} to a sheet); that is not "
+                f"charged, because the gauge differs" if _alt else ""),
              "price the print, or add this substrate and size to the AI Print calculator")
         return estimate
 
