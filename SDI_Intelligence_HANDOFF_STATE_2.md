@@ -98,6 +98,32 @@ where we are on the sheet list ... re run a row we already have ran").** Two lay
     Do not pass capability names to make the button clickable. A "Review / rerun" hyperlink
     column in the tracker (`#tti-row-id=<id>`) selects a row on the page and starts nothing.
 
+**Drawing packs, as of the night of 15 Nov 2026 (build 044ae526, laptop merge db821ed4).**
+JG: "no, we need to re extract. we know the drawing extracts we did were rubbish" ... "in the live
+enquiry area on the K:// we need to create a new version" ... "only if someone does a one job run
+and adds drawing files manually, otherwise it needs to re extract" ... "we need to have all the
+logs in the html mail file - where they're specifically copied from - as well as the actual
+copying of the files themselves and the identification of drawings that we would ideally have".
+
+  * Every run copies its pack whole from W: into `Live Enquiry\<client>\<drawing> vN`. No saved
+    extract is read again; earlier versions are left as they were (`pack_store.store`, fresh=True).
+  * A folder a person filled by hand is used only on a one-job run; a batch passes it by.
+  * A row whose pack files or top-level drawing are not all in the folder handed to the run is
+    held ("held: pack not complete"); nothing is queued. Cause: 12736-00-01, priced on 15 Nov from
+    a 10 Nov folder that lacked its top-level assembly PDF.
+  * The tracker batch sends the pack's record with the job; the e-mail's pack block states where
+    discovery looked, the W: folder, a "Copied from" folder for each file, the K: copy's folder,
+    version, count and time, any file found and not given to the run (red), and "Drawings we
+    would ideally have".
+  * Nothing in the repository deletes, moves or renames anything on W: (29 write/delete lines in
+    the 13 programs that name W: were read; all act on C: or K:). SolidWorks opens read-only and
+    opens the K: copy. A server-side read-only right for the runner account would make it certain.
+
+**The run started that night:** rows 3,4,5,7,8 again (`--run-again --drawings-only`), then
+`--next 20` with the agreed hold rows. Plan (JG): 20 a day, check and send one by one; about 40
+rows have packs; done by Wednesday. Next: review those packs and estimates, fix shared causes;
+then the estimating pack status report and status report updates (JG has the details).
+
 **Costing questions open on 12181-00-GA (run e2639e873262), for estimating, not to be guessed:**
 timber cut from length sits on the Other Sheet row, which cannot price it (how does SDI price
 timber sections?); two plywood pieces from files `_1_PLY` / `_2_PLY` under a part stated 18 mm
