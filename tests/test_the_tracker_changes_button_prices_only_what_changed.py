@@ -555,3 +555,28 @@ def test_the_page_offers_the_two_buttons_and_price_starts_disabled():
     assert '<button class="btn-run" id="ttiChgRun" type="button" disabled>' in PAGE
     assert "ttiChgPlan = null;                 /* never reused" in PAGE
     assert 'id="ttiFind"' in PAGE and 'id="ttiGo"' in PAGE, "the sheet buttons are still there"
+
+
+def _index_db(tmp_path, roots):
+    import sqlite3, json as _json, time as _time
+    db = tmp_path / "index.sqlite"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)")
+    con.executemany("INSERT INTO meta VALUES (?,?)",
+                    [("built_at", str(_time.time())), ("roots", _json.dumps(roots))])
+    con.commit(); con.close()
+    return {"SDI_DRAWING_INDEX": str(tmp_path / "index.json.gz")}
+
+
+def test_an_index_that_could_not_read_a_drawing_area_is_a_hold_however_new_it_is(tmp_path):
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    import tti_tracker_source as src
+    env = _index_db(tmp_path, {"//s/Design": {"readable": True}, "//s/Prototype": {"readable": False}})
+    lookup, problem = src.index_lookup(env)
+    assert lookup is None and "//s/Prototype" in problem and "//s/Design" not in problem
+    # the contrast: every area read, and the same index is used
+    (tmp_path / "ok").mkdir()
+    env = _index_db(tmp_path / "ok", {"//s/Design": {"readable": True}, "//s/Prototype": {"readable": True}})
+    lookup, problem = src.index_lookup(env)
+    assert lookup is not None and problem == ""

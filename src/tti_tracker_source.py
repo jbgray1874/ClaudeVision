@@ -207,6 +207,14 @@ def index_lookup(env: Optional[Dict[str, str]] = None, now: Optional[float] = No
         built = datetime.fromtimestamp(meta["built_at"]).strftime("%d %b %H:%M") if meta["built_at"] else "never"
         return None, (f"The drawing index is older than {cfg['max_hours']:g} hours (built {built}); "
                       f"refresh it before pricing changes")
+    # AN INDEX THAT COULD NOT READ AN AREA IS NOT CURRENT (15 Nov 2026): the index built at 01:17
+    # recorded both drawing areas as unreadable, was still "fresh" by its clock, and the batch
+    # then listed the share live for ten hours. A pack looked up in it cannot be called current.
+    roots = meta.get("roots") or {}
+    unread = sorted(r for r, v in roots.items() if not (v or {}).get("readable"))
+    if not roots or unread:
+        return None, ("The drawing index did not read " + ("; ".join(unread) if unread else "any drawing area")
+                      + " when it was last built; refresh it before pricing changes")
     return (lambda d: drawing_index.db_lookup(db, d)), ""
 
 
