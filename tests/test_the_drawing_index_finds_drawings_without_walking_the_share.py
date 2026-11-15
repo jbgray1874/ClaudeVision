@@ -90,7 +90,13 @@ def test_the_pricer_reads_a_fresh_index_and_walks_live_without_one(tmp_path, mon
     f = tp.find_drawings("12181-00-GA", listings)
     assert f["match"] == "drawing number" and Path(f["files"][0]).name == "12181-00-GA.pdf"
     monkeypatch.setenv("SDI_DRAWING_INDEX_MAX_HOURS", "0")
-    _, how = tp.area_listings(w / "TTI", proto / "TTi")
+    # A STALE INDEX STOPS THE BATCH (15 Nov 2026): it used to start the whole-share listing
+    # here, in silence, which on the real share is some ten hours. The listing is still there
+    # for whoever asks for it by name.
+    with pytest.raises(SystemExit) as stop:
+        tp.area_listings(w / "TTI", proto / "TTi")
+    assert "stale" in str(stop.value) and "--walk-live" in str(stop.value)
+    _, how = tp.area_listings(w / "TTI", proto / "TTi", walk_live=True)
     assert how == "walked live (the drawing index is stale)"
 
 

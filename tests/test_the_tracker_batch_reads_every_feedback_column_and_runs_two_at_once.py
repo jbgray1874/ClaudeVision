@@ -135,7 +135,9 @@ def test_a_second_row_for_a_drawing_still_running_waits_for_that_run(tmp_path, m
     sheet = base._sheet(tmp_path)
     wb = openpyxl.load_workbook(sheet)
     ws = wb.active
-    ws["B7"], ws["D7"], ws["G7"], ws["L7"] = "Counter unit again", 9, "MDF, white gloss", "TTI-10234"
+    # The same words as row 3, at another quantity: rows whose words differ are separate
+    # estimates since 15 Nov 2026, so "again" in the description would make this two runs.
+    ws["B7"], ws["D7"], ws["G7"], ws["L7"] = "Counter unit", 9, "MDF, white gloss", "TTI-10234"
     wb.save(sheet)
     base._areas(tmp_path, monkeypatch)
     monkeypatch.setattr(tp.SheetWriter, "__init__", lambda self, s, n, c: (
