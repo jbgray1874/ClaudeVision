@@ -9,7 +9,7 @@ alias resolution so estimators can cope without requiring FD to rename everythin
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 __all__ = [
     "normalize_part_code", "is_placeholder_identity", "dxf_alias_target",
@@ -394,6 +394,70 @@ def category_code_identities(rows: Iterable[Any], code_key: str = "part_number",
                 ident = f"{ident}-{used[ident]}"
             for i in by_article[words]:
                 out[i] = ident
+    out.update(_shared_article_code_identities(listed, code_key, desc_key, out))
+    return out
+
+
+def _shared_article_code_identities(listed: List[Any], code_key: str, desc_key: str,
+                                    taken: Mapping[int, str]) -> Dict[int, str]:
+    """{index: identity} for the SECOND item a table lists under a supplier's code it has
+    already used for a different item (15 Nov 2026).
+
+    Two packs print one maker's article number at two item numbers of one parts list: a
+    machine screw x12 and the thumb nut that goes on it x12. Keyed on the code there was one
+    record: the screw. The nut had no line and no price, and D-508 could only ask about it.
+    A supplier's article number printed against two rows of ONE table whose words name
+    different things (route_compiler.same_item_described, the test D-508 already uses) is two
+    purchases. The first row keeps the printed code, so the record every reader already made
+    for it stands; each later different item becomes "<printed code>-<its words>", shows the
+    code the drawing printed, and is priced as what its own words say at its own count.
+
+    Narrow on purpose. Only a supplier's article (part_code_conventions.is_supplier_article):
+    a drawing number at two item numbers may be an assembly and the part it wears the code of,
+    which D-508 relinks by the row's words and this leaves alone. Only rows of one table, at
+    different item numbers. A handed pair or a respelling shares its words and stays one."""
+    try:
+        from part_code_conventions import is_category_not_a_code, is_supplier_article
+        from route_compiler import same_item_described
+    except Exception:                                               # pragma: no cover
+        return {}
+    groups: Dict[Tuple[str, str], List[int]] = {}
+    for i, row in enumerate(listed):
+        if not isinstance(row, dict) or i in taken:
+            continue
+        code = str(row.get(code_key) or "").strip()
+        parent = str(row.get("bom_parent") or row.get("source_pdf") or "").strip().upper()
+        item = str(row.get("bom_item_no") or row.get("item_number") or row.get("item_no") or "").strip()
+        if not code or not parent or not item or row.get("printed_code"):
+            continue
+        if is_category_not_a_code(code) or not is_supplier_article(code):
+            continue
+        groups.setdefault(("".join(code.upper().split()), parent), []).append(i)
+    out: Dict[int, str] = {}
+    for idxs in groups.values():
+        if len(idxs) < 2:
+            continue
+        first = listed[idxs[0]]
+        first_desc = str(first.get(desc_key) or "")
+        first_item = str(first.get("bom_item_no") or first.get("item_number") or first.get("item_no") or "")
+        kinds: List[Tuple[str, str]] = []                # (description, identity) of later items
+        for i in idxs[1:]:
+            row = listed[i]
+            desc = str(row.get(desc_key) or "")
+            item = str(row.get("bom_item_no") or row.get("item_number") or row.get("item_no") or "")
+            if item == first_item or not desc.strip() or same_item_described(first_desc, desc):
+                continue
+            ident = next((k for d, k in kinds if same_item_described(d, desc)), "")
+            if not ident:
+                words = _article_words(desc)
+                if not words:
+                    continue
+                printed = str(row.get(code_key) or "").strip().upper()
+                ident = f"{printed}-{'-'.join(words[:4])}"
+                if any(k == ident for _d, k in kinds):
+                    ident = f"{ident}-{len(kinds) + 1}"
+                kinds.append((desc, ident))
+            out[i] = ident
     return out
 
 

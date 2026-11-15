@@ -3064,8 +3064,19 @@ def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
         # two with no line on the Estimate (D-290). The printed class word says what the row
         # is; the identity the split gave it is the article.
         _printed = str(row.get("printed_code") or "").strip()
+        _row_code = str(row.get("part_number") or "").strip()
+        if not _printed and _article and _row_code \
+                and _article.upper().startswith(_row_code.upper() + "-"):
+            _printed = _row_code            # split here, not upstream: the row still prints it
         if (not _article and _printed and pn and is_category_not_a_code(_printed)
                 and pn.upper() != _printed.upper()):
+            _article = pn
+        # AND THE SECOND ITEM UNDER A SUPPLIER'S CODE THE TABLE USED TWICE (15 Nov 2026):
+        # part_identity gave it "<printed code>-<its words>" for the same reason, and the
+        # same 40-character cap would refuse it.
+        _second_item = bool(_printed and pn and not is_category_not_a_code(_printed)
+                            and pn.upper().startswith(_printed.upper() + "-"))
+        if not _article and _second_item:
             _article = pn
         dsc = str(row.get("description") or "").strip()
         qty = row.get("quantity") or 1
@@ -3108,6 +3119,14 @@ def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
         rec["page_roles"] = ["bought_in"]
         rec["pages"] = []
         rec["materials"] = []
+        if (_printed and not is_category_not_a_code(_printed)
+                and effective_pn.upper().startswith(_printed.upper() + "-")):
+            rec["printed_code"] = _printed
+            rec.setdefault("review_flags", []).append(
+                f"ONE CODE, TWO ITEMS: the parts list prints {_printed} against this item "
+                f"('{effective_desc}') and against a different item. Each is a line of its "
+                f"own at its own count, and this one is priced as what its words say, not by "
+                f"that code. Confirm its real code with the drawing office.")
         rec["source"] = "non_sdi_bom_row"
         if _article:
             rec["printed_code"] = _printed or str(row.get("part_number") or "").strip()
