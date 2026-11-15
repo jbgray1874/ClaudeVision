@@ -223,9 +223,16 @@ def same_time(mtime, listed):
             return abs(float(mtime) - float(listed['mtime'])) <= 1.0
         except (TypeError, ValueError):
             return False
+    # A file too large to hash is fingerprinted by its size and whole-second time: exact.
+    mark = text(listed.get('fingerprint'))
+    if mark.startswith('stat:'):
+        return mark.rsplit(':', 1)[-1] == str(int(mtime))
     stamp = text(listed.get('modified'))
     if not stamp:
         return True
+    # To the minute, with the size compared beside it. A same-size edit inside the listing's
+    # own minute is the one change this cannot see; the engine's content fingerprint is what
+    # a run compares at submission.
     return datetime.fromtimestamp(mtime).isoformat(timespec='minutes') == stamp[:16]
 
 

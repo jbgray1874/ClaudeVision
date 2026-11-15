@@ -308,3 +308,8 @@ class ResolverManifestShapeTests(unittest.TestCase):
         self.assertTrue(p.same_time(1000.2, {'mtime': 1000.0}))
         self.assertFalse(p.same_time(1900.0, {'mtime': 1000.0}))
         self.assertTrue(p.same_time(1000.0, {'size': 3}))
+
+    def test_a_large_files_size_and_second_fingerprint_is_compared_exactly(self):
+        listed = {'size': 9, 'modified': '2026-11-15T02:06', 'fingerprint': 'stat:9:1000'}
+        self.assertTrue(p.same_time(1000.4, listed))
+        self.assertFalse(p.same_time(1001.0, listed), 'one second later is a change')
