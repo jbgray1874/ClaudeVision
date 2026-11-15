@@ -432,11 +432,20 @@ class _Portal(FakePortal):
         return {"status": "done", "quantity_prices": [{"quantity": 4, "unit_gbp": self.price}]}
 
 
+def _no_sheet_backup(monkeypatch):
+    """ONLY THE TRACKER'S OWN BACKUP COPY IS SKIPPED. This used to switch every copy off, so a
+    row's pack never reached the folder it is kept in, and nothing noticed. A run is now handed
+    the pack whole or not at all, so the pack's files must really be copied."""
+    real = tp.shutil.copy2
+    monkeypatch.setattr(tp.shutil, "copy2", lambda src, dst, *a, **k: (
+        None if "(before AI cost" in str(dst) else real(src, dst, *a, **k)))
+
+
 def _quiet(monkeypatch):
     """Write into the test's own sheet with openpyxl (no Excel, no backup copy), so the
     read-back check sees what was written."""
     monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: self._openpyxl(row, value))
-    monkeypatch.setattr(tp.shutil, "copy2", lambda *a, **k: None)
+    _no_sheet_backup(monkeypatch)
 
 
 def test_a_cost_already_in_the_cell_is_kept_and_not_priced_again(tmp_path, monkeypatch):
@@ -689,7 +698,7 @@ def _unwritten_row(tmp_path, monkeypatch):
     sheet = _sheet(tmp_path)
     wb = openpyxl.load_workbook(sheet); wb.active["P3"] = None; wb.save(sheet)
     _areas(tmp_path, monkeypatch)
-    monkeypatch.setattr(tp.shutil, "copy2", lambda *a, **k: None)
+    _no_sheet_backup(monkeypatch)
     monkeypatch.setattr(tp.SheetWriter, "write",
                         lambda self, row, value: (_ for _ in ()).throw(OSError("the workbook is open")))
     first = _Portal()
