@@ -3315,3 +3315,38 @@ It reads either Dave's own sheet or a board that Production has edited and saved
   - the part-code → BOM links (703) are unchanged.
 - **So the weekly cycle becomes:** refresh the board (or run the query), and last week's notes come across by themselves.
 - **In X3:** the same notes become user fields on the works order (question 7 to Rachael and Liz), so they stay with the order.
+
+### 22.24 Emails ready for Monday 16 Nov: Ethan + Dave (estimating TEST load) and Ethan (Live Orders on X3 data)
+
+These are saved in the scratchpad `outbox_16Nov/` (not git).
+
+**A. Estimating (to Ethan and Dave, cc James Ryan and Neil). Decision (James, 15 Nov): don't wait for Dave's macro sheet.**
+- The converter's files use the migration's own templates and match Access on a real estimate. The macro sheet is now only a cross-check.
+- **Ethan loads two real estimates into TEST:**
+  - Dave's IMPORT part: product, 14 BOM lines, 30 operations. The parent IMPORT already exists, with a manual routing.
+  - The Gift Card Header: 8 BOM lines and 9 operations, identical to the migrated ones.
+- **The load answers Acuity Q6 and Q7 directly:** what re-importing an existing product, BOM or route does, and whether a works order can be raised for IMPORT straight away (product-site).
+- **Dave:** the macro workbook as a cross-check, and 30 minutes on screen with the TEST load. Questions 10–13 still stand.
+- **Attachments:**
+  - `Estimating_X3_TEST_load_files.zip`: 5 load files (CRLF) plus a read-me, for Ethan;
+  - `Estimating_to_X3_examples.xlsx`, for Dave.
+
+**B. Live Orders (to Ethan, cc Neil and Dave).** An export from TEST so the board runs on X3 data. Section C of email 6 in practice. It asks for:
+1. open WOs with the originating SO / line;
+2. WO operations;
+3. WO materials (required, allocated, short);
+4. open SO lines;
+5. open PO lines with expected dates;
+6. stock.
+
+**Questions in it:** do the Run 4 works orders (721) and the WO → SO link exist in TEST; three WO user fields (Comments, Prog, Tube req); has MRP run.
+**Attachment:** the 13 Nov board.
+
+**Live Orders: what's understood and what isn't.**
+- **Understood and proved:** every column's source and logic, against Dave's sheet.
+- **Still open:**
+  - Production's rules: the 12 questions to Rachael and Liz, due Fri 20 Nov;
+  - the REV drawing folder (Dave says production folder; to confirm with James);
+  - the Crystal report behind the sheet;
+  - work-centre capacities;
+  - the X3 side, which Ethan's export answers.
