@@ -6,6 +6,7 @@ migration's extract_transactions.txt) instead. After go-live the same page reads
 
     set SDI_SQL_CONN=DRIVER={ODBC Driver 17 for SQL Server};SERVER=<server>;DATABASE=SDILive;Trusted_Connection=yes;ApplicationIntent=ReadOnly
     set LO_PRODUCTS=<ZSDIITM products file .xlsx>   LO_BOMS=<YA00408BOM .txt>   LO_ROUTES=<ZSDIROU2 .txt>
+    set LO_COSTS=<YITC product costs .txt>   (optional: material cost on the exploded BOMs)
     python live_orders_app.py                   ->  http://localhost:8767
     python live_orders_app.py --host 0.0.0.0    ->  shared on the SDI network (no login - keep it inside SDI)
 """
@@ -30,6 +31,7 @@ RUNS = Path(os.environ.get("LO_RUNS", HERE / "runs"))
 CONN = os.environ.get("SDI_SQL_CONN", "")
 MASTER = {k: os.environ.get(f"LO_{k.upper()}", "") for k in ("products", "boms", "routes")}
 DAVE = os.environ.get("LO_DAVE", "")              # optional: Dave's workbook, to compare against
+COSTS = os.environ.get("LO_COSTS", "")            # optional: YITC product costs (.txt) - material cost on the BOMs
 e = html.escape
 
 
@@ -115,7 +117,8 @@ def build_run(text, source):
     d.mkdir(parents=True)
     (d / "live_orders_extract.txt").write_text(text, encoding="utf-8")
     res = lo.build(d / "live_orders_extract.txt", d, MASTER["products"], MASTER["boms"], MASTER["routes"],
-                   DAVE if DAVE and Path(DAVE).exists() else None)
+                   DAVE if DAVE and Path(DAVE).exists() else None, 14,
+                   COSTS if COSTS and Path(COSTS).exists() else None)
     meta = dict(res["meta"], source=source, files=res["files"])
     if not meta["wos"]:
         raise ValueError("No open works orders were found - is this the result of live_orders.sql?")

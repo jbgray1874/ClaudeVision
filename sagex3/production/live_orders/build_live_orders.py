@@ -27,6 +27,7 @@ the board's own - in X3 the works order's allocations replace it.
         --routes ZSDIROU2.txt [--dave Live_Orders.xlsx] [--suggest-lead-days 14]
 """
 import argparse
+from openpyxl.worksheet.hyperlink import Hyperlink
 import csv
 import datetime as dt
 import html
@@ -149,7 +150,16 @@ def drawing_of(code):
 
 
 # ---------------------------------------------------------------- the board
-def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, lead_days=14):
+def read_costs(path):
+    """YITC load file: I;site;product;...;cost (last field) - the X3 standard cost per stock unit."""
+    out = {}
+    for r in read_load(path):
+        if len(r) >= 12 and r[0] == "I":
+            out[r[2]] = num(r[11])
+    return out
+
+
+def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, lead_days=14, costs_path=None):
     grids, as_at = read_extract(extract)
     prods, boms, routes, wcnames = read_products(products_path), read_boms(boms_path), read_routes(routes_path), read_work_centres()
     today = day(as_at[:10]) or dt.date.today()
@@ -303,6 +313,7 @@ def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, le
                         families=sorted({family(o[1]) for o in rt if family(o[1])}), drawing=drawing_of(code)))
 
     # exploded BOMs, all levels
+    costs = read_costs(costs_path) if costs_path else None
     def explode(code, qty, level, seen):
         out = []
         for comp, link in boms.get(code, []):
@@ -311,6 +322,9 @@ def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, le
                             stock=stock.get(comp, 0), on_po=on_po.get(comp, 0),
                             po_due=fmt(next((x[0] for x in pos.get(comp, []) if x[0]), None)), on_wo=on_wo.get(comp, 0),
                             bom=comp in boms, route=comp in routes,
+                            dept="/".join(sorted({family(o[1]) for o in routes.get(comp, []) if family(o[1])})),
+                            cost_each=costs.get(comp) if costs else None,
+                            cost=round(costs[comp] * need, 2) if costs and costs.get(comp) is not None else None,
                             make="Manufactured" if comp in boms or comp in routes else "Purchased"))
             if comp in boms and comp not in seen and level < 8:
                 out += explode(comp, need, level + 1, seen | {comp})
@@ -408,7 +422,7 @@ def write_xlsx(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare):
               ["Work-centre hours", "Route run time x balance, plus set-up if nothing is made yet. Column = X3 work centre (Access dept)."],
               ["Work-centre load", "Those hours by week of the works order's due date; overdue counts in this week."],
               ["WO Suggestions", "Sales-order lines for made parts not covered by stock or works orders. Start = due - lead days."],
-              ["Exploded BOMs", "Every level, with stock, on PO (next due), on WO and make / buy."],
+              ["Exploded BOMs", "Every level, with stock, on PO (next due), on WO, make / buy, has BOM / route, department, and material cost (X3 standard cost x required). Click a part code on Live Orders to jump to its works order here."],
               ["Typed by Production", "Comments, Prog and Tube req are not in Access or X3 data: kept on the board's side (LO-01)."]]:
         ws.append(r)
     ws.column_dimensions["A"].width, ws.column_dimensions["B"].width, ws.column_dimensions["C"].width = 26, 70, 50
@@ -422,10 +436,24 @@ def write_xlsx(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare):
              w["des"], drawing_of(w["code"]), w["rev"], w["status"], w["mat_text"], w["qty"], w["done"], w["bal"],
              *["Y" if f in w["families"] else "" for f in ("Metal", "Joinery", "Acrylics")], "", "", ""]
             + [round(w["hours"][c], 2) if w["hours"].get(c) else None for c in wc_cols] for w in wos]
+    bom_rows, bom_first = [], {}
+    for w in wos:
+        bom_first[w["wo"]] = len(bom_rows) + 2
+        bom_rows.append([w["wo"], w["code"], 0, w["code"], w["des"], 1, w["bal"], stock_of(w), None, None, None, None, None,
+                         "Yes" if w["has_route"] else "No", "", None, None, w["status"]])
+        for e_ in w["explode"]:
+            bom_rows.append([w["wo"], w["code"], e_["level"], e_["comp"], e_["des"], e_["link"], round(e_["need"], 4), e_["stock"],
+                             e_["on_po"], e_["po_due"], e_["on_wo"], e_["make"], "Yes" if e_["bom"] else "",
+                             "Yes" if e_["route"] else "", e_["dept"], e_["cost_each"], e_["cost"], ""])
     s = sheet(wb, "Live Orders", head, rows, [10, 12, 13, 12, 11, 17, 9, 20, 34, 16, 5, 10, 48, 7, 8, 8, 6, 7, 8, 24, 6, 8]
               + [9] * len(wc_cols), status_col=11)
     for r in range(2, s.max_row + 1):
         s.cell(r, 1).number_format = "dd/mm/yy"
+        tgt = bom_first.get(s.cell(r, 3).value)
+        if tgt:   # Dave (LO-05): the part code opens this works order's exploded BOM - stock, on order, PO due date
+            s.cell(r, 8).hyperlink = Hyperlink(ref=s.cell(r, 8).coordinate, location=f"'Exploded BOMs'!A{tgt}",
+                                               tooltip="Exploded BOM: stock, on order, PO due date")
+            s.cell(r, 8).font = Font(color="2B6CB0", underline="single")
         if isinstance(s.cell(r, 2).value, dt.date):
             s.cell(r, 2).number_format = "dd/mm/yy"
 
@@ -445,15 +473,19 @@ def write_xlsx(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare):
         for c in (8, 9, 14):
             s.cell(r, c).number_format = "dd/mm/yy"
 
-    rows = []
-    for w in wos:
-        rows.append([w["wo"], w["code"], 0, w["code"], w["des"], 1, w["bal"], stock_of(w), None, None, None, None, None, w["status"]])
-        for e_ in w["explode"]:
-            rows.append([w["wo"], w["code"], e_["level"], e_["comp"], e_["des"], e_["link"], round(e_["need"], 4), e_["stock"],
-                         e_["on_po"], e_["po_due"], e_["on_wo"], e_["make"], "Yes" if e_["bom"] else "", ""])
-    sheet(wb, "Exploded BOMs", ["WO", "Part", "Level", "Component", "Description", "Qty used", "Required", "In stock",
-                                "On PO", "Next PO due", "On WO", "Procurement", "Has BOM", "Status"], rows,
-          [13, 20, 6, 22, 34, 9, 10, 9, 9, 11, 8, 13, 8, 9], status_col=13)
+    sb = sheet(wb, "Exploded BOMs", ["WO", "Part", "Level", "Component", "Description", "Qty used", "Required", "In stock",
+                                     "On PO", "Next PO due", "On WO", "Procurement", "Has BOM", "Has route", "Department",
+                                     "Mat cost each", "Mat cost", "Status"], bom_rows,
+               [13, 20, 6, 22, 34, 9, 10, 9, 9, 11, 8, 13, 8, 8, 12, 11, 11, 9], status_col=17)
+    for r in range(2, sb.max_row + 1):
+        if sb.cell(r, 3).value == 0:      # the works order's own line: bold, and a link back to Live Orders
+            for c in range(1, 19):
+                sb.cell(r, c).font = Font(bold=True)
+        for c in (16, 17):
+            sb.cell(r, c).number_format = "#,##0.00"
+        if sb.cell(r, 3).value == 0:
+            sb.cell(r, 17).value = f"=SUMIFS(Q:Q,A:A,A{r},C:C,1)"
+    sb.freeze_panes = "A2"
     if compare:
         sheet(wb, "Check against Dave", ["WO", "Dave part", "Board part", "Part", "Dave qty", "Board qty", "Dave balance",
                                          "Board balance", "Balance", "Dave due", "Board due", "Dave material status",
@@ -564,9 +596,10 @@ if __name__ == "__main__":
     ap.add_argument("--boms", required=True)
     ap.add_argument("--routes", required=True)
     ap.add_argument("--dave")
+    ap.add_argument("--costs", help="YITC product costs load file (.txt) - material cost on the exploded BOMs")
     ap.add_argument("--suggest-lead-days", type=int, default=14)
     a = ap.parse_args()
-    res = build(a.extract, a.out_dir, a.products, a.boms, a.routes, a.dave, a.suggest_lead_days)
+    res = build(a.extract, a.out_dir, a.products, a.boms, a.routes, a.dave, a.suggest_lead_days, a.costs)
     print(json.dumps(res["meta"]), "\n", res["files"])
     if res["compare"]:
         print("against Dave's sheet:", res["compare"])

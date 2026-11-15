@@ -3167,3 +3167,34 @@ Then go to the API once Acuity has given us the template and the access.
   - whether the 6% is accounted for outside Finance's quantity-rebate provisions (asked of Charlotte).
 
 **Lesson:** a report recreated from a user's copy reproduces their mistakes as well as their totals. Ask the users to read the line list, not just the totals.
+
+### 22.20 Dave's Live Orders sheet re-analysed (15 Nov) – his two "game changer" notes; "Live Enquiry" means this sheet
+
+**Correction:** when James says "live enquiry" for Rachael and Liz, he means **Dave's Live Orders sheet** (`Live_Orders.xlsx`). The 15 Nov upload is byte-for-byte the copy we built the board from, MD5 4a2406…. The opportunity work (Live Enquiry → X3 opportunity, OPP-00..06) is a separate thing and stays with Acuity. The draft users' email in 22.18 is **withdrawn** and won't be sent.
+
+**What Dave's sheet holds:**
+- **Live Orders:** 304 rows. Due date, customer date (a broken #REF! formula), WO, SO, part, description, drawing, REV, material status (typed), qty / booked in / balance, Metal / Joinery / Acrylics, tube req, comments, prog, and 23 department hour columns. Black "weekly break lines" separate the weeks.
+- **WO Suggestions:** MRP-style.
+- **BOM Report:** an example exploded BOM, with level, part, description, qty used, required, in stock, on PO, **PO due date** ("new thing"), on WO, BOM, route, mat cost, **mat cost each** ("new thing"), department, procurement.
+
+**His two notes (cell comments):**
+1. **E30, part code: "Apply a link from this cell that takes the user to the BOM report (as per tab 3). This would be a game changer for a lot of people in office and on shop floor. BOM to show stock of parts / if on order / due date of order."**
+   - **Done.** The web board already opened each works order's exploded BOM on click.
+   - **New (15 Nov):** in the Excel version, every part code on Live Orders is now a link to that works order's line on Exploded BOMs. All 703 were checked: each lands on the right works order.
+   - **New columns on Exploded BOMs, so it matches his tab 3:**
+     - Has route;
+     - Department (Metal / Joinery / Acrylics, from the component's route);
+     - Mat cost each (X3 standard cost, YITC);
+     - Mat cost (required × each), with a total on each works-order line.
+   - The cost file is optional: `--costs <YITC .txt>` on the builder, or `LO_COSTS` for the web page.
+   - The board's totals are unchanged: 703 WOs, 169 / 261 / 273.
+2. **H13, REV: "Highlight REV cell in red if the letter / number in this cell does not match the rev indicated on the GA of the drawing located in the production folder."**
+   - **Not built.** It needs the drawing files on W:\Production, which this session can't reach.
+   - **Plan:** a small read-only script on James's PC.
+     - It lists the GA drawings (PDF) for each board drawing number, reads the rev from the file name (or from the title block if the names don't carry it), and compares it with the works order's REV.
+     - Mismatches turn the REV cell red, with a "Drawing rev" column next to it.
+     - The existing `live_enquiry_collector.py` already searches `W:\Production\<customer>` by drawing number, and the rev check reuses that search.
+   - **Needed from James:** a file listing to learn the naming, from
+     `dir /s /b "W:\Production\*-GA*.pdf" > ga_list.txt`.
+
+**Also on Dave's sheet and already covered:** WO Suggestions; department hours (work-centre hours and load by week); the black week break lines (the board sorts by due date; week grouping is a display choice for LO-01). Comments, Prog and Tube req stay typed by Production (LO-01).
