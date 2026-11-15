@@ -1016,31 +1016,63 @@ def checked_pack_difference(checked: Dict[str, Dict[str, str]], drawing: str,
     return "the pack found now differs from the pack that was checked (" + "; ".join(said) + ")"
 
 
-def adopt_after_no_answer(portal: Any, drawing: str, asked_at: float, wait_s: float = 600.0,
-                          every_s: float = 15.0, sleep: Callable[[float], None] = time.sleep,
-                          say: Callable[[str], None] = lambda m: print(m, flush=True)) -> Optional[str]:
-    """After a submit that got no answer: the run the service started for this drawing since the
-    request left, or None when it shows none within `wait_s`. Only a run this batch could have
-    asked for is taken: the tracker's own source, the same drawing, queued after the request."""
+def runs_after_no_answer(portal: Any, drawing: str, quantity: Any, asked_at: float, wait_s: float = 600.0,
+                         every_s: float = 15.0, sleep: Callable[[float], None] = time.sleep,
+                         say: Callable[[str], None] = lambda m: print(m, flush=True)
+                         ) -> Tuple[List[str], bool]:
+    """After a request that got no answer: (the runs the service holds that this row could have
+    asked for, whether the service was heard at all). A run is this row's only when it is the
+    tracker's own source, the same drawing AND the same number of units, queued since the
+    request left. The caller takes a run up only when there is exactly one; with none, several,
+    or a service that could not be asked, the outcome is not known and nothing is sent."""
     tries = max(1, int(wait_s // max(every_s, 0.001)) + 1)
     say(f"[tti] the service did not answer the request for {drawing}; asking it whether it holds the run "
-        f"(up to {wait_s:g} s) before anything is sent again")
+        f"(up to {wait_s:g} s). Nothing is sent again while the outcome is not known")
+    heard = False
     for n in range(tries):
         try:
             runs = (portal.recent(100) or {}).get("runs") or []
+            heard = True
         except Exception:                                                # noqa: BLE001
-            runs = None
-        if runs:
-            mine = [x for x in runs
-                    if str(x.get("drawing_number") or "").strip().upper() == str(drawing).strip().upper()
-                    and str(x.get("source") or "") == "tti"
-                    and float(x.get("queued_at") or 0) >= asked_at - 5]
-            if mine:
-                mine.sort(key=lambda x: float(x.get("queued_at") or 0))
-                return str(mine[-1].get("run_id"))
+            runs = []
+        mine = [x for x in runs
+                if str(x.get("drawing_number") or "").strip().upper() == str(drawing).strip().upper()
+                and str(x.get("source") or "") == "tti"
+                and str(x.get("units")) == str(quantity)
+                and float(x.get("queued_at") or 0) >= asked_at - 5]
+        if mine:
+            return sorted({str(x.get("run_id")) for x in mine}), True
         if n + 1 < tries:
             sleep(every_s)
-    return None
+    return [], heard
+
+
+def take_ups(values: Any) -> Dict[int, str]:
+    """--take-up 3=e2639e873262: the run that is a row's, named by the person who can see it."""
+    out: Dict[int, str] = {}
+    for v in values or []:
+        m = re.fullmatch(r"\s*(\d+)\s*=\s*([0-9a-fA-F]{6,})\s*", str(v))
+        if not m:
+            raise SystemExit(f"--take-up is ROW=RUN, e.g. 3=e2639e873262; this is not: {v!r}. "
+                             f"Nothing was queued or written.")
+        out[int(m.group(1))] = m.group(2).lower()
+    return out
+
+
+def run_is_the_rows(portal: Any, run_id: str, r: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+    """(the run's status, "") when the named run is for this row's drawing and units; else (None, why)."""
+    try:
+        st = portal.status(run_id) or {}
+    except Exception as exc:                                             # noqa: BLE001
+        return None, f"run {run_id} could not be read from the service ({exc})"
+    if str(st.get("drawing_number") or "").strip().upper() != str(r.get("drawing") or "").strip().upper():
+        return None, f"run {run_id} is for {st.get('drawing_number') or 'no drawing'}, not {r.get('drawing')}"
+    if str(st.get("units")) != str(r.get("quantity")):
+        return None, f"run {run_id} is for {st.get('units')} unit(s), not this row's {r.get('quantity')}"
+    return st, ""
+
+
+OUTCOME_NOT_KNOWN = "outcome not known"
 
 
 def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optional[Path] = None,
@@ -1198,6 +1230,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     # by this one process, one finished run at a time, so no two writers meet. A later row for
     # a drawing still in flight waits for that run and takes its break, as before.
     at_once = max(1, int(getattr(args, "at_once", 1) or 1))
+    _take_up = take_ups(getattr(args, "take_up", []))
     in_flight: List[List[Any]] = []
 
     def _finish(item, r, manifest, st) -> None:
@@ -1473,47 +1506,76 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             _asked_at = time.time()
             _failed: Optional[BaseException] = None
             started = None
-            # THE ROW'S LAST REQUEST GOT NO ANSWER (15 Nov 2026): the service may have queued it
-            # all the same, and did for row 3. Before a second request is sent, the service is
-            # asked once for a run of this drawing queued around that request; if it holds one,
-            # that run is this row's: followed if it is still going, used if it has finished.
-            if r.get("drawing") and str(_prev.get("state")) == "not queued" \
-                    and "did not answer" in str(_prev.get("why") or ""):
+            _hold = ""
+            # A ROW IS NEVER SENT WHILE AN EARLIER REQUEST'S OUTCOME IS NOT KNOWN (15 Nov 2026).
+            # Row 3's request got no answer and the service ran the job all the same. The run that
+            # is the row's is taken up when a person names it (--take-up ROW=RUN) and it is for
+            # this drawing and these units, or when the service shows exactly one such run.
+            # Otherwise nothing is sent: not on a lookup that failed, not on "none found", not by
+            # picking the newest of several. --resubmit-lost says, by hand, that there is no run.
+            _named = _take_up.get(int(r["row"]))
+            _uncertain = str(_prev.get("state")) == OUTCOME_NOT_KNOWN or (
+                str(_prev.get("state")) == "not queued" and "did not answer" in str(_prev.get("why") or ""))
+            if _named:
+                _st, _why = run_is_the_rows(portal, _named, r)
+                if _st is None:
+                    _hold = f"--take-up was refused: {_why}. Nothing was sent"
+                else:
+                    started = {"run_id": _named}
+                    item["resumed"] = f"run {_named} was named as this row's and is taken up; nothing was sent"
+            elif _uncertain and r.get("drawing") and not getattr(args, "resubmit_lost", False):
                 try:
                     _then = datetime.fromisoformat(str(_prev.get("updated"))).timestamp()
                 except (TypeError, ValueError):
                     _then = None
-                _found = adopt_after_no_answer(portal, r["drawing"], _then - 900, wait_s=0, sleep=sleep) \
-                    if _then else None
-                if _found:
-                    started = {"run_id": _found}
-                    item["resumed"] = (f"the last request for this row got no answer, but the service had "
-                                       f"queued it: run {_found} is taken up, nothing was sent twice")
+                _found, _heard = runs_after_no_answer(portal, r["drawing"], r["quantity"], _then - 900,
+                                                      wait_s=0, sleep=sleep) if _then else ([], False)
+                if len(_found) == 1:
+                    started = {"run_id": _found[0]}
+                    item["resumed"] = (f"the last request for this row got no answer, but the service holds "
+                                       f"exactly one run for it: run {_found[0]} is taken up, nothing was sent")
+                else:
+                    _hold = ("the last request for this row got no answer and its outcome is still not known: "
+                             + ("the service could not be asked" if not _heard else
+                                f"the service shows {len(_found)} runs that could be it ({', '.join(_found)})"
+                                if _found else "the service shows no run that is plainly it")
+                             + f". Nothing was sent. Name the run with --take-up {r['row']}=RUN, or, once Grid "
+                               f"Control shows there is no run for this row, add --resubmit-lost")
+            if _hold:
+                item.update(state=OUTCOME_NOT_KNOWN, why=_hold)
+                record(item, r, manifest)
+                save()
+                continue
             if started is None:
                 try:
                     started = portal.start(body)
                 except Exception as exc:                                 # noqa: BLE001
                     _failed = exc
             if _failed is not None and getattr(_failed, "status", None) == 0 and r.get("drawing"):
-                # NO ANSWER IS NOT A REFUSAL (15 Nov 2026). The service took a 65-file pack with
-                # its models, the answer did not come inside the wait, and the row was written
-                # down as "not queued" while the service may have queued it. Before anything is
-                # said, the service is asked whether it holds a run for this drawing started
-                # since the request left; if it does, that run is this row's and is followed.
-                _found = adopt_after_no_answer(portal, r["drawing"], _asked_at, sleep=sleep)
-                if _found:
-                    started = {"run_id": _found}
+                # NO ANSWER IS NOT A REFUSAL. The service is asked whether it holds the run; one
+                # plain match is followed. Anything else is "outcome not known", never "not queued".
+                _found, _heard = runs_after_no_answer(portal, r["drawing"], r["quantity"], _asked_at, sleep=sleep)
+                if len(_found) == 1:
+                    started = {"run_id": _found[0]}
                     item["resumed"] = (f"the service did not answer the request in time but had queued "
-                                       f"it: run {_found} is followed, nothing was sent twice")
+                                       f"it: run {_found[0]} is followed, nothing was sent twice")
                     _failed = None
+                else:
+                    item.update(state=OUTCOME_NOT_KNOWN,
+                                why=f"{_failed} — the request left and no answer came. "
+                                    + ("The service could not be asked afterwards" if not _heard else
+                                       f"The service shows {len(_found)} runs that could be it ({', '.join(_found)})"
+                                       if _found else "The service showed no run for it in ten minutes")
+                                    + f". Nothing will be sent for this row until the outcome is known: check Grid "
+                                      f"Control, then --take-up {r['row']}=RUN or --resubmit-lost")
+                    record(item, r, manifest)
+                    save()
+                    continue
             if _failed is not None:
                 _m = re.search(r"/api/estimate/([0-9a-f]{6,})/", str(_failed))
                 item.update(state="not queued", why=str(_failed)
                             + (f" — this batch did not start run {_m.group(1)}; let it finish or stop it on "
-                               f"Grid Control, then run this row again" if _m else "")
-                            + (" — the service was asked for ten minutes whether it holds a run for this "
-                               "drawing and showed none; check Grid Control before running the row again"
-                               if getattr(_failed, "status", None) == 0 else ""))
+                               f"Grid Control, then run this row again" if _m else ""))
                 record(item, r, manifest)
                 save()
                 continue
@@ -1617,6 +1679,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--write-only", action="store_true",
                     help="write back the cost of runs already finished (to the cost column, the central "
                          "sheet and the conference folder); never start or wait for an estimate")
+    ap.add_argument("--take-up", action="append", default=[], metavar="ROW=RUN",
+                    help="the run that is a row's, e.g. 3=e2639e873262: it is followed or its result "
+                         "used, and nothing is sent for that row. Refused when the run is for another "
+                         "drawing or another number of units")
     ap.add_argument("--resubmit-lost", action="store_true",
                     help="submit again a row whose earlier run failed because its runner stopped "
                          "answering; only once that process is confirmed ended")
