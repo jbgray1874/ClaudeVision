@@ -14,6 +14,76 @@ bought-in recogniser and the cross-layer reconciliation pass.
 
 ## 0. WHAT HAS CHANGED SINCE §1–§12 WERE WRITTEN (2026-09-11)
 
+### 0.TTI THE TTI TRACKER WORK, AS IT STANDS ON 15 NOV 2026 (read this before touching it)
+
+Written so the next session does not lose it. Status words are JG's: implemented, tested,
+deployed, proved on a real result. Only the last means fixed.
+
+**How a drawing pack is found. JG's rule, word for word (15 Nov 2026):** "we find the pdfs, in
+the ga pdfs we find the hierarchy of drawings needed, including the part and assembly files, as
+well as the dxfs .. the ai runner only differs in that it doesn't read from the prototype
+folder". And: "We need to take the latest one from design as the designers save there first and
+then would usually move to prototype."
+
+  * NO DRAWING INDEX in discovery. `src/drawing_index.py` was introduced on 9 Nov 2026 by a
+    session, not asked for by JG. It was incomplete (it held almost none of the TTI Design area)
+    and two tracker rows were priced from Prototype PDFs and DXFs while the Design folder held 11
+    assemblies and 13 parts. JG: "forget the index". Do not bring it back as a prerequisite or as
+    the authority for what exists. It survives only behind `--use-index`.
+  * `pack_resolver.rows_for_job_now(drawing, areas)`: the job number names the job; each area is
+    looked in, in order, for folders named for it; every folder of the job is listed at that
+    moment; the resolver chooses. An area or folder that cannot be read, or does not answer in
+    time, raises `PackCheckStalled` and the row is HELD. "Could not look" is never "not there".
+  * TTI tracker batch (`src/tti_pricer.py`): Design, then Prototype. PROVED on 12181-00-GA.
+  * AI runner (`src/live_enquiry_runner.py` `DesignShare`): Design ONLY. Deployed, not proved.
+  * The page's Find drawing pack (`pack_resolver.main`): Design then Prototype. Deployed, not proved.
+
+**Where a TTI estimate is saved. JG's instruction, word for word (15 Nov 2026):**
+"results folder - full estimating extract: K:\Estimating\Completed\Live Enquiries\completed AI
+briefs\TTI\$job_no . full estimating extract: C:\ClaudeVision (or ClaudeVision-s2 equivalent,
+depending on the runner)\output\estimates . ONLY the GA PDF and the s/sheet estimate:
+K:\Estimating\Completed\Live Enquiries\completed AI briefs\TTI\TTI_Amsterdam-Conference .
+Drawing packs.. FULL ONLY HERE - K:\Estimating\Completed\AI Estimating\Live Enquiry\TTI\$job_no".
+The estimate spreadsheets themselves also live in `K:\Estimating\Completed\AI Estimating\AISheets`
+(`AISheets\<client>\<drawing>\<date time> (<qty> off)`). The conference copy and the tracker
+cost are BATCH steps: a run started outside the batch does not get them.
+
+**How the batch is run.** Five-job groups, two runners at once (the laptop cannot run three),
+then a review gate before the next five. Each row's cost, files and ledger entry are written as
+that row finishes. A request that got no answer is never sent again while its outcome is not
+known: `--take-up ROW=RUN` names the run (checked against the row's drawing and units), or
+`--resubmit-lost` says by hand that there is none. Never sync or publish while a job runs.
+Master tracker: SharePoint, site TTiProjects2022, "TRACKER - MILWAUKEE AMSTERDAM CONFERENCE
+2027.xlsx", tab Milwaukee, an Excel table `Table1` (A2:AN237 on 15 Nov). The batch has so far
+run on a downloaded copy under `chatgptdropoff`.
+
+**THE CHANGES BUTTON IS NOT READY. All five must be PROVED, not just built:**
+
+  1. Permanent AI Row IDs written into the master tracker (tool in the reviewed package
+     `tti_row_id_excel.py`, not yet brought in; trial on a backed-up copy first).
+  2. A baseline built from the jobs already priced, so the first Check does not call them new
+     (built: `POST /api/estimate/tti/changes/baseline`; no page button; never run on real results).
+  3. The cost written back by row ID, re-found on the live master, not by row number or by
+     drawing and quantity.
+  4. The pack checked at preview must be the pack that is priced: a manifest handed from the
+     preview to the batch, with a change between the two refused.
+  5. Proof on the laptop, on both runners, with the Price button on for one row.
+
+JG's acceptance: estimating or a PM says the tracker has changed; click Check changes; review
+new / changed / unchanged / held with reasons; click Estimate changes. It opens the SharePoint
+tracker itself. A change to an AI-written cost, formatting or row order never triggers an
+estimate. A second click or an uncertain reply never makes a duplicate, across both services.
+`SDI_TTI_CHANGES_RUN` stays unset until all five are proved. "Price the sheet" on the page runs
+the same batch as the command line and is the first button to move to; it has no take-up.
+
+**Costing questions open on 12181-00-GA (run e2639e873262), for estimating, not to be guessed:**
+timber cut from length sits on the Other Sheet row, which cannot price it (how does SDI price
+timber sections?); two plywood pieces from files `_1_PLY` / `_2_PLY` under a part stated 18 mm
+(each 18 mm, or two layers making 18?); the AI Print calculator has no 5 mm foamed PVC row (the
+graphic is asked, with the 3 mm row's figure as a comparison, and not charged). A flag is not a
+fix. AI Tube operations (cut, hole, slot) are not built. Document Manager stays OFF until it is
+accepted.
+
 Everything below §0 was written on 2026-06-30 and has not been revised since. Parts of it are now
 WRONG rather than merely old, which is worse — a stale instruction reads exactly like a current
 one. This section is the correction. Read it before §2, and treat it as superseding §2 wherever
