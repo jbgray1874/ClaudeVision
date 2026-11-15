@@ -1781,8 +1781,18 @@ _KNOWN_OPS = {"laser_cutting", "folding", "hole_machining", "welding", "dress_we
               "powder_coating", "wet_spray", "diamond_polish", "cnc_routing", "glue"}
 
 
+# A MODEL FILE'S OWN NAME, WHERE A PART IS KNOWN BY IT (15 Nov 2026). One job's bill prints
+# two mirrors as "<code>.SLDPRT1" and the model signals keep that spelling, while the model's
+# assembly list and its parent edges name the same part "<code>". Keyed as printed, the part
+# found no row in the assembly list: it was called "in NO assembly BOM — a fixture or jig",
+# took no count from the model, and the table's larger count was charged. The extension and
+# SolidWorks' copy number are not part of a part's number, here as in
+# route_compiler.name_parts_by_their_code.
+_MODEL_FILE_TAIL = re.compile(r"(?<=[A-Z0-9])\.(?:SLDPRT|SLDASM|SLDDRW)\d*$")
+
+
 def _pn_key(s: Any) -> str:
-    return re.sub(r"\s+", "", str(s or "")).upper()
+    return _MODEL_FILE_TAIL.sub("", re.sub(r"\s+", "", str(s or "")).upper())
 
 
 def _match_native(part: Dict[str, Any], exact: Dict[str, str],
