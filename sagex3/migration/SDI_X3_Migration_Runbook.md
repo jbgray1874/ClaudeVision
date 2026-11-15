@@ -3198,3 +3198,15 @@ Then go to the API once Acuity has given us the template and the access.
      `dir /s /b "W:\Production\*-GA*.pdf" > ga_list.txt`.
 
 **Also on Dave's sheet and already covered:** WO Suggestions; department hours (work-centre hours and load by week); the black week break lines (the board sorts by due date; week grouping is a display choice for LO-01). Comments, Prog and Tube req stay typed by Production (LO-01).
+
+### 22.21 RULE (James, 15 Nov): which drawing folders each tool searches – never Production
+
+- **TTi (prototype work):** search the **Design** and **Prototype** folders only, e.g. `W:\Prototype\TTi\…`.
+- **The AI runner (AI estimating):** search the **Design** folder only.
+- **Never search `W:\Production`.** That was never asked for.
+- **The mistake:** `src/live_enquiry_collector.py` (written in July) hard-codes `PRODUCTION_ROOT=W:\Production`, and the 14–15 Nov advice repeated it. That's why the 12736 pack missed the top-level GA and the design drawings. Production was the wrong place to look.
+- **Fix (waiting on James's go):**
+  - replace `PRODUCTION_ROOT` with the folder rules above, using the exact Design path from James;
+  - flag any pack with no top-level GA PDF as "GA missing", not complete.
+- **Nothing was deleted by any tool:** the collector only copies, and nothing in the repo deletes drawing files.
+- **Lesson:** check a tool's folder roots against James's rule before giving advice or building on it. Don't repeat what old code does.
