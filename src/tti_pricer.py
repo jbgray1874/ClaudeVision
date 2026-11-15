@@ -891,6 +891,61 @@ def approval_of(item: Dict[str, Any], manifest: Optional[Dict[str, Any]]) -> str
     return "provisional: estimator to review — " + "; ".join(why)
 
 
+# ── THE PACKS ALREADY CHECKED (15 Nov 2026) ─────────────────────────────────────────────────
+# The pack check (src/tti_preflight.py) names, per drawing, every file of the pack it resolved
+# and each file's fingerprint. A batch given that report prices ONLY those packs, and only where
+# the pack found again now is the same files with the same fingerprints. It then needs no
+# listing of the drawing areas: the lookup database finds the drawing's folders and the folder
+# round each candidate GA is listed again now, as the pack check itself did. "We already have an
+# index and checked packs. We do not need another whole-share scan to start those."
+def _pack_files(manifest: Any) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for member in (manifest or {}).get("members") or []:
+        for f in member.get("files") or []:
+            out[os.path.normcase(os.path.normpath(str(f.get("path") or "")))] = str(f.get("fingerprint") or "")
+    return out
+
+
+def load_checked_packs(path: Any) -> Dict[str, Dict[str, str]]:
+    """{DRAWING: {file: fingerprint}} for every pack the report resolved. Raises SystemExit
+    when the report cannot be read or resolved nothing: a batch is never run on an empty check."""
+    try:
+        report = json.loads(Path(str(path)).read_text(encoding="utf-8-sig"))
+        rows = report["rows"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise SystemExit(f"The pack check report could not be read ({path}: {type(exc).__name__}). "
+                         f"Nothing was queued or written.")
+    out: Dict[str, Dict[str, str]] = {}
+    for r in rows:
+        pack = r.get("pack") or {}
+        files = _pack_files(pack.get("manifest"))
+        if pack.get("state") == "resolved" and files and r.get("drawing"):
+            out[str(r["drawing"]).strip().upper()] = files
+    if not out:
+        raise SystemExit(f"The pack check report {path} resolved no pack. Nothing was queued or written.")
+    return out
+
+
+def checked_pack_difference(checked: Dict[str, Dict[str, str]], drawing: str,
+                            manifest: Optional[Dict[str, Any]]) -> str:
+    """Why this row's pack is not the pack that was checked, or "" when it is that pack."""
+    was = checked.get(str(drawing or "").strip().upper())
+    if was is None:
+        return "its pack is not one the pack check resolved"
+    now = _pack_files(manifest)
+    if not now:
+        return "the checked pack was not found again"
+    added = sorted(set(now) - set(was))
+    gone = sorted(set(was) - set(now))
+    changed = sorted(k for k in set(now) & set(was) if now[k] != was[k])
+    if not (added or gone or changed):
+        return ""
+    said = [f"{len(n)} file(s) {w}: {Path(n[0]).name}" + (f" and {len(n) - 1} more" if len(n) > 1 else "")
+            for n, w in ((added, "not in the checked pack"), (gone, "of the checked pack not in it now"),
+                         (changed, "changed since the check")) if n]
+    return "the pack found now differs from the pack that was checked (" + "; ".join(said) + ")"
+
+
 def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optional[Path] = None,
               sleep: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
     sheet = Path(args.sheet)
@@ -923,11 +978,21 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                          f"would be priced without its drawings. Nothing was queued or written. Set "
                          f"SDI_DRIVE_MAP (W=\\\\server\\share) or the two SDI_TTI_*_ROOT settings, and run "
                          f"--dry-run until rows show their folders.")
-    listings, source = area_listings(design, proto, walk_live=bool(getattr(args, "walk_live", False)),
-                                     client=str(getattr(args, "client", "") or "TTI"))
+    _checked = load_checked_packs(args.checked_packs) if getattr(args, "checked_packs", "") else None
     _DB_ROWS.clear()
-    if source.startswith("drawing index"):
+    if _checked is not None:
+        # No listing of either area: each row's pack comes from the lookup database with the
+        # GA's own folders listed again now, and is held unless it is the pack that was checked.
+        listings = [("design", []), ("prototype", [])]
+        source = f"checked packs ({len(_checked)} in {Path(str(args.checked_packs)).parent.name})"
+        print(f"PACKS: only the {len(_checked)} the pack check resolved, each compared with it file by "
+              f"file. The drawing areas are not listed.", flush=True)
         _DB_ROWS.append(True)
+    else:
+        listings, source = area_listings(design, proto, walk_live=bool(getattr(args, "walk_live", False)),
+                                         client=str(getattr(args, "client", "") or "TTI"))
+        if source.startswith("drawing index"):
+            _DB_ROWS.append(True)
     out_root = inputs_root() / re.sub(r"[^\w .-]", "_", sheet.stem)
     report: Dict[str, Any] = {"sheet": str(sheet), "tab": data["sheet"], "header_row": data["header_row"],
                               "header": data["header"], "started": datetime.now().isoformat(timespec="seconds"),
@@ -1093,6 +1158,13 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         if not found and r["drawing"]:
             item["job_folders"] = job_folders(r["drawing"], listings)
         report["rows"].append(item)
+        if _checked is not None and r["drawing"] and not _stalled:
+            _differs = checked_pack_difference(_checked, r["drawing"], manifest)
+            if _differs:
+                item.update(state="held: not the checked pack", kind="not priced (not the checked pack)",
+                            why=f"{_differs}. Nothing is queued; run the pack check again for this row")
+                save()
+                continue
         if _stalled:
             item.update(state="held: pack not checked", kind="not priced (pack not checked)",
                         why=f"{_stalled}. Nothing is queued from an unchecked pack; run the row again")
@@ -1372,6 +1444,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--rows", default="", help="sheet rows to price: a range (5-12), a list (134,137) or both")
     ap.add_argument("--walk-live", action="store_true",
                     help="list both drawing areas live when the index cannot be used (hours on a VPN)")
+    ap.add_argument("--checked-packs", default="",
+                    help="the pack check's preflight.json: price only the packs it resolved, each "
+                         "held unless found again now with the same files; the drawing areas are not listed")
     ap.add_argument("--client", default="TTI")
     ap.add_argument("--method", default="both", choices=("both", "targeted", "deterministic", "llm"))
     ap.add_argument("--col-drawing", default="L")
