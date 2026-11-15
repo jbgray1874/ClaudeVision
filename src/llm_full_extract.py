@@ -579,7 +579,7 @@ def _call_llm(user_content: str, model: str,
             return _ask_claude(system, user_content, "no XAI_API_KEY is set")
         raise RuntimeError("XAI_API_KEY not set (C:\\ClaudeVision\\.env or $env:XAI_API_KEY).")
     from openai import OpenAI  # xAI is OpenAI-compatible
-    client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+    client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1", **xai_models.client_budget())
     def _once():
         return client.chat.completions.create(
             model=model,

@@ -157,9 +157,45 @@ def retry_waits() -> List[float]:
     return out
 
 
+def request_timeout_s() -> float:
+    """How long ONE request to xAI may take before it counts as a timeout (SDI_XAI_TIMEOUT_S,
+    default 600 s, never under 30)."""
+    try:
+        v = float(_env("SDI_XAI_TIMEOUT_S") or 600)
+    except ValueError:
+        v = 600.0
+    return max(30.0, v)
+
+
+def client_budget() -> Dict[str, Any]:
+    """ONE TRY IS ONE REQUEST, AND ITS LIMIT IS STATED (15 Nov 2026). The client's own defaults
+    were a 600 s limit and two silent retries of its own, inside this module's four said tries:
+    one drawing read could wait two hours and print nothing, and two estimates sat at three
+    times their usual length with no line to say why. The client now makes one request per
+    try, with the limit named here; every further try is this module's, and is said."""
+    return {"timeout": request_timeout_s(), "max_retries": 0}
+
+
+def _waiting_said(what: str, n: int, tries: int, say: Any, every_s: float) -> Any:
+    """Says, every `every_s`, that the request is still out. Returns the function that stops it."""
+    import threading
+    import time as _time
+    started = _time.time()
+    stop = threading.Event()
+
+    def _run() -> None:
+        while not stop.wait(every_s):
+            say(f"   {XAI_WAIT_TAG} still waiting for xAI on {what}: {round(_time.time() - started)} s "
+                f"into try {n} of {tries} (limit {request_timeout_s():g} s a try)")
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return stop.set
+
+
 def call_with_retry(fn: Any, model: str, what: str = "the drawing read",
-                    sleep: Any = None, say: Any = None) -> Any:
-    """fn() again after each wait while xAI is busy; the last error is raised when it stays so."""
+                    sleep: Any = None, say: Any = None, waiting_every_s: float = 60.0) -> Any:
+    """fn() again after each wait while xAI is busy; the last error is raised when it stays so.
+    While a request is out, a line every minute says so, with how long and which try."""
     import time as _time
     sleep = _time.sleep if sleep is None else sleep
     say = (lambda m: print(m, flush=True)) if say is None else say
@@ -167,8 +203,12 @@ def call_with_retry(fn: Any, model: str, what: str = "the drawing read",
     tries = len(waits) + 1
     waited = 0.0
     for n in range(1, tries + 1):
+        _stop = _waiting_said(what, n, tries, say, waiting_every_s) if waiting_every_s else (lambda: None)
         try:
-            out = fn()
+            try:
+                out = fn()
+            finally:
+                _stop()
         except Exception as exc:                                     # noqa: BLE001
             kind = busy_kind(exc)
             if not kind or note_exception(exc, model):
