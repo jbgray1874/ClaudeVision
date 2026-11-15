@@ -204,7 +204,9 @@ def test_every_route_that_delivers_a_file_is_covered():
     # /api/estimate/pack/<token>, never from the page.
     # And /estimating/bundle/<token>: the page that shows one run's filed bundle, one fixed
     # file behind sign-in; its data and files come from /api/estimate/bundle/<token>.
-    assert known_file_responses["app.py"] == 14, (
+    # Since 15 Nov 2026, /estimating/tti-batch-controls.js: the TTI batch controls' page script,
+    # one fixed static file like sdi-voice.js, with no job data in it. Not a deliverable.
+    assert known_file_responses["app.py"] == 15, (
         f"a new file-serving route appeared in app.py ({known_file_responses['app.py']} "
         f"FileResponse calls, was 5) — does it need the release gate?")
     # estimate_routes.py: the drawings-print PDF, which is a drawing pack and not a quotation;
