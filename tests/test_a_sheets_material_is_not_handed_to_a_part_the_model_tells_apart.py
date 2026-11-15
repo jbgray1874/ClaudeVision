@@ -95,3 +95,12 @@ def test_the_reads_board_does_not_replace_a_model_metal_among_parts_the_model_te
     panel, plate = _part("T-101", "PANEL", "MDF"), _part("T-103", "PLATE", "MILD_STEEL")
     assert lj._model_tells_apart(plate, [panel, plate])
     assert not lj._model_tells_apart(plate, [plate, _part("T-104", "BRACKET", "MILD_STEEL")])
+
+
+def test_a_part_alone_on_a_page_has_its_own_sheet_and_a_part_sharing_every_page_does_not():
+    from source_connectors import llm_full_job as lj
+    panel, plate = _part("T-101", "PANEL", "MDF"), _part("T-103", "PLATE", "MILD_STEEL")
+    assert lj._shares_every_page(plate, [panel, plate])
+    own = _part("T-105", "BRACKET", "MILD_STEEL", pages=(2, 9))
+    assert not lj._shares_every_page(own, [panel, plate, own]), "page 9 is its own sheet"
+    assert not lj._shares_every_page(_part("T-106", "X", "MILD_STEEL", pages=()), [panel])

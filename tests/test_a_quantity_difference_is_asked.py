@@ -108,3 +108,17 @@ def test_a_table_repeating_what_its_own_sub_assembly_lists_is_still_asked():
 def test_a_route_that_does_not_end_on_a_printed_row_is_still_asked():
     mixed = [THREE_TABLES[0], "GA x1 -> T-102 x1 (BOM) -> PP x29 (inferred) = 29"]
     assert len(_asked(_summary(1, 43, mixed))) == 1
+
+
+SIBLING_NOTE = ("PP sits under more than one parent, which each take a different count of it, "
+                "so its own figure of 1 cannot stand for all of them. The BOM edges are what "
+                "is costed — confirm the split")
+
+
+def test_the_cascades_own_several_parents_note_does_not_bring_the_question_back():
+    """The real record carries this note; the first form of the rule required none."""
+    assert not _asked(_summary(1, 57, THREE_TABLES, note=SIBLING_NOTE))
+
+
+def test_a_note_that_a_row_was_counted_once_is_still_asked_over_sibling_tables():
+    assert len(_asked(_summary(1, 57, THREE_TABLES, note="a row was added to the count"))) == 1

@@ -4085,7 +4085,12 @@ def costed_job(source: Any) -> Dict[str, Any]:
         # Where every route ends on a printed parts-list row and no route's parent sits
         # inside another route (a table repeating what its sub-assembly holds is still
         # asked), the sum is what the drawings print.
-        if len(_trails) > 1 and not str(_node.get("qty_note") or ""):
+        # The cascade's own note for this case ("sits under more than one parent, which each
+        # take a different count of it") is not a row dropped or added; it describes these
+        # routes. The first form of this rule required no note at all and so never ran on the
+        # job it was written for (the 02:40 run).
+        _qn_sib = str(_node.get("qty_note") or "")
+        if len(_trails) > 1 and (not _qn_sib or "sits under more than one parent" in _qn_sib):
             _routes = [[seg.rsplit(" x", 1)[0].strip().upper() for seg in t.split("=")[0].split(" -> ")]
                        for t in _trails]
             _last_printed = all("(BOM" in t.split("=")[0].split(" -> ")[-1].upper()

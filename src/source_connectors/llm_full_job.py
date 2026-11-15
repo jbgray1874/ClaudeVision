@@ -296,6 +296,22 @@ def _a_piece_carries(part: Dict[str, Any], op: str, parts: List[Dict[str, Any]])
     return False
 
 
+def _shares_every_page(part: Dict[str, Any], parts: Any) -> bool:
+    """Is every page this part is drawn on also another part's page? A part alone on a page has
+    a sheet of its own and that title block is its own. A part that shares every page has no
+    sheet of its own: a title block "read for it" is the shared sheet's (the 03:03 run, where
+    two steel plates and an edging took a shared sheet's MDF as their own title block)."""
+    pages = {str(p).strip() for p in (part.get("pages") or []) if str(p).strip()}
+    if not pages:
+        return False
+    for pg in pages:
+        if not any(o is not part and isinstance(o, dict)
+                   and pg in {str(x).strip() for x in (o.get("pages") or [])}
+                   for o in parts or ()):
+            return False
+    return True
+
+
 def _model_tells_apart(part: Dict[str, Any], parts: Any) -> bool:
     """source_precedence.model_tells_sheet_mates_apart, by this module's material names."""
     try:
@@ -497,7 +513,7 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
                   and not _native_material
                   and _new_mat in _NON_METAL_FAMILIES
                   and _cur_mat in _METAL_FAMILIES
-                  and "material" not in (jp.get("_deterministic") or [])
+                  and _shares_every_page(part, parts)
                   and _model_tells_apart(part, parts)):
                 # NOT A DEFAULT: THE MODEL GIVES THIS SHEET'S PARTS DIFFERENT MATERIALS (15 Nov
                 # 2026). A carbon-steel lock plate drawn on a board panel's sheet was called

@@ -93,3 +93,24 @@ def test_a_glued_table_beside_the_sheets_own_weld_note_still_states_the_weld():
 def test_a_sub_assemblys_own_glued_title_still_states_its_weld():
     got, _parts = _stated({LEG: "TITLELHS UPRIGHT - WELDED ASSEMBLYMATERIALMILD STEEL"})
     assert got == [LEG]
+
+
+# ── A TOP ASSEMBLY READ ON ITS OWN, AS THE LATE PASS READS IT (the 02:40 run, build dbb51d1) ──
+def test_a_top_assembly_handed_in_alone_still_knows_the_packs_other_parts():
+    """The model mints the top assembly late; the second call passes it alone. The other
+    parts are still the pack's: every sheet is keyed by the part its title block names."""
+    top = {"part_number": TOP, "review_flags": []}
+    by_part = {ws._clean_pn(TOP): {"notes": GLUED, "text": ""},
+               ws._clean_pn(LEG): {"notes": "LHS UPRIGHT - WELDED ASSEMBLY", "text": ""},
+               ws._clean_pn(RAIL): {"notes": "", "text": ""},
+               ws._clean_pn(BAR): {"notes": "", "text": ""}}
+    assert ws.apply_sheet_weld_notes([top], by_part) == []
+    assert "weld_stated_by_note" not in top
+
+
+def test_a_sub_assembly_handed_in_alone_keeps_the_weld_its_own_title_states():
+    leg = {"part_number": LEG, "review_flags": []}
+    by_part = {ws._clean_pn(TOP): {"notes": GLUED, "text": ""},
+               ws._clean_pn(LEG): {"notes": "TITLELHS UPRIGHT - WELDED ASSEMBLYMATERIALMILD STEEL",
+                                   "text": ""}}
+    assert ws.apply_sheet_weld_notes([leg], by_part) == [LEG]

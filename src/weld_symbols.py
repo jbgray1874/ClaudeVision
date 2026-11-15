@@ -913,9 +913,15 @@ def apply_sheet_weld_notes(parts: Sequence[Dict[str, Any]],
         # name another part of this job are taken out before the sheet's notes are read; a
         # note in the sheet's own words, and a sheet whose own title says it is welded, still
         # state the weld.
-        hit = sheet_weld_note(_without_rows_naming_other_parts(
-            facts.get("notes"), [p.get("part_number") for p in parts or ()
-                                 if isinstance(p, dict) and _clean_pn(p.get("part_number")) != pn]))
+        # THE OTHER PARTS ARE THE PACK'S, NOT ONLY THE ONES THIS CALL WAS HANDED (15 Nov 2026,
+        # the 02:40 run on build dbb51d1). A top assembly the model mints late is read in a
+        # second call that passes the late records alone, so the rule had no other codes to
+        # look for and the weld was charged a third time. Every sheet in the pack is keyed by
+        # the part its title block names; those are parts of this job whoever is in `parts`.
+        _others = [p.get("part_number") for p in parts or ()
+                   if isinstance(p, dict) and _clean_pn(p.get("part_number")) != pn]
+        _others += [k for k in by_part if _clean_pn(k) != pn]
+        hit = sheet_weld_note(_without_rows_naming_other_parts(facts.get("notes"), _others))
         if not hit:
             continue
         ruled = part.get("operations_ruled_out") or {}

@@ -53,3 +53,24 @@ def test_a_count_that_is_not_the_sum_of_its_rows_is_still_capped():
 def test_one_row_alone_is_not_this_rule():
     part = _insert([("T-101", 57)])
     assert e._sanitise_part_quantity(part) == 1
+
+
+# ── THE ROWS ARRIVE AFTER THE CAP HAS RUN (the 02:40 run) ──────────────────────────────────
+def test_a_held_count_is_settled_once_its_parts_lists_rows_are_on_the_record():
+    part = {"part_number": "FIXING-INSERT", "quantity": 57}
+    assert e._sanitise_part_quantity(part) == 1 and part["quantity_unresolved"]["computed"] == 57
+    part["bom_parents"] = [{"parent": "T-101", "qty": 14}, {"parent": "T-102", "qty": 29},
+                           {"parent": "T-103", "qty": 14}]
+    assert e.settle_counts_the_parts_lists_print([part]) == ["FIXING-INSERT"]
+    assert "quantity_unresolved" not in part
+    flags = [f for f in part["review_flags"] if isinstance(f, dict)]
+    assert [f["flag"] for f in flags] == ["quantity_over_cap_kept"]
+    assert "29 under T-102" in flags[0]["detail"]
+
+
+def test_a_held_count_its_rows_do_not_add_up_to_stays_held():
+    part = {"part_number": "FIXING-BUSH", "quantity": 52}
+    e._sanitise_part_quantity(part)
+    part["bom_parents"] = [{"parent": "T-101", "qty": 2}, {"parent": "T-102", "qty": 2}]
+    assert e.settle_counts_the_parts_lists_print([part]) == []
+    assert part["quantity_unresolved"]["computed"] == 52

@@ -16154,6 +16154,42 @@ def _job_order_quantity(summary: Optional[Dict[str, Any]]) -> int:
     return max(1, int(_q or getattr(config, "DEFAULT_JOB_QUANTITY", 180)))
 
 
+def settle_counts_the_parts_lists_print(records: Any) -> List[str]:
+    """Lift "quantity NOT ESTABLISHED" from a line whose count is the sum of its parts lists'
+    printed rows (15 Nov 2026, the 02:40 run).
+
+    The cap runs while a line is costed, before the table reader has recorded which parts
+    lists name it. An insert listed x14, x29 and x14 by three sub-assemblies was therefore
+    marked "carried at 1, NOT a price for the quantity required" beside a sheet charging 57.
+    Once the rows are on the record, a held count that is exactly their sum (two rows or
+    more) is a read count: the mark and the blocking flag come off and the line says which
+    tables the count came from. Nothing is re-costed here; the sheet already charges the
+    graph's figure. Returns the part numbers settled."""
+    done: List[str] = []
+    for rec in records or ():
+        if not isinstance(rec, dict) or not isinstance(rec.get("quantity_unresolved"), dict):
+            continue
+        rows = [e for e in (rec.get("bom_parents") or []) if isinstance(e, dict)]
+        held = _safe_float(rec["quantity_unresolved"].get("computed"))
+        total = sum(_safe_float(e.get("qty")) or 0.0 for e in rows)
+        if len(rows) < 2 or held is None or abs(total - held) > 1e-6:
+            continue
+        rec.pop("quantity_unresolved", None)
+        flags = [f for f in (rec.get("review_flags") or [])
+                 if not (isinstance(f, dict) and f.get("flag") == "quantity_capped")]
+        flags.append({
+            "severity": "info", "flag": "quantity_over_cap_kept",
+            "detail": (f"qty {held:g} is over the per-unit limit and stands: it is the sum of "
+                       f"the counts its parts lists print — "
+                       + " + ".join(f"{_safe_float(e.get('qty')) or 0:g} under {e.get('parent')}"
+                                    for e in rows))})
+        rec["review_flags"] = flags
+        rec["risk_flags"] = [r for r in (rec.get("risk_flags") or [])
+                             if "quantity_capped" not in str(r)]
+        done.append(str(rec.get("part_number") or ""))
+    return done
+
+
 def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
     """Run estimate_part over records appended to part_estimates after estimate_document.
 
@@ -16173,6 +16209,16 @@ def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
     _pes = _es.get("part_estimates") if _es is not None else summary.get("part_estimates")
     if not isinstance(_pes, list):
         return 0
+    try:
+        _settled = settle_counts_the_parts_lists_print(
+            list(_pes) + list(((summary.get("manufacturing_writeup") or {}).get("parts")) or []))
+        if _settled:
+            print(f"   [quantity] {len(set(_settled))} count(s) over the limit stand: each is the "
+                  f"sum of the rows its parts lists print ({', '.join(sorted(set(_settled)))})",
+                  flush=True)
+    except Exception as _settle_exc:                                 # noqa: BLE001
+        print(f"   [quantity] printed counts not settled ({type(_settle_exc).__name__}: "
+              f"{_settle_exc})", flush=True)
     _q = _job_order_quantity(summary)
     _keep = ("bom_parent", "bom_parents", "printed_code", "is_bought_in", "page_roles",
              "source", "owning_assembly", "supplied_by_third_party",
