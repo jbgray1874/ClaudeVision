@@ -826,6 +826,27 @@ def audit(summary: Mapping[str, Any], snapshot: Optional[Mapping[str, Any]] = No
                      bad or f"charged on {host}, which carries it ({', '.join(sorted({l['title'] for l in rows}))})",
                      rows)
                 return
+        # A MEMBER COATED AS PART OF ITS WELDED ASSEMBLY IS COATED ONCE, THERE (15 Nov 2026).
+        # Three legs' own sheets state POWDER COATED; each is welded into an upright that is
+        # coated as one piece and carries the coating row, with its area taken from its
+        # members. The record names no host on the leg, so the ledger said "the read names it
+        # and no calculated row charges it" beside the upright's charged coating. Where an
+        # assembly that lists this part carries a charged row for the same coat, the part is
+        # covered by it and the assembly is named.
+        if op in ("powder_coating", "wet_spray") and fam:
+            for _apn, _arec in list(book.records.items()) + list(book.costs.items()):
+                if not isinstance(_arec, Mapping) or _pn(_apn) == pn:
+                    continue
+                if pn not in {_pn(c) for c in (_arec.get("assembly_children") or [])}:
+                    continue
+                rows = book.charged_rows(_pn(_apn), fam)
+                if rows:
+                    bad = labour_evidence(rows, fam, _pn(_apn))
+                    done(item, UNRESOLVED if bad else COVERED,
+                         bad or f"coated as part of {_pn(_apn)}, whose coating row carries its "
+                                f"members ({', '.join(sorted({l['title'] for l in rows}))})",
+                         rows)
+                    return
         # AN EDGE FINISH STATED ON AN ASSEMBLY IS CHARGED ON ITS MEMBERS (12424-02-GA,
         # 14 Nov 2026). The route charges polished edges on the pieces whose edges they are,
         # each on its own outline, and stands the assembly's own row down (route_compiler,
