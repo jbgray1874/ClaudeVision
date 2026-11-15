@@ -752,7 +752,7 @@ def unit_cost_of(st: Dict[str, Any], qty: int) -> Optional[float]:
 # two drawings reported missing. So the job's folders in the Design area are listed NOW for
 # every row, whatever the index holds, and handed to the resolver with the rest. Where the
 # Design area cannot be read the row is held: a Prototype pack is never accepted unlooked.
-_DESIGN_JOBS: Dict[str, List[str]] = {}
+_DIRECT: List[bool] = []           # non-empty: packs come from the job's own folders, no index
 
 
 def design_root() -> Optional[Path]:
@@ -761,31 +761,15 @@ def design_root() -> Optional[Path]:
     return Path(to_unc(v)) if v else None
 
 
-def design_rows_now(drawing: str, root: Optional[Path]) -> Tuple[List[Any], str]:
-    """(the job's Design folders listed now, what was looked at). Raises PackCheckStalled when
-    the Design area or one of the job's folders in it cannot be read."""
-    import drawing_index as di
-    import pack_resolver as pr
-    job = re.match(r"\s*(\d{3,})", str(drawing or ""))
-    if root is None or not job:
-        return [], ""
-    key = os.path.normcase(str(root))
-    if key not in _DESIGN_JOBS:
-        try:
-            _DESIGN_JOBS[key] = sorted(e.name for e in os.scandir(root) if e.is_dir())
-        except OSError as exc:
-            raise pr.PackCheckStalled(f"the Design area could not be read to look for a Design copy "
-                                      f"({root}: {type(exc).__name__})")
-    mine = [n for n in _DESIGN_JOBS[key] if re.match(rf"{job.group(1)}(?!\d)", n)]
-    if not mine:
-        return [], f"no folder for job {job.group(1)} in the Design area, looked at now"
-    rows: List[Any] = []
-    for name in mine:
-        got = di.live_rows(root / name)
-        if got is None:
-            raise pr.PackCheckStalled(f"the job's Design folder could not be read ({root / name})")
-        rows += got
-    return rows, f"{len(mine)} Design folder(s) for job {job.group(1)} listed now ({len(rows)} folder(s) in all)"
+def prototype_root() -> Optional[Path]:
+    from drive_map import to_unc
+    v = (os.getenv("SDI_TTI_PROTOTYPE_ROOT") or DEFAULT_PROTOTYPE or "").strip()
+    return Path(to_unc(v)) if v else None
+
+
+def job_areas() -> List[Tuple[str, Optional[Path]]]:
+    """The batch's two areas in the order they are looked in: Design, then Prototype."""
+    return [("Design", design_root()), ("Prototype", prototype_root())]
 
 
 def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
@@ -795,11 +779,28 @@ def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
     named for the drawing, so the job-folder fallback can say what it found instead."""
     import pack_resolver as pr
     folders = [(f, area) for area, fs in listings for f in fs]
+    if _DIRECT:
+        # THE TRACKER NAMES THE JOB; THE JOB'S OWN FOLDERS ARE READ (JG, 15 Nov 2026: "we have the
+        # s/sheet, we have the drawing folder name ... we never needed this crazy index"). Design
+        # is listed first and Prototype after it, both now, and the resolver's own rules choose:
+        # Design where it holds the drawing, Prototype only where a Design that was read does not.
+        rows, said, design_rows = pr.rows_for_job_now(drawing, job_areas())
+        if not rows:
+            return {}, None
+        m = pr.resolve(drawing, rows, client=client, client_folders_only=True)
+        if m["status"] == "not found":
+            return {}, None
+        sel = str(m.get("selected_folder") or "")
+        area = "design" if sel in design_rows else "prototype"
+        files = [f["path"] for x in m["members"] for f in x["files"]]
+        return ({"area": area, "match": "pack", "folder": sel, "files": files, "design_looked": said,
+                 "technical": "technical" in sel.lower(), "newest": "",
+                 "other_folders": [c["folder"] for c in m["candidates"] if c["folder"] != sel][:5]}, m)
     if _DB_ROWS:
         # THE LOOKUP DATABASE: the drawing's own and its job's folders, the GA's surroundings
         # re-listed now, and shared-library parts found anywhere: the page's and Self-Running's way.
         rows, _src, lookup = pr.folders_for(drawing, index_path=_LOOKUP_INDEX[0] if _LOOKUP_INDEX else None)
-        now_rows, looked = design_rows_now(drawing, design_root())
+        now_rows, looked, _d = pr.rows_for_job_now(drawing, job_areas()[:1])
         if now_rows:
             listed = {os.path.normcase(str(r[0])) for r in now_rows}
             rows = [r for r in rows if os.path.normcase(str(r[0])) not in listed] + now_rows
@@ -1050,8 +1051,19 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     _checked = load_checked_packs(args.checked_packs) if getattr(args, "checked_packs", "") else None
     _DB_ROWS.clear()
     _LOOKUP_INDEX.clear()
-    _DESIGN_JOBS.clear()
-    if _checked is not None:
+    _DIRECT.clear()
+    try:
+        import pack_resolver as _pr
+        _pr.forget_job_folders()
+    except Exception:                                                    # noqa: BLE001
+        pass
+    if not getattr(args, "use_index", False) and _checked is None and not getattr(args, "walk_live", False):
+        listings = [("design", []), ("prototype", [])]
+        source = "each job's own folders, listed now (no index)"
+        print("PACKS: each row's job is looked for in the Design area, then the Prototype area, now. "
+              "No index is used and neither area is listed whole.", flush=True)
+        _DIRECT.append(True)
+    elif _checked is not None:
         # No listing of either area: each row's pack comes from the lookup database with the
         # GA's own folders listed again now, and is held unless it is the pack that was checked.
         listings = [("design", []), ("prototype", [])]
@@ -1516,6 +1528,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--rows", default="", help="sheet rows to price: a range (5-12), a list (134,137) or both")
     ap.add_argument("--walk-live", action="store_true",
                     help="list both drawing areas live when the index cannot be used (hours on a VPN)")
+    ap.add_argument("--use-index", action="store_true",
+                    default=(os.getenv("SDI_TTI_USE_INDEX") or "").strip().lower() in ("1", "true", "yes", "on"),
+                    help="find packs through the drawing index, as before 15 Nov 2026. Without it each "
+                         "row's pack is found in its job's own folders, Design first then Prototype, "
+                         "listed now, and no index is needed or used")
     ap.add_argument("--checked-packs", default="",
                     help="the pack check's preflight.json: price only the packs it resolved, each "
                          "held unless found again now with the same files; the drawing areas are not listed")
@@ -1629,7 +1646,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if it.get("formats"):
             print(f"{'':<11}files: " + ", ".join(f"{n} {e}" for e, n in it["formats"].items()), flush=True)
         if _f.get("design_looked"):
-            print(f"{'':<11}Design area: {_f['design_looked']}", flush=True)
+            print(f"{'':<11}looked: {_f['design_looked']}", flush=True)
         if it.get("cost_before") not in (None, "") or it.get("previous"):
             _pv = it.get("previous") or {}
             print(f"{'':<11}now in {args.col_cost.upper()}: {it.get('cost_before') if it.get('cost_before') not in (None, '') else 'empty'}"

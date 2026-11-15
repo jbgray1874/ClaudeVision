@@ -76,6 +76,10 @@ def _areas(tmp_path: Path, monkeypatch) -> tuple:
 
 def _args(sheet: Path, **kw) -> Namespace:
     a = tp.build_parser().parse_args(["--sheet", str(sheet)])
+    # These tests state the rules of the index and live-walk route, which is now asked for by
+    # name (--use-index). The default route, each job's own folders with no index, has its own
+    # tests in test_a_pack_is_found_in_the_jobs_own_folders_design_first_with_no_index.py.
+    a.use_index = True
     for k, v in kw.items():
         setattr(a, k, v)
     return a
@@ -226,6 +230,7 @@ def test_the_service_refuses_a_bad_sheet_and_runs_a_dry_run_to_its_status(servic
     assert tc.post("/api/estimate/tti/run", json={"sheet": str(tmp / "nope.xlsx")}).status_code == 400
     sheet = _sheet(tmp)
     _areas(tmp, monkeypatch)
+    monkeypatch.setenv("SDI_TTI_USE_INDEX", "1")       # this test's share is the index and live-walk route's
     assert tc.post("/api/estimate/tti/run", json={"sheet": str(sheet), "rows": "5 to 9"}).status_code == 400
     r = tc.post("/api/estimate/tti/run", json={"sheet": str(sheet), "dry_run": True}).json()
     deadline = time.time() + 60

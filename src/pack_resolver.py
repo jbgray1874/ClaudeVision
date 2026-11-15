@@ -995,6 +995,166 @@ def folders_for(drawing: str, live: bool = True, index_path: Optional[Path] = No
     return rows, source, (lambda did: di.db_lookup(db, did))
 
 
+# ── THE JOB'S OWN FOLDERS, READ NOW: DESIGN FIRST, THEN PROTOTYPE (JG, 15 Nov 2026) ──────────
+# "forget the index ... we need to look up the drawing files from design and prototype."
+# An index that did not hold the Design area offered the resolver only Prototype copies: two
+# packs went out as PDFs and DXFs while the job's Design Technical folder held the assemblies,
+# the parts and two drawings reported missing. A pack is now found from the job number:
+#
+#   1. each area is looked in, in order (Design, then Prototype), for folders named for the
+#      job. Jobs sit under a client, an event or a trade folder, so those are walked, three
+#      levels at most, and never into a job's own folder: tens of listings, not the area;
+#   2. every folder of the job found is listed now, to the bottom;
+#   3. the resolver's own rules then choose: the first area that holds the drawing wins.
+#
+# An area or a folder that cannot be read, or does not answer in time, raises PackCheckStalled:
+# the caller holds the row with that reason. "Could not look" is never "not there".
+_JOB_FOLDERS: Dict[str, List[Path]] = {}
+
+
+def forget_job_folders() -> None:
+    _JOB_FOLDERS.clear()
+
+
+def folder_seconds() -> float:
+    """How long one job's folders may take to list before the row is held (SDI_PACK_FOLDER_SECONDS,
+    default 300; finding an area's job folders is given three times that)."""
+    try:
+        return max(1.0, float(os.getenv("SDI_PACK_FOLDER_SECONDS") or 300))
+    except ValueError:
+        return 300.0
+
+
+def _within(what: str, fn: Callable[[], Any], seconds: Optional[float] = None) -> Any:
+    import threading
+    limit = seconds if seconds is not None else folder_seconds()
+    box: Dict[str, Any] = {}
+
+    def _run() -> None:
+        try:
+            box["out"] = fn()
+        except BaseException as exc:                                 # noqa: BLE001
+            box["err"] = exc
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(limit)
+    if t.is_alive():
+        raise PackCheckStalled(f"{what} did not finish within {limit:g} s")
+    if "err" in box:
+        raise box["err"]
+    return box.get("out")
+
+
+def rows_now(top: Path, depth: int = 8) -> List[FolderRow]:
+    """Every folder under `top` listed now. A folder that cannot be read stops the listing with
+    its name: a pack is not chosen from part of a job."""
+    sys.path.insert(0, str(HERE))
+    import drawing_index as di
+    out: List[FolderRow] = []
+    stack = [(top, 0)]
+    while stack:
+        f, lvl = stack.pop()
+        got = di._list(f)
+        if got is None:
+            raise PackCheckStalled(f"a folder of the job could not be read ({f})")
+        out.append((f, [(f / n, int(sz), float(m)) for n, sz, m in got["files"]],
+                    di.is_archive(str(f)[len(str(top)):])))
+        if lvl < depth:
+            stack.extend((f / d, lvl + 1) for d in got["dirs"])
+    return out
+
+
+def job_number(drawing: Any) -> str:
+    m = re.match(r"\s*(\d{3,})", str(drawing or ""))
+    return m.group(1) if m else ""
+
+
+def job_folders_now(root: Path, job: str, label: str = "") -> List[Path]:
+    """The folders named for the job under `root`, found by walking the folders above the jobs
+    once (kept for the life of the process)."""
+    key = os.path.normcase(str(root))
+    if key not in _JOB_FOLDERS:
+        def _walk() -> List[Path]:
+            found: List[Path] = []
+            stack = [(Path(root), 0)]
+            while stack:
+                f, lvl = stack.pop()
+                try:
+                    with os.scandir(f) as it:
+                        names = sorted(e.name for e in it if e.is_dir())
+                except OSError as exc:
+                    if lvl == 0:
+                        raise PackCheckStalled(f"the {label or 'drawing'} area could not be read "
+                                               f"({f}: {type(exc).__name__})")
+                    raise PackCheckStalled(f"a folder of the {label or 'drawing'} area could not be "
+                                           f"read ({f}: {type(exc).__name__})")
+                for n in names:
+                    if re.match(r"\d{3,}", n):
+                        found.append(f / n)
+                    elif lvl < 3:
+                        stack.append((f / n, lvl + 1))
+            return found
+        t0 = time.time()
+        _JOB_FOLDERS[key] = _within(f"finding the job folders of the {label or 'drawing'} area ({root})",
+                                    _walk, folder_seconds() * 3)
+        print(f"[pack] {label or root}: {len(_JOB_FOLDERS[key])} job folder(s) found in "
+              f"{round(time.time() - t0, 1)} s ({root})", file=sys.stderr, flush=True)
+    return [p for p in _JOB_FOLDERS[key] if re.match(rf"{re.escape(job)}(?!\d)", p.name)]
+
+
+def rows_for_job_now(drawing: str, areas: Sequence[Tuple[str, Optional[Path]]]
+                     ) -> Tuple[List[FolderRow], str, set]:
+    """(every folder of the drawing's job in each area, listed now and in the areas' order; what
+    was looked at and found, for the record; the folders that are in the FIRST area)."""
+    job = job_number(drawing)
+    rows: List[FolderRow] = []
+    said: List[str] = []
+    first: set = set()
+    if not job:
+        return rows, "no job number in the drawing number to look for", first
+    for n, (label, root) in enumerate(areas):
+        if root is None:
+            continue
+        mine = job_folders_now(Path(root), job, label)
+        if not mine:
+            said.append(f"{label}: no folder for job {job}, looked at now")
+            continue
+        got: List[FolderRow] = []
+        for folder in mine:
+            got += _within(f"listing the job's {label} folder ({folder})", lambda f=folder: rows_now(f))
+        holds = any(_same(drawing_id(f[0].name), drawing) for r in got for f in r[1])
+        kinds: Dict[str, int] = {}
+        for r in got:
+            for f in r[1]:
+                e = f[0].suffix.lower().lstrip(".")
+                kinds[e] = kinds.get(e, 0) + 1
+        said.append(f"{label}: {len(mine)} folder(s) for job {job} listed now ("
+                    + (", ".join(f"{c} {e}" for e, c in sorted(kinds.items(), key=lambda kv: -kv[1])) or "no drawing files")
+                    + "), " + ("holds a file named for the drawing" if holds
+                               else "holds NO file named for the drawing"))
+        rows += got
+        if n == 0:
+            first = {str(r[0]) for r in got}
+    return rows, "; ".join(said), first
+
+
+def area_roots() -> List[Tuple[str, Path]]:
+    """The areas every entry point looks in, in order: the drawing index's own roots setting
+    (the Design customers folder, then Prototype), used here only as the list of areas."""
+    sys.path.insert(0, str(HERE))
+    import drawing_index as di
+    roots = list(di.settings()["roots"])
+    labels = ["Design", "Prototype"] + [f"area {i}" for i in range(3, len(roots) + 1)]
+    return list(zip(labels, roots))
+
+
+def folders_now(drawing: str) -> Tuple[List[FolderRow], str, None]:
+    """What folders_for gave, without the index: the job's folders in Design then Prototype,
+    listed now. Same shape, so a caller changes one word."""
+    rows, said, _first = rows_for_job_now(drawing, area_roots())
+    return rows, said, None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--drawing", required=True)
