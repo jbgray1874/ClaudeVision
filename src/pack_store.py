@@ -7,7 +7,12 @@ Every entry point (the estimating page, AI Estimate Self-Running, the tracker pr
 pack here through store(). The pack's files are compared with the latest set already saved for
 that client and drawing, by name and fingerprint:
 
-  unchanged   the saved set is used as it is; nothing is copied
+  re-extracted  THE RULE SINCE 15 NOV 2026 (JG: "we need to re extract"): every run copies the
+              pack from W: again. A saved extract is never trusted as it stands. The same pack
+              is copied over its saved copy in the same folder (a missing file comes back); a
+              pack that differs goes whole into a new version folder, as "changed" below.
+  unchanged   only with fresh=False: the saved set is used as it is, after every file of it has
+              been found in the folder (one that is absent is copied in: "restored")
   new         the first set: the folder is made and filled
   changed     a NEW folder beside the old one ("<drawing> v2"), with what was added, removed or
               changed listed in its manifest. The earlier set is never overwritten, so a decision
@@ -97,7 +102,7 @@ def compare(wanted: Dict[str, str], saved: Dict[str, str]) -> Dict[str, List[str
 
 
 def store(manifest: Dict[str, Any], client: str, root: Optional[Path] = None,
-          now: Optional[datetime] = None) -> Dict[str, Any]:
+          now: Optional[datetime] = None, fresh: bool = True) -> Dict[str, Any]:
     """Save the pack (or find it already saved). Returns where, which version and what changed;
     the same facts are written into the manifest beside the files."""
     root = root or store_root()
@@ -117,6 +122,29 @@ def store(manifest: Dict[str, Any], client: str, root: Optional[Path] = None,
                 and any(p.is_file() for p in last.iterdir()):
             return {"state": "kept by hand", "folder": str(last), "version": last_n,
                     "changes": diff}
+        if fresh and not any(diff.values()):
+            # EVERY RUN TAKES THE PACK FROM W: AGAIN (JG, 15 Nov 2026: "no, we need to re
+            # extract. we know the drawing extracts we did were rubbish"). A pack saved on
+            # 10 Nov without its top-level drawing was handed to a run on 15 Nov as it stood.
+            # A saved extract is no longer trusted: each file discovery found now is copied
+            # over the saved copy of it, into the same folder, so Live Enquiry\<client>\<drawing>
+            # holds the pack as it is on W: today. A pack that differs from the saved one is
+            # copied whole into a new version folder, further down, so the earlier set is never
+            # overwritten. A file in the folder that is not in today's pack is left where it is,
+            # named in the manifest, and not handed to the run. A pack a person made (no
+            # manifest of ours, and different) is left alone, above.
+            for f in files:
+                shutil.copy2(Path(f["path"]), last / Path(f["path"]).name)
+            sys.path.insert(0, str(HERE))
+            from pack_resolver import DRAWING_EXT
+            extra = sorted(p.name for p in last.iterdir() if p.is_file()
+                           and p.suffix.lower() in DRAWING_EXT and p.name.lower() not in wanted)
+            result = {"state": "re-extracted", "folder": str(last), "version": last_n,
+                      "changes": diff, "copied": len(files)}
+            if extra:
+                result["not_in_todays_pack"] = extra
+            _write(last, manifest, result, now)
+            return result
         if not any(diff.values()):
             # UNCHANGED IS WHAT IS IN THE FOLDER, NOT WHAT ITS MANIFEST SAYS (15 Nov 2026).
             # 12736-00-01's saved pack listed the top-level assembly PDF and the file was not

@@ -645,7 +645,11 @@ class DesignShare:
         folder = Path(kept["folder"])
         return Located("found", f"{m['status']} pack from the design share: {len(m['members'])} drawing(s), "
                                 f"revision {m.get('revision') or 'not read'}; {kept['state']} in {folder.name}",
-                       folder=folder, client_folder_name=client, files=pack_files(folder), source=self.name,
+                       folder=folder, client_folder_name=client,
+                       # THE PACK FOUND NOW, NOT WHATEVER ELSE THE FOLDER HOLDS: a file left from an
+                       # earlier extract that is not in today's pack is not read.
+                       files=[Path(p) for p in ps.stored_files(kept, m) if Path(p).is_file()],
+                       source=self.name,
                        manifest=carried_manifest(m, "the pack gathered from the design share"))
 
 

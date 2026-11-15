@@ -323,7 +323,7 @@ def test_every_found_pack_is_labelled_a_candidate_not_a_verified_pack(tmp_path, 
     assert "not verified" in tp.PACK_JOB_FOLDER and "r.pack" in PAGE
 
 
-def test_a_priced_rows_pack_is_kept_in_live_enquiry_and_reused_next_time(tmp_path, monkeypatch):
+def test_a_priced_rows_pack_is_kept_in_live_enquiry_and_taken_again_next_time(tmp_path, monkeypatch):
     sheet = _sheet(tmp_path)
     _areas(tmp_path, monkeypatch)
     monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: None)
@@ -331,7 +331,8 @@ def test_a_priced_rows_pack_is_kept_in_live_enquiry_and_reused_next_time(tmp_pat
     kept = first["rows"][0]["kept"]
     assert kept["state"] == "new" and kept["folder"] == str(tmp_path / "held" / "LiveEnquiry" / "TTI" / "TTI-10234")
     again = tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=FakePortal(), status_path=None, sleep=lambda s: None)
-    assert again["rows"][0]["kept"]["state"] == "unchanged"
+    # copied from W: again, into the same folder (JG, 15 Nov 2026: "we need to re extract")
+    assert again["rows"][0]["kept"]["state"] == "re-extracted" and again["rows"][0]["kept"]["folder"] == kept["folder"]
     portal = FakePortal()
     tp.run_batch(_args(sheet, rows="3", replace_costs=True), portal=portal, status_path=None, sleep=lambda s: None)
     assert "Drawing pack provisional:" in portal.started[0]["enquiry_brief"], "the pack's assumptions travel with the job"

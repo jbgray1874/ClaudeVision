@@ -44,18 +44,48 @@ def test_a_saved_pack_missing_a_file_is_not_called_unchanged_and_the_file_is_put
     assert first["state"] == "new"
     top = Path(first["folder"]) / f"{TOP}_DEMO ASSY_revB.pdf"
     top.unlink()                                       # the manifest still lists it
-    again = ps.store(manifest, "TTI", root=tmp_path / "store")
+    again = ps.store(manifest, "TTI", root=tmp_path / "store", fresh=False)
     assert again["state"] == "restored" and again["restored"] == [top.name] and top.is_file()
     assert ps.not_there(ps.stored_files(again, manifest)) == []
     saved = json.loads((Path(again["folder"]) / ps.MANIFEST).read_text())
     assert saved["stored"]["restored"] == [top.name], "the folder does not say what was put back"
 
 
-def test_a_saved_pack_that_is_all_there_is_unchanged_and_nothing_is_copied(tmp_path):
+def test_every_run_takes_the_pack_from_w_again_and_a_stale_or_missing_copy_is_replaced(tmp_path):
+    """JG, 15 Nov 2026: "no, we need to re extract. we know the drawing extracts we did were
+    rubbish." The saved copy is not trusted: its manifest can say all is well while a file is
+    gone or is not the file on W:."""
+    manifest = _pack(tmp_path / "W")
+    first = ps.store(manifest, "TTI", root=tmp_path / "store")
+    folder = Path(first["folder"])
+    top, frame = folder / f"{TOP}_DEMO ASSY_revB.pdf", folder / "12736-01-101_Frame_revB.pdf"
+    top.unlink()
+    frame.write_text("a rubbish extract")               # same name, not what is on W:
+    (folder / "left over.dxf").write_text("from an earlier extract")
+    again = ps.store(manifest, "TTI", root=tmp_path / "store")
+    assert again["state"] == "re-extracted" and again["folder"] == first["folder"] and again["copied"] == 3
+    assert top.read_text() == TOP and frame.read_text() == "12736-01-101"
+    assert again["not_in_todays_pack"] == ["left over.dxf"]
+    assert "left over.dxf" not in [Path(p).name for p in ps.stored_files(again, manifest)]
+    assert (folder / "left over.dxf").is_file(), "nothing is deleted"
+    assert not list(folder.parent.glob(f"{TOP} v*")), "the same pack makes no new version"
+
+
+def test_a_pack_that_differs_from_the_saved_one_goes_whole_into_a_new_version(tmp_path):
+    manifest = _pack(tmp_path / "W")
+    first = ps.store(manifest, "TTI", root=tmp_path / "store")
+    manifest["members"][1]["files"][0]["fingerprint"] = "a later issue"
+    later = ps.store(manifest, "TTI", root=tmp_path / "store")
+    assert later["state"] == "changed" and Path(later["folder"]).name == f"{TOP} v2"
+    assert ps.not_there(ps.stored_files(later, manifest)) == []
+    assert len(list(Path(first["folder"]).glob("*.pdf"))) == 2, "the earlier set is left as it was"
+
+
+def test_with_reuse_asked_for_a_saved_pack_that_is_all_there_is_unchanged_and_nothing_is_copied(tmp_path):
     manifest = _pack(tmp_path / "W")
     first = ps.store(manifest, "TTI", root=tmp_path / "store")
     stamps = {p.name: p.stat().st_mtime_ns for p in Path(first["folder"]).iterdir()}
-    again = ps.store(manifest, "TTI", root=tmp_path / "store")
+    again = ps.store(manifest, "TTI", root=tmp_path / "store", fresh=False)
     assert again["state"] == "unchanged" and "restored" not in again
     assert {p.name: p.stat().st_mtime_ns for p in Path(again["folder"]).iterdir()} == stamps
 
@@ -113,7 +143,7 @@ def test_a_row_whose_saved_pack_lost_a_file_is_sent_with_the_file_back_in_it(tmp
     sent[0].unlink()
     portal = FakePortal()
     row = _batch(tmp_path, monkeypatch, portal)
-    assert row["kept"]["state"] == "restored" and row["kept"]["restored"] == [sent[0].name]
+    assert row["kept"]["state"] == "re-extracted"
     assert all(Path(p).is_file() for p in portal.started[0]["files"])
 
 
