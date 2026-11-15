@@ -3225,3 +3225,20 @@ Then go to the API once Acuity has given us the template and the access.
 - **James to run it** (Results to Text, tab-delimited) and upload the .rpt.
 - **Step 2:** map the fields found against X3's opportunity (customer / prospect, description, value, dates, probability, stage "Identified" → "Won or lost", project on a win). The X3 field names must come from Acuity's opportunity template (OPP-01, asked 13 Nov).
 - **Step 3:** build the stage-1 converter, the same pattern as estimating: Access enquiries → X3 opportunity import file with checks. Then go to the API.
+
+**15 Nov – first discovery result (`live_enquiry_discovery.sql`, 177 objects, 480 columns, 39 sample rows):**
+- **Access SupplyChain has a CRM module:** views for sales opportunities, pipeline, outstanding estimates, prospects, contacts, campaigns, tasks and leads.
+  - The opportunity view carries an estimate number, estimate value, probability, and prospect fields (character, date and number).
+  - **But** the only CRM table by name is `CRM_LOOKUPS`, with 15 rows from 2014, and the MetaData.Enquiry* and Workspace.Quote* tables are empty. So the CRM may never have been used.
+- **`ORD_HEADER`** (the order header) has `OH_PROBABILITY`, `OH_QUOTE_DATE` and `OH_ESTIMATE_DROP_DATE`. Quotes and estimates may sit on order headers.
+- **Projects exist:** the `CST_PROJECT` views (estimated sales and costs, an "IsProspect" flag), `ASC_ORC_PROJECTS`, `UDEF_SALES_ORDER_PROJECT_NUMBER` and `UDEF_WOR_PROJECT`. These are relevant to won → project (OPP-04).
+- **Leads:** `DLR_LEADUPDATE` (lead id, status, lost status).
+- **`historical_quote_*`** (1,982 estimates; materials, operations, labour; built May–June 2026) are **our own AI-estimating history tables** (paths `C:\ClaudeVision\src\output…`). They come from the manual estimate files. They're not Access's enquiry data, but they're useful for estimate values.
+- **Next:** `live_enquiry_discovery_2.sql` (read-only). For those objects it gives:
+  - real row counts;
+  - full columns;
+  - view definitions;
+  - quote counts on ORD_HEADER by year;
+  - recent rows.
+
+  That shows whether the CRM / quotes are actually used, or whether the live enquiry process lives only in the K: workbook.
