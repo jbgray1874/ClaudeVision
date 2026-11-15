@@ -1426,6 +1426,73 @@ class TTIRequest(BaseModel):
     method: str = "both"
     dry_run: bool = True
     sheet_name: str = ""
+    at_once: int = 2
+    drawings_only: bool = True
+
+
+# THE ROWS THE BATCH ITSELF ACCEPTS (15 Nov 2026): a row, a range, a list, or a mix
+# ("134,137", "5-12", "10, 114, 134-137"). The route allowed a single range only, so the page
+# could not name the approved rows, and a range takes in every held row between its ends.
+_TTI_ROWS = re.compile(r"\s*\d+(\s*-\s*\d+)?(\s*[,;]\s*\d+(\s*-\s*\d+)?)*\s*")
+TTI_AT_ONCE_MAX = 2
+
+
+def _tti_lock_file() -> Path:
+    return estimate_email.state_dir() / "tti" / "batch.lock"
+
+
+def _tti_batch_args(sheet: Path, method: str, server: str, status: Path, rows: str = "",
+                    sheet_name: str = "", dry_run: bool = False, at_once: int = 2,
+                    drawings_only: bool = True) -> List[str]:
+    """The batch's command line, the same for the sheet button and the changes button: the rows
+    named exactly, two estimates open at most (one per Grid Runner), and only rows that carry a
+    drawing number priced; the rest are listed, never estimated from their notes unasked."""
+    args = [_ENGINE_PYTHON, str(_REPO_ROOT / "src" / "tti_pricer.py"), "--sheet", str(sheet),
+            "--method", method, "--server", server, "--status-file", str(status),
+            "--at-once", str(max(1, min(TTI_AT_ONCE_MAX, int(at_once or 1))))]
+    if drawings_only:
+        args.append("--drawings-only")
+    if rows:
+        args += ["--rows", re.sub(r"\s+", "", rows.replace(";", ","))]
+    if sheet_name:
+        args += ["--sheet-name", sheet_name]
+    if dry_run:
+        args.append("--dry-run")
+    return args
+
+
+def _tti_spawn(args: List[str], status: Path, key: Optional[str], writes: bool, tid: str) -> int:
+    """Start the batch; returns its process id. ONE WRITER: a batch that writes is refused (409)
+    while another that writes is still alive, whichever button or service started it. A dry run
+    writes nothing and is never refused."""
+    import tti_batch_lock
+    if writes:
+        held = tti_batch_lock.holder(_tti_lock_file())
+        if held:
+            raise HTTPException(409, f"A tracker batch is already running (task {held.get('task_id')}). "
+                                     f"Wait for it to finish; nothing was started.")
+    status.parent.mkdir(parents=True, exist_ok=True)
+    status.write_text(json.dumps({"state": "starting", "rows": []}), encoding="utf-8")
+    env = dict(os.environ)
+    if key:
+        env["SDI_API_KEY"] = key
+    # The drawings and thumbnails each row is priced from are copied where start() may read them.
+    if not env.get("SDI_TTI_INPUTS", "").strip():
+        env["SDI_TTI_INPUTS"] = str(_held_dir("tti"))
+    log = status.with_suffix(".log")
+    with open(log, "w", encoding="utf-8") as fh:
+        proc = subprocess.Popen(args, stdout=fh, stderr=subprocess.STDOUT, env=env, cwd=str(_REPO_ROOT))
+    _TTI_PROCS[tid] = proc                 # kept so the finished child is reaped, not left a zombie
+    if writes:
+        try:
+            tti_batch_lock.claim(_tti_lock_file(), tid, proc.pid)
+        except tti_batch_lock.Busy as exc:
+            proc.terminate()               # another service claimed it in the same moment
+            raise HTTPException(409, str(exc)) from None
+    return proc.pid
+
+
+_TTI_PROCS: Dict[str, Any] = {}
 
 
 def _tti_status_file(tid: str) -> Path:
@@ -1512,30 +1579,14 @@ def tti_run(req: TTIRequest, request: Request, x_sdi_key: Optional[str] = Header
                                  f"and that the file is saved as .xlsx.")
     if req.method not in ("both", "targeted", "deterministic", "llm"):
         raise HTTPException(400, f"Unknown method {req.method!r}.")
-    if req.rows and not re.fullmatch(r"\d+(-\d+)?", req.rows.strip()):
-        raise HTTPException(400, "Rows are a sheet row or a range, e.g. 5-12.")
+    if req.rows and not _TTI_ROWS.fullmatch(req.rows):
+        raise HTTPException(400, "Rows are sheet rows, ranges or both, e.g. 134,137 or 5-12.")
     tid = uuid.uuid4().hex[:8]
     status = _tti_status_file(tid)
-    status.parent.mkdir(parents=True, exist_ok=True)
-    status.write_text(json.dumps({"state": "starting", "rows": []}), encoding="utf-8")
     server = str(request.base_url).rstrip("/")
-    args = [_ENGINE_PYTHON, str(_REPO_ROOT / "src" / "tti_pricer.py"), "--sheet", str(sheet),
-            "--method", req.method, "--server", server, "--status-file", str(status)]
-    if req.rows:
-        args += ["--rows", req.rows.strip()]
-    if req.sheet_name:
-        args += ["--sheet-name", req.sheet_name]
-    if req.dry_run:
-        args.append("--dry-run")
-    env = dict(os.environ)
-    if x_sdi_key:
-        env["SDI_API_KEY"] = x_sdi_key
-    # The drawings and thumbnails each row is priced from are copied where start() may read them.
-    if not env.get("SDI_TTI_INPUTS", "").strip():
-        env["SDI_TTI_INPUTS"] = str(_held_dir("tti"))
-    log = status.with_suffix(".log")
-    with open(log, "w", encoding="utf-8") as fh:
-        subprocess.Popen(args, stdout=fh, stderr=subprocess.STDOUT, env=env, cwd=str(_REPO_ROOT))
+    args = _tti_batch_args(sheet, req.method, server, status, rows=req.rows, sheet_name=req.sheet_name,
+                           dry_run=req.dry_run, at_once=req.at_once, drawings_only=req.drawings_only)
+    _tti_spawn(args, status, x_sdi_key, writes=not req.dry_run, tid=tid)
     _TTI_TASKS[tid] = {"sheet": str(sheet), "dry_run": req.dry_run, "started_at": time.time()}
     return {"task_id": tid, "status_url": f"/api/estimate/tti/{tid}", "dry_run": req.dry_run}
 
@@ -1555,6 +1606,81 @@ def tti_status(tid: str, x_sdi_key: Optional[str] = Header(default=None)):
     except OSError:
         body["log_tail"] = ""
     return body
+
+
+# ── THE ONE BUTTON: price what changed on the master tracker (JG, 15 Nov 2026) ──────────────
+# "we want to just run that command button whenever estimating / PMs say that the s.sheet has
+# new rows / changes to it, so that our process finds that s/sheet on the sharepoint, does the
+# delta and prices any changes." Check always answers; pricing is off until SDI_TTI_CHANGES_RUN=1.
+# The decisions and reservations are one SQLite file in the shared state folder, so both
+# services see the same claim; the batch is the one /tti/run starts, under the same one writer.
+_TTI_STORES: Dict[str, Any] = {}
+
+
+class _TTIChangesStore:
+    """The store, opened on first use where the state folder then is."""
+
+    def __getattr__(self, name: str) -> Any:
+        import tti_incremental
+        path = estimate_email.state_dir() / "tti" / "changes.sqlite"
+        store = _TTI_STORES.get(str(path))
+        if store is None:
+            store = _TTI_STORES[str(path)] = tti_incremental.Store(path)
+        return getattr(store, name)
+
+
+def _tti_changes_spawn(*, task_id: str, sheet: Path, tab: str, rows: str, replace_costs: bool,
+                       server: str, key: str) -> Dict[str, Any]:
+    _engine_ready()
+    status = _tti_status_file(task_id)
+    args = _tti_batch_args(sheet, "both", server, status, rows=rows, sheet_name=tab,
+                           dry_run=False, at_once=TTI_AT_ONCE_MAX, drawings_only=True)
+    if replace_costs:
+        args.append("--replace-costs")
+    _tti_spawn(args, status, key or None, writes=True, tid=task_id)
+    _TTI_TASKS[task_id] = {"sheet": str(sheet), "dry_run": False, "started_at": time.time()}
+    return {"task_id": task_id, "status_url": f"/api/estimate/tti/{task_id}", "rows": rows}
+
+
+def _tti_status_of(tid: str) -> Optional[Dict[str, Any]]:
+    try:
+        return json.loads(_tti_status_file(tid).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _tti_busy() -> Optional[str]:
+    import tti_batch_lock
+    held = tti_batch_lock.holder(_tti_lock_file())
+    return (f"A tracker batch is already running (task {held.get('task_id')}). Wait for it to "
+            f"finish; nothing was started.") if held else None
+
+
+def _tti_ledgers() -> List[Dict[str, Any]]:
+    import tti_changes
+    folders = [estimate_email.state_dir() / "tti", _REPO_ROOT / "output" / "tti"]
+    folders += [Path(p.strip()) for p in os.getenv("SDI_TTI_LEDGER_DIRS", "").split("|") if p.strip()]
+    return [ledger for folder in folders for ledger in tti_changes.ledgers_in(folder)]
+
+
+def _tti_changes_router() -> APIRouter:
+    import tti_batch_lock
+    import tti_changes
+    import tti_incremental_routes
+    store = _TTIChangesStore()
+    return tti_incremental_routes.make_router(
+        store, allowed_trackers={tti_changes.TRACKER_ID},
+        snapshot=tti_changes.make_snapshot(lambda: _ENGINE_PYTHON, _REPO_ROOT,
+                                           lambda: estimate_email.state_dir() / "tti"),
+        submit=tti_changes.make_submit(_tti_changes_spawn),
+        check_key=_check_key, run_enabled=tti_changes.run_enabled, busy=_tti_busy,
+        reconcile=tti_changes.make_reconcile(
+            store, _tti_status_of, lambda: tti_batch_lock.holder(_tti_lock_file())),
+        ledgers=_tti_ledgers, prefix="/tti/changes")
+
+
+router.include_router(_tti_changes_router())
+
 
 @router.get("/wall")
 def wall(local: bool = False, x_sdi_key: Optional[str] = Header(default=None)):
