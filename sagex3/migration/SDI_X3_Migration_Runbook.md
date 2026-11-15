@@ -3125,3 +3125,23 @@ SDI has **three kinds of rebate**. They are separate, and each needs its own dat
 - **Sent to Charlotte** as attachment 2, with the check workbook.
 - **For Charlotte to refresh it herself:** her Windows login needs read-only access to SDILive (IT / Acuity). Until then, James runs the query.
 - **Lesson:** build the tool so the user's answers become settings, not formula edits. Prove it against the agreed check before it goes out.
+
+### 22.18 Status check (15 Nov): rebates (Finance), estimating import, Live Enquiry – what's done, what's waiting, and the gap
+
+| Workstream | Built and proved | Emails | Waiting on | What we can still do before replies |
+|---|---|---|---|---|
+| Finance rebates (REP-23 + quantity rebates) | Check workbook (115 / 137 cells to the penny, provision check); self-refreshing provision workbook (= check to the penny) | Charlotte: **ready, 2 attachments, not yet sent** | Charlotte's answers (5 priorities by Wed 25 Nov); read-only SDILive access for her login | Nothing: the next step is her answers |
+| Rebate report (REP-22) | Report + app (to the penny) | Claire + Nick: sent 13 Nov | Claire's 4 confirmations | – |
+| Estimating import (EST-10) | Converter + web page; the real estimate = the Access route / BOM | Dave + James Ryan: sent 13 Nov (14 questions + examples workbook); Acuity B: sent 13 Nov | Their replies by Fri 20 Nov; Acuity on re-import / product-site | **A TEST load of the IMPORT test part, if James has import rights in X3 TEST** |
+| Live Enquiry → opportunity (OPP-00..06) | **Not built.** There's no template from Acuity yet, and we don't have the Live Enquiry workbook | Acuity D (3 questions): sent 13 Nov. **Users: none sent. That's the gap.** | Acuity (Fri 20 Nov); the users' workbook and answers | **The users' email is drafted (13 questions), waiting on James to confirm who it goes to** |
+
+**Live Enquiry facts already in hand:**
+- The list is `K:\Estimating\Completed\Manual Estimates\Live Enquiry.xls`, sheet "Live Enquiries". Its columns include Customer, Drawing No., Job Description and Enquiry Received.
+- `src/live_enquiry_collector.py` already gathers each enquiry's drawings into `K:\Estimating\Completed\AI Estimating\Live Enquiry\<drawing – description>`. If X3 SaaS can't store files, that folder is the fallback link for OPP-05.
+
+**Next:** once the workbook arrives, build stage 1 in the same way as estimating:
+- read the list;
+- check each customer against X3;
+- write the opportunity import file with checks.
+
+Then go to the API once Acuity has given us the template and the access.
