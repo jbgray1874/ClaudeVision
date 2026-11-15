@@ -319,7 +319,7 @@ def notes(meta):
         "lines (COR_TBL) for the price, as Access's own invoiced-sales view does. Run on any day and the 12 months roll with it.",
         f"Period: {meta['period']} – the 12 months ending with the month of the run.",
         f"Selection: by part code only, any customer – the {len(meta['parts'])} codes in rebate_parts.csv (the codes on the "
-        "November 2026 report). Add or remove a code there; no code change is needed.",
+        "November 2026 report, less the installation line HHA-INSTALL M&M, removed at Nick Garrish's request on 15 Nov: the rebate is on goods only). Add or remove a code there; no code change is needed.",
         "Value = quantity x price per, to the penny; a credit note is a negative line.",
         f"Month: by {meta['basis']} date" + (" – the customer due date on the sales order line, as the Access report does"
         if meta["basis"] == "due" else "") + ". Invoice, due and order dates are all on the Lines tab; the report can be "

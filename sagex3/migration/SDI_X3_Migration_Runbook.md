@@ -3145,3 +3145,25 @@ SDI has **three kinds of rebate**. They are separate, and each needs its own dat
 - write the opportunity import file with checks.
 
 Then go to the API once Acuity has given us the template and the access.
+
+### 22.19 Rebate rolling report (REP-22): installation lines removed (Nick Garrish, 15 Nov)
+
+**Nick's reply to the 13 Nov email:** "the only immediate thing I can see is there are some lines that refer to install which would need removing."
+
+- **The install lines are part code `HHA-INSTALL M&M`, the only installation code on the list.** Claire's November report shows four lines (30, −72, +72, +72). Access holds two invoice lines (30 and 72) on invoice 5019204. Both come to 102 units at £135, so **£13,770.00**.
+- **Done:**
+  - removed from `rebate_parts.csv` (now 21 codes) and from the part list in `rebate_rolling.sql`;
+  - the report's notes say why: the rebate is on goods only;
+  - the web app follows the CSV automatically.
+- **Result (12 months to Nov 2026, by due date):**
+  - **sales £535,441.31** (was £549,211.31, −£13,770.00);
+  - **rebate £32,126.48** (was £32,952.68, −£826.20, i.e. 6% of the install value).
+  - The rebuilt report is in the scratchpad `rebate/live/out/`.
+- This also settles the open "HHA-INSTALL credit / re-invoice" question from the 13 Nov email, because the line is no longer on the report.
+- **Still open with Claire:**
+  - the HHA01 M&M due-date move (Sep → Nov);
+  - the flat 6% as a separate agreement;
+  - whether the part list is complete (other 10932-00-GA variants);
+  - whether the 6% is accounted for outside Finance's quantity-rebate provisions (asked of Charlotte).
+
+**Lesson:** a report recreated from a user's copy reproduces their mistakes as well as their totals. Ask the users to read the line list, not just the totals.

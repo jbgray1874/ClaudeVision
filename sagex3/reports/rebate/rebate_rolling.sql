@@ -4,7 +4,8 @@
 -- order line COR_TBL -> customer SL_ACCOUNTS2), with real dates instead of text.
 -- Results to file, tab delimited, WITH headers: <run>/rebate_lines.txt. Then:
 --   python build_rebate_report.py rebate_lines.txt <out folder>
--- Part list: keep in step with rebate_parts.csv.
+-- Part list: keep in step with rebate_parts.csv. Installation lines are excluded (Nick Garrish, 15 Nov):
+-- HHA-INSTALL M&M removed - the rebate is on goods only.
 SET NOCOUNT ON;
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 
@@ -36,6 +37,6 @@ WHERE i.TBI_INVOICE_DATE >= @from AND i.TBI_INVOICE_DATE < @to
       '10932-00-GA1 HAR', '10932-00-GA1 M&M', '10932-00-GA HVL', '10932-00-GA1 KEN', '10932-00-GA1 B/B',
       '10932-00-GA1 BEL', '10932-00-GA1 CAD', '10932-00-GA1 TOB', '10932-00-GA1 BRU', '10932-00-GA1 NES',
       '10932-00-GA1 ROW', '10932-00-GA1 GOU', '10932-00-GA1 VOL', '10932-00-GA1 SH', '10932-00-GA1 TET',
-      '10932-00-GA1 QW', '10932-00-GA1 COM', '10932-00-GA1 HEI', 'HHA-INSTALL M&M', 'LRS01- RIBENA',
+      '10932-00-GA1 QW', '10932-00-GA1 COM', '10932-00-GA1 HEI', 'LRS01- RIBENA',
       'LRS01- LUCOZADE', 'WMM01-GOALPOST')
 ORDER BY customer_code, part_code, i.TBI_INVOICE_DATE;
