@@ -120,11 +120,11 @@ def test_one_plain_match_is_followed_and_nothing_is_sent_twice(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("runs, said", [
-    ([], "showed no run for it"),
-    ([_run(run_id="a"), _run(run_id="b")], "2 runs that could be it"),
-    ([_run(units=25, run_id="other quantity")], "showed no run for it")])
+    (lambda: [], "showed no run for it"),
+    (lambda: [_run(run_id="a"), _run(run_id="b")], "2 runs that could be it"),
+    (lambda: [_run(units=25, run_id="other quantity")], "showed no run for it")])
 def test_no_run_several_runs_or_another_quantitys_run_leave_the_outcome_not_known(tmp_path, monkeypatch, runs, said):
-    row = _batch(tmp_path, monkeypatch, _portal(runs))
+    row = _batch(tmp_path, monkeypatch, _portal(runs()))        # queued now, not when the file was read
     assert row["state"] == tp.OUTCOME_NOT_KNOWN and said in row["why"] and "--take-up 2=RUN" in row["why"]
     assert not row.get("run_id")
 
@@ -172,10 +172,10 @@ def test_a_named_run_is_taken_up_when_it_is_this_rows(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("run, why", [
-    (_run("TTI-99999", run_id="e2639e873262"), "is for TTI-99999, not TTI-10234"),
-    (_run(units=25, run_id="e2639e873262"), "is for 25 unit(s), not this row's 4")])
+    (lambda: _run("TTI-99999", run_id="e2639e873262"), "is for TTI-99999, not TTI-10234"),
+    (lambda: _run(units=25, run_id="e2639e873262"), "is for 25 unit(s), not this row's 4")])
 def test_a_named_run_for_another_drawing_or_quantity_is_refused_and_nothing_is_sent(tmp_path, monkeypatch, run, why):
-    portal = _portal([run], cls=_Answers)
+    portal = _portal([run()], cls=_Answers)
     row = _batch(tmp_path, monkeypatch, portal, take_up=["2=e2639e873262"])
     assert portal.started == [] and row["state"] == tp.OUTCOME_NOT_KNOWN and why in row["why"]
 
