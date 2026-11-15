@@ -3287,3 +3287,8 @@ Then go to the API once Acuity has given us the template and the access.
 | WO Suggestions | Uncovered sales-order lines for made parts | MRP suggestions (X3 MRP) |
 | BOM Report (stock / on PO / PO due / on WO / cost) | Exploded BOM against stock, PO and WO; cost from YITC | BOM (BOMD) explosion with stock (STOCK), PO lines, WOs; standard cost |
 | Tube req, Comments, Prog | Typed by Production (not in Access) | X3 user fields on the WO, or kept on the board side (LO-01) |
+
+**15 Nov – "Live_Orders.shopfloor.xlsx".** This is byte-for-byte the same file as Dave's `Live_Orders.xlsx` (MD5 4a2406…), the fourth copy received.
+- **New fact from its properties:** created by **"Crystal Decisions"** and last saved by David Wright on 26 Oct 2026, 09:16. So today's sheet is a **Crystal Reports export from Access**, which Production then edits by hand: material status, comments, Prog, tube req, the colours and the week break lines.
+  - The Crystal report file (.rpt) behind it holds the exact Access tables and formulas. If it can be found on the network, it confirms the source of every column.
+- **The 13 Nov Live Orders email went to Rachael and Liz** ("Hi Rachael, Liz"), not Dave and Rachael as earlier entries say. It was the 4 Nov board with 12 questions, replies due Fri 20 Nov.
