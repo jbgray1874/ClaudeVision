@@ -1588,8 +1588,11 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             try:
                 # A PACK A PERSON MADE IS USED ONLY ON A ONE-JOB RUN; a batch always takes the
                 # pack from W: again (JG, 15 Nov 2026).
+                # --write-only starts nothing, so it takes no new copy of the pack: it would be a
+                # version folder no run ever read.
                 kept = ps.store(manifest, args.client,
-                                honour_hand_made=len(data["rows"]) == 1 and not _next)
+                                honour_hand_made=len(data["rows"]) == 1 and not _next,
+                                fresh=not getattr(args, "write_only", False))
                 item["kept"] = {k: v for k, v in kept.items() if k != "copies"}
                 inputs = ps.stored_files(kept, manifest)
                 _gone = ps.not_there(inputs)

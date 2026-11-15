@@ -173,3 +173,23 @@ def test_a_row_whose_pack_cannot_be_made_whole_is_held_and_nothing_is_sent(tmp_p
     monkeypatch.setattr(ps, "store", broken)
     row = _batch(tmp_path, monkeypatch, portal)
     assert portal.started == [] and row["state"] == "held: pack not complete" and "share went away" in row["why"]
+
+
+def test_writing_back_a_cost_takes_no_new_copy_of_the_pack(tmp_path, monkeypatch):
+    """--write-only starts no estimate (the tracker was locked in Excel overnight, 15 Nov 2026,
+    and the costs are written back next morning). A new version folder would be a pack no run read."""
+    status = tmp_path / "status.json"
+    first = FakePortal()
+    sheet = tmp_path / "tracker.xlsx"
+    _tracker(tmp_path, [(D, "Counter", "", "", 4)])
+    _areas(tmp_path, monkeypatch)
+    monkeypatch.setattr(tp.SheetWriter, "write",
+                        lambda self, row, value: (_ for _ in ()).throw(OSError("the file is read-only")))
+    tp.run_batch(_args(sheet, drawings_only=True), portal=first, status_path=status, sleep=lambda s: None)
+    store = tmp_path / "held" / "LiveEnquiry" / "TTI"
+    before = sorted(p.name for p in store.iterdir())
+    monkeypatch.setattr(tp.SheetWriter, "write", lambda self, row, value: None)
+    rep = tp.run_batch(_args(sheet, drawings_only=True, write_only=True), portal=FakePortal(),
+                       status_path=status, sleep=lambda s: None)
+    assert sorted(p.name for p in store.iterdir()) == before, "write-only made a new pack version"
+    assert rep["rows"][0].get("written"), rep["rows"][0]
