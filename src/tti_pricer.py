@@ -744,6 +744,50 @@ def unit_cost_of(st: Dict[str, Any], qty: int) -> Optional[float]:
     return None
 
 
+# ── DESIGN FIRST IS LOOKED FOR, NOT HOPED FOR (JG, 15 Nov 2026) ─────────────────────────────
+# "We need to take the latest one from design as the designers save there first and then would
+# usually move to prototype." The resolver prefers the Design copy WHEN IT IS OFFERED ONE. An
+# index that did not hold the Design area offered it none: two packs were taken from Prototype
+# as PDFs and DXFs while the job's Design Technical folder held the assemblies, the parts and
+# two drawings reported missing. So the job's folders in the Design area are listed NOW for
+# every row, whatever the index holds, and handed to the resolver with the rest. Where the
+# Design area cannot be read the row is held: a Prototype pack is never accepted unlooked.
+_DESIGN_JOBS: Dict[str, List[str]] = {}
+
+
+def design_root() -> Optional[Path]:
+    from drive_map import to_unc
+    v = (os.getenv("SDI_TTI_DESIGN_ROOT") or DEFAULT_DESIGN or "").strip()
+    return Path(to_unc(v)) if v else None
+
+
+def design_rows_now(drawing: str, root: Optional[Path]) -> Tuple[List[Any], str]:
+    """(the job's Design folders listed now, what was looked at). Raises PackCheckStalled when
+    the Design area or one of the job's folders in it cannot be read."""
+    import drawing_index as di
+    import pack_resolver as pr
+    job = re.match(r"\s*(\d{3,})", str(drawing or ""))
+    if root is None or not job:
+        return [], ""
+    key = os.path.normcase(str(root))
+    if key not in _DESIGN_JOBS:
+        try:
+            _DESIGN_JOBS[key] = sorted(e.name for e in os.scandir(root) if e.is_dir())
+        except OSError as exc:
+            raise pr.PackCheckStalled(f"the Design area could not be read to look for a Design copy "
+                                      f"({root}: {type(exc).__name__})")
+    mine = [n for n in _DESIGN_JOBS[key] if re.match(rf"{job.group(1)}(?!\d)", n)]
+    if not mine:
+        return [], f"no folder for job {job.group(1)} in the Design area, looked at now"
+    rows: List[Any] = []
+    for name in mine:
+        got = di.live_rows(root / name)
+        if got is None:
+            raise pr.PackCheckStalled(f"the job's Design folder could not be read ({root / name})")
+        rows += got
+    return rows, f"{len(mine)} Design folder(s) for job {job.group(1)} listed now ({len(rows)} folder(s) in all)"
+
+
 def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
              ) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
     """The row's drawing pack through the shared resolver (src/pack_resolver.py, SCRUM-199): the
@@ -755,12 +799,17 @@ def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
         # THE LOOKUP DATABASE: the drawing's own and its job's folders, the GA's surroundings
         # re-listed now, and shared-library parts found anywhere: the page's and Self-Running's way.
         rows, _src, lookup = pr.folders_for(drawing, index_path=_LOOKUP_INDEX[0] if _LOOKUP_INDEX else None)
+        now_rows, looked = design_rows_now(drawing, design_root())
+        if now_rows:
+            listed = {os.path.normcase(str(r[0])) for r in now_rows}
+            rows = [r for r in rows if os.path.normcase(str(r[0])) not in listed] + now_rows
         m = pr.resolve(drawing, rows, client=client, lookup=lookup, client_folders_only=True)
         if m["status"] == "not found":
             return {}, None
         area = "prototype" if "prototype" in str(m.get("selected_folder") or "").lower() else "design"
         files = [f["path"] for x in m["members"] for f in x["files"]]
         return ({"area": area, "match": "pack", "folder": m.get("selected_folder"), "files": files,
+                 "design_looked": looked,
                  "technical": "technical" in str(m.get("selected_folder") or "").lower(), "newest": "",
                  "other_folders": [c["folder"] for c in m["candidates"] if c["folder"] != m.get("selected_folder")][:5]},
                 m)
@@ -783,6 +832,16 @@ def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
              "newest": "", "other_folders": [c["folder"] for c in m["candidates"]
                                              if c["folder"] != m.get("selected_folder")][:5]}
     return found, m
+
+
+def _formats(files: Iterable[str]) -> Dict[str, int]:
+    """How many of the pack's files are of each kind, the most first: a pack with no model
+    files is seen at a glance, before it is priced."""
+    out: Dict[str, int] = {}
+    for f in files:
+        ext = Path(str(f)).suffix.lower().lstrip(".") or "no extension"
+        out[ext] = out.get(ext, 0) + 1
+    return dict(sorted(out.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
 def pack_line(m: Dict[str, Any]) -> str:
@@ -991,6 +1050,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     _checked = load_checked_packs(args.checked_packs) if getattr(args, "checked_packs", "") else None
     _DB_ROWS.clear()
     _LOOKUP_INDEX.clear()
+    _DESIGN_JOBS.clear()
     if _checked is not None:
         # No listing of either area: each row's pack comes from the lookup database with the
         # GA's own folders listed again now, and is held unless it is the pack that was checked.
@@ -1152,6 +1212,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                          else "full estimate") if found else "LLM estimate (no drawings found)",
                 "found": {k: v for k, v in found.items() if k != "files"} if found else None,
                 "files": len(found.get("files") or []) if found else 0,
+                "formats": _formats(found.get("files") or []) if found else None,
                 "thumbnails": len(r["pictures"]), "cost_before": r["cost_before"], "state": "planned",
                 "previous": {k: (ledger.get(row_key(r)) or {}).get(k)
                              for k in ("run_id", "state", "unit_cost", "written", "approval")}
@@ -1562,6 +1623,13 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{it.get('unit_cost', '') if it.get('unit_cost') is not None else ''}  {where}", flush=True)
         if it.get("pack"):
             print(f"{'':<11}{it['pack']}", flush=True)
+        _f = it.get("found") or {}
+        if _f.get("folder"):
+            print(f"{'':<11}from the {_f.get('area')} area: {_f['folder']}", flush=True)
+        if it.get("formats"):
+            print(f"{'':<11}files: " + ", ".join(f"{n} {e}" for e, n in it["formats"].items()), flush=True)
+        if _f.get("design_looked"):
+            print(f"{'':<11}Design area: {_f['design_looked']}", flush=True)
         if it.get("cost_before") not in (None, "") or it.get("previous"):
             _pv = it.get("previous") or {}
             print(f"{'':<11}now in {args.col_cost.upper()}: {it.get('cost_before') if it.get('cost_before') not in (None, '') else 'empty'}"
