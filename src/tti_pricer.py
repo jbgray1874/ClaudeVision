@@ -4,6 +4,9 @@
     python src/tti_pricer.py --sheet "C:\\...\\TRACKER - MILWAUKEE AMSTERDAM CONFERENCE 2027.xlsx" --dry-run
     python src/tti_pricer.py --sheet "<same>"                 price every row, one after another
     python src/tti_pricer.py --sheet "<same>" --rows 5-12      only those sheet rows
+    python src/tti_pricer.py --sheet "<same>" --rows 134,137   exactly those rows, none between
+    python src/tti_pricer.py --sheet "<same>" --walk-live      list both drawing areas live when the
+                                                               index cannot be used (hours on a VPN)
 
 ONE ROW, ONE JOB. Each row is one TTI job:
     column L   the drawing number, looked for in the design and prototype areas
@@ -212,19 +215,28 @@ def _token(drawing: str) -> Optional[re.Pattern]:
     return re.compile(r"(?<![0-9A-Za-z])" + re.escape(d).replace(r"\-", r"[-_ ]?") + r"(?![0-9])", re.IGNORECASE)
 
 
-def list_folders(root: Path, depth: int = 7) -> List[Path]:
-    """Every folder under the root, to a depth, archives skipped: walked once per batch."""
+def list_folders(root: Path, depth: int = 7, say_every: int = 2000) -> List[Path]:
+    """Every folder under the root, to a depth, archives skipped: walked once per batch.
+    It says how far it has got: on the real share this is some 230,000 folders."""
     out: List[Path] = []
     if not root.is_dir():
         return out
     base = len(root.parts)
+    started = time.time()
     for dirpath, dirnames, _files in os.walk(root):
         p = Path(dirpath)
         dirnames[:] = [d for d in dirnames if not SKIP.search(d)]
         if len(p.parts) - base >= depth:
             dirnames[:] = []
         out.append(p)
+        if say_every and len(out) % say_every == 0:
+            print(f"[tti] listing {root}: {len(out)} folder(s) so far, "
+                  f"{int(time.time() - started)} s", flush=True)
     return out
+
+
+class IndexNotUsable(SystemExit):
+    """The drawing index exists and cannot be used, and nobody asked for the long listing."""
 
 
 _FILES: Dict[str, List[Path]] = {}
@@ -253,7 +265,8 @@ def _mtime(p: Path) -> float:
     return _MTIME[k]
 
 
-def area_listings(design: Path, proto: Path) -> Tuple[List[Tuple[str, List[Path]]], str]:
+def area_listings(design: Path, proto: Path, walk_live: bool = False
+                  ) -> Tuple[List[Tuple[str, List[Path]]], str]:
     """The folders of both areas, from the drawing index where it is fresh and covers them,
     else walked live; and which of the two it was, said on the status and the console."""
     try:
@@ -280,6 +293,21 @@ def area_listings(design: Path, proto: Path) -> Tuple[List[Tuple[str, List[Path]
         return out, f"drawing index built {datetime.fromtimestamp(idx['built_at']).isoformat(timespec='minutes')}"
     why = ("no drawing index" if not idx else "the drawing index is stale" if not di.is_fresh(idx, cfg["max_hours"])
            else "the drawing index does not cover these folders")
+    # AN INDEX THAT CANNOT BE USED STOPS THE BATCH; IT DOES NOT START A TEN-HOUR LISTING IN
+    # SILENCE (15 Nov 2026). A refresh that ran while the share was away marked both areas
+    # unreadable. The batch then listed every folder of both areas itself, some 230,000 over
+    # a VPN, printing nothing: one dry run sat for ten hours and a two-row run would have done
+    # the same. Where an index exists, the batch now says why it cannot use it, how to put
+    # that right in minutes, and stops. --walk-live asks for the long listing by name. With
+    # no index at all there is nothing to refresh, so the areas are listed, and said so.
+    if idx and not walk_live:
+        raise IndexNotUsable(
+            f"The drawing index cannot be used: {why}. Nothing was listed, queued or written.\n"
+            f"Refresh it (minutes): python src\\drawing_index.py --build\n"
+            f"It must print both drawing areas as 'readable'. Then run this again.\n"
+            f"To list both areas live instead (about 230,000 folders, hours on a VPN), add --walk-live.")
+    print(f"[tti] LISTING BOTH DRAWING AREAS LIVE ({why}). On the real share this is some "
+          f"230,000 folders and takes hours; progress is printed as it goes.", flush=True)
     return [("design", list_folders(design)), ("prototype", list_folders(proto))], f"walked live ({why})"
 
 
@@ -510,6 +538,63 @@ def check_write(before: Dict[str, Any], after: Dict[str, Any], col: str, value: 
 
 # ── the batch ───────────────────────────────────────────────────────────────────────────
 
+def parse_rows(text: Any) -> List[int]:
+    """The sheet rows --rows names: "5-12", "134,137" or "10, 114, 134-137". Empty: every row."""
+    out: List[int] = []
+    for piece in str(text or "").replace(";", ",").split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        a, dash, b = piece.partition("-")
+        try:
+            lo, hi = int(a), int(b) if dash and b.strip() else int(a)
+        except ValueError:
+            raise SystemExit(f"--rows: '{piece}' is not a row or a range of rows (e.g. 134,137 or 5-12)")
+        if lo < 1 or hi < lo:
+            raise SystemExit(f"--rows: '{piece}' is not a valid range")
+        out.extend(range(lo, hi + 1))
+    return sorted(set(out))
+
+
+def scope_text(r: Dict[str, Any]) -> str:
+    """What a row asks to be made, apart from how many: its drawing cell, description, notes
+    and every feedback, spaces and case aside."""
+    bits = [r.get("drawing_cell"), r.get("description"), r.get("notes")]
+    bits += [f"{h}:{t}" for h, t in (r.get("feedbacks") or [])]
+    if not r.get("feedbacks"):
+        bits.append(r.get("feedback"))
+    return " | ".join(" ".join(str(b or "").split()).lower() for b in bits)
+
+
+def assign_run_keys(rows: List[Dict[str, Any]]) -> None:
+    """Give each row the key of the estimate it belongs to (15 Nov 2026).
+
+    One drawing on several rows was one run: the first row's brief priced it and the other
+    rows took its cost or one of its quantity breaks. A tracker lists a booth on six rows with
+    different descriptions and feedback, one of them another product built on the same
+    drawing; five briefs were dropped. Rows of one drawing that ask for the same thing still
+    share one run and its quantity breaks. Rows whose words differ are separate estimates,
+    each priced on its own brief, and say so."""
+    scopes: Dict[str, List[str]] = {}
+    for r in rows:
+        if r.get("drawing"):
+            st = scope_text(r)
+            if st not in scopes.setdefault(r["drawing"], []):
+                scopes[r["drawing"]].append(st)
+    for r in rows:
+        d = r.get("drawing") or ""
+        kinds = scopes.get(d) or []
+        if d and len(kinds) > 1:
+            r["run_key"] = f"{d}#{kinds.index(scope_text(r)) + 1}"
+            r["scope_differs"] = len(kinds)
+        else:
+            r["run_key"] = d
+
+
+def _rk(r: Dict[str, Any]) -> str:
+    return str(r.get("run_key") or r.get("drawing") or "")
+
+
 def brief_for(r: Dict[str, Any]) -> str:
     parts = [f"TTI job, sheet row {r['row']}."]
     if r.get("drawing"):
@@ -730,11 +815,20 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     sheet = Path(args.sheet)
     cols = {"drawing": args.col_drawing, "notes": args.col_notes, "thumbs": args.col_thumbs.split(","),
             "cost": args.col_cost, "qty": getattr(args, "col_qty", "") or ""}
-    rows = None
-    if args.rows:
-        a, _, b = args.rows.partition("-")
-        rows = (int(a), int(b or a))
+    wanted = parse_rows(args.rows)
+    rows = (min(wanted), max(wanted)) if wanted else None
     data = read_rows(sheet, cols, rows, args.sheet_name)
+    if wanted:
+        # ONLY THE ROWS NAMED. A range read everything between its ends, so approving rows 134
+        # and 137 also ran 135 and 136, which had been held (15 Nov 2026).
+        _named = set(wanted)
+        _got = {r["row"] for r in data["rows"]}
+        data["rows"] = [r for r in data["rows"] if r["row"] in _named]
+        _absent = sorted(_named - _got)
+        if _absent:
+            print(f"[tti] row(s) {', '.join(map(str, _absent))} named in --rows are not job rows "
+                  f"of this sheet and are left out", flush=True)
+    assign_run_keys(data["rows"])
     if data.get("cost_column") and data["cost_column"] != args.col_cost:
         print(f"[tti] {data.get('cost_column_said')}", flush=True)
         args.col_cost = data["cost_column"]
@@ -750,7 +844,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                          f"would be priced without its drawings. Nothing was queued or written. Set "
                          f"SDI_DRIVE_MAP (W=\\\\server\\share) or the two SDI_TTI_*_ROOT settings, and run "
                          f"--dry-run until rows show their folders.")
-    listings, source = area_listings(design, proto)
+    listings, source = area_listings(design, proto, walk_live=bool(getattr(args, "walk_live", False)))
     _DB_ROWS.clear()
     if source.startswith("drawing index"):
         _DB_ROWS.append(True)
@@ -838,9 +932,9 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
     qtys_of: Dict[str, List[int]] = {}
     for _r in data["rows"]:
         if _r.get("drawing"):
-            qtys_of.setdefault(_r["drawing"], [])
-            if _r["quantity"] not in qtys_of[_r["drawing"]]:
-                qtys_of[_r["drawing"]].append(_r["quantity"])
+            qtys_of.setdefault(_rk(_r), [])
+            if _r["quantity"] not in qtys_of[_rk(_r)]:
+                qtys_of[_rk(_r)].append(_r["quantity"])
     runs_of: Dict[str, Dict[str, Any]] = {}
     # TWO RUNNERS, TWO JOBS AT ONCE (JG, 14 Nov 2026: "we want two at once.. we have two
     # runners"). The batch queued a job and waited for it, so the second runner sat idle
@@ -894,6 +988,9 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 found = find_drawings(r["drawing"], listings)
         item = {"row": r["row"], "drawing": r["drawing"], "drawing_cell": r.get("drawing_cell", r["drawing"]),
                 "quantity": r["quantity"],
+                "own_brief": (f"priced on this row's own brief: {r['drawing']} is on rows with "
+                              f"{r['scope_differs']} different descriptions or feedback"
+                              if r.get("scope_differs") else None),
                 "kind": (f"full estimate ({manifest['status']} pack)" if manifest
                          else "full estimate (job folder)" if found.get("match") == "job folder"
                          else "full estimate") if found else "LLM estimate (no drawings found)",
@@ -977,12 +1074,12 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 extras(item, r, manifest, _prev.get("workbook"), _prev.get("unit_cost"),
                        copy=_need_copy, central_too=_need_central)
                 record(item, r, manifest)
-            priced[(r["drawing"], r["quantity"])] = item
+            priced[(_rk(r), r["quantity"])] = item
             save()
             continue
         save()
         # THE SAME DRAWING AT THE SAME QUANTITY IS PRICED ONCE PER BATCH; later rows take its cost.
-        same = priced.get((r["drawing"], r["quantity"])) if r["drawing"] else None
+        same = priced.get((_rk(r), r["quantity"])) if r["drawing"] else None
         if same is not None:
             item.update(state="same as row %d" % same["row"], same_as_row=same["row"])
             if args.dry_run or same.get("unit_cost") is None:
@@ -994,14 +1091,14 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             item.update(state="ask", why=manifest["question"])
             save()
             continue
-        _shared = runs_of.get(r["drawing"]) if (r["drawing"] and same is None) else None
+        _shared = runs_of.get(_rk(r)) if (r["drawing"] and same is None) else None
         if args.dry_run:
             if _shared is not None:
                 item.update(state="same run as row %d" % _shared["row"],
                             why=f"priced from that run's {r['quantity']}-off break")
             elif r["drawing"]:
-                priced[(r["drawing"], r["quantity"])] = item
-                runs_of[r["drawing"]] = {"row": r["row"]}
+                priced[(_rk(r), r["quantity"])] = item
+                runs_of[_rk(r)] = {"row": r["row"]}
             continue
         if same is not None:
             item["unit_cost"] = same["unit_cost"]
@@ -1023,7 +1120,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                     item["written"] = f"{args.col_cost}{r['row']} = {_bc}"
                 except OSError as exc:
                     item["why"] = f"{args.col_cost}{r['row']} could not be written ({exc})"
-                priced[(r["drawing"], r["quantity"])] = item
+                priced[(_rk(r), r["quantity"])] = item
                 save()
                 continue
         name = re.sub(r"[^\w .-]", "_", r["drawing"] or f"row{r['row']}")
@@ -1044,7 +1141,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         body = {"client": args.client, "drawing_number": r["drawing"] or f"TTI-row{r['row']}",
                 "source": "tti",
                 "units": r["quantity"], "files": inputs, "deliverables": True,
-                "quantity_breaks": sorted(q for q in qtys_of.get(r["drawing"] or "", []) if q != r["quantity"]),
+                "quantity_breaks": sorted(q for q in qtys_of.get(_rk(r), []) if q != r["quantity"]),
                 "method": args.method if found else "llm",
                 "enquiry_brief": brief_for(r) + (
                     f" Drawing pack {manifest['status']}: " + "; ".join(manifest["assumptions"][:6])
@@ -1150,9 +1247,9 @@ def _finish_body(item, r, manifest, st, *, args, sheet, data, writer, priced, ru
         item.update(state=str(st.get("status")), unit_cost=cost, output=st.get("output_path") or st.get("output"),
                     quality=st.get("quality") or None, review=st.get("review") or None)
         if r["drawing"]:
-            priced[(r["drawing"], r["quantity"])] = item
+            priced[(_rk(r), r["quantity"])] = item
             if str(st.get("status")) == "done":
-                runs_of[r["drawing"]] = {"row": r["row"], "st": st, "run_id": item.get("run_id")}
+                runs_of[_rk(r)] = {"row": r["row"], "st": st, "run_id": item.get("run_id")}
         if cost is not None and str(st.get("status")) == "done":
             try:
                 try:
@@ -1189,7 +1286,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sheet", required=True)
     ap.add_argument("--sheet-name", default="", help="the tab; default the active one")
-    ap.add_argument("--rows", default="", help="sheet rows to price, e.g. 5-12")
+    ap.add_argument("--rows", default="", help="sheet rows to price: a range (5-12), a list (134,137) or both")
+    ap.add_argument("--walk-live", action="store_true",
+                    help="list both drawing areas live when the index cannot be used (hours on a VPN)")
     ap.add_argument("--client", default="TTI")
     ap.add_argument("--method", default="both", choices=("both", "targeted", "deterministic", "llm"))
     ap.add_argument("--col-drawing", default="L")
