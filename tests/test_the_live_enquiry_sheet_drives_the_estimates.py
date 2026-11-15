@@ -484,11 +484,11 @@ def test_self_running_takes_the_pack_from_the_design_share_and_keeps_it_in_live_
     assert sorted(p.name for p in got.files if p.suffix != ".json") == [
         "12517-00-GA.SLDASM", "12517-00-GA_Unit_RevE.pdf", "12517-01-01M_Panel_RevE.DXF"]
     again = src.find(rows[0])
-    assert again.folder == got.folder and "re-extracted" in again.reason, \
-        "the same pack is copied from the design share again, into the same folder (15 Nov 2026)"
+    assert again.folder.name == "12517-00-GA v2" and "re-extracted" in again.reason, \
+        "the same pack is copied from the design share again, into a new version (15 Nov 2026)"
     changed = _design(tmp_path, body="revised ")
     later = L.DesignShare(root, folders=lambda: changed).find(rows[0])
-    assert later.folder.name == "12517-00-GA v2" and "changed" in later.reason
+    assert later.folder.name == "12517-00-GA v3" and "changed" in later.reason
 
 
 def test_nothing_on_the_design_share_leaves_the_hand_dropped_pack_to_the_share(root, ledger, tmp_path):

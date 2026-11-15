@@ -147,22 +147,23 @@ def test_the_pack_is_saved_once_reused_when_unchanged_and_versioned_when_changed
     assert (store / "TTI" / GA / ps.MANIFEST).exists() and len(ps.stored_files(first, m1)) == 3
     # THE RULE CHANGED ON 15 NOV 2026 (JG: "no, we need to re extract. we know the drawing extracts
     # we did were rubbish"): the same pack is copied from W: again into the same folder, not
-    # trusted as it was saved. A pack that differs still goes into a new version folder.
+    # trusted as it was saved ... "in the live enquiry area on the K:// we need to create a new
+    # version": each run's pack is a new version folder; the earlier ones are left as they were.
     again = ps.store(pr.resolve(GA, [_real_pack(share)], read_text=_text()), "TTI", root=store)
-    assert again["state"] == "re-extracted" and again["folder"] == first["folder"] and again["copied"] == 3
+    assert again["state"] == "re-extracted" and again["folder"] == str(store / "TTI" / f"{GA} v2") and again["copied"] == 3
     kept = ps.store(pr.resolve(GA, [_real_pack(share)], read_text=_text()), "TTI", root=store, fresh=False)
-    assert kept["state"] == "unchanged" and kept["folder"] == first["folder"], "reuse is still there when asked for"
+    assert kept["state"] == "unchanged" and kept["folder"] == again["folder"], "reuse is still there when asked for"
     (share / "11896-01-01-02M_1.2mm MS_RevE.DXF").write_text("a changed flat pattern")
     st = (share / "11896-01-01-02M_1.2mm MS_RevE.DXF").stat()
     m3 = pr.resolve(GA, [(share, [(p, p.stat().st_size, p.stat().st_mtime) for p in sorted(share.iterdir())], False)],
                     read_text=_text())
     third = ps.store(m3, "TTI", root=store)
-    assert third["state"] == "changed" and third["folder"] == str(store / "TTI" / f"{GA} v2")
-    assert third["changes"]["changed"] == ["11896-01-01-02m_1.2mm ms_reve.dxf"] and third["previous"] == first["folder"]
+    assert third["state"] == "changed" and third["folder"] == str(store / "TTI" / f"{GA} v3")
+    assert third["changes"]["changed"] == ["11896-01-01-02m_1.2mm ms_reve.dxf"] and third["previous"] == again["folder"]
     assert (store / "TTI" / GA / f"{GA}.SLDASM").exists(), "the earlier set is never overwritten"
 
 
-def test_a_folder_filled_by_hand_whose_files_match_is_taken_as_the_pack_and_copied_again(tmp_path):
+def test_a_folder_filled_by_hand_whose_files_match_is_left_alone_and_the_pack_is_a_new_version(tmp_path):
     share = tmp_path / "W" / "11896-01-00-GA"
     pack = _real_pack(share)
     store = tmp_path / "LiveEnquiry"
@@ -171,7 +172,8 @@ def test_a_folder_filled_by_hand_whose_files_match_is_taken_as_the_pack_and_copi
     for p, _s, _m in pack[1]:
         (by_hand / p.name).write_bytes(p.read_bytes())
     got = ps.store(pr.resolve(GA, [pack], read_text=_text()), "TTI", root=store)
-    assert got["state"] == "re-extracted" and (by_hand / ps.MANIFEST).exists()
+    assert got["state"] == "re-extracted" and got["folder"] == str(store / "TTI" / f"{GA} v2")
+    assert not (by_hand / ps.MANIFEST).exists(), "the folder a person filled is left exactly as it was"
 
 
 def test_the_store_root_is_the_live_enquiry_folder_by_its_network_path():

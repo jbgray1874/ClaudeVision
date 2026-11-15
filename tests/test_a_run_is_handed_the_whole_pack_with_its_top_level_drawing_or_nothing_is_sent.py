@@ -51,24 +51,28 @@ def test_a_saved_pack_missing_a_file_is_not_called_unchanged_and_the_file_is_put
     assert saved["stored"]["restored"] == [top.name], "the folder does not say what was put back"
 
 
-def test_every_run_takes_the_pack_from_w_again_and_a_stale_or_missing_copy_is_replaced(tmp_path):
+def test_every_run_takes_the_pack_from_w_again_into_a_new_version_and_reads_no_saved_extract(tmp_path):
     """JG, 15 Nov 2026: "no, we need to re extract. we know the drawing extracts we did were
-    rubbish." The saved copy is not trusted: its manifest can say all is well while a file is
-    gone or is not the file on W:."""
+    rubbish" ... "in the live enquiry area on the K:// we need to create a new version". The
+    saved copy is not trusted: its manifest can say all is well while a file is gone or is not
+    the file on W:. It is not repaired either; it is left as the record of what was read then."""
     manifest = _pack(tmp_path / "W")
     first = ps.store(manifest, "TTI", root=tmp_path / "store")
-    folder = Path(first["folder"])
-    top, frame = folder / f"{TOP}_DEMO ASSY_revB.pdf", folder / "12736-01-101_Frame_revB.pdf"
-    top.unlink()
-    frame.write_text("a rubbish extract")               # same name, not what is on W:
-    (folder / "left over.dxf").write_text("from an earlier extract")
+    old = Path(first["folder"])
+    (old / f"{TOP}_DEMO ASSY_revB.pdf").unlink()
+    (old / "12736-01-101_Frame_revB.pdf").write_text("a rubbish extract")   # same name, not W:'s
+    before = sorted((p.name, p.read_text()) for p in old.iterdir() if p.name != ps.MANIFEST)
     again = ps.store(manifest, "TTI", root=tmp_path / "store")
-    assert again["state"] == "re-extracted" and again["folder"] == first["folder"] and again["copied"] == 3
-    assert top.read_text() == TOP and frame.read_text() == "12736-01-101"
-    assert again["not_in_todays_pack"] == ["left over.dxf"]
-    assert "left over.dxf" not in [Path(p).name for p in ps.stored_files(again, manifest)]
-    assert (folder / "left over.dxf").is_file(), "nothing is deleted"
-    assert not list(folder.parent.glob(f"{TOP} v*")), "the same pack makes no new version"
+    new = Path(again["folder"])
+    assert again["state"] == "re-extracted" and new.name == f"{TOP} v2" and again["previous"] == str(old)
+    handed = ps.stored_files(again, manifest)
+    assert all(Path(p).parent == new for p in handed) and ps.not_there(handed) == []
+    assert ps.top_level_absent(manifest, handed) == ""
+    assert (new / "12736-01-101_Frame_revB.pdf").read_text() == "12736-01-101"
+    assert sorted((p.name, p.read_text()) for p in old.iterdir() if p.name != ps.MANIFEST) == before, \
+        "the earlier extract was altered"
+    third = ps.store(manifest, "TTI", root=tmp_path / "store")
+    assert Path(third["folder"]).name == f"{TOP} v3"
 
 
 def test_a_pack_that_differs_from_the_saved_one_goes_whole_into_a_new_version(tmp_path):
@@ -77,6 +81,7 @@ def test_a_pack_that_differs_from_the_saved_one_goes_whole_into_a_new_version(tm
     manifest["members"][1]["files"][0]["fingerprint"] = "a later issue"
     later = ps.store(manifest, "TTI", root=tmp_path / "store")
     assert later["state"] == "changed" and Path(later["folder"]).name == f"{TOP} v2"
+    assert later["changes"]["changed"] == ["12736-01-101_frame_revb.pdf"]
     assert ps.not_there(ps.stored_files(later, manifest)) == []
     assert len(list(Path(first["folder"]).glob("*.pdf"))) == 2, "the earlier set is left as it was"
 
@@ -150,12 +155,11 @@ def test_a_row_whose_saved_pack_lost_a_file_is_sent_with_the_file_back_in_it(tmp
 def test_a_row_whose_pack_cannot_be_made_whole_is_held_and_nothing_is_sent(tmp_path, monkeypatch):
     first = FakePortal()
     _batch(tmp_path, monkeypatch, first)
-    folder = Path(first.started[0]["files"][0]).parent
     real = ps.store
 
     def lossy(manifest, client, *a, **k):               # the store says it is all there; it is not
         out = real(manifest, client, *a, **k)
-        for p in folder.glob("*.pdf"):
+        for p in Path(out["folder"]).glob("*.pdf"):
             p.unlink()
         return out
     monkeypatch.setattr(ps, "store", lossy)

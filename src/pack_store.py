@@ -7,10 +7,10 @@ Every entry point (the estimating page, AI Estimate Self-Running, the tracker pr
 pack here through store(). The pack's files are compared with the latest set already saved for
 that client and drawing, by name and fingerprint:
 
-  re-extracted  THE RULE SINCE 15 NOV 2026 (JG: "we need to re extract"): every run copies the
-              pack from W: again. A saved extract is never trusted as it stands. The same pack
-              is copied over its saved copy in the same folder (a missing file comes back); a
-              pack that differs goes whole into a new version folder, as "changed" below.
+  re-extracted  THE RULE SINCE 15 NOV 2026 (JG: "we need to re extract ... we need to create a new
+              version"): every run copies the pack from W: again, whole, into a new version
+              folder beside the earlier ones. A saved extract is never read again. "changed"
+              when it also differs from the last one saved.
   unchanged   only with fresh=False: the saved set is used as it is, after every file of it has
               been found in the folder (one that is absent is copied in: "restored")
   new         the first set: the folder is made and filled
@@ -122,28 +122,22 @@ def store(manifest: Dict[str, Any], client: str, root: Optional[Path] = None,
                 and any(p.is_file() for p in last.iterdir()):
             return {"state": "kept by hand", "folder": str(last), "version": last_n,
                     "changes": diff}
-        if fresh and not any(diff.values()):
-            # EVERY RUN TAKES THE PACK FROM W: AGAIN (JG, 15 Nov 2026: "no, we need to re
-            # extract. we know the drawing extracts we did were rubbish"). A pack saved on
-            # 10 Nov without its top-level drawing was handed to a run on 15 Nov as it stood.
-            # A saved extract is no longer trusted: each file discovery found now is copied
-            # over the saved copy of it, into the same folder, so Live Enquiry\<client>\<drawing>
-            # holds the pack as it is on W: today. A pack that differs from the saved one is
-            # copied whole into a new version folder, further down, so the earlier set is never
-            # overwritten. A file in the folder that is not in today's pack is left where it is,
-            # named in the manifest, and not handed to the run. A pack a person made (no
-            # manifest of ours, and different) is left alone, above.
+        if fresh:
+            # EVERY RUN TAKES THE PACK FROM W: AGAIN, INTO A NEW VERSION (JG, 15 Nov 2026: "no, we
+            # need to re extract. we know the drawing extracts we did were rubbish" ... "in the
+            # live enquiry area on the K:// we need to create a new version"). A pack saved on
+            # 10 Nov without its top-level drawing was handed to a run on 15 Nov as it stood. A
+            # saved extract is no longer read: the pack discovery found now is copied whole into
+            # "<drawing> vN" beside the earlier ones, and that is what the run is handed. Nothing
+            # earlier is overwritten or removed. A pack a person made is left alone, above.
+            target = base.parent / f"{base.name} v{last_n + 1}"
+            target.mkdir(parents=True, exist_ok=True)
             for f in files:
-                shutil.copy2(Path(f["path"]), last / Path(f["path"]).name)
-            sys.path.insert(0, str(HERE))
-            from pack_resolver import DRAWING_EXT
-            extra = sorted(p.name for p in last.iterdir() if p.is_file()
-                           and p.suffix.lower() in DRAWING_EXT and p.name.lower() not in wanted)
-            result = {"state": "re-extracted", "folder": str(last), "version": last_n,
-                      "changes": diff, "copied": len(files)}
-            if extra:
-                result["not_in_todays_pack"] = extra
-            _write(last, manifest, result, now)
+                shutil.copy2(Path(f["path"]), target / Path(f["path"]).name)
+            result = {"state": "changed" if any(diff.values()) else "re-extracted",
+                      "folder": str(target), "version": last_n + 1, "changes": diff,
+                      "copied": len(files), "previous": str(last)}
+            _write(target, manifest, result, now)
             return result
         if not any(diff.values()):
             # UNCHANGED IS WHAT IS IN THE FOLDER, NOT WHAT ITS MANIFEST SAYS (15 Nov 2026).
