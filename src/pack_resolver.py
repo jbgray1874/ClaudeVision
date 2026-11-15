@@ -1009,7 +1009,8 @@ def folders_for(drawing: str, live: bool = True, index_path: Optional[Path] = No
 #
 # An area or a folder that cannot be read, or does not answer in time, raises PackCheckStalled:
 # the caller holds the row with that reason. "Could not look" is never "not there".
-_JOB_FOLDERS: Dict[str, List[Path]] = {}
+_JOB_FOLDERS: Dict[str, Tuple[float, List[Path]]] = {}
+JOB_FOLDERS_KEPT_S = 600.0         # a job folder made since is seen within ten minutes
 
 
 def forget_job_folders() -> None:
@@ -1073,7 +1074,7 @@ def job_folders_now(root: Path, job: str, label: str = "") -> List[Path]:
     """The folders named for the job under `root`, found by walking the folders above the jobs
     once (kept for the life of the process)."""
     key = os.path.normcase(str(root))
-    if key not in _JOB_FOLDERS:
+    if key not in _JOB_FOLDERS or time.time() - _JOB_FOLDERS[key][0] > JOB_FOLDERS_KEPT_S:
         def _walk() -> List[Path]:
             found: List[Path] = []
             stack = [(Path(root), 0)]
@@ -1095,11 +1096,12 @@ def job_folders_now(root: Path, job: str, label: str = "") -> List[Path]:
                         stack.append((f / n, lvl + 1))
             return found
         t0 = time.time()
-        _JOB_FOLDERS[key] = _within(f"finding the job folders of the {label or 'drawing'} area ({root})",
-                                    _walk, folder_seconds() * 3)
-        print(f"[pack] {label or root}: {len(_JOB_FOLDERS[key])} job folder(s) found in "
+        found = _within(f"finding the job folders of the {label or 'drawing'} area ({root})",
+                        _walk, folder_seconds() * 3)
+        _JOB_FOLDERS[key] = (time.time(), found)
+        print(f"[pack] {label or root}: {len(found)} job folder(s) found in "
               f"{round(time.time() - t0, 1)} s ({root})", file=sys.stderr, flush=True)
-    return [p for p in _JOB_FOLDERS[key] if re.match(rf"{re.escape(job)}(?!\d)", p.name)]
+    return [p for p in _JOB_FOLDERS[key][1] if re.match(rf"{re.escape(job)}(?!\d)", p.name)]
 
 
 def rows_for_job_now(drawing: str, areas: Sequence[Tuple[str, Optional[Path]]]
@@ -1148,10 +1150,13 @@ def area_roots() -> List[Tuple[str, Path]]:
     return list(zip(labels, roots))
 
 
-def folders_now(drawing: str) -> Tuple[List[FolderRow], str, None]:
+def folders_now(drawing: str, design_only: bool = False) -> Tuple[List[FolderRow], str, None]:
     """What folders_for gave, without the index: the job's folders in Design then Prototype,
-    listed now. Same shape, so a caller changes one word."""
-    rows, said, _first = rows_for_job_now(drawing, area_roots())
+    listed now. Same shape, so a caller changes one word. `design_only`: the AI runner's rule
+    (JG, 15 Nov 2026: "the ai runner only differs in that it doesn't read from the prototype
+    folder")."""
+    areas = area_roots()
+    rows, said, _first = rows_for_job_now(drawing, areas[:1] if design_only else areas)
     return rows, said, None
 
 
@@ -1160,6 +1165,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--drawing", required=True)
     ap.add_argument("--client", default="")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--use-index", action="store_true",
+                    help="find the drawing through the drawing index, as before 15 Nov 2026; without "
+                         "it the job's own folders are listed now, Design first then Prototype")
     ap.add_argument("--no-live", action="store_true", help="use the index's listing only; do not re-list the GA's folder")
     ap.add_argument("--store", action="store_true",
                     help="keep the pack in Live Enquiry\\<client>\\<drawing> (src/pack_store.py) when it may be priced")
@@ -1171,7 +1179,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             import config  # noqa: F401  (loads .env)
         except Exception:                                                # noqa: BLE001
             pass
-        folders, source, lookup = folders_for(args.drawing, live=not args.no_live)
+        if getattr(args, "use_index", False):
+            folders, source, lookup = folders_for(args.drawing, live=not args.no_live)
+        else:
+            # The page's "Find drawing pack": the job's own folders, Design then Prototype, now.
+            folders, source, lookup = folders_now(args.drawing)
         m = resolve(args.drawing, folders, args.client, lookup=lookup)
         m["source"] = source
         if args.store and m["price_ok"]:

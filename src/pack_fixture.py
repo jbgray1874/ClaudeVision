@@ -105,7 +105,7 @@ def capture(drawing: str, client: str = "", folders: Optional[List[Any]] = None,
             area_rank: Optional[Callable[[Path], int]] = None, source: str = "") -> Dict[str, Any]:
     """Resolve one drawing and keep everything the resolver looked at."""
     if folders is None:
-        folders, source, lookup = pr.folders_for(drawing)
+        folders, source, lookup = pr.folders_now(drawing)
     rank = area_rank or pr._default_area_rank()
     looked: Dict[str, List[Any]] = {}
     texts: Dict[str, str] = {}

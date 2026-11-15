@@ -570,6 +570,11 @@ class LiveEnquiryShare:
 class DesignShare:
     """THE DESIGN SHARE, THROUGH THE SHARED PACK RESOLVER (SCRUM-199/203, JG 9 Nov 2026).
 
+    NO DRAWING INDEX (JG, 15 Nov 2026: "I never asked for it to use the index ... just fix it
+    all"). The job's own folders in the Design area are listed at that moment from the job
+    number, Design only: this runner does not read Prototype. A Design area or folder that
+    cannot be read holds the row; it is never read as "nothing on design".
+
     Packs come from the design area (\\\\sdi-dc01\\CAD\\Design\\Customers April 08 Onwards, then
     Prototype), never the production share, which is a hand-made copy holding PDFs and sometimes
     DXFs. The row's drawing number is resolved exactly as the estimating page and the tracker
@@ -618,7 +623,7 @@ class DesignShare:
         if self._folders is not None:
             folders, lookup = self._folders(), None
         else:
-            folders, _source, lookup = pr.folders_for(row.drawing)
+            folders, _source, lookup = pr.folders_now(row.drawing, design_only=True)
         if not folders:
             return None             # nothing to search: the share's own reason is the useful one
         m = pr.resolve(row.drawing, folders, client=row.customer, lookup=lookup)
@@ -650,7 +655,7 @@ class DesignShare:
             if self._folders is not None:
                 folders, lookup = self._folders(), None
             else:
-                folders, _source, lookup = pr.folders_for(row.drawing)
+                folders, _source, lookup = pr.folders_now(row.drawing, design_only=True)
             if not folders:
                 return None
             m = pr.resolve(row.drawing, folders, client=row.customer, lookup=lookup)

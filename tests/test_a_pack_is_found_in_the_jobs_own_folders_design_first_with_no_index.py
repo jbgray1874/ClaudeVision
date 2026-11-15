@@ -182,3 +182,50 @@ def test_the_same_lookup_is_there_for_the_other_entry_points(share, monkeypatch,
 
 def test_the_row_says_what_kinds_of_file_its_pack_holds():
     assert tp._formats(["a.PDF", "b.pdf", "c.SLDASM", "d.dxf", "e.dxf", "f.dxf"]) == {"dxf": 3, "pdf": 2, "sldasm": 1}
+
+
+# ── the AI runner: the same lookup, the Design area only ─────────────────────────────────
+def _ai_runner(tmp_path, monkeypatch, design=True, prototype=True):
+    """A share with the client's folder under a customers folder, as the Design area is."""
+    import live_enquiry_runner as ler
+    d, p = _share(tmp_path, design=design, prototype=prototype)
+    monkeypatch.setenv("SDI_DRAWING_INDEX_ROOTS", f"{d.parent}|{p.parent}")
+    monkeypatch.setenv("SDI_DRAWING_INDEX", str(tmp_path / "no index" / "index.json.gz"))
+    monkeypatch.delenv("SDI_PACK_FOLDER_SECONDS", raising=False)
+    pr.forget_job_folders()
+    monkeypatch.setattr(pr, "folders_for", lambda *a, **k: pytest.fail("the drawing index was asked"))
+    live = tmp_path / "Live Enquiry"
+    live.mkdir()
+    return ler, ler.DesignShare(live), ler.EnquiryRow(row=3, customer="TTI", drawing=GA)
+
+
+def test_the_ai_runner_finds_the_design_pack_from_the_job_number_with_no_index(tmp_path, monkeypatch):
+    ler, source, row = _ai_runner(tmp_path, monkeypatch)
+    seen = {}
+
+    def _resolve(drawing, rows, **kw):
+        seen["names"] = _names(rows)
+        seen["folders"] = [str(r[0]) for r in rows]
+        return {"status": "not found"}
+    monkeypatch.setattr(pr, "resolve", _resolve)
+    source.find(row)
+    assert "12181-00-GA.SLDASM" in seen["names"] and "12181-01-01J.SLDPRT" in seen["names"]
+    assert not any("Prototype" in f for f in seen["folders"]), "the AI runner read the Prototype area"
+    pr.forget_job_folders()
+
+
+def test_the_ai_runner_does_not_take_a_pack_that_is_only_in_prototype(tmp_path, monkeypatch):
+    ler, source, row = _ai_runner(tmp_path, monkeypatch, design=False)
+    monkeypatch.setattr(pr, "resolve", lambda *a, **k: pytest.fail("a Prototype pack was offered to the resolver"))
+    assert source.find(row) is None, "the Live Enquiry folder's own reason must stand"
+    pr.forget_job_folders()
+
+
+def test_the_ai_runner_holds_the_row_when_the_design_area_cannot_be_read(tmp_path, monkeypatch):
+    ler, source, row = _ai_runner(tmp_path, monkeypatch)
+    monkeypatch.setenv("SDI_DRAWING_INDEX_ROOTS", f"{tmp_path / 'gone'}|{tmp_path / 'Prototype'}")
+    pr.forget_job_folders()
+    got = source.find(row)
+    assert got is not None and got.status == "held"
+    assert "could not be checked" in got.reason and "Design area could not be read" in got.reason
+    pr.forget_job_folders()

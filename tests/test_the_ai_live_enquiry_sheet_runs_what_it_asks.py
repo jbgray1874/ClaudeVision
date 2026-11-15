@@ -37,6 +37,23 @@ HEADER = [None, "Enquiry Received", "Account Manager", "Customer", "Job Descript
           "Drawing No.", "Requested Estimate Completion Date", "AI CHECK", "QTY", "AICompleted",
           "Estimator"]
 
+@pytest.fixture(autouse=True)
+def _a_design_area_that_can_be_read(tmp_path_factory, monkeypatch):
+    """The AI runner looks in the Design area for the job's own folders (15 Nov 2026), and an
+    area it cannot read holds the row. These tests are about the Live Enquiry folder and the
+    extract, so they are given a Design area that can be read and holds nothing."""
+    area = tmp_path_factory.mktemp("design_area")
+    monkeypatch.setenv("SDI_DRAWING_INDEX_ROOTS", f"{area / 'Design'}|{area / 'Prototype'}")
+    (area / "Design").mkdir()
+    (area / "Prototype").mkdir()
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "src"))
+    import pack_resolver as _pr
+    _pr.forget_job_folders()
+    yield
+    _pr.forget_job_folders()
+
 
 def _line(customer, drawing, qty="1,5,10", done="NO", ai="YES", desc="Editions Footwear Podium",
           due=datetime(2026, 11, 5)):

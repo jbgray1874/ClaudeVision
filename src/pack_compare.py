@@ -146,7 +146,7 @@ def run(root: Path, since: Optional[datetime] = None, drawing: str = "", client:
     """The comparison for every job folder found; `resolve(drawing, client)` gives the manifest."""
     if resolve is None:
         def resolve(d: str, cl: str) -> Dict[str, Any]:
-            rows, _src, lookup = pr.folders_for(d)
+            rows, _src, lookup = pr.folders_now(d)
             return pr.resolve(d, rows, client=cl, lookup=lookup)
     cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
     out = []
