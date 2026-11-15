@@ -277,3 +277,34 @@ class IOTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+
+class ResolverManifestShapeTests(unittest.TestCase):
+    """The file fields the real resolver gives (15 Nov 2026).
+
+    pack_resolver's manifest lists each file with `modified` (ISO, to the minute) and
+    `fingerprint`, and no `mtime`. The worker read `mtime`; on the live share 41 of 76 packs
+    reached their files and failed with KeyError, and none was validated."""
+
+    def test_the_manifest_the_resolver_builds_has_modified_and_no_mtime(self):
+        import inspect
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+        import pack_resolver
+        source = inspect.getsource(pack_resolver)
+        self.assertIn('"modified": datetime.fromtimestamp(m).isoformat(timespec="minutes")', source)
+
+    def test_a_file_listed_by_modified_minute_is_unchanged(self):
+        from datetime import datetime
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / 'T-01-GA.pdf'
+            f.write_bytes(b'%PDF-1.4 x')
+            st = f.stat()
+            listed = {'path': str(f), 'size': st.st_size, 'fingerprint': 'sha1:x',
+                      'modified': datetime.fromtimestamp(st.st_mtime).isoformat(timespec='minutes')}
+            self.assertTrue(p.same_time(st.st_mtime, listed))
+            self.assertFalse(p.same_time(st.st_mtime + 3600, listed))
+
+    def test_a_raw_mtime_is_still_compared_and_a_listing_with_neither_is_not_called_changed(self):
+        self.assertTrue(p.same_time(1000.2, {'mtime': 1000.0}))
+        self.assertFalse(p.same_time(1900.0, {'mtime': 1000.0}))
+        self.assertTrue(p.same_time(1000.0, {'size': 3}))

@@ -209,6 +209,26 @@ def classify(row):
     return 'candidate_for_pilot'
 
 
+def same_time(mtime, listed):
+    """Is a file's time on disk the time its listing gave?
+
+    The resolver's manifest gives each file `modified`, an ISO time to the minute, and no
+    `mtime`. The first form of this check read `mtime`, so every pack that reached its files
+    failed with KeyError and none was validated (the 02:06 report, 15 Nov 2026: 41 of 76).
+    A listing that carries a raw `mtime` is compared to the second; one that carries only
+    `modified` is compared to the minute; one that carries neither cannot be compared and is
+    not called changed on that account."""
+    if listed.get('mtime') is not None:
+        try:
+            return abs(float(mtime) - float(listed['mtime'])) <= 1.0
+        except (TypeError, ValueError):
+            return False
+    stamp = text(listed.get('modified'))
+    if not stamp:
+        return True
+    return datetime.fromtimestamp(mtime).isoformat(timespec='minutes') == stamp[:16]
+
+
 def worker_resolve(repo, index, drawing, client):
     """Avoid folders_for/build_db/run_batch: those can write or dispatch work."""
     sys.dont_write_bytecode = True
@@ -239,7 +259,7 @@ def worker_resolve(repo, index, drawing, client):
             st = p.stat()
             with p.open('rb') as stream:
                 stream.read(1)
-            if st.st_size != f['size'] or abs(st.st_mtime - f['mtime']) > 0.01:
+            if st.st_size != f.get('size') or not same_time(st.st_mtime, f):
                 errors.append(f'Changed since listing: {p}')
         except OSError as exc:
             errors.append(f'Cannot open {p}: {type(exc).__name__}')
