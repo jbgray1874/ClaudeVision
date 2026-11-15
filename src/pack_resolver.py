@@ -942,7 +942,7 @@ def folders_from_index(roots: Optional[List[Path]] = None) -> Tuple[List[FolderR
     return value
 
 
-def folders_for(drawing: str, live: bool = True
+def folders_for(drawing: str, live: bool = True, index_path: Optional[Path] = None
                 ) -> Tuple[List[FolderRow], str, Optional[Callable[[str], List[FileRow]]]]:
     """The folders one drawing's pack can come from, from the lookup database (made from the
     index on first use if needed), with the folder around each candidate GA RE-LISTED NOW, so a
@@ -950,6 +950,13 @@ def folders_for(drawing: str, live: bool = True
     sys.path.insert(0, str(HERE))
     import drawing_index as di
     cfg = di.settings()
+    if index_path is not None:
+        # THE INDEX THE CALLER IS WORKING FROM (15 Nov 2026). The tracker batch listed its own two
+        # folders into its own index, then asked this for each drawing's folders, and this read
+        # the whole-share index instead: an older one that held almost none of the Design area.
+        # Two packs were taken from Prototype, without their models, while the Design copies
+        # stood in the index the batch had just built.
+        cfg = dict(cfg, path=Path(index_path))
     db = di.db_path(cfg["path"])
     stale_rule = db.exists() and di.db_meta(db).get("did_rule") != di.DID_RULE
     if not db.exists() or stale_rule:

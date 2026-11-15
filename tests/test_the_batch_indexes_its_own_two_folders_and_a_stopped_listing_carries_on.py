@@ -283,3 +283,33 @@ def test_listing_creates_changes_and_deletes_nothing_under_the_share(tmp_path, m
     tp.area_listings(design / "TTI", proto / "TTi", walk_live=True)          # and the live walk
     assert _picture(share) == before, "something under the share was created, changed or removed"
     assert (tmp_path / "laptop" / "own" / "index.json.gz").is_file()
+
+
+# ── each row's folders come from the index the batch listed ──────────────────────────────
+def test_a_rows_folders_are_looked_up_in_the_batchs_own_index_not_an_older_whole_share_one(tmp_path, monkeypatch):
+    """15 Nov 2026: the batch listed its own two folders, then looked each drawing up in the
+    whole-share index, which held the Prototype copy and none of the Design area. Two packs were
+    taken from Prototype without their models while the Design copies stood in the batch's own
+    index."""
+    import pack_resolver as pr
+    design, proto = _batch(monkeypatch, tmp_path)
+    di.refresh([proto], tmp_path / "all" / "index.json.gz")          # the older index: Prototype only
+    tp.refresh_scoped_index("TTI", say=lambda _l: None)               # the batch's own: both areas
+    listings, source = tp.area_listings(design / "TTI", proto / "TTi")
+    assert "own two folders" in source
+    seen = {}
+
+    def _resolve(drawing, rows, **kw):
+        seen["folders"] = [str(r[0]) for r in rows]
+        return {"status": "not found"}
+    monkeypatch.setattr(pr, "resolve", _resolve)
+    tp._DB_ROWS[:] = [True]
+    try:
+        tp.pack_for("12181-01-GA", listings, "TTI")
+    finally:
+        tp._DB_ROWS.clear()
+    assert any(str(design) in f for f in seen["folders"]), "the Design copy was not offered to the resolver"
+    # the contrast: with no index of its own the batch still reads the whole-share one
+    tp._LOOKUP_INDEX.clear()
+    rows, _src, _lookup = pr.folders_for("12181-01-GA", live=False)
+    assert rows and not any(str(design) in str(r[0]) for r in rows)

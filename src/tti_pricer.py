@@ -242,6 +242,7 @@ class IndexNotUsable(SystemExit):
 _FILES: Dict[str, List[Path]] = {}
 _MTIME: Dict[str, float] = {}
 _DB_ROWS: List[bool] = []          # non-empty while the batch reads from the lookup database
+_LOOKUP_INDEX: List[Path] = []     # the index that lookup reads: the one the listing came from
 _SIZE: Dict[str, int] = {}
 
 
@@ -342,6 +343,7 @@ def area_listings(design: Path, proto: Path, walk_live: bool = False, client: st
             seen.append((label, idx, db))
             if not (di.is_fresh(idx, cfg["max_hours"]) and di.covers(idx, design) and di.covers(idx, proto)):
                 continue
+            _LOOKUP_INDEX[:] = [Path(index_file)]        # each row's folders come from this same index
             out = []
             for area, root in (("design", design), ("prototype", proto)):
                 folders = []
@@ -752,7 +754,7 @@ def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
     if _DB_ROWS:
         # THE LOOKUP DATABASE: the drawing's own and its job's folders, the GA's surroundings
         # re-listed now, and shared-library parts found anywhere: the page's and Self-Running's way.
-        rows, _src, lookup = pr.folders_for(drawing)
+        rows, _src, lookup = pr.folders_for(drawing, index_path=_LOOKUP_INDEX[0] if _LOOKUP_INDEX else None)
         m = pr.resolve(drawing, rows, client=client, lookup=lookup, client_folders_only=True)
         if m["status"] == "not found":
             return {}, None
@@ -988,6 +990,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                          f"--dry-run until rows show their folders.")
     _checked = load_checked_packs(args.checked_packs) if getattr(args, "checked_packs", "") else None
     _DB_ROWS.clear()
+    _LOOKUP_INDEX.clear()
     if _checked is not None:
         # No listing of either area: each row's pack comes from the lookup database with the
         # GA's own folders listed again now, and is held unless it is the pack that was checked.
