@@ -398,6 +398,32 @@ def category_code_identities(rows: Iterable[Any], code_key: str = "part_number",
     return out
 
 
+# Words that say WHICH HAND or HOW MANY, not WHAT — two rows differing only in these are one
+# item described twice.
+_NOT_ITEM_WORDS = frozenset({
+    "LH", "RH", "LEFT", "RIGHT", "HAND", "HANDED", "MIRROR", "MIRRORED", "MIR", "OPPOSITE",
+    "MM", "OFF", "QTY", "PCS", "PC", "EACH", "AND", "THE", "FOR", "WITH", "OF", "TO",
+})
+
+
+def _item_words(text: Any) -> Set[str]:
+    return {w for w in re.findall(r"[A-Z]{2,}", str(text or "").upper())
+            if w not in _NOT_ITEM_WORDS}
+
+
+def same_item_described(a: Any, b: Any) -> bool:
+    """Do two parts-list descriptions name ONE item? (D-508)
+
+    Yes where either says nothing comparable, or they share at least half the words of the
+    shorter — a handed pair and a misspelling both pass. No where they share no word at all:
+    HOOK SECURITY STOP LOCK and POWERTOOL PIN are two purchases whatever code they carry."""
+    wa, wb = _item_words(a), _item_words(b)
+    if not wa or not wb:
+        return True
+    shared = wa & wb
+    return bool(shared) and len(shared) / min(len(wa), len(wb)) >= 0.5
+
+
 def _shared_article_code_identities(listed: List[Any], code_key: str, desc_key: str,
                                     taken: Mapping[int, str]) -> Dict[int, str]:
     """{index: identity} for the SECOND item a table lists under a supplier's code it has
@@ -407,7 +433,7 @@ def _shared_article_code_identities(listed: List[Any], code_key: str, desc_key: 
     machine screw x12 and the thumb nut that goes on it x12. Keyed on the code there was one
     record: the screw. The nut had no line and no price, and D-508 could only ask about it.
     A supplier's article number printed against two rows of ONE table whose words name
-    different things (route_compiler.same_item_described, the test D-508 already uses) is two
+    different things (same_item_described, the test D-508 already uses) is two
     purchases. The first row keeps the printed code, so the record every reader already made
     for it stands; each later different item becomes "<printed code>-<its words>", shows the
     code the drawing printed, and is priced as what its own words say at its own count.
@@ -418,7 +444,6 @@ def _shared_article_code_identities(listed: List[Any], code_key: str, desc_key: 
     different item numbers. A handed pair or a respelling shares its words and stays one."""
     try:
         from part_code_conventions import is_category_not_a_code, is_supplier_article
-        from route_compiler import same_item_described
     except Exception:                                               # pragma: no cover
         return {}
     groups: Dict[Tuple[str, str], List[int]] = {}

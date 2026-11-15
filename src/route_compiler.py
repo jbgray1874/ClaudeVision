@@ -1619,30 +1619,10 @@ def _bom_stated_edges(
     return [(c, p, q) for (c, p), (q, _items, _d) in combined.items()]
 
 
-# Words that say WHICH HAND or HOW MANY, not WHAT — two rows differing only in these are one
-# item described twice.
-_NOT_ITEM_WORDS = frozenset({
-    "LH", "RH", "LEFT", "RIGHT", "HAND", "HANDED", "MIRROR", "MIRRORED", "MIR", "OPPOSITE",
-    "MM", "OFF", "QTY", "PCS", "PC", "EACH", "AND", "THE", "FOR", "WITH", "OF", "TO",
-})
-
-
-def _item_words(text: Any) -> Set[str]:
-    return {w for w in re.findall(r"[A-Z]{2,}", str(text or "").upper())
-            if w not in _NOT_ITEM_WORDS}
-
-
-def same_item_described(a: Any, b: Any) -> bool:
-    """Do two parts-list descriptions name ONE item? (D-508)
-
-    Yes where either says nothing comparable, or they share at least half the words of the
-    shorter — a handed pair and a misspelling both pass. No where they share no word at all:
-    HOOK SECURITY STOP LOCK and POWERTOOL PIN are two purchases whatever code they carry."""
-    wa, wb = _item_words(a), _item_words(b)
-    if not wa or not wb:
-        return True
-    shared = wa & wb
-    return bool(shared) and len(shared) / min(len(wa), len(wb)) >= 0.5
+# ONE DEFINITION, IN THE LIGHT MODULE (15 Nov 2026). part_identity needs this test to tell
+# two items under one supplier's code apart, and the service imports part_identity without
+# the engine; defined here it pulled the whole engine into the service's import set.
+from part_identity import _NOT_ITEM_WORDS, _item_words, same_item_described  # noqa: E402,F401
 
 
 def relink_by_words(description: Any, known: Any, exclude: Any = ()) -> str:
