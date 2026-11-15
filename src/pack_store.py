@@ -118,8 +118,21 @@ def store(manifest: Dict[str, Any], client: str, root: Optional[Path] = None,
             return {"state": "kept by hand", "folder": str(last), "version": last_n,
                     "changes": diff}
         if not any(diff.values()):
-            result = {"state": "unchanged", "folder": str(last), "version": last_n, "changes": diff}
-            if not (last / MANIFEST).exists():
+            # UNCHANGED IS WHAT IS IN THE FOLDER, NOT WHAT ITS MANIFEST SAYS (15 Nov 2026).
+            # 12736-00-01's saved pack listed the top-level assembly PDF and the file was not
+            # there. The set was called unchanged on the manifest's word, the run was handed a
+            # path with nothing at it, and the estimate was made without the GA. Every file of
+            # the pack is now looked for where it is saved; one that is absent is copied in
+            # again from where discovery found it, and that is said. If it cannot be copied the
+            # error goes up and the row is held.
+            absent = [f for f in files if not (last / Path(f["path"]).name).is_file()]
+            for f in absent:
+                shutil.copy2(Path(f["path"]), last / Path(f["path"]).name)
+            result = {"state": "restored" if absent else "unchanged", "folder": str(last),
+                      "version": last_n, "changes": diff}
+            if absent:
+                result["restored"] = sorted(Path(f["path"]).name for f in absent)
+            if absent or not (last / MANIFEST).exists():
                 _write(last, manifest, result, now)
             return result
         target = base.parent / f"{base.name} v{last_n + 1}"
@@ -147,4 +160,37 @@ def _write(folder: Path, manifest: Dict[str, Any], result: Dict[str, Any], now: 
 def stored_files(result: Dict[str, Any], manifest: Dict[str, Any]) -> List[str]:
     """The saved copies of the pack's files, which is what a run is given to read."""
     folder = Path(result["folder"])
+    if result.get("state") == "kept by hand":
+        # A PACK A PERSON MADE IS READ AS IT STANDS: the drawing files that are in it, not the
+        # names of the design pack's files, which may not be there.
+        sys.path.insert(0, str(HERE))
+        from pack_resolver import DRAWING_EXT
+        try:
+            return [str(p) for p in sorted(folder.iterdir())
+                    if p.is_file() and p.suffix.lower() in DRAWING_EXT]
+        except OSError:
+            return []
     return [str(folder / Path(f["path"]).name) for f in _files_of(manifest)]
+
+
+def not_there(paths: Any) -> List[str]:
+    """The names of the files a run would be handed that are not where they are said to be."""
+    return [Path(str(p)).name for p in paths if not Path(str(p)).is_file()]
+
+
+def top_level_absent(manifest: Dict[str, Any], paths: Any) -> str:
+    """'' when the pack's own top-level drawing is among the files a run is handed; else its
+    name. The top-level drawing is the member the pack is named for; its PDF is the sheet
+    every other drawing hangs from, so an estimate without it is not an estimate of the job."""
+    want = str(manifest.get("drawing") or "").strip().lower()
+    top = next((m for m in manifest.get("members") or []
+                if str(m.get("drawing") or "").strip().lower() == want), None)
+    pdf = next((f for f in (top or {}).get("files") or []
+                if str(f.get("format") or Path(f["path"]).suffix.lstrip(".")).lower() == "pdf"), None)
+    if not want or pdf is None:
+        return ""
+    names = {Path(str(p)).name.lower() for p in paths if Path(str(p)).is_file()}
+    name = Path(pdf["path"]).name
+    if name.lower() in names or any(n.endswith(".pdf") and n.startswith(want) for n in names):
+        return ""
+    return name

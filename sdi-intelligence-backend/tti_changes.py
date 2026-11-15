@@ -112,7 +112,8 @@ def outcomes_from(status: Dict[str, Any], selected: List[Dict[str, Any]]) -> Dic
             out[sel["row_id"]] = {"state": "failed", "run_id": run_id, "said": said}
         elif not run_id and str(item.get("state")) in {
                 "needs drawing", "needs decision", "ask", "skipped", "has a cost",
-                "held: pack not checked", "held: not the checked pack"}:
+                "held: pack not checked", "held: not the checked pack",
+                "held: pack not complete"}:
             out[sel["row_id"]] = {"state": "not_submitted", "evidence": said}
         else:
             # A POST can succeed and its reply time out. The batch currently records that as

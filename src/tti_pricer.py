@@ -1580,9 +1580,31 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             # THE PACK IS KEPT IN LIVE ENQUIRY\<client>\<drawing> (src/pack_store.py): re-used when
             # unchanged, a new version beside it when changed; the run reads the kept copy.
             import pack_store as ps
-            kept = ps.store(manifest, args.client)
-            item["kept"] = kept
-            inputs = ps.stored_files(kept, manifest)
+            # THE RUN IS HANDED THE PACK THAT WAS FOUND, WHOLE, OR NOTHING IS SENT (15 Nov 2026).
+            # 12736-00-01: discovery found the top-level assembly PDF; the saved pack did not
+            # hold it; the service skipped the missing path and the estimate was made from the
+            # other fifteen sheets, with a sub-assembly taken as the main drawing.
+            _short = ""
+            try:
+                kept = ps.store(manifest, args.client)
+                item["kept"] = kept
+                inputs = ps.stored_files(kept, manifest)
+                _gone = ps.not_there(inputs)
+                _top = ps.top_level_absent(manifest, inputs)
+                if _gone:
+                    _short = (f"{len(_gone)} file(s) of the pack are not in {kept.get('folder')}: "
+                              + ", ".join(_gone[:6]))
+                elif _top:
+                    _short = (f"the top-level drawing {_top} is not among the files in "
+                              f"{kept.get('folder')} ({kept.get('state')})")
+            except OSError as _exc:
+                inputs = []
+                _short = f"the pack could not be saved or read where it is kept ({_exc})"
+            if _short:
+                item.update(state="held: pack not complete", kind="not priced (pack not complete)",
+                            why=f"{_short}. Nothing is queued: an estimate is not made from part of a pack")
+                save()
+                continue
         else:
             inputs = copy_inputs(found.get("files") or [], [] if found else r["pictures"],
                                  out_root / f"row{r['row']}_{name}")
