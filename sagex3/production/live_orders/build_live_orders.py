@@ -159,7 +159,32 @@ def read_costs(path):
     return out
 
 
-def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, lead_days=14, costs_path=None):
+def read_carry(path):
+    """Production's typed columns from last week's sheet (Dave's layout or a board saved by Production), by WO.
+    Dave (26 Oct): Rachael copies the sheet over by hand every Monday - this carries Comments, Prog, Tube req and
+    the typed material note forward, so nothing is re-typed."""
+    wb = load_workbook(path, data_only=True)
+    ws = next((wb[n] for n in wb.sheetnames if n.strip().lower() == "live orders"), wb.worksheets[0])
+    head = [re.sub(r"\s+", " ", str(c.value or "")).strip().lower() for c in ws[1]]
+    def col(*names):
+        return next((head.index(n) for n in names if n in head), None)
+    wo_c, com_c, prog_c, tube_c = col("wo num", "wo"), col("comments"), col("prog"), col("tube req")
+    mat_c = col("production's material note") if "material detail" in head else col("material status")  # typed text only
+    out = {}
+    if wo_c is None:
+        return out
+    for r in ws.iter_rows(min_row=2, values_only=True):
+        wo = str(r[wo_c] or "").strip()
+        if not wo:
+            continue
+        val = lambda c: ("" if c is None or r[c] is None else str(r[c]).strip())
+        rec = dict(comments=val(com_c), prog=val(prog_c), tube=val(tube_c), note=val(mat_c))
+        if any(rec.values()):
+            out[wo] = rec
+    return out
+
+
+def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, lead_days=14, costs_path=None, carry=None):
     grids, as_at = read_extract(extract)
     prods, boms, routes, wcnames = read_products(products_path), read_boms(boms_path), read_routes(routes_path), read_work_centres()
     today = day(as_at[:10]) or dt.date.today()
@@ -344,6 +369,10 @@ def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, le
                 overdue=sum(1 for w in wos if w["due"] and w["due"] < today),
                 hours=round(sum(sum(w["hours"].values()) for w in wos), 1))
     name = f"SDI_Live_Orders_{stamp[:10]}"
+    carried = read_carry(carry) if carry else {}
+    for w in wos:
+        w["carry"] = carried.get(w["wo"], {})
+    meta["carried"] = sum(1 for w in wos if w["carry"])
     write_xlsx(out / f"{name}.xlsx", meta, wos, wc_cols, wcnames, load, sug, checks, compare)
     write_html(out / f"{name}.html", meta, wos, wc_cols, wcnames, load, sug, compare)
     return dict(meta=meta, files=[f"{name}.xlsx", f"{name}.html"], compare=compare and compare["summary"])
@@ -423,18 +452,20 @@ def write_xlsx(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare):
               ["Work-centre load", "Those hours by week of the works order's due date; overdue counts in this week."],
               ["WO Suggestions", "Sales-order lines for made parts not covered by stock or works orders. Start = due - lead days."],
               ["Exploded BOMs", "Every level, with stock, on PO (next due), on WO, make / buy, has BOM / route, department, and material cost (X3 standard cost x required). Click a part code on Live Orders to jump to its works order here."],
-              ["Typed by Production", "Comments, Prog and Tube req are not in Access or X3 data: kept on the board's side (LO-01)."]]:
+              ["Typed by Production", "Comments, Prog, Tube req and Production's material note are not in Access or X3 data. They are carried forward by WO from last week's sheet, so nothing is re-typed on Monday (LO-01)."]]:
         ws.append(r)
     ws.column_dimensions["A"].width, ws.column_dimensions["B"].width, ws.column_dimensions["C"].width = 26, 70, 50
     ws["A1"].font = Font(bold=True, size=14)
 
     head = (["Due date", "Customer date", "WO Num", "Level", "Parent WO", "SO Num", "Account", "Part code", "Description",
              "DRAWING NUMBER", "REV", "MATERIAL STATUS", "Material detail", "QTY", "Booked in", "Balance",
-             "Metal", "Joinery", "Acrylics", "Comments", "Prog", "Tube req"]
+             "Metal", "Joinery", "Acrylics", "Comments", "Prog", "Tube req", "Production's material note"]
             + [f"{wc_label(c, wcnames)} ({c})" for c in wc_cols])
     rows = [[w["due"], w["cust_date"] or w["cust_note"], w["wo"], w["level"], w["parent"], w["so"], w["account"], w["code"],
              w["des"], drawing_of(w["code"]), w["rev"], w["status"], w["mat_text"], w["qty"], w["done"], w["bal"],
-             *["Y" if f in w["families"] else "" for f in ("Metal", "Joinery", "Acrylics")], "", "", ""]
+             *["Y" if f in w["families"] else "" for f in ("Metal", "Joinery", "Acrylics")],
+             w.get("carry", {}).get("comments", ""), w.get("carry", {}).get("prog", ""), w.get("carry", {}).get("tube", ""),
+             w.get("carry", {}).get("note", "")]
             + [round(w["hours"][c], 2) if w["hours"].get(c) else None for c in wc_cols] for w in wos]
     bom_rows, bom_first = [], {}
     for w in wos:
@@ -445,7 +476,7 @@ def write_xlsx(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare):
             bom_rows.append([w["wo"], w["code"], e_["level"], e_["comp"], e_["des"], e_["link"], round(e_["need"], 4), e_["stock"],
                              e_["on_po"], e_["po_due"], e_["on_wo"], e_["make"], "Yes" if e_["bom"] else "",
                              "Yes" if e_["route"] else "", e_["dept"], e_["cost_each"], e_["cost"], ""])
-    s = sheet(wb, "Live Orders", head, rows, [10, 12, 13, 12, 11, 17, 9, 20, 34, 16, 5, 10, 48, 7, 8, 8, 6, 7, 8, 24, 6, 8]
+    s = sheet(wb, "Live Orders", head, rows, [10, 12, 13, 12, 11, 17, 9, 20, 34, 16, 5, 10, 48, 7, 8, 8, 6, 7, 8, 24, 6, 8, 30]
               + [9] * len(wc_cols), status_col=11)
     for r in range(2, s.max_row + 1):
         s.cell(r, 1).number_format = "dd/mm/yy"
@@ -596,10 +627,12 @@ if __name__ == "__main__":
     ap.add_argument("--boms", required=True)
     ap.add_argument("--routes", required=True)
     ap.add_argument("--dave")
+    ap.add_argument("--carry", help="last week's Live Orders (Dave's sheet or a board saved by Production): "
+                    "Comments, Prog, Tube req and typed material notes are carried onto the new board by WO")
     ap.add_argument("--costs", help="YITC product costs load file (.txt) - material cost on the exploded BOMs")
     ap.add_argument("--suggest-lead-days", type=int, default=14)
     a = ap.parse_args()
-    res = build(a.extract, a.out_dir, a.products, a.boms, a.routes, a.dave, a.suggest_lead_days, a.costs)
+    res = build(a.extract, a.out_dir, a.products, a.boms, a.routes, a.dave, a.suggest_lead_days, a.costs, a.carry)
     print(json.dumps(res["meta"]), "\n", res["files"])
     if res["compare"]:
         print("against Dave's sheet:", res["compare"])

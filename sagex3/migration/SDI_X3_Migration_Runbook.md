@@ -3292,3 +3292,26 @@ Then go to the API once Acuity has given us the template and the access.
 - **New fact from its properties:** created by **"Crystal Decisions"** and last saved by David Wright on 26 Oct 2026, 09:16. So today's sheet is a **Crystal Reports export from Access**, which Production then edits by hand: material status, comments, Prog, tube req, the colours and the week break lines.
   - The Crystal report file (.rpt) behind it holds the exact Access tables and formulas. If it can be found on the network, it confirms the source of every column.
 - **The 13 Nov Live Orders email went to Rachael and Liz** ("Hi Rachael, Liz"), not Dave and Rachael as earlier entries say. It was the 4 Nov board with 12 questions, replies due Fri 20 Nov.
+
+### 22.23 Dave's original request (26 Oct, to James, cc Rachael) – and the Monday copy-over
+
+> "This is probably the most important report we will need from SAGE, which will produce the Live Orders (Production Plan). I have attached a copy of the current one we use which **Rachael has to manually copy over every Monday into a new Live Orders for the week**. Can we link this to SAGE as a **live document, so all the manual work is taken away**. Live Orders (tab 1), WO Suggestions (tab 2), BOM Report (tab 3). This email is only my initial thoughts… will need a few meetings to figure out the details." – David Wright, Head of Estimating & Purchasing
+
+**The requirement in his words:**
+1. A live document from Sage, not a weekly copy.
+2. No manual work.
+3. The three tabs.
+4. Meetings to settle the details (LO-01).
+
+**Built 15 Nov: the Monday copy-over is gone.** `build_live_orders.py --carry <last week's sheet>` (or `LO_CARRY` for the web page) reads Production's typed columns and puts them on the new board against the same works order:
+- Comments, Prog and Tube req;
+- Production's typed material note.
+
+It reads either Dave's own sheet or a board that Production has edited and saved.
+
+- **Tested:**
+  - from Dave's sheet, **45 works orders** got their notes on the 13 Nov board (of the 49 still open);
+  - from that board saved again, the same 45 came through, so the round trip loses nothing;
+  - the part-code → BOM links (703) are unchanged.
+- **So the weekly cycle becomes:** refresh the board (or run the query), and last week's notes come across by themselves.
+- **In X3:** the same notes become user fields on the works order (question 7 to Rachael and Liz), so they stay with the order.
