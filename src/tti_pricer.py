@@ -1586,8 +1586,11 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             # other fifteen sheets, with a sub-assembly taken as the main drawing.
             _short = ""
             try:
-                kept = ps.store(manifest, args.client)
-                item["kept"] = kept
+                # A PACK A PERSON MADE IS USED ONLY ON A ONE-JOB RUN; a batch always takes the
+                # pack from W: again (JG, 15 Nov 2026).
+                kept = ps.store(manifest, args.client,
+                                honour_hand_made=len(data["rows"]) == 1 and not _next)
+                item["kept"] = {k: v for k, v in kept.items() if k != "copies"}
                 inputs = ps.stored_files(kept, manifest)
                 _gone = ps.not_there(inputs)
                 _top = ps.top_level_absent(manifest, inputs)
@@ -1617,6 +1620,15 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 "units": r["quantity"], "files": inputs, "deliverables": True,
                 "quantity_breaks": sorted(q for q in qtys_of.get(_rk(r), []) if q != r["quantity"]),
                 "method": args.method if found else "llm",
+                # THE PACK'S OWN RECORD TRAVELS WITH THE JOB (15 Nov 2026): what was found, where
+                # each file was copied from and to, and what the drawings call for that was not
+                # found. Without it the covering e-mail said "No pack manifest was saved with
+                # this job" on every tracker estimate.
+                "pack_manifest": (json.loads(json.dumps(dict(
+                    manifest, stored=kept, staged_from="the TTI tracker batch",
+                    discovery=str(found.get("design_looked") or ""),
+                    taken_from={"area": found.get("area"), "folder": str(found.get("folder") or "")}),
+                    default=str)) if manifest else None),
                 "enquiry_brief": brief_for(r) + (
                     f" Drawing pack {manifest['status']}: " + "; ".join(manifest["assumptions"][:6])
                     if manifest and manifest.get("assumptions") else "")}

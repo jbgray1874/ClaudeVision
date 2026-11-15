@@ -82,6 +82,16 @@ def gather(record: Dict[str, Any], manifest: Optional[Dict[str, Any]] = None) ->
             failed[n.lower()] = re.sub(r"\s+", " ", why)[:160]
     revs = {str(m.get("drawing") or "").upper(): str(m.get("revision") or "")
             for m in manifest.get("members") or []}
+    # WHERE EACH FILE WAS COPIED FROM: the folder discovery found it in, by the file's name.
+    came_from: Dict[str, str] = {}
+    for m in manifest.get("members") or []:
+        for f in m.get("files") or []:
+            if f.get("path"):
+                came_from.setdefault(_name(f["path"]).lower(),
+                                     str(f["path"])[: -len(_name(f["path"]))].rstrip("\\/"))
+    for c in (manifest.get("stored") or {}).get("copies") or []:
+        if isinstance(c, dict) and c.get("file") and c.get("from"):
+            came_from[str(c["file"]).lower()] = str(c["from"])
     rows: List[Dict[str, str]] = []
     seen = set()
 
@@ -94,7 +104,7 @@ def gather(record: Dict[str, Any], manifest: Optional[Dict[str, Any]] = None) ->
         m = _REV.search(Path(name).stem)
         rows.append({"file": name, "drawing": number,
                      "revision": revs.get(number.upper()) or (m.group(1).upper() if m else ""),
-                     "state": state, "why": why})
+                     "state": state, "why": why, "from": came_from.get(name.lower(), "")})
 
     for n in cad.get("read") or []:
         add(n, "read")
@@ -130,7 +140,55 @@ def gather(record: Dict[str, Any], manifest: Optional[Dict[str, Any]] = None) ->
         "pack_status": manifest.get("status") if manifest else "",
         "configurations_unconfirmed": bool(manifest.get("configurations_unconfirmed")),
         "has_manifest": bool(manifest),
+        "copy_log": copy_log(manifest, {r["file"].lower() for r in rows}),
     }
+
+
+def copy_log(manifest: Dict[str, Any], given: Any = ()) -> List[str]:
+    """THE PACK'S OWN LOG, IN WORDS (JG, 15 Nov 2026: "we need to have all the logs in the html
+    mail file - where they're specifically copied from - as well as the actual copying of the
+    files themselves and the identification of drawings that we would ideally have").
+    Where discovery looked, the folder it took, where the files were copied to, when, how many,
+    and what the drawings call for that was not found. From the manifest that travelled with the
+    job; nothing is looked up afterwards."""
+    if not manifest:
+        return []
+    out: List[str] = []
+    st = manifest.get("stored") or {}
+    took = manifest.get("taken_from") or {}
+    if manifest.get("discovery"):
+        out.append("Where we looked: " + str(manifest["discovery"]))
+    folder = took.get("folder") or manifest.get("selected_folder")
+    if folder:
+        out.append("Taken from" + (f" the {took['area']} area" if took.get("area") else "") + f": {folder}")
+    sources = sorted({str(c.get("from")) for c in st.get("copies") or [] if isinstance(c, dict) and c.get("from")})
+    if len(sources) > 1:
+        out.append(f"The files came from {len(sources)} folders: " + " | ".join(sources))
+    if st.get("folder"):
+        how = {"new": "the first copy of this pack", "re-extracted": "copied from the drawing area again for this run",
+               "changed": "copied from the drawing area again for this run; it differs from the last copy",
+               "unchanged": "the copy already saved was used; nothing was copied on this run",
+               "restored": "the copy already saved was used, with missing files copied in again",
+               "kept by hand": "a pack a person placed there; used as it stands, nothing was copied"}.get(
+                   str(st.get("state")), str(st.get("state") or ""))
+        out.append(f"Copied to: {st['folder']}"
+                   + (f" (version {st['version']})" if st.get("version") else "")
+                   + (f", {st['copied']} file(s)" if st.get("copied") is not None else "")
+                   + (f", at {st['at']}" if st.get("at") else "") + f". {how[:1].upper() + how[1:]}.")
+        if st.get("previous"):
+            out.append(f"The copy before this one is kept, unaltered: {st['previous']}")
+        ch = st.get("changes") or {}
+        if st.get("state") == "changed":
+            out.append("Against the last copy: " + "; ".join(
+                f"{len(ch.get(k) or [])} {k}" + (f" ({', '.join((ch.get(k) or [])[:6])})" if ch.get(k) else "")
+                for k in ("added", "removed", "changed")))
+    given = {str(g).lower() for g in given}
+    if given:
+        absent = sorted({_name(f["path"]) for m in manifest.get("members") or [] for f in m.get("files") or []
+                         if f.get("path") and _name(f["path"]).lower() not in given})
+        if absent:
+            out.append(f"FOUND FOR THE PACK AND NOT GIVEN TO THIS RUN ({len(absent)}): " + ", ".join(absent[:20]))
+    return out
 
 
 # WHERE THE SERVICE PUTS THE LINK TO THE EXACT PACK. The engine writes the note while it
@@ -177,7 +235,9 @@ def section(record: Dict[str, Any], manifest: Optional[Dict[str, Any]] = None) -
                     "read have no equivalent native model shown read in their place: "
                     + ", ".join(ev["coverage_unresolved"][:8]))
     if g["missing"]:
-        gaps.append("Referenced by the drawings, no file found: " + ", ".join(g["missing"][:12]))
+        gaps.append("Drawings we would ideally have: referenced by the drawings, no file found: "
+                    + ", ".join(g["missing"][:20]))
+    gaps += [w for w in g.get("copy_log") or [] if w.startswith("FOUND FOR THE PACK AND NOT GIVEN")]
     if g["unread_assemblies"]:
         gaps.append("Assemblies not read for their parts, so what they call for is not known: "
                     + ", ".join(g["unread_assemblies"][:12]))
@@ -214,7 +274,9 @@ def section(record: Dict[str, Any], manifest: Optional[Dict[str, Any]] = None) -
         f'<tr><td style="{td}">{e(r["file"])}</td><td style="{td}">{e(r["drawing"] or "-")}</td>'
         f'<td style="{td}">{e(r["revision"] or "-")}</td><td style="{td}">{e(r["format"])}</td>'
         f'<td style="{td};{red if r["state"].startswith("NOT READ") else ""}">'
-        f'{e(r["state"])}{(" - " + e(r["why"])) if r["why"] else ""}</td></tr>' for r in rows)
+        f'{e(r["state"])}{(" - " + e(r["why"])) if r["why"] else ""}</td>'
+        f'<td style="{td}">{e(r.get("from") or "not recorded")}</td></tr>' for r in rows)
+    log = [w for w in g.get("copy_log") or [] if not w.startswith("FOUND FOR THE PACK AND NOT GIVEN")]
     html = (
         '<div style="margin:14px 0 18px;padding:12px 14px;border:1px solid #d5dbe3;border-radius:4px">'
         f'<p style="margin:0 0 6px;font-weight:bold;font-size:15px">{PACK_HEADING}</p>'
@@ -225,16 +287,26 @@ def section(record: Dict[str, Any], manifest: Optional[Dict[str, Any]] = None) -
         + f'<p style="margin:0 0 8px;color:#5b6b7d;font-size:13px">{e(head)}. These are the files this run '
           'was given and what it did with each, as the run recorded them.</p>'
         + "".join(f'<p style="margin:0 0 6px;color:#5b6b7d;font-size:13px">{e(w)}</p>' for w in info)
+        + (f'<p style="margin:8px 0 4px;font-weight:bold;font-size:13px">Where this pack was taken from, and the copy made of it</p>'
+           + "".join(f'<p style="margin:0 0 4px;font-size:13px">{e(w)}</p>' for w in log)
+           + ("" if g["missing"] else '<p style="margin:0 0 4px;font-size:13px">Drawings we would ideally have: '
+              'none are named by the drawings that were not found.</p>') if log else "")
         + '<table style="border-collapse:collapse"><tr>'
-        + "".join(f'<th style="{td};text-align:left">{h}</th>' for h in ("File", "Drawing", "Rev", "Format", "On this run"))
+        + "".join(f'<th style="{td};text-align:left">{h}</th>'
+                  for h in ("File", "Drawing", "Rev", "Format", "On this run", "Copied from"))
         + f"</tr>{body}</table></div>")
     text = (PACK_HEADING_TEXT + "\n" + ident + "\n"
             + (f"  !! {NOT_PROVED}\n" if gaps else "")
             + "".join(f"  ! {w}\n" for w in gaps)
             + head + "\n"
             + "".join(f"  {w}\n" for w in info)
+            + ("WHERE THIS PACK WAS TAKEN FROM, AND THE COPY MADE OF IT\n" + "".join(f"  {w}\n" for w in log) if log else "")
             + "".join(f"  {r['file']}  |  {r['drawing'] or '-'}  |  rev {r['revision'] or '-'}  |  {r['format']}  |  "
-                      f"{r['state']}{(' - ' + r['why']) if r['why'] else ''}\n" for r in rows) + "\n")
+                      f"{r['state']}{(' - ' + r['why']) if r['why'] else ''}\n" for r in rows)
+            + ("COPIED FROM\n" + "".join(
+                f"  {folder}: " + ", ".join(r["file"] for r in rows if (r.get("from") or "not recorded") == folder) + "\n"
+                for folder in sorted({r.get("from") or "not recorded" for r in rows})) if log else "")
+            + "\n")
     return {"html": html, "text": text}
 
 

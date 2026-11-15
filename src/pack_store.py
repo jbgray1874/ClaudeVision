@@ -102,7 +102,8 @@ def compare(wanted: Dict[str, str], saved: Dict[str, str]) -> Dict[str, List[str
 
 
 def store(manifest: Dict[str, Any], client: str, root: Optional[Path] = None,
-          now: Optional[datetime] = None, fresh: bool = True) -> Dict[str, Any]:
+          now: Optional[datetime] = None, fresh: bool = True,
+          honour_hand_made: bool = True) -> Dict[str, Any]:
     """Save the pack (or find it already saved). Returns where, which version and what changed;
     the same facts are written into the manifest beside the files."""
     root = root or store_root()
@@ -118,7 +119,11 @@ def store(manifest: Dict[str, Any], client: str, root: Optional[Path] = None,
         # A FOLDER A PERSON MADE IS NEVER SUPERSEDED (JG, 10 Nov 2026): one with no manifest of
         # ours that differs from the design pack is the estimator's pack; it is used as it is
         # and nothing is filed beside it (12674-01-GA v2 held a lone DXF beside the full pack).
-        if any(diff.values()) and not (last / MANIFEST).exists() \
+        # ONLY ON A ONE-JOB RUN (JG, 15 Nov 2026: "only if someone does a one job run and adds
+        # drawing files manually, otherwise it needs to re extract"). A batch over several jobs
+        # passes honour_hand_made=False: the hand-made folder is left exactly as it is and the
+        # pack is taken from W: into a new version beside it.
+        if honour_hand_made and any(diff.values()) and not (last / MANIFEST).exists() \
                 and any(p.is_file() for p in last.iterdir()):
             return {"state": "kept by hand", "folder": str(last), "version": last_n,
                     "changes": diff}
@@ -136,7 +141,9 @@ def store(manifest: Dict[str, Any], client: str, root: Optional[Path] = None,
                 shutil.copy2(Path(f["path"]), target / Path(f["path"]).name)
             result = {"state": "changed" if any(diff.values()) else "re-extracted",
                       "folder": str(target), "version": last_n + 1, "changes": diff,
-                      "copied": len(files), "previous": str(last)}
+                      "copied": len(files), "previous": str(last),
+                      "copies": [{"file": Path(f["path"]).name, "from": str(Path(f["path"]).parent)}
+                                 for f in files]}
             _write(target, manifest, result, now)
             return result
         if not any(diff.values()):
@@ -169,13 +176,16 @@ def store(manifest: Dict[str, Any], client: str, root: Optional[Path] = None,
         shutil.copy2(src, dst)
         copied.append(str(dst))
     result = {"state": state, "folder": str(target), "version": number, "changes": diff,
-              "previous": str(versions[-1][1]) if versions else None}
+              "previous": str(versions[-1][1]) if versions else None, "copied": len(files),
+              "copies": [{"file": Path(f["path"]).name, "from": str(Path(f["path"]).parent)}
+                         for f in files]}
     _write(target, manifest, result, now)
     return result
 
 
 def _write(folder: Path, manifest: Dict[str, Any], result: Dict[str, Any], now: datetime) -> None:
-    out = dict(manifest, stored=dict(result, at=now.isoformat(timespec="seconds")))
+    result["at"] = now.isoformat(timespec="seconds")        # when the files were copied
+    out = dict(manifest, stored=dict(result))
     (folder / MANIFEST).write_text(json.dumps(out, indent=1), encoding="utf-8")
 
 
