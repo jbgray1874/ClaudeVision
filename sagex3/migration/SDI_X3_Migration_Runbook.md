@@ -3265,3 +3265,25 @@ Then go to the API once Acuity has given us the template and the access.
 - **Needed:**
   1. a copy of `Live Enquiry.xls`;
   2. who creates the project number in Access today, and at what point (on a win, or at enquiry?).
+
+**15 Nov – CORRECTION (James): "Live Enquiry" IS the Live Orders sheet.** There is **no** `K:\Estimating\Completed\Manual Estimates\Live Enquiry.xls`. That path came from the July collector's example config and was wrongly treated as a real file. **Stop asking for it.**
+- The task is to recreate **Dave's Live Orders sheet** in X3, mapped from the Access SupplyChain data. That's the work in 22.6 / 22.11 / 22.13 / 22.20.
+- The two `live_enquiry_discovery` queries were a detour. They aren't needed for Live Orders, but their facts stand: no CRM / opportunity data in Access, and 2,627 Access projects.
+- **Lesson:** use James's names for things. When a name is ambiguous, check the conversation before trusting old config files.
+
+**Live Orders: Access source → X3 (the map for Acuity; X3 table names to be confirmed in their reply to C15):**
+
+| Dave's column | Access SupplyChain today | X3 |
+|---|---|---|
+| Due date | `ASC_WOR_TBL.WOR_DATE_SCHED` (works-order scheduled date) | Works-order end date (MFGHEAD / MFGITM) |
+| Customer date | `WOR_SALORD` → sales-order line due date (`vw_SOH_V2`); Dave's own formula is `#REF!` | Originating sales-order line (SORDERQ) requested / ship date |
+| WO Num / SO Num | `WOR_ORDER`, `WOR_PARENT_ORDER`, `WOR_SALORD` | WO number; originating SO and line |
+| Part code, Description | `WOR_ITEM_ONLY` → product master | ITMMASTER (code, description 1) |
+| Drawing, REV | Part code; `WOR_ITEM_REV` | Product code / description 2 (rev, as migrated) |
+| MATERIAL STATUS | Worked out: BOM × balance against stock (`vw_SMR_V2`), open POs (`vw_POH_V2`) and works orders. Today it's typed free text | WO material lines (MFGMAT): allocated / short, PO lines (PORDERQ) with due dates → RAG |
+| QTY / Booked in / Balance | `WOR_ORIG_QTY` / `WOR_AMD_QTY`, `WOR_GOOD_QTY`; balance = qty − good | WO planned / completed / remaining (MFGITM) |
+| Metal / Joinery / Acrylics | Route work centres (mapped LASM→MMAC002 etc.) | Work centres on the WO operations (MFGOPE) |
+| LASM … PACP (23 hour columns) | Route run time × balance (+ set-up) per work centre | Remaining operation time per work centre (MFGOPE) |
+| WO Suggestions | Uncovered sales-order lines for made parts | MRP suggestions (X3 MRP) |
+| BOM Report (stock / on PO / PO due / on WO / cost) | Exploded BOM against stock, PO and WO; cost from YITC | BOM (BOMD) explosion with stock (STOCK), PO lines, WOs; standard cost |
+| Tube req, Comments, Prog | Typed by Production (not in Access) | X3 user fields on the WO, or kept on the board side (LO-01) |
