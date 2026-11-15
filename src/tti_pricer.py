@@ -1016,6 +1016,33 @@ def checked_pack_difference(checked: Dict[str, Dict[str, str]], drawing: str,
     return "the pack found now differs from the pack that was checked (" + "; ".join(said) + ")"
 
 
+def adopt_after_no_answer(portal: Any, drawing: str, asked_at: float, wait_s: float = 600.0,
+                          every_s: float = 15.0, sleep: Callable[[float], None] = time.sleep,
+                          say: Callable[[str], None] = lambda m: print(m, flush=True)) -> Optional[str]:
+    """After a submit that got no answer: the run the service started for this drawing since the
+    request left, or None when it shows none within `wait_s`. Only a run this batch could have
+    asked for is taken: the tracker's own source, the same drawing, queued after the request."""
+    tries = max(1, int(wait_s // max(every_s, 0.001)) + 1)
+    say(f"[tti] the service did not answer the request for {drawing}; asking it whether it holds the run "
+        f"(up to {wait_s:g} s) before anything is sent again")
+    for n in range(tries):
+        try:
+            runs = (portal.recent(100) or {}).get("runs") or []
+        except Exception:                                                # noqa: BLE001
+            runs = None
+        if runs:
+            mine = [x for x in runs
+                    if str(x.get("drawing_number") or "").strip().upper() == str(drawing).strip().upper()
+                    and str(x.get("source") or "") == "tti"
+                    and float(x.get("queued_at") or 0) >= asked_at - 5]
+            if mine:
+                mine.sort(key=lambda x: float(x.get("queued_at") or 0))
+                return str(mine[-1].get("run_id"))
+        if n + 1 < tries:
+            sleep(every_s)
+    return None
+
+
 def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optional[Path] = None,
               sleep: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
     sheet = Path(args.sheet)
@@ -1443,13 +1470,50 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             save()
             continue
         if st is None:
-            try:
-                started = portal.start(body)
-            except Exception as exc:                                     # noqa: BLE001
-                _m = re.search(r"/api/estimate/([0-9a-f]{6,})/", str(exc))
-                item.update(state="not queued", why=str(exc)
+            _asked_at = time.time()
+            _failed: Optional[BaseException] = None
+            started = None
+            # THE ROW'S LAST REQUEST GOT NO ANSWER (15 Nov 2026): the service may have queued it
+            # all the same, and did for row 3. Before a second request is sent, the service is
+            # asked once for a run of this drawing queued around that request; if it holds one,
+            # that run is this row's: followed if it is still going, used if it has finished.
+            if r.get("drawing") and str(_prev.get("state")) == "not queued" \
+                    and "did not answer" in str(_prev.get("why") or ""):
+                try:
+                    _then = datetime.fromisoformat(str(_prev.get("updated"))).timestamp()
+                except (TypeError, ValueError):
+                    _then = None
+                _found = adopt_after_no_answer(portal, r["drawing"], _then - 900, wait_s=0, sleep=sleep) \
+                    if _then else None
+                if _found:
+                    started = {"run_id": _found}
+                    item["resumed"] = (f"the last request for this row got no answer, but the service had "
+                                       f"queued it: run {_found} is taken up, nothing was sent twice")
+            if started is None:
+                try:
+                    started = portal.start(body)
+                except Exception as exc:                                 # noqa: BLE001
+                    _failed = exc
+            if _failed is not None and getattr(_failed, "status", None) == 0 and r.get("drawing"):
+                # NO ANSWER IS NOT A REFUSAL (15 Nov 2026). The service took a 65-file pack with
+                # its models, the answer did not come inside the wait, and the row was written
+                # down as "not queued" while the service may have queued it. Before anything is
+                # said, the service is asked whether it holds a run for this drawing started
+                # since the request left; if it does, that run is this row's and is followed.
+                _found = adopt_after_no_answer(portal, r["drawing"], _asked_at, sleep=sleep)
+                if _found:
+                    started = {"run_id": _found}
+                    item["resumed"] = (f"the service did not answer the request in time but had queued "
+                                       f"it: run {_found} is followed, nothing was sent twice")
+                    _failed = None
+            if _failed is not None:
+                _m = re.search(r"/api/estimate/([0-9a-f]{6,})/", str(_failed))
+                item.update(state="not queued", why=str(_failed)
                             + (f" — this batch did not start run {_m.group(1)}; let it finish or stop it on "
-                               f"Grid Control, then run this row again" if _m else ""))
+                               f"Grid Control, then run this row again" if _m else "")
+                            + (" — the service was asked for ten minutes whether it holds a run for this "
+                               "drawing and showed none; check Grid Control before running the row again"
+                               if getattr(_failed, "status", None) == 0 else ""))
                 record(item, r, manifest)
                 save()
                 continue
@@ -1609,7 +1673,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     portal = None
     if not args.dry_run:
         import live_enquiry_runner as ler
-        portal = ler.Portal(args.server, args.api_key, timeout=120)
+        portal = ler.Portal(args.server, args.api_key, timeout=600)
     status = Path(args.status_file) if args.status_file else (ROOT / "output" / "tti" / "last_tti_run.json")
     rep = run_batch(args, portal, status)
     ro = rep["roots"]
