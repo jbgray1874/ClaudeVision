@@ -3242,3 +3242,26 @@ Then go to the API once Acuity has given us the template and the access.
   - recent rows.
 
   That shows whether the CRM / quotes are actually used, or whether the live enquiry process lives only in the K: workbook.
+
+**15 Nov – follow-up result (`live_enquiry_discovery_2.sql`): enquiries are NOT held in Access.**
+- **0 rows:**
+  - sales opportunities (header / detail);
+  - pipeline (current, analysis);
+  - outstanding estimates (header / detail);
+  - the CRM estimate report;
+  - contact history;
+  - leads (`DLR_LEADUPDATE`);
+  - `ORD_HEADER`, so there are no quotes on order headers.
+- **So the Live Enquiry pipeline exists only in the `K:\Estimating\Completed\Manual Estimates\Live Enquiry.xls` workbook. That workbook is the source to map onto X3 opportunities.**
+- **What Access does hold around it (the master data the opportunity needs):**
+  - **Accounts:** `AA_CRM_ACCOUNT_VIEW` has 1,034 rows: code, name, account manager / analysis (e.g. "Other – N. Garrish"), status, address, phone, email, credit limit. `AA_REP_CRM_PROSPECT_LIST_VIEW` has 517. These map to X3 customers (migrated) and **prospects** (for enquiries from non-customers).
+  - **Contacts:** `AA_CRM_CONTACTS_SIMPLE_VIEW` has 14,419.
+  - **Projects (Sage costing, `CH_*`):** 2,627 projects, codes **400000+** (e.g. 400000, 402591). Each has a name, customer (`CH_ACCOUNT`), status, type (e.g. PROTO), start / deadline / completed dates, estimated and actual sales and costs, and an IsProspect flag.
+    - Sales-order lines carry the project (`COR_PROJECT`; `UDEF_SALES_ORDER_PROJECT_NUMBER`, 17,286 order / project pairs).
+    - `UDEF_PROJECT_DETAIL` (13,611) links project → sales order → part / drawing.
+    - `UDEF_WOR_PROJECT` (2,627) links project → GA drawing → value.
+    - `ASC_ORC_PROJECTS` holds 11 distinct project codes on works orders.
+  - **This is today's "won → project number".** In X3 it becomes the project / financial dimension created on a win (OPP-04). Its numbering (400000+) and fields are what Acuity's design has to carry.
+- **Needed:**
+  1. a copy of `Live Enquiry.xls`;
+  2. who creates the project number in Access today, and at what point (on a win, or at enquiry?).
