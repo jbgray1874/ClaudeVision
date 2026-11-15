@@ -14,7 +14,7 @@ through the laptop's signed-in desktop Excel; this reads it by the same route.
     tracker_rows(copy, tab)       the copy's job rows in the shape the change check compares:
                                   permanent AI Row ID (None where the sheet has none), drawing,
                                   quantity, both feedback columns, cost, whether the drawing
-                                  index holds current files for the drawing, and every reason a
+                                  live Design/Prototype resolution found a usable pack, and every reason a
                                   row is on hold. Nothing is defaulted: a blank quantity is a
                                   hold, not 1.
 
@@ -145,21 +145,22 @@ def _row_ids(path: Path, tab: Optional[str], header_row: int) -> Tuple[bool, Dic
 
 
 def pack_of(files: Sequence[Tuple[Any, int, float]]) -> Tuple[str, str]:
-    """(state, key) of the drawing's current files in the index: 'ready' with a key that changes
-    when a file is added, removed, resized or re-saved; 'missing' with no key."""
+    """Compatibility for injected file-list readers; production uses resolved_pack below."""
     if not files:
         return "missing", ""
-    listed = sorted((str(p).replace("\\", "/").casefold(), int(sz), int(float(m) // 60)) for p, sz, m in files)
+    listed = sorted((str(p).replace("\\", "/").casefold(), int(sz), float(m)) for p, sz, m in files)
     return "ready", hashlib.sha256(json.dumps(listed).encode()).hexdigest()
 
 
 def tracker_rows(path: Path, tab: Optional[str] = None, *,
                  lookup: Optional[Callable[[str], Sequence[Tuple[Any, int, float]]]] = None,
-                 index_problem: str = "", hold_out: Iterable[str] = (), client: str = "TTI",
+                 discovery_problem: str = "", hold_out: Iterable[str] = (), client: str = "TTI",
+                 pack_lookup: Optional[Callable[[str], Dict[str, Any]]] = None,
                  method: str = "both") -> Dict[str, Any]:
-    """The copy's job rows for the change check. `lookup(drawing)` gives the drawing's current
-    indexed files; `index_problem` (the index is missing or stale) puts every row with a drawing
-    on hold with that reason, because a pack cannot then be called current."""
+    """Rows for comparison. Production supplies a live resolved-pack reader, never an index.
+    A discovery failure is a hold, not missing drawings or permission to price without them.
+    `lookup` is retained for callers injecting a file-list reader; it is never selected here.
+    """
     import tti_preflight
     raw, meta = tti_preflight.read_tracker(path, tab or None)
     has_ids, ids = _row_ids(Path(path), meta.get("sheet"), int(meta["header_row"]))
@@ -172,50 +173,103 @@ def tracker_rows(path: Path, tab: Optional[str] = None, *,
         holds = [h for h in r["holds"] if not h.startswith(_NOT_A_HOLD_HERE)]
         drawing = r["drawing"]
         state, key = ("missing", "")
+        pack: Dict[str, Any] = {}
         if drawing:
             if drawing.upper() in held_out:
                 holds.append("Held out of the button's work by setting (SDI_TTI_HOLD_OUT)")
-            if index_problem:
-                holds.append(index_problem)
+            if discovery_problem:
+                holds.append(discovery_problem)
+            elif drawing.upper() in held_out:
+                state = "held"
+            elif pack_lookup is not None:
+                pack = pack_lookup(drawing)
+                state, key = pack["state"], pack.get("key", "")
+                holds.extend(pack.get("holds") or [])
             elif lookup is not None:
                 state, key = pack_of(lookup(drawing))
+            else:
+                holds.append("No live drawing discovery was supplied; nothing can be priced")
         rev = _REV.search(r.get("drawing_cell") or "")
+        if rev and pack_lookup is not None and state == "ready":
+            requested = rev.group(1).upper()
+            selected = str(pack.get("revision") or "").upper()
+            if selected != requested:
+                holds.append(f"Tracker requests revision {requested}, but the selected pack revision is "
+                             f"{selected or 'unread'}; review the drawing selection")
+                state = "held"
         cost = r.get("cost_before")
         rows.append({
             "row_id": ids.get(r["row"]), "row": r["row"], "drawing": drawing or "",
             "quantity": r["quantity"], "description": r["description"],
             "previous_feedback": fb.get("previous", ""), "latest_feedback": fb.get("latest", ""),
-            "revision": rev.group(1).upper() if rev else "", "pack_key": key, "method": method,
+            "revision": rev.group(1).upper() if rev else pack.get("revision", ""), "pack_key": key, "method": method,
             "client": client, "cost": None if cost in (None, "") else (cost if isinstance(cost, (int, float)) else str(cost)),
             "pack_state": state, "pack_safe": state == "ready", "holds": holds, "history": None,
-            "snapshot_file": str(path), "tab": meta.get("sheet") or ""})
+            "snapshot_file": str(path), "tab": meta.get("sheet") or "",
+            "pack_evidence": pack.get("evidence", {})})
     return {"rows": rows, "tab": meta.get("sheet") or "", "row_id_column": has_ids,
             "rows_without_id": [r["row"] for r in rows if not r["row_id"]]}
 
 
-def index_lookup(env: Optional[Dict[str, str]] = None, now: Optional[float] = None
-                 ) -> Tuple[Optional[Callable[[str], Sequence[Tuple[Any, int, float]]]], str]:
-    """(lookup, problem). The drawing index's own database; a missing or stale index is a stated
-    problem, never a silent listing of the share."""
-    import drawing_index
-    cfg = drawing_index.settings(env)
-    db = drawing_index.db_path(cfg["path"])
-    if not db.is_file():
-        return None, "The drawing index has not been built on this machine; packs cannot be checked"
-    meta = drawing_index.db_meta(db)
-    if not drawing_index.is_fresh(meta, cfg["max_hours"], now):
-        built = datetime.fromtimestamp(meta["built_at"]).strftime("%d %b %H:%M") if meta["built_at"] else "never"
-        return None, (f"The drawing index is older than {cfg['max_hours']:g} hours (built {built}); "
-                      f"refresh it before pricing changes")
-    # AN INDEX THAT COULD NOT READ AN AREA IS NOT CURRENT (15 Nov 2026): the index built at 01:17
-    # recorded both drawing areas as unreadable, was still "fresh" by its clock, and the batch
-    # then listed the share live for ten hours. A pack looked up in it cannot be called current.
-    roots = meta.get("roots") or {}
-    unread = sorted(r for r, v in roots.items() if not (v or {}).get("readable"))
-    if not roots or unread:
-        return None, ("The drawing index did not read " + ("; ".join(unread) if unread else "any drawing area")
-                      + " when it was last built; refresh it before pricing changes")
-    return (lambda d: drawing_index.db_lookup(db, d)), ""
+def resolved_pack(manifest: Dict[str, Any], looked: str) -> Dict[str, Any]:
+    """Stable pack signature from the resolver's actual chosen members, not a GA-only hit.
+    Order and resolved_at are not inputs. Changed parts, source selection and revision are.
+    Missing referenced files remain visible under the normal estimating rules; conflicts hold.
+    """
+    files = []
+    for member in manifest.get("members") or []:
+        for f in member.get("files") or []:
+            if not f.get("path") or not f.get("fingerprint"):
+                return {"state": "held", "key": "", "holds": ["Resolved pack contains a file without an identity/fingerprint"]}
+            files.append((str(member.get("drawing") or ""),
+                          str(f["path"]).replace("\\", "/").casefold(), str(f["fingerprint"])))
+    evidence = {"looked": looked, "selected_folder": manifest.get("selected_folder"),
+                "status": manifest.get("status"), "missing": manifest.get("missing") or [],
+                "conflicts": manifest.get("conflicts") or [],
+                "assumptions": manifest.get("assumptions") or [],
+                "files": [{"drawing": d, "path": p, "fingerprint": fp} for d, p, fp in sorted(files)]}
+    missing = manifest.get("status") == "not found"
+    safe = bool(manifest.get("price_ok") and files and not manifest.get("conflicts"))
+    return {"state": "ready" if safe else "missing" if missing else "held",
+            "key": hashlib.sha256(json.dumps({"files": sorted(files),
+                                               "revision": manifest.get("revision") or ""},
+                                              sort_keys=True).encode()).hexdigest() if safe else "",
+            "revision": manifest.get("revision") or "", "evidence": evidence,
+            "holds": [] if safe else [manifest.get("question") or "No safe resolved drawing pack was found"]}
+
+
+def live_pack_lookup(client: str = "TTI", areas=None, read_text=None) -> Callable[[str], Dict[str, Any]]:
+    """One snapshot's Design-first reader using the same job-scoped resolver as TTI pricing.
+    Repeated drawings share only discovery work, never their quantities/briefs/row identities.
+    The next snapshot starts fresh, including newly created job folders. No index file is read.
+    """
+    import pack_resolver as pr
+    if areas is None:
+        from tti_pricer import job_areas
+        areas = job_areas()
+    areas = list(areas)
+    if not areas or areas[0][0].casefold() != "design" or areas[0][1] is None:
+        raise ValueError("A Design root is required before Prototype may be considered")
+    pr.forget_job_folders()
+    cache: Dict[str, Dict[str, Any]] = {}
+
+    def lookup(drawing: str) -> Dict[str, Any]:
+        import copy
+        key = drawing.strip().upper()
+        if key not in cache:
+            try:
+                rows, looked, design_rows = pr.rows_for_job_now(key, areas)
+                options = {"read_text": read_text} if read_text is not None else {}
+                manifest = pr.resolve(key, rows, client=client, client_folders_only=True,
+                                      area_rank=lambda folder: 0 if str(folder) in design_rows else 1,
+                                      **options)
+                cache[key] = resolved_pack(manifest, looked)
+            except (pr.PackCheckStalled, OSError, ValueError) as exc:
+                cache[key] = {"state": "held", "key": "",
+                              "holds": [f"Live drawing check failed for {key}: {exc}"],
+                              "evidence": {"error": type(exc).__name__}}
+        return copy.deepcopy(cache[key])
+    return lookup
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -234,10 +288,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     out: Dict[str, Any]
     try:
         copy = snapshot(args.master, Path(args.out_dir), master=args.master)
-        lookup, problem = index_lookup()
-        out = tracker_rows(copy, args.tab or None, lookup=lookup, index_problem=problem,
+        lookup = live_pack_lookup(client=args.client)
+        out = tracker_rows(copy, args.tab or None, pack_lookup=lookup,
                            hold_out=(os.getenv("SDI_TTI_HOLD_OUT", "")).split(","), client=args.client)
-        out.update(ok=True, snapshot=str(copy), taken=time.time(), index_problem=problem)
+        out.update(ok=True, snapshot=str(copy), taken=time.time(),
+                   discovery="live job folders, Design then Prototype; no index")
     except Exception as exc:                                         # noqa: BLE001
         out = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     body = json.dumps(out, ensure_ascii=False, default=str)

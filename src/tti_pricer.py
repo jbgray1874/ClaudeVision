@@ -787,7 +787,10 @@ def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
         rows, said, design_rows = pr.rows_for_job_now(drawing, job_areas())
         if not rows:
             return {}, None
-        m = pr.resolve(drawing, rows, client=client, client_folders_only=True)
+        # Design first is stated here, not left to a setting: a folder listed from the first
+        # area ranks ahead of any other.
+        m = pr.resolve(drawing, rows, client=client, client_folders_only=True,
+                       area_rank=lambda folder: 0 if str(folder) in design_rows else 1)
         if m["status"] == "not found":
             return {}, None
         sel = str(m.get("selected_folder") or "")

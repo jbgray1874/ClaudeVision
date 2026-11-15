@@ -108,10 +108,18 @@ def outcomes_from(status: Dict[str, Any], selected: List[Dict[str, Any]]) -> Dic
         if str(item.get("state")) == "done" and item.get("unit_cost") is not None and run_id:
             out[sel["row_id"]] = {"state": "completed" if item.get("written") else "completed_pending_write",
                                   "run_id": run_id, "unit_cost": item.get("unit_cost"), "said": said}
-        elif run_id:
+        elif run_id and str(item.get("state")) in {"error", "failed", "cancelled", "abandoned"}:
             out[sel["row_id"]] = {"state": "failed", "run_id": run_id, "said": said}
-        else:
+        elif not run_id and str(item.get("state")) in {
+                "needs drawing", "needs decision", "ask", "skipped", "has a cost",
+                "held: pack not checked", "held: not the checked pack"}:
             out[sel["row_id"]] = {"state": "not_submitted", "evidence": said}
+        else:
+            # A POST can succeed and its reply time out. The batch currently records that as
+            # 'not queued' with no run ID. That is not evidence of non-submission (row 3,
+            # run e2639e873262). Keep the reservation until the services are reconciled.
+            raise ReviewRequired(f"Row {sel['row']} has an uncertain/non-terminal outcome ({said}); "
+                                 "check the service job history and reconcile before any retry")
     return out
 
 
@@ -131,11 +139,9 @@ def make_reconcile(store: Store, status_of: Callable[[str], Optional[Dict[str, A
         if status is None:
             if held:
                 return f"The last batch (task {tid}) left no status and another batch is running; wait for it."
-            # Nothing was ever started under this plan's task id, and no batch is alive.
-            said = f"no status file exists for task {tid} and no batch process is alive"
-            store.finish(active["plan_id"], {r["row_id"]: {"state": "not_submitted", "evidence": said}
-                                             for r in active["rows"]})
-            return f"The last request (task {tid}) never started a batch; its rows are held for review, not resent."
+            # A missing file/dead batch does not rule out an accepted runner job.
+            return (f"The last request (task {tid}) has no status file. Its reservation stays held; "
+                    "check the service job history and reconcile before any retry.")
         if not status.get("finished"):
             return (f"The last batch (task {tid}) ended without finishing. Its rows stay reserved: "
                     f"review its log before anything else is priced.")

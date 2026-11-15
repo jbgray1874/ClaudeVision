@@ -151,13 +151,13 @@ def test_a_blank_quantity_is_a_hold_and_never_one(tmp_path):
     assert whole["quantity"] == 4 and whole["holds"] == []
 
 
-def test_a_tracker_without_ids_says_so_and_a_stale_index_or_a_held_out_drawing_is_a_hold(tmp_path):
+def test_a_tracker_without_ids_says_so_and_a_discovery_failure_or_a_held_out_drawing_is_a_hold(tmp_path):
     bare = _rows(_tracker(tmp_path / "bare.xlsx", LINES, ids=False))
     assert bare["row_id_column"] is False and bare["rows_without_id"] == [3, 4, 5]
     held = source.tracker_rows(_tracker(tmp_path / "t.xlsx", LINES), None, lookup=None,
-                               index_problem="The drawing index is older than 26 hours",
+                               discovery_problem="Live drawing discovery could not read Design",
                                hold_out=["70002-01-ga"])["rows"]
-    assert all(any("index" in h for h in r["holds"]) for r in held[:2]) and held[0]["pack_state"] == "missing"
+    assert all(any("discovery" in h for h in r["holds"]) for r in held[:2]) and held[0]["pack_state"] == "missing"
     assert any("SDI_TTI_HOLD_OUT" in h for h in held[1]["holds"])
     assert not any("SDI_TTI_HOLD_OUT" in h for h in held[0]["holds"])
 
@@ -539,14 +539,16 @@ def test_the_service_reads_the_master_through_the_engines_own_command(service, m
     tc, er, tmp = service
     master = _tracker(tmp / "MASTER.xlsx", LINES)
     monkeypatch.setenv("SDI_TTI_CENTRAL_SHEET", str(master))
-    monkeypatch.setenv("SDI_DRAWING_INDEX", str(tmp / "none" / "index.json.gz"))
+    # Missing roots fail closed immediately; this test must never touch the real CAD share.
+    monkeypatch.setenv("SDI_TTI_DESIGN_ROOT", str(tmp / "missing-design"))
+    monkeypatch.setenv("SDI_TTI_PROTOTYPE_ROOT", str(tmp / "missing-prototype"))
     before = master.read_bytes()
     p = tc.post("/api/estimate/tti/changes/check", json={"tracker_id": "master"})
     assert p.status_code == 200, p.text
     body = p.json()
     assert body["message"] == routes.NO_BASELINE and body["rows"] == 3
-    assert all(any("drawing index" in x for x in d["reasons"]) for d in body["decisions"] if d["drawing"]), \
-        "no index on this machine is said on every row; the share is never listed instead"
+    assert all(any("Live drawing check failed" in x for x in d["reasons"]) for d in body["decisions"] if d["drawing"]), \
+        "a failed live check is stated on each row, never treated as missing drawings"
     assert master.read_bytes() == before
 
 
@@ -557,26 +559,10 @@ def test_the_page_offers_the_two_buttons_and_price_starts_disabled():
     assert 'id="ttiFind"' in PAGE and 'id="ttiGo"' in PAGE, "the sheet buttons are still there"
 
 
-def _index_db(tmp_path, roots):
-    import sqlite3, json as _json, time as _time
-    db = tmp_path / "index.sqlite"
-    con = sqlite3.connect(db)
-    con.execute("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)")
-    con.executemany("INSERT INTO meta VALUES (?,?)",
-                    [("built_at", str(_time.time())), ("roots", _json.dumps(roots))])
-    con.commit(); con.close()
-    return {"SDI_DRAWING_INDEX": str(tmp_path / "index.json.gz")}
-
-
-def test_an_index_that_could_not_read_a_drawing_area_is_a_hold_however_new_it_is(tmp_path):
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-    import tti_tracker_source as src
-    env = _index_db(tmp_path, {"//s/Design": {"readable": True}, "//s/Prototype": {"readable": False}})
-    lookup, problem = src.index_lookup(env)
-    assert lookup is None and "//s/Prototype" in problem and "//s/Design" not in problem
-    # the contrast: every area read, and the same index is used
-    (tmp_path / "ok").mkdir()
-    env = _index_db(tmp_path / "ok", {"//s/Design": {"readable": True}, "//s/Prototype": {"readable": True}})
-    lookup, problem = src.index_lookup(env)
-    assert lookup is not None and problem == ""
+def test_live_discovery_failure_does_not_fall_back_to_a_persistent_index(tmp_path, monkeypatch):
+    import drawing_index as di
+    monkeypatch.setattr(di, "db_lookup", lambda *a, **k: pytest.fail("index lookup used"))
+    lookup = source.live_pack_lookup(areas=[("Design", tmp_path / "unreadable"),
+                                            ("Prototype", tmp_path / "other")])
+    result = lookup("12181-00-GA")
+    assert result["state"] == "held" and "Design" in result["holds"][0]
