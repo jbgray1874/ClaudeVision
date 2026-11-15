@@ -2264,6 +2264,14 @@ def _inherit_sheet_material_to_parts(
             [str(n) for n in (tb.get("drawing_numbers") or []) if n],
             [str(m) for m in (tb.get("materials") or []) if str(m or "").strip()],
         )
+    # WHAT THE MODEL SAID OF EVERY PART, BEFORE THIS PASS CHANGES ANY OF THEM: the first
+    # part to take the sheet's material would otherwise stop being the model's witness for
+    # the next.
+    _as_read = {id(p): {"normalized_material": p.get("normalized_material"),
+                        "material_source": _source_of(p, "normalized_material")
+                        or p.get("material_source"),
+                        "pages": list(p.get("pages") or [])}
+                for p in parts if isinstance(p, dict)}
     for part in parts:
         pn = str(part.get("part_number") or "").strip()
         if not pn or part.get("is_bought_in") or part.get("is_assembly_parent") \
@@ -2289,6 +2297,35 @@ def _inherit_sheet_material_to_parts(
         before_src = str(_source_of(part, "normalized_material") or "")
         sheet = ", ".join(f"p.{p}" + (f" ({sheets[p][0][0]})" if sheets[p][0] else "")
                           for p in drawn_on)
+        # A MODEL THAT TELLS THIS SHEET'S PARTS APART IS NOT HANDING OUT A DEFAULT (15 Nov
+        # 2026, source_precedence.model_tells_sheet_mates_apart). The sheet's one material is
+        # its subject's; this part keeps the model's, and the difference is asked.
+        if before and _material_family(before) not in families:
+            try:
+                from source_precedence import model_tells_sheet_mates_apart as _apart
+                # a material the family table does not hold (PVC) is its own family here
+                _kept = _apart(_as_read[id(part)], list(_as_read.values()),
+                               lambda _m: _material_family(_m) or str(_m or "").strip().upper())
+            except Exception:                                             # noqa: BLE001
+                _kept = False
+            if _kept:
+                _why = (f"material: {pn} has no sheet of its own; the sheet that draws it "
+                        f"({sheet}) states {stated[0]}, and the model gives this part "
+                        f"'{before}' and gives other parts on that sheet other materials. "
+                        f"The sheet's material is taken as its subject's and NOT handed to "
+                        f"this part; '{before}' is kept. Confirm the material.")
+                if _why not in (part.get("review_flags") or []):
+                    part.setdefault("review_flags", []).append(_why)
+                try:
+                    from source_precedence import raise_manufacturing_question as _ask_m
+                    _ask_m(part, f"{pn}: the model says '{before}', the sheet that draws it "
+                                 f"states {stated[0]}",
+                           f"costed as '{before}' (the model's), not as the sheet's {stated[0]}",
+                           "confirm which material this part is made of",
+                           "file_scan.sheet_material_not_handed_to_a_part_the_model_tells_apart")
+                except Exception:                                         # noqa: BLE001
+                    pass
+                continue
         if not _apply_field(part, "normalized_material", material, "drawn_on_sheet"):
             continue
         part["material_inherited_from"] = f"the sheet that draws it: {sheet}"

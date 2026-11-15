@@ -1556,3 +1556,40 @@ def raise_manufacturing_question(part: Dict[str, Any], issue: str, assumption: s
         q["operations"] = _ops
     qs.append(q)
     return True
+
+
+def model_tells_sheet_mates_apart(part: Any, parts: Any, family: Any) -> bool:
+    """Does the MODEL give this part a different material family from another part drawn on
+    the same sheet? (15 Nov 2026)
+
+    A model's applied material ranks below a drawing callout because it is often a template's
+    default: one job's acrylic layers were all "steel" in the model, and the sheet that draws
+    them was right. But another job's shared sheet states MDF for its panel and also draws the
+    panel's PVC edging and a carbon-steel lock plate, each with its own material in the model.
+    Handing the sheet's MDF to all three priced a steel plate and a PVC strip as 9 mm board.
+
+    A model that gives the parts of one sheet DIFFERENT families is not handing out a default.
+    There the sheet's one material describes the sheet's subject, and a sheet-mate keeps what
+    the model says, as a question. Where the model gives every sheet-mate the same family, or
+    says nothing of the others, nothing here applies and the sheet stands as before.
+    `family` maps a material name to its family ("" when unknown)."""
+    if not isinstance(part, dict):
+        return False
+    if not str(part.get("material_source") or "").lower().startswith("solidworks"):
+        return False
+    own = family(part.get("normalized_material"))
+    pages = {str(p).strip() for p in (part.get("pages") or []) if str(p).strip()}
+    if not own or not pages:
+        return False
+    for other in parts or ():
+        if other is part or not isinstance(other, dict):
+            continue
+        if not str(other.get("material_source") or "").lower().startswith("solidworks"):
+            continue
+        if not pages & {str(p).strip() for p in (other.get("pages") or [])}:
+            continue
+        theirs = family(other.get("normalized_material"))
+        if theirs and theirs != own:
+            return True
+    return False
+

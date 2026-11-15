@@ -296,6 +296,21 @@ def _a_piece_carries(part: Dict[str, Any], op: str, parts: List[Dict[str, Any]])
     return False
 
 
+def _model_tells_apart(part: Dict[str, Any], parts: Any) -> bool:
+    """source_precedence.model_tells_sheet_mates_apart, by this module's material names."""
+    try:
+        from source_precedence import model_tells_sheet_mates_apart
+    except Exception:                                               # noqa: BLE001
+        return False
+
+    def _fam(name: Any) -> str:
+        n = _norm_material(str(name or "")) if name else ""
+        if n in _METAL_FAMILIES:
+            return "METAL"
+        return n if n and n not in {"UNKNOWN", "NONE"} else ""
+    return model_tells_sheet_mates_apart(part, parts, _fam)
+
+
 def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> Dict[str, int]:
     """Fold the LLM whole-document job into the pre-estimate part records. Non-destructive:
     fills a field only where the engine has nothing solid, EXCEPT it deliberately provides
@@ -478,6 +493,24 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
                     out["inferred"] += 1
                 _flagged = True
                 out["material"] += 1
+            elif (not _dxf_backed
+                  and not _native_material
+                  and _new_mat in _NON_METAL_FAMILIES
+                  and _cur_mat in _METAL_FAMILIES
+                  and "material" not in (jp.get("_deterministic") or [])
+                  and _model_tells_apart(part, parts)):
+                # NOT A DEFAULT: THE MODEL GIVES THIS SHEET'S PARTS DIFFERENT MATERIALS (15 Nov
+                # 2026). A carbon-steel lock plate drawn on a board panel's sheet was called
+                # "engine default", made MDF and priced as 9 mm board. The metal is the
+                # model's own, among sheet-mates the model gives other materials, and the
+                # board is not printed on this part's own title block. Kept, and asked.
+                _kept_why = (f"material '{_cur_mat}' is the model's and is KEPT: the read gave "
+                             f"'{_new_mat}', which is not on this part's own title block, and "
+                             f"the model gives other parts drawn with it other materials. "
+                             f"Confirm the material.")
+                if _kept_why not in (part.get("review_flags") or []):
+                    part.setdefault("review_flags", []).append(_kept_why)
+                _flagged = True
             elif (not _dxf_backed
                   and not _native_material
                   and _new_mat in _NON_METAL_FAMILIES
