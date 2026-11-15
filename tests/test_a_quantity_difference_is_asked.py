@@ -87,3 +87,24 @@ def test_a_total_that_is_not_the_models_own_count_does_not_silence_the_question(
 def test_a_note_that_a_row_was_dropped_or_added_is_asked_even_when_the_model_agrees():
     s = _with_model_count(_summary(2, 4, TWO_LEGS, note="a table row was added to the cascade"), 4)
     assert len(_asked(s)) == 1
+
+
+# ── SIBLING PARTS LISTS THAT EACH PRINT THEIR OWN COUNT (15 Nov 2026) ─────────────────────
+THREE_TABLES = ["GA x1 -> T-101 x1 (BOM, the SolidWorks model agrees) -> PP x14 (BOM) = 14",
+                "GA x1 -> T-102 x1 (BOM, the SolidWorks model agrees) -> PP x29 (BOM) = 29",
+                "GA x1 -> T-103 x1 (BOM, the SolidWorks model agrees) -> PP x14 (BOM) = 14"]
+
+
+def test_an_insert_three_sibling_tables_each_list_is_not_asked():
+    """The record's own figure had been reset to 1; the sheet costs the 57 the tables print."""
+    assert not _asked(_summary(1, 57, THREE_TABLES))
+
+
+def test_a_table_repeating_what_its_own_sub_assembly_lists_is_still_asked():
+    nested = ["GA x1 -> PP x1 (BOM) = 1", "GA x1 -> SA x1 (BOM) -> PP x1 (BOM) = 1"]
+    assert len(_asked(_summary(1, 2, nested))) == 1
+
+
+def test_a_route_that_does_not_end_on_a_printed_row_is_still_asked():
+    mixed = [THREE_TABLES[0], "GA x1 -> T-102 x1 (BOM) -> PP x29 (inferred) = 29"]
+    assert len(_asked(_summary(1, 43, mixed))) == 1

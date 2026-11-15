@@ -12407,6 +12407,26 @@ def _sanitise_part_quantity(part: Dict[str, Any]) -> int:
         })
         return raw_qty
 
+    # THE SUM OF THE COUNTS SEVERAL PARTS LISTS PRINT IS A READ COUNT TOO (15 Nov 2026). An
+    # insert is listed x14, x29 and x14 by three sub-assemblies' own tables: 57 in the
+    # product, each figure printed. The sum's source is "per unit", not "bom_tree", so the
+    # cap called it "NOT ESTABLISHED, carried at 1" and raised a quantity question, beside a
+    # sheet that rightly charged 57. Where the figure is exactly the sum of the rows that
+    # list the part, it stands and says which tables it came from.
+    if raw_qty > _MAX:
+        _rows = [e for e in (part.get("bom_parents") or []) if isinstance(e, dict)]
+        _row_sum = sum(_safe_float(e.get("qty")) or 0.0 for e in _rows)
+        if len(_rows) >= 2 and abs(_row_sum - raw_qty) < 1e-6:
+            part.setdefault("review_flags", []).append({
+                "severity": "info",
+                "flag": "quantity_over_cap_kept",
+                "detail": (f"qty {raw_qty} is over MAX_PART_QTY_PER_UNIT ({_MAX}) and kept — "
+                           f"it is the sum of the counts its parts lists print: "
+                           + " + ".join(f"{_safe_float(e.get('qty')) or 0:g} under "
+                                        f"{e.get('parent')}" for e in _rows)),
+            })
+            return raw_qty
+
     if raw_qty > _MAX:
         # A COUNT NOBODY READ IS NOT REPLACED BY ONE (6364-01, 12 Nov 2026). The bill tree
         # produced 52 hank bushes from a drawing that calls for 4. This cap then "reset to 1"

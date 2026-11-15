@@ -4078,6 +4078,23 @@ def costed_job(source: Any) -> Dict[str, Any]:
                     and str(_prec_q.get("quantity_total_per_unit_source") or "")
                     .lower().startswith("solidworks")):
                 continue
+        # SEVERAL PARTS LISTS THAT EACH PRINT THEIR OWN COUNT ARE NOT A QUESTION EITHER (15 Nov
+        # 2026). An insert is listed x14, x29 and x14 by three sibling sub-assemblies' tables
+        # and the sheet costs 57. The record's own figure had been reset to 1, so the list
+        # asked "its BOM row states 1, the sheet costs 57" beside three rows that print it.
+        # Where every route ends on a printed parts-list row and no route's parent sits
+        # inside another route (a table repeating what its sub-assembly holds is still
+        # asked), the sum is what the drawings print.
+        if len(_trails) > 1 and not str(_node.get("qty_note") or ""):
+            _routes = [[seg.rsplit(" x", 1)[0].strip().upper() for seg in t.split("=")[0].split(" -> ")]
+                       for t in _trails]
+            _last_printed = all("(BOM" in t.split("=")[0].split(" -> ")[-1].upper()
+                                for t in _trails)
+            _owners = [r[-2] for r in _routes if len(r) >= 2]
+            _nested = any(o in r[:-2] for o in _owners for r in _routes)
+            if (_last_printed and len(_owners) == len(_routes)
+                    and len(set(_owners)) == len(_owners) and not _nested):
+                continue
         _each = _money_of(_line) / _eff if _eff else 0.0
         decisions.append({
             "part": _line["part_number"], "kind": "quantity_check",
