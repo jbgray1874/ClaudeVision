@@ -69,3 +69,27 @@ def test_only_the_rows_are_removed_and_the_rest_of_the_sheet_is_left():
 def test_a_row_naming_this_sheets_own_part_is_not_removed():
     left = ws._without_rows_naming_other_parts(f"{LEG} LHS UPRIGHT - WELDED ASSEMBLY 1", [RAIL])
     assert "WELDED" in left
+
+
+# ── THE ROWS AS THE REAL SHEETS PRINT THEM (runs of 14 Nov 2026, 20:12 and 20:22) ──────────
+# The line-by-line read gives a table's cells with no space between them. The first form of
+# the rule asked for a space at each join, removed nothing, and the top assembly's weld was
+# still on the charged workbook after the release.
+GLUED = (f"12345678 ITEMDWG NO.DESCRIPTIONQTY 1{LEG}LHS UPRIGHT - WELDED ASSEMBLY1 "
+         f"2{RAIL}CROSS RAIL - WELDED ASSEMBLY2 AA 3{BAR}UNIT FIXED Z-BAR12")
+
+
+def test_rows_printed_with_no_space_between_their_cells_are_removed_too():
+    got, parts = _stated({TOP: GLUED})
+    assert got == [] and "weld_stated_by_note" not in parts[TOP]
+    assert "welding" not in (parts[TOP].get("textual_operations") or [])
+
+
+def test_a_glued_table_beside_the_sheets_own_weld_note_still_states_the_weld():
+    got, parts = _stated({TOP: GLUED + " NOTE: FRAME TO BE WELDED ON SITE JIG"})
+    assert got == [TOP]
+
+
+def test_a_sub_assemblys_own_glued_title_still_states_its_weld():
+    got, _parts = _stated({LEG: "TITLELHS UPRIGHT - WELDED ASSEMBLYMATERIALMILD STEEL"})
+    assert got == [LEG]

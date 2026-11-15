@@ -871,8 +871,15 @@ def _without_rows_naming_other_parts(notes: Any, other_codes: Iterable[Any]) -> 
     for code in codes:
         if len(code) < 4 or code not in text:
             continue
-        # code, then a description of words and punctuation, then the row's quantity
-        text = re.sub(re.escape(code) + r"(?![\w-])\s+[A-Z0-9 &/.,()'\-]{0,90}?\s+\d{1,4}(?![\w.-])",
+        # code, then a description of words and punctuation, then the row's quantity.
+        # THE CELLS OF A TABLE ROW ARE OFTEN PRINTED WITH NO SPACE BETWEEN THEM (the real
+        # runs of 14 Nov 2026 20:12 and 20:22): the line-by-line read gives
+        # "1PPP-101LHS UPRIGHT - WELDED ASSEMBLY1 2PPP-102...", the item number glued to the
+        # code, the code to the description and the description to the quantity. The first
+        # form of this rule asked for a space at each join, matched nothing on those sheets,
+        # and the top assembly's weld was still charged. No space is asked for now; the codes
+        # are taken longest first, so a code that begins another is never cut short.
+        text = re.sub(re.escape(code) + r"[A-Z0-9 &/.,()'\-]{0,90}?\d{1,4}(?![\w.-])",
                       " ", text)
     return " ".join(text.split())
 
