@@ -3402,3 +3402,19 @@ These are saved in the scratchpad `outbox_16Nov/` (not git).
   - keep every run;
   - stage 2 = the X3 API.
 - **Correction:** with STOP checks, the load files **are still written** (so the user can see what was read). The result is NOT READY and the files must not be loaded. The 16 Nov README.txt in the converter zip said STOP prevents writing; that was wrong, and README.md replaces it.
+
+**16 Nov – estimating emails (James to send):**
+1. **To Dave, James Ryan, Tim, Ethan and Marc:** Tim's Gift Card Header converted. It asks for:
+   - a check of the conversion (Tim, Dave);
+   - CR4 for sheet steel (Tim);
+   - Dave's import macros (Alt + F11);
+   - the TEST load and re-import behaviour (Acuity);
+   - a walk-through by Fri 20 Nov.
+2. **To Dave (cc James Ryan): where "Send to Sage X3" will live.**
+   - **Option 1, recommended:** the estimating portal runs the converter. It shows READY / NOT READY with checks by cell and keeps every run. It sends straight to X3 once the API is available.
+   - **Option 2:** a "Send to Sage X3" button in the estimate template. The recommended form is a short macro that sends the estimate to the portal, so the rules stay in one place. Python on every PC, or rewriting the rules as macros, are not recommended.
+   - **Asks:**
+     - the trigger (quoted, won or ordered) and who presses the button;
+     - Excel, the portal, or both;
+     - the macros;
+     - template changes (a Material column on sheet steel, a code column on other sheet).
