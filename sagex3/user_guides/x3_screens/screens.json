@@ -1,0 +1,200 @@
+{
+  "_about": "Tracker for the Sage X3 screens guide (Debbie, Claire, Sam). James sends screenshots from the training site (sdi-displays-trn, folder X3ERPV12 / SDIMIG) 5 at a time. Edit this file, then run build_guide.py to rebuild the Word guide. Status: todo / selection (selection screen only) / done (selection + results) / not-this (wrong screen) / not-found.",
+  "batches": [
+    {
+      "batch": 1,
+      "date": "16 Nov 2026",
+      "files": [
+        "00_navigation_menu_usage.png",
+        "01_CONSCSF_delivery_line_list_selection.png",
+        "02_FUNGRHSDH1_shipments_by_period_selection.png",
+        "01b_CONSCSF_delivery_line_list_selection_dup.png (same screen, not used)",
+        "03_GESSIH_sales_invoice_entry.png",
+        "04_CONSCSP_order_lines_selection_menu.png"
+      ]
+    },
+    {
+      "batch": 2,
+      "date": "16 Nov 2026",
+      "files": [
+        "05_GESPTH_purchase_receipt_entry.png"
+      ]
+    }
+  ],
+  "screens": [
+    {
+      "n": 1,
+      "search": "Order lines",
+      "code": "CONSCSP",
+      "path": "Sales > Enquiries > Orders > Order lines",
+      "report": "Outstanding Orders",
+      "who": "Debbie (Simon REP-07)",
+      "status": "selection",
+      "shots": [
+        "04_CONSCSP_order_lines_selection_menu.png"
+      ],
+      "results_shot": null
+    },
+    {
+      "n": 2,
+      "search": "Sales order status",
+      "code": "SLSSTAT",
+      "path": "Printouts (report)",
+      "report": "Outstanding Orders (printed)",
+      "who": "Debbie",
+      "status": "not-found",
+      "shots": [],
+      "results_shot": null,
+      "note": "James couldn't find it in the menu. Reports are usually run from Printouts (print / report printing, enter code SLSSTAT) or from the printer icon on the right of an order screen. Optional: Order lines + Excel export already covers Outstanding Orders. Ask Marc."
+    },
+    {
+      "n": 3,
+      "search": "Delivery line list",
+      "code": "CONSCSF",
+      "path": "Sales > Enquiries > Shipments > Delivery line list",
+      "report": "Delivered not Invoiced",
+      "who": "Debbie, Claire",
+      "status": "selection",
+      "shots": [
+        "01_CONSCSF_delivery_line_list_selection.png"
+      ],
+      "results_shot": null
+    },
+    {
+      "n": 4,
+      "search": "Delivery list",
+      "code": "CONSCSD",
+      "path": "Sales > Enquiries > Shipments > Delivery list",
+      "report": "Delivered not Invoiced (by delivery)",
+      "who": "Debbie, Claire",
+      "status": "todo",
+      "shots": [],
+      "results_shot": null
+    },
+    {
+      "n": 5,
+      "search": "Shipments by period",
+      "code": "FUNGRHSDH1",
+      "path": "Sales > Enquiries > Shipments > Shipments by period",
+      "report": "Delivered not Invoiced (totals by period)",
+      "who": "Debbie, Claire",
+      "status": "selection",
+      "shots": [
+        "02_FUNGRHSDH1_shipments_by_period_selection.png"
+      ],
+      "results_shot": null
+    },
+    {
+      "n": 6,
+      "search": "Invoices to be issued",
+      "code": "FUNAUTFAE",
+      "path": "Financials > Closing processes > Invoices to be issued (per Sage help)",
+      "report": "Month-end accrual for delivered not invoiced",
+      "who": "Claire (Finance) - not Debbie",
+      "status": "todo",
+      "note": "The screenshot sent (GESSIH) is Sales > Invoices > invoice ENTRY, not this. Search the menu for 'Invoices to be issued'.",
+      "shots": [],
+      "results_shot": null
+    },
+    {
+      "n": 7,
+      "search": "List of receipts",
+      "code": "CONSCPR",
+      "path": "Purchasing > Enquiries > Receipts",
+      "report": "Received not invoiced",
+      "who": "Claire",
+      "status": "todo",
+      "shots": [],
+      "results_shot": null,
+      "note": "Not found yet as an enquiry. Purchasing > Receipts > Receipts (GESPTH, entry screen) shows Invoiced (status) and Invoiced (quantity) per line, and has 'Receipt Enquiry' in its right panel."
+    },
+    {
+      "n": 8,
+      "search": "Receipt lines",
+      "code": "CONSCPS",
+      "path": "Purchasing > Enquiries > Receipts",
+      "report": "Received not invoiced (lines)",
+      "who": "Claire",
+      "status": "todo",
+      "shots": [],
+      "results_shot": null
+    },
+    {
+      "n": 9,
+      "search": "Subcontract",
+      "code": "CONSSST",
+      "path": "Manufacturing > Enquiries > Subcontract",
+      "report": "Subcontract orders not booked in",
+      "who": "Sam",
+      "status": "todo",
+      "shots": [],
+      "results_shot": null
+    },
+    {
+      "n": 10,
+      "search": "Shortage",
+      "code": "CONSSMQ?",
+      "path": "Stock or Manufacturing > Enquiries",
+      "report": "SDI MRP filtered to DF",
+      "who": "Debbie (REP-18)",
+      "status": "todo",
+      "shots": [],
+      "results_shot": null
+    },
+    {
+      "n": 11,
+      "search": "MRP results",
+      "code": "",
+      "path": "Manufacturing > Enquiries > Reorder results",
+      "report": "SDI MRP filtered to DF",
+      "who": "Debbie (REP-18)",
+      "status": "todo",
+      "shots": [],
+      "results_shot": null
+    },
+    {
+      "n": 12,
+      "search": "Requester",
+      "code": "",
+      "path": "Usage / Development",
+      "report": "Custom enquiry route for MRP by operator",
+      "who": "James / Acuity",
+      "status": "todo",
+      "shots": [],
+      "results_shot": null
+    },
+    {
+      "n": 13,
+      "search": "Sales Invoice (full entry)",
+      "code": "GESSIH",
+      "path": "Sales > Invoices",
+      "report": "Not a report: where an invoice is created. Its 'Select Shipments' panel lists a customer's shipments to invoice",
+      "who": "Customer Services invoicing",
+      "status": "not-this",
+      "shots": [
+        "03_GESSIH_sales_invoice_entry.png"
+      ],
+      "results_shot": null
+    },
+    {
+      "n": 14,
+      "search": "Receipts",
+      "code": "GESPTH",
+      "path": "Purchasing > Receipts > Receipts (transaction YPTH: Purchase Receipt - Essentials)",
+      "report": "Not a report: where a receipt is entered. Each line shows Invoiced (status) and Invoiced (quantity); right panel has Receipt Enquiry and Receipt situation",
+      "who": "Purchasing / Claire",
+      "status": "not-this",
+      "shots": [
+        "05_GESPTH_purchase_receipt_entry.png"
+      ],
+      "results_shot": null
+    }
+  ],
+  "seen_on_screens": {
+    "site": "Training site sdi-displays-trn.uk.sagex3.com, endpoint X3ERPV12 / SDIMIG (version 12), James as Super administrator. Company C01, site S01A default.",
+    "dates": "Delivery line list and Order lines need a Start and End date (default about 3 months: 01/09/26 - 30/11/26). Widen the start date to catch older items.",
+    "export": "Every enquiry has GLOBAL EXPORT > CSV export / Excel export in the right-hand panel.",
+    "memo": "Shipments by period has Memo / Recall / Delete Memo: a saved selection, so a user can keep their own filters.",
+    "orders_menu": "Sales > Enquiries > Orders holds: List of orders (CONSCSO), Order lines (CONSCSP), Orders per period, Routes, Order hitlist; also Shipments, Invoices, Returns, Allocations, Picking tickets, Parcel content, Document traceability."
+  }
+}
