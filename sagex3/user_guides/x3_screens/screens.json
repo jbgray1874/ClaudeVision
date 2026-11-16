@@ -19,6 +19,12 @@
       "files": [
         "05_GESPTH_purchase_receipt_entry.png"
       ]
+    },
+    {
+      "batch": 3,
+      "date": "16 Nov 2026",
+      "files": [],
+      "note": "5 screenshots seen but NOT saved to disk (sent mid-turn): Delivery entry GESSDH, Purchasing > Enquiries menu, Receipt enquiry CONSCPR, Receipt lines CONSCPS, Receipts by period FUNGRHPR. James to re-send so they can go in the guide."
     }
   ],
   "screens": [
@@ -100,35 +106,37 @@
       "n": 7,
       "search": "List of receipts",
       "code": "CONSCPR",
-      "path": "Purchasing > Enquiries > Receipts",
+      "path": "Purchasing > Enquiries > Receipts > List of receipts (screen title: Receipt enquiry)",
       "report": "Received not invoiced",
       "who": "Claire",
-      "status": "todo",
+      "status": "seen-resend",
       "shots": [],
       "results_shot": null,
-      "note": "Not found yet as an enquiry. Purchasing > Receipts > Receipts (GESPTH, entry screen) shows Invoiced (status) and Invoiced (quantity) per line, and has 'Receipt Enquiry' in its right panel."
+      "note": "Selection: Starting / Ending Supplier, Receipt no. from / to, project, Start / End date; Status: Invoiced / Not Invoiced, Posted / Not Posted. Right panel: Excel export; Graphics: Invoices by period, Returns by period."
     },
     {
       "n": 8,
       "search": "Receipt lines",
       "code": "CONSCPS",
-      "path": "Purchasing > Enquiries > Receipts",
+      "path": "Purchasing > Enquiries > Receipts > Receipt lines (screen title: Receipt lines inquiry)",
       "report": "Received not invoiced (lines)",
       "who": "Claire",
-      "status": "todo",
+      "status": "seen-resend",
       "shots": [],
-      "results_shot": null
+      "results_shot": null,
+      "note": "Selection as List of receipts plus Product; Status: Invoiced / Not Invoiced, Posted / Not Posted. Excel export."
     },
     {
       "n": 9,
       "search": "Subcontract",
       "code": "CONSSST",
-      "path": "Manufacturing > Enquiries > Subcontract",
+      "path": "Purchasing > Enquiries > Subcontract (seen in the menu); also Manufacturing > Enquiries > Subcontract per the help",
       "report": "Subcontract orders not booked in",
       "who": "Sam",
       "status": "todo",
       "shots": [],
-      "results_shot": null
+      "results_shot": null,
+      "note": "Found in the Purchasing > Enquiries menu; screen not opened yet."
     },
     {
       "n": 10,
@@ -187,6 +195,40 @@
       "shots": [
         "05_GESPTH_purchase_receipt_entry.png"
       ],
+      "results_shot": null
+    },
+    {
+      "n": 15,
+      "search": "Receipts by period",
+      "code": "FUNGRHPR",
+      "path": "Purchasing > Enquiries > Receipts > Receipts by period",
+      "report": "Received not invoiced, totals by month",
+      "who": "Claire",
+      "status": "seen-resend",
+      "note": "Status ticks: Invoiced, Not Invoiced, Posted, Not Posted, Printed, Not Printed, Costs considered. Frequency: Period (Month), No of periods, Start / End date. Memo / Recall saves the selection.",
+      "shots": [],
+      "results_shot": null
+    },
+    {
+      "n": 16,
+      "search": "Shipments (delivery entry)",
+      "code": "GESSDH",
+      "path": "Sales > Shipments (transaction YSDH: Shipments - Essentials)",
+      "report": "Not a report: where a delivery is entered; has Validation, Invoice and Pro Forma buttons",
+      "who": "Customer Services",
+      "status": "not-this",
+      "shots": [],
+      "results_shot": null
+    },
+    {
+      "n": 17,
+      "search": "Purchasing > Enquiries menu",
+      "code": "",
+      "path": "Purchasing > Enquiries: Requests, Subcontract, Orders, Receipts (List of receipts, Receipt lines, Receipts by period), Invoices, Returns, Document traceability, Products by supplier, Shipments",
+      "report": "Menu map",
+      "who": "-",
+      "status": "seen-resend",
+      "shots": [],
       "results_shot": null
     }
   ],
