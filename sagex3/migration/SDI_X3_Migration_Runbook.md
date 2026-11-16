@@ -3516,3 +3516,21 @@ It isn't a replacement for Production's sheet now.
   - REP-05: export invoice samples from Ewa.
 - **Reply by Fri 27 Nov** (moved from 20 Nov in the attachment).
 - **Next:** Claire's and Debbie's messages from last week.
+
+**16 Nov – Claire's year-end email (11 Nov, to all staff) and Debbie's reply (13 Nov).**
+- **Claire's dates and rules:**
+  - Access SupplyChain has a hard cut-off on **21 March 2027**, and the audit must finish before then;
+  - hard customer-invoicing cut-off at the end of December: everything delivered is invoiced in Access;
+  - Finance work through the holidays. Anything not processed in Access before the final extract is processed twice (Access for the year-end audit, then X3).
+- **What this means for the go-live run:** the final extract (31 Dec) loads whatever is open in Access. **1,557 open SO lines are due more than 60 days ago** (13 Nov run); they need invoicing or closing, or they migrate as open orders.
+- **Reply drafted to Claire (cc Charlotte, not reply-all).** It offers weekly read-only Access lists (old open SO lines, delivered not invoiced, receipts with no PO / open POs, subcon not booked in) and asks for the last invoicing time on 31 Dec. Only the old-SO-lines list exists today.
+- **Debbie** gave the three Access menu paths and offered a call. Reply drafted: a 20-minute call Tue 17 / Wed 18 Nov, with screenshots taken on the call.
+
+**16 Nov – Sage X3 standard screens for these reports (Sage online help, v11 / v12):**
+- **Delivered not invoiced (REP-19):** Sales > Inquiries > Deliveries > Delivery list (CONSCSD) / Delivery lines (CONSCSF), "Not invoiced" filter; Deliveries by period; Invoices to be issued (FUNAUTFAE) for the month-end accrual.
+- **Outstanding SOs (REP-07):** Order lines inquiry (CONSCSP); Sales order status report SLSSTAT.
+- **Received not invoiced:** List of receipts (CONSCPR) with the "Not invoiced" tick box; Receipt lines (CONSCPS); FUNPTH accrual. Part-received lines are a known weak spot.
+- **Subcontract not booked in:** Manufacturing > Inquiries > Subcontract (CONSSST); Purchasing > Subcontract lines (CONSSSC).
+- **SDI MRP by operator (REP-18):** only partly standard. There's a shortage inquiry and MRP results, but **no standard filter by the user who entered the order**, so it's likely a custom inquiry. Ask Acuity.
+- **James has admin access to the training site (sdi-displays-trn)** and checks each screen there (the menu search box takes the function names).
+- **Lesson:** check function codes against the help URL before quoting them. The first list gave two wrong codes (CONSSCD / CONSSCF for CONSCSD / CONSCSF).
