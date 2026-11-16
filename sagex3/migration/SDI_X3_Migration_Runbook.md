@@ -3350,3 +3350,18 @@ These are saved in the scratchpad `outbox_16Nov/` (not git).
   - the Crystal report behind the sheet;
   - work-centre capacities;
   - the X3 side, which Ethan's export answers.
+
+**16 Nov – Finance's cell notes read; the email and attachments are rebuilt (REP-23, finance only, no figures here).**
+- Finance's workbook carries **cell comments** that explain most of the differences:
+  - deferred sales moved to the right month;
+  - VAT on one country's invoices taken off;
+  - rebate credit notes (a conference credit, and a credit that released prior-year balances);
+  - one sale left out because it wasn't paid;
+  - one scheme's year-end retrospective correction.
+- **The 14 Nov check had read the values and formulas but not the comments.** That raised questions the notes already answered.
+- **Now:**
+  - 15 of the questions are marked answered, each with Finance's own note;
+  - the provision workbook carries those adjustments, each with its reason;
+  - the gap left is small and itemised;
+  - one final email replaces the 14 Nov draft.
+- **Lesson:** when checking a user's workbook, **read the cell comments first**. They're the user's own explanations. Never ask a question their workbook already answers.
