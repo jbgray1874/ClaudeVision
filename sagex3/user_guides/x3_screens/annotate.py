@@ -62,6 +62,33 @@ MARKS = {
         (3, (1420, 230, 1541, 285)),     # Search
         (4, (1640, 640, 1860, 728)),     # Excel export
     ],
+    "28_CONSSMV_stock_transactions_selection.png": [
+        (1, (40, 508, 200, 548)),        # site
+        (2, (400, 508, 766, 548)),       # product (required)
+        (3, (1420, 230, 1541, 285)),     # Search
+        (4, (1640, 442, 1860, 532)),     # Excel export
+    ],
+    "29_stock_enquiries_transactions_menu.png": [
+        (1, (128, 586, 292, 620)),       # Transactions by Date
+        (2, (128, 826, 320, 860)),       # Stock valuation by period
+        (3, (128, 546, 278, 580)),       # Stock Transactions
+    ],
+    "30_CONSSFC_stock_by_site_selection.png": [
+        (1, (220, 508, 586, 548)),       # product (required)
+        (2, (992, 508, 1266, 548)),      # quantity type
+        (3, (1420, 230, 1541, 285)),     # Search
+        (4, (1640, 562, 1860, 652)),     # Excel export
+    ],
+    "31_FUNAUTFAE_invoices_to_be_issued.png": [
+        (1, (466, 410, 990, 452)),       # company / all sites
+        (2, (230, 512, 448, 552)),       # shipments until
+        (3, (230, 768, 442, 886)),       # generation type
+        (4, (1256, 222, 1344, 278)),     # OK
+    ],
+    "32_financials_closing_processes_menu.png": [
+        (1, (104, 618, 264, 650)),       # Invoices to be issued
+        (2, (104, 538, 254, 570)),       # Invoice receivables
+    ],
     "05_GESPTH_purchase_receipt_entry.png": [
         (1, (6, 180, 357, 440)),         # list of receipts on the left
         (2, (412, 922, 870, 992)),       # invoiced status / quantity

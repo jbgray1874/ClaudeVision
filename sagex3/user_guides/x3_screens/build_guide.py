@@ -131,9 +131,26 @@ STOCK_MENU = (
     "25_stock_enquiries_stock_menu.png",
     [(1, "Stock → Enquiries → Stock: Stock by Site, Stock by product, Stock by Lots, Detailed Stock (by lot and location), "
          "Projected Stock, Available Stock, Obsolete Stock and more."),
-     (2, "Stock → Enquiries → Transactions: every movement in and out – the usage report."),
+     (2, "Stock → Enquiries → Transactions: the movements in and out (opened below)."),
      (None, "Stock → Enquiries → Locations: what is in each location.")],
-    "Month-end stock value is usually a printout (stock valuation) – being confirmed.")
+    None)
+STOCK_TX_MENU = (
+    "Usage and month-end value: the Transactions menu", "Stock → Enquiries → Transactions",
+    "29_stock_enquiries_transactions_menu.png",
+    [(1, "Transactions by Date: every movement across all products for a period – the stock usage report (REP-10) and movements (REP-13)."),
+     (2, "Stock valuation by period: stock value at a date – the end-of-month stock report (REP-09)."),
+     (3, "Stock Transactions: the movements of one product (below).")],
+    "Transactions by Date and Stock valuation by period are the all-product lists; their screens will be added once tried.")
+STOCK_ONE = (
+    "One product: Stock by Site", "Stock → Enquiries → Stock → Stock by Site",
+    "30_CONSSFC_stock_by_site_selection.png",
+    [(1, "Enter the Product – this screen is one product at a time."),
+     (2, "Quantity Type: Physical qty, or choose another view."),
+     (3, "Press Search: stock internal, waiting put-away, at subcontractors, allocated and available to promise."),
+     (4, "Excel export on the right-hand panel.")],
+    None,
+    [("28_CONSSMV_stock_transactions_selection.png",
+      "Stock Transactions (Stock → Enquiries → Transactions) is the same for movements: Site (1), Product (2), Search (3), Excel export (4).")])
 MRP_RESULTS = (
     "MRP results for one product", "Manufacturing → Enquiries → Reorder Results → MRP - MPS Results",
     "26_CONSSCBB1_mrp_mps_results.png",
@@ -151,6 +168,19 @@ BOM_MULTI = (
      (1, "Press Multi-level: every component at every level, with quantities."),
      (4, "The SDI Drawing Number and SDI Revision Number fields are on the BOM too.")],
     "Routings and Production Slip, next to Multi-level, show the route and the shop-floor slip for the same part.")
+
+INV_TO_ISSUE = (
+    "Invoices to be issued", "Financials → Closing processes → Invoices to be issued",
+    "31_FUNAUTFAE_invoices_to_be_issued.png",
+    [(None, "Click All → Financials → Closing processes → Invoices to be issued. This is a process, not an enquiry: it posts the accrual."),
+     (1, "Company C01; leave All sites ticked."),
+     (2, "Shipments Until: the month-end date."),
+     (3, "Generation Type: Active Simulation or Inactive Simulation to see the result first, with the Log file ticked. "
+         "Actual posts the accrual."),
+     (4, "Press OK to run it. Document Type, Journal and Document date (and a Reversing date for Actual) must be filled in.")],
+    "Run a simulation and read the log before running it as Actual. In classic use it runs at month end and reverses at the start of the next month.",
+    [("32_financials_closing_processes_menu.png",
+      "the same Closing processes menu also holds Invoice receivables (2) – the matching accrual for goods received but not yet invoiced by suppliers.")])
 
 STD_CHECKS = ["It shows the same items as my Access report", "The columns I use are there",
               "I can filter it the way I need", "The Excel export gives me what I need"]
@@ -224,9 +254,10 @@ GUIDES = {
                     "End-of-month stock; Stock usage; Stock tracking, booking-in, locations and movements",
                     "Stock value at month end, what has been used, and where stock is.",
                     "Stock → Enquiries: Stock, Transactions and Locations.",
-                    [STOCK_MENU], ["Which totals do you need at month end (quantity, value, by location)?",
+                    [STOCK_MENU, STOCK_TX_MENU, STOCK_ONE], ["Which totals do you need at month end (quantity, value, by location)?",
                                    "Over what period do you look at usage?"],
-                    note="The Stock enquiries are found; Transactions and Locations screens and the month-end valuation will be added once confirmed.", ready=False),
+                    note="Stock by Site and Stock Transactions are one product at a time. The all-product lists are Transactions by Date "
+                         "(usage, movements) and Stock valuation by period (month end) – being tried next.", ready=False),
             section("Exploded BOMs, incl. carton call-offs (REP-03)", "Exploded BOMs",
                     "Every component at every level, with quantities (for Sam).",
                     "Common data → BOMs, then the Multi-level button.",
@@ -263,8 +294,9 @@ GUIDES = {
             section("Invoices to be issued (month-end accrual)", "The month-end accrual for delivered-not-invoiced",
                     "An accrual posted at month end for deliveries not yet invoiced, reversed next month.",
                     "Sage X3's Invoices to be issued closing process (Financials → Closing processes).",
-                    [], ["How is the accrual done in Access today?", "Which nominal codes does it use?"],
-                    note="Being confirmed with Acuity."),
+                    [INV_TO_ISSUE], ["The simulation shows the deliveries I expect", "The accrual posts to the right nominal codes",
+                                     "It reverses correctly the next month"],
+                    note="This posts to the ledger when run as Actual – try it as a simulation first."),
             section("Subcontract orders not booked in", "Subcontract orders waiting to be booked in (with Sam)",
                     "Work sent out to subcontractors and not yet received back.",
                     "Purchasing → Enquiries → Subcontract: Allocations, Allocation Shortages and Subcontract consumption.",
