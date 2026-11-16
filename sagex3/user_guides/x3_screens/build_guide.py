@@ -68,7 +68,8 @@ ORDER_LINES = (
      (2, "Under Order State, untick Closed. Leave Not Closed ticked, so only open lines show."),
      (3, "Press Search. Every open sales-order line is listed."),
      (4, "Excel export on the right-hand panel takes the list into Excel.")],
-    "Optional filters: Customer, Product or Order Type. The same Orders menu has List of orders (one line per order) and Orders per period (totals).",
+    "Optional filters: Customer, Product or Order Type. For a printed version: Printouts → Prints/group → Sales → Analyse → "
+    "Customer order book (SCARNETQTY) or Valued customer order book (SCARNETCDE).",
     [("13_CONSCSP_order_lines_results.png",
       "the open order lines are listed underneath: order number, customer, date, product and description. "
       "The count and page numbers are at the top of the list (1); Excel export (2) takes all of them into Excel.")])
@@ -141,6 +142,15 @@ STOCK_TX_MENU = (
      (2, "Stock valuation by period: stock value at a date – the end-of-month stock report (REP-09)."),
      (3, "Stock Transactions: the movements of one product (below).")],
     "Transactions by Date and Stock valuation by period are the all-product lists; their screens will be added once tried.")
+TX_BY_DATE = (
+    "Transactions by Date – usage and movements, all products", "Stock → Enquiries → Transactions → Transactions by Date",
+    "37_CONSSMJ_transactions_by_date.png",
+    [(None, "Click All → Stock → Enquiries → Transactions → Transactions by Date. Site S01A is filled in."),
+     (1, "Set the Start date and End date – e.g. the month you want usage for."),
+     (2, "Selection Date: Creation date, or choose another date."),
+     (3, "Press Search: every stock movement in the period – product, description, posted date, lot and quantity."),
+     (4, "Excel export on the right-hand panel; total by product in Excel for usage.")],
+    "No product needed – this is the all-product list for stock usage (REP-10) and movements (REP-13).")
 STOCK_ONE = (
     "One product: Stock by Site", "Stock → Enquiries → Stock → Stock by Site",
     "30_CONSSFC_stock_by_site_selection.png",
@@ -190,7 +200,11 @@ PRINTOUTS = (
          "Internal documents, Prices, Analyse), Stock, and more.")],
     "The Analyse groups under Sales and Stock hold the sales statistics and stock valuation reports – the candidates for "
     "Total revenue, Manufactured sales and month-end stock.",
-    [("34_printouts_menu_stock.png",
+    [("35_printouts_sales_analysis_list.png",
+      "Sales → Analyse holds four reports (1): Valued customer order book (SCARNETCDE), Customer order book (SCARNETQTY), "
+      "Products To Deliver (SPROALIV) and Shipment Request Listing (SSUIVOUV). None of them is a revenue report – "
+      "Total revenue and Manufactured sales will be built once defined."),
+     ("34_printouts_menu_stock.png",
       "Stock (1): Internal documents, Counts, Reordering, Stock to be moved and Analyse.")])
 
 STD_CHECKS = ["It shows the same items as my Access report", "The columns I use are there",
@@ -265,10 +279,10 @@ GUIDES = {
                     "End-of-month stock; Stock usage; Stock tracking, booking-in, locations and movements",
                     "Stock value at month end, what has been used, and where stock is.",
                     "Stock → Enquiries: Stock, Transactions and Locations.",
-                    [STOCK_MENU, STOCK_TX_MENU, STOCK_ONE], ["Which totals do you need at month end (quantity, value, by location)?",
+                    [STOCK_MENU, STOCK_TX_MENU, TX_BY_DATE, STOCK_ONE], ["Which totals do you need at month end (quantity, value, by location)?",
                                    "Over what period do you look at usage?"],
-                    note="Stock by Site and Stock Transactions are one product at a time. The all-product lists are Transactions by Date "
-                         "(usage, movements) and Stock valuation by period (month end) – being tried next.", ready=False),
+                    note="Usage and movements: ready (Transactions by Date). Month-end value: Stock valuation by period, in the same "
+                         "menu – its screen is being added."),
             section("Exploded BOMs, incl. carton call-offs (REP-03)", "Exploded BOMs",
                     "Every component at every level, with quantities (for Sam).",
                     "Common data → BOMs, then the Multi-level button.",
@@ -277,7 +291,7 @@ GUIDES = {
                     "Formatted, printable reports.",
                     "Printouts → Prints/group: the standard reports, grouped by area.",
                     [PRINTOUTS], ["Which of your reports do you print rather than view on screen?"],
-                    note="The reports inside Sales → Analyse and Stock → Analyse are being checked against your list.",
+                    note="Sales → Analyse is checked: order books and deliveries, no revenue report. Stock → Analyse is being checked.",
                     ready=False),
             section("Reports we need you to define (REP-05, 11, 12, 14, 15, 16, 17)",
                     "Your list, 13 October",

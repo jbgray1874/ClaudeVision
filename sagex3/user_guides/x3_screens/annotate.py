@@ -96,6 +96,15 @@ MARKS = {
     "34_printouts_menu_stock.png": [
         (1, (84, 764, 284, 992)),        # Prints/group > Stock
     ],
+    "35_printouts_sales_analysis_list.png": [
+        (1, (744, 366, 1170, 500)),      # the four Sales - Analysis reports
+    ],
+    "37_CONSSMJ_transactions_by_date.png": [
+        (1, (220, 508, 672, 548)),       # start / end date
+        (2, (692, 508, 966, 548)),       # selection date
+        (3, (1420, 230, 1541, 285)),     # Search
+        (4, (1640, 442, 1860, 532)),     # Excel export
+    ],
     "05_GESPTH_purchase_receipt_entry.png": [
         (1, (6, 180, 357, 440)),         # list of receipts on the left
         (2, (412, 922, 870, 992)),       # invoiced status / quantity
