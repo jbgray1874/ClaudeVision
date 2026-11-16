@@ -3367,3 +3367,38 @@ These are saved in the scratchpad `outbox_16Nov/` (not git).
 - **Lesson:** when checking a user's workbook, **read the cell comments first**. They're the user's own explanations. Never ask a question their workbook already answers.
 
 **16 Nov – SENT to Charlotte (finance only):** the quantity-rebate email with two attachments (the check workbook with 33 questions, 15 answered by her own notes; the provision workbook). Reply due Wed 25 Nov. Next: a full November run on 1 Dec and a side-by-side with her November.
+
+### 22.25 Estimating converter – how it runs, and embedding it in the estimating portal (16 Nov)
+
+**Full technical write-up:** `sagex3/estimating/README.md`. It's the reference for James's estimating-portal build.
+
+- **Restart (16 Nov):** estimating is now worked from **Tim's original estimate only** (12539-04-GA (0359869) Gift Card Header rev B, 1 Sep 2026, quantity 40). The file is identical to the 13 Nov upload.
+  - **Fresh run:** `MS-0359869 (existing): BOM 8 lines, route 9 ops, 0 stop, 0 warn`.
+  - The BOM and route `.txt` are byte-identical to the 13 Nov run.
+  - **No ZSDIITM:** the part already exists in X3. A product file is only written for a new part, as with Dave's IMPORT test part before.
+- **The email to Dave, Tim, James Ryan, Ethan and Marc (16 Nov, James's wording) has three attachments:**
+  1. Tim's original `.xls`;
+  2. `Tim_GiftCard_estimate_to_SageX3.xlsx`: Read me, Estimate → X3 line by line, BOM file, Route file, Checks;
+  3. `Tim_GiftCard_SageX3_import_files.zip`: BOM and route `.txt` plus a read-me.
+- **It asks for:**
+  - **Tim:** check the conversion; is CR4 right?
+  - **Dave:** check the conversion; send the import macros (Alt + F11 shows which file holds them).
+  - **Acuity:** load in TEST, BOM then route; what does re-import do to an existing BOM / route (replace, add or reject); send logs and screenshots.
+  - A 30-minute TEST walk-through with everyone; done by Fri 20 Nov.
+- **How it runs:**
+  - `est_to_x3.build(est_path, out_dir, products_path, parent, category, rev_in_code, sheet_material)` returns `{code, new, bom, ops, stop, warn, files, checks}`;
+  - the same call from the command line;
+  - or the `est_app.py` web page (port 8766: `POST /run`, `GET /run/<id>`, `/zip`).
+- **Needs:**
+  - Python 3.10+ with openpyxl;
+  - LibreOffice for `.xls` estimates only;
+  - the current X3 product list (ZSDIITM file or an X3 product export);
+  - `migration/rebuild/common.py` and `work_centres.csv`, kept in the same layout.
+- **Portal embedding:**
+  - call `build()` from a background task;
+  - show READY / NOT READY and the checks;
+  - offer the `.txt` files only when `stop == 0`;
+  - warn when the part already exists (Acuity B6);
+  - keep every run;
+  - stage 2 = the X3 API.
+- **Correction:** with STOP checks, the load files **are still written** (so the user can see what was read). The result is NOT READY and the files must not be loaded. The 16 Nov README.txt in the converter zip said STOP prevents writing; that was wrong, and README.md replaces it.
