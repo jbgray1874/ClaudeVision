@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SDI Intelligence — Latest Update · 19 Aug 2026</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0d0d0f; --bg-2:#141417; --surface:#17171b; --surface-2:#1d1d22;
+    --line:#2a2a31; --line-soft:#202026;
+    --ink:#f3f2ee; --ink-dim:#a3a3aa; --ink-faint:#6b6b73;
+    --accent:#ffd400; --accent-deep:#e6be00;
+    --ok:#5fd08a; --warn:#ff9d42; --fail:#ff5d5d; --info:#6db3ff;
+    --r:4px;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --disp:'Archivo',sans-serif;
+    --body:'Hanken Grotesk',sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--body);line-height:1.55;font-size:14px;
+    background-image:radial-gradient(1100px 500px at 80% -10%,rgba(255,212,0,.05),transparent 60%);padding:0 0 80px}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 32px}
+  a{color:inherit;text-decoration:none}
+  ::selection{background:var(--accent);color:#000}
+  header{border-bottom:1px solid var(--line);background:linear-gradient(180deg,#101013,#0d0d0f);
+         position:sticky;top:0;z-index:20;backdrop-filter:blur(10px)}
+  .head-in{max-width:1080px;margin:0 auto;padding:20px 32px;display:flex;align-items:center;gap:14px}
+  .mark{width:36px;height:36px;background:var(--accent);border-radius:3px;display:grid;place-items:center;flex:none;
+        box-shadow:0 0 0 1px rgba(255,212,0,.3),0 8px 22px -8px rgba(255,212,0,.5)}
+  .mark b{font-family:var(--disp);font-weight:900;color:#000;font-size:21px;line-height:1;letter-spacing:-1px}
+  .brand-txt .t1{font-family:var(--disp);font-weight:800;letter-spacing:.12em;font-size:14px}
+  .brand-txt .t2{font-size:10.5px;color:var(--ink-faint);letter-spacing:.34em;text-transform:uppercase;margin-top:2px}
+  .head-meta{margin-left:auto;text-align:right;font-family:var(--mono);font-size:11px;color:var(--ink-faint);letter-spacing:.04em}
+  .head-meta b{color:var(--accent);font-weight:600}
+  .hero{padding:40px 0 8px}
+  .kicker{font-family:var(--mono);font-size:11px;letter-spacing:.18em;color:var(--accent);text-transform:uppercase}
+  h1{font-family:var(--disp);font-weight:800;font-size:32px;letter-spacing:-.02em;margin-top:8px;line-height:1.05}
+  .sub{color:var(--ink-dim);margin-top:10px;max-width:74ch;font-size:14.5px}
+  h2{font-family:var(--disp);font-weight:700;font-size:14px;letter-spacing:.1em;text-transform:uppercase;
+     color:var(--ink-dim);margin:40px 0 16px;display:flex;align-items:center;gap:12px}
+  h2 .ic{width:22px;height:22px;border-radius:3px;background:var(--surface-2);border:1px solid var(--line);
+         display:grid;place-items:center;font-size:12px;color:var(--accent);flex:none}
+  h2::after{content:"";flex:1;height:1px;background:var(--line-soft)}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:6px 0 4px}
+  .k{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 17px;position:relative;overflow:hidden}
+  .k::before{content:"";position:absolute;inset:0 auto 0 0;width:2px;background:var(--accent);opacity:.55}
+  .k.risk::before{background:var(--fail);opacity:.7}
+  .k .lab{font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-faint)}
+  .k .big{font-family:var(--disp);font-weight:800;font-size:27px;margin-top:8px;letter-spacing:-.02em}
+  .k .meta{font-family:var(--mono);font-size:11px;color:var(--ink-dim);margin-top:6px}
+  .good{color:var(--ok)} .up{color:var(--warn)} .acc{color:var(--accent)} .info{color:var(--info)} .bad{color:var(--fail)}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:20px 22px;margin-bottom:14px}
+  .panel.lead{border-color:rgba(255,212,0,.28);box-shadow:0 0 0 1px rgba(255,212,0,.06),0 20px 50px -30px rgba(255,212,0,.3)}
+  .panel.alert{border-color:rgba(255,93,93,.35);box-shadow:0 0 0 1px rgba(255,93,93,.06)}
+  .panel h3{font-family:var(--disp);font-weight:700;font-size:14px;letter-spacing:.05em;margin-bottom:4px;color:var(--ink);
+            display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .panel .owner{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--ink-faint);
+                text-transform:uppercase;margin-bottom:14px}
+  .panel p{color:var(--ink-dim);font-size:13.5px;margin:9px 0}
+  .panel p b{color:var(--ink);font-weight:600}
+  .badge{font-family:var(--mono);font-size:10px;letter-spacing:.08em;padding:3px 8px;border-radius:100px;
+         text-transform:uppercase;font-weight:500;border:1px solid;display:inline-flex;align-items:center;gap:5px;vertical-align:middle}
+  .b-live{color:var(--ok);border-color:rgba(95,208,138,.4);background:rgba(95,208,138,.08)}
+  .b-prog{color:var(--warn);border-color:rgba(255,157,66,.4);background:rgba(255,157,66,.08)}
+  .b-plan{color:var(--info);border-color:rgba(109,179,255,.4);background:rgba(109,179,255,.08)}
+  .b-done{color:var(--accent);border-color:rgba(255,212,0,.4);background:rgba(255,212,0,.08)}
+  .b-risk{color:var(--fail);border-color:rgba(255,93,93,.45);background:rgba(255,93,93,.09)}
+  .dot{width:6px;height:6px;border-radius:50%;display:inline-block}
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.info{background:var(--info)}
+  .dot.acc{background:var(--accent)} .dot.bad{background:var(--fail)}
+  ul.clean{list-style:none;margin:10px 0 4px}
+  ul.clean li{position:relative;padding:6px 0 6px 20px;color:var(--ink-dim);font-size:13.5px;border-bottom:1px solid var(--line-soft)}
+  ul.clean li:last-child{border-bottom:none}
+  ul.clean li::before{content:"";position:absolute;left:2px;top:13px;width:5px;height:5px;border-radius:50%;background:var(--accent)}
+  ul.clean li b{color:var(--ink);font-weight:600}
+  ul.clean li.next::before{background:var(--info)}
+  ul.clean li.risk::before{background:var(--fail)}
+  ul.clean li.ok::before{background:var(--ok)}
+  .strip{background:linear-gradient(90deg,rgba(255,212,0,.09),transparent);border-left:2px solid var(--accent);
+          padding:12px 16px;border-radius:0 var(--r) var(--r) 0;margin:12px 0;font-size:13.5px;color:var(--ink-dim)}
+  .strip.red{background:linear-gradient(90deg,rgba(255,93,93,.10),transparent);border-left-color:var(--fail)}
+  .strip.green{background:linear-gradient(90deg,rgba(95,208,138,.10),transparent);border-left-color:var(--ok)}
+  .strip.blue{background:linear-gradient(90deg,rgba(109,179,255,.10),transparent);border-left-color:var(--info)}
+  .strip b{color:var(--ink);font-weight:600}
+  table{width:100%;border-collapse:collapse;margin:14px 0 6px;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line-soft)}
+  th{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-faint);
+     background:var(--surface-2);font-weight:500}
+  td{color:var(--ink-dim)}
+  td b{color:var(--ink);font-weight:600}
+  td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  tr.star td{background:rgba(95,208,138,.05)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .arch{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--r);padding:18px 16px;margin:16px 0 6px}
+  .lane{display:grid;grid-template-columns:118px 1fr;gap:12px;align-items:stretch;margin-bottom:7px}
+  .lane .tag{font-family:var(--mono);font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-faint);
+     background:var(--surface-2);border:1px solid var(--line);border-radius:3px;padding:8px 9px;display:flex;align-items:center;line-height:1.3}
+  .cells{display:flex;gap:7px;flex-wrap:wrap}
+  .cell{flex:1 1 158px;background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:9px 11px;
+        font-size:12px;color:var(--ink-dim);line-height:1.4}
+  .cell b{color:var(--ink);font-size:12.5px;font-weight:600}
+  .cell .rk{font-family:var(--mono);font-size:9.5px;color:var(--accent);float:right;margin-left:8px}
+  .cell.sw{border-color:rgba(95,208,138,.38)} .cell.sw .rk{color:var(--ok)}
+  .cell.fb{border-color:rgba(109,179,255,.40)} .cell.fb .rk{color:var(--info)}
+  .cell.out{border-color:rgba(255,212,0,.30);flex:1 1 120px}
+  .arrow{text-align:center;color:var(--ink-faint);font-family:var(--mono);font-size:11px;letter-spacing:.14em;margin:3px 0 7px}
+  .caption{font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);letter-spacing:.04em;margin-top:2px}
+  @media(max-width:820px){ .lane{grid-template-columns:1fr} }
+  code{font-family:var(--mono);font-size:12px;background:var(--surface-2);border:1px solid var(--line);
+       border-radius:3px;padding:1px 5px;color:var(--accent)}
+  footer{margin-top:40px;padding-top:20px;border-top:1px solid var(--line-soft);
+         font-family:var(--mono);font-size:11px;color:var(--ink-faint);letter-spacing:.04em;text-align:center}
+  footer b{color:var(--ink-dim)}
+  @media(max-width:820px){
+    .kpis{grid-template-columns:repeat(2,1fr)}
+    .two{grid-template-columns:1fr}
+    h1{font-size:26px}
+    .wrap,.head-in,.head-meta{padding-left:20px;padding-right:20px}
+  }
+  @media print{
+    body{background:#fff;color:#111;background-image:none;padding:0}
+    header{position:static;background:#fff;border-color:#ccc}
+    .panel,.k,table,th,td,.strip{border-color:#ccc}
+    .panel,.k{background:#f8f8f8;box-shadow:none}
+    h2::after{background:#ddd}
+    .sub,.panel p,td,ul.clean li{color:#333}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="head-in">
+    <div class="mark"><b>S</b></div>
+    <div class="brand-txt">
+      <div class="t1">SDI INTELLIGENCE</div>
+      <div class="t2">Digital Transformation</div>
+    </div>
+    <div class="head-meta">
+      LATEST UPDATE · <b>WK 34</b><br>Wednesday 19 August 2026
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="hero">
+    <div class="kicker">Programme Status Report</div>
+    <h1>Latest Update — AI Digital Transformation</h1>
+    <p class="sub">Two things moved a long way and one stopped. <b>The portal is now a working
+    estimating tool</b> — an amended workbook can be uploaded and a fresh client quote regenerated
+    from it, which was the specific ask for this week, and it is built and working. Behind it, the
+    fortnight's largest piece of engineering was <b>integrating the native SOLIDWORKS API into the
+    pipeline</b>, so material, gauge, flat pattern and weldment cut list are read from the model rather
+    than inferred from a picture of it. <b>Six jobs have
+    been run since the last update</b>. But <b>none has been tested and no feedback has been returned
+    on any of them</b> — and the two carried as “in progress” on 7 August have not come back either, so
+    <b>seven jobs now await estimator review</b>, against four returned in the previous fortnight. The cause is not
+    unwillingness: the two tasks that were meant to make reviewing cheap — a standard feedback form
+    and protected estimator time — <b>were due on 7 August and have not been started</b>, while
+    estimating carried a large M&amp;S quote and the day-to-day queue. <b>The SOLIDWORKS licences have
+    also now expired</b>, which stops the model-reading work being proven until replacements are in place,
+    and <b>the server remains a personal laptop</b> pending IT hardware resource and a service account that
+    has been requested and not yet provided.
+    <b>RAG: Amber, and the validation gate is the one to watch.</b></p>
+  </div>
+
+  <div class="kpis">
+    <div class="k">
+      <div class="lab">Jobs run since 7 Aug</div>
+      <div class="big acc">6 Run</div>
+      <div class="meta">12392-02 · 12422-24 · 11650-00 · 11650-04 · 10575-02 · 12392</div>
+    </div>
+    <div class="k risk">
+      <div class="lab">Estimates unanswered</div>
+      <div class="big bad">12 of 19</div>
+      <div class="meta">Since 5 May · last response 28 Jul</div>
+    </div>
+    <div class="k risk">
+      <div class="lab">SOLIDWORKS licences</div>
+      <div class="big bad">Expired</div>
+      <div class="meta">Free trial ended · replacements not ordered</div>
+    </div>
+    <div class="k">
+      <div class="lab">Working days to launch</div>
+      <div class="big up">13</div>
+      <div class="meta">RC freeze 25 Aug · go/no-go 4 Sep</div>
+    </div>
+  </div>
+
+  <!-- ===================== THE ASK DELIVERED ===================== -->
+  <h2><span class="ic">◆</span> This week's specific ask — delivered</h2>
+
+  <div class="panel lead">
+    <h3>Amend a sheet, upload it, get a new quote <span class="badge b-live"><span class="dot ok"></span>Built &amp; Working</span></h3>
+    <div class="owner">Owner · James Gray &nbsp;·&nbsp; Requested by · Dave</div>
+    <p>The request was for <b>“an area to the intelligence tool to ensure when they manually modify a
+    prepopulated sheet, they have an area to reupload and regenerate a new quote ready for next
+    week.”</b> That is built, tested and on the portal.</p>
+    <ul class="clean">
+      <li class="ok"><b>The estimator's own figure is the one that goes out.</b> The sheet is read for
+      Sell Price in preference to Unit Cost, so a margin they set is what the customer sees.</li>
+      <li class="ok"><b>Hours or days later is fine.</b> They re-enter units, drawing number and client;
+      nothing needs re-running and no drawings are needed.</li>
+      <li class="ok"><b>The full quotation is preserved</b> — material, finish, operations and the GA
+      image come from the original run, with only the money and those three fields overlaid.</li>
+      <li class="ok"><b>Their sheet is kept as the record</b>, filed as
+      <code>&lt;job&gt;_MANUAL_OVERRIDE.xlsx</code> alongside the quote on the AI Estimating share.</li>
+      <li><b>One operational note for training:</b> the workbook must be opened and saved in Excel
+      first. The totals are formulas, and Excel only stores the computed values on save. If it has not
+      been, the tool says so rather than producing a blank quote.</li>
+    </ul>
+    <div class="strip green">
+      <b>Why this matters for Week One.</b> The 24–28 August plan has estimators working from
+      pre-populated sheets and sending their final versions back for quoting. That loop now exists as
+      a page rather than a developer task, which is what makes the week runnable.
+    </div>
+  </div>
+
+  <!-- ===================== VALIDATION ===================== -->
+  <h2><span class="ic">!</span> The one that stopped — validation</h2>
+
+  <div class="panel alert">
+    <h3>Six jobs run, none tested, no feedback returned <span class="badge b-risk"><span class="dot bad"></span>Gate at risk</span></h3>
+    <div class="owner">Dependency · Estimating &nbsp;·&nbsp; Plan tasks 5, 6, 7</div>
+
+    <p>Six jobs have been run since the last update. <b>None has been reviewed and no feedback has come
+    back on any of them.</b> The two reported as “in progress” on 7 August — <b>12422-24 and 11350,
+    both with Tim</b> — have also not been returned, so they are carried forward rather than closed;
+    12422-24 has since been re-run on the current engine, 11350 has not. <b>Seven distinct jobs now sit
+    awaiting estimator review.</b> The previous update reported four returned and
+    two in progress, so this is a step backwards rather than a plateau, and it is the item that decides
+    whether the acceptance gates can be evidenced.</p>
+
+    <div class="strip red">
+      <b>The fortnight understates it.</b> The full issue log, set out in the <b>User Adoption</b> register
+      at the end of this report, shows the pattern is not a recent dip: <b>nineteen estimates issued since
+      5 May, seven answered, one formally signed off, and no response of any kind since 28 July.</b> Two
+      estimates issued on 4 June have never been answered. That register is the validation evidence the
+      4 September gate will be measured against, and it is thin.
+    </div>
+
+    <table>
+      <thead><tr><th>Job</th><th class="n">Rev</th><th class="n">Qty</th><th class="n">Inputs<br>outstanding</th><th class="n">Run</th><th>Position</th></tr></thead>
+      <tbody>
+        <tr><td><b>12392-02</b></td><td class="n">A</td><td class="n">180</td><td class="n">4</td><td class="n">10 Aug</td>
+            <td>Run. Not tested, no feedback.</td></tr>
+        <tr><td><b>12422-24</b> GA End Cap</td><td class="n">B</td><td class="n">10</td><td class="n">6</td><td class="n">10 Aug</td>
+            <td>Re-run on the current engine. <b>Carried from 7 Aug still unreturned.</b></td></tr>
+        <tr><td><b>11650-00</b> GA Fragrance Coffret</td><td class="n">E</td><td class="n">45</td><td class="n">8</td><td class="n">13 Aug</td>
+            <td>Run. Not tested, no feedback.</td></tr>
+        <tr><td><b>11650-04</b> Side Panel</td><td class="n">—</td><td class="n">5</td><td class="n">3</td><td class="n">14 Aug</td>
+            <td>Run. Not tested, no feedback.</td></tr>
+        <tr><td><b>10575-02</b> V2 Upright Display (Dyson)</td><td class="n">D</td><td class="n">1</td><td class="n">2</td><td class="n">19 Aug</td>
+            <td>Run. Not tested. An incomplete pack — see engine section.</td></tr>
+        <tr><td><b>12392</b></td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">Aug</td>
+            <td>Run. Not tested, no feedback.</td></tr>
+        <tr><td><b>11350</b> Ladder Rack Comms Bar</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">3 Aug</td>
+            <td><b>Issued 3 August — still not returned.</b></td></tr>
+      </tbody>
+    </table>
+
+    <div class="strip">
+      <b>“Inputs outstanding” is the number an estimator is being asked for</b> — rates the engine holds
+      none for, or a figure only they can settle. It is a fair measure of how much of each sheet is
+      genuinely theirs to finish: <b>three on the Side Panel, eight on the Fragrance Coffret</b>. It is
+      also the number that should fall as supplier catalogues are integrated.
+    </div>
+
+    <div class="strip red">
+      <b>The cause is mechanical, not attitudinal, and that matters for how it is fixed.</b> Two plan
+      tasks exist precisely to make reviewing cheap: <b>a standard feedback form and return route
+      (task 6, 8 hours, due 7 August)</b> and <b>protected estimator testing time (task 5, 4 hours,
+      due 7 August)</b>. <b>Both are still Not Started.</b> Estimating has meanwhile carried a large
+      M&amp;S quote and the normal daily queue. Sheets were sent to people with no agreed slot in which
+      to look at them and no quick way to return what they found. On that basis, nothing coming back
+      is the expected outcome rather than a surprise.
+    </div>
+
+    <ul class="clean">
+      <li class="next"><b>Build the return route before sending anything else.</b> 8 hours of work that
+      unblocks the leading indicator for the whole programme.</li>
+      <li class="next"><b>Agree named, protected review time</b> with Dave and James Ryan — a specific
+      slot, not an aspiration, and sized to what the live queue actually leaves.</li>
+      <li class="next"><b>Report reviews completed weekly</b> as the headline number, since it is the
+      evidence four of the eight gates depend on.</li>
+    </ul>
+  </div>
+
+  <!-- ===================== LICENCE ===================== -->
+  <h2><span class="ic">£</span> New blocker — SOLIDWORKS licences have expired</h2>
+
+  <div class="panel alert">
+    <h3>Model reading is stopped until seats are in place <span class="badge b-risk"><span class="dot bad"></span>Spend Decision</span></h3>
+    <div class="owner">Owner · James Gray &nbsp;·&nbsp; Plan task 26 — due 19 August, Not Started</div>
+
+    <p>The introductory SOLIDWORKS subscriptions used for the last six weeks (one month free plus a
+    two-week extension) <b>have expired</b>, and SOLIDWORKS will not extend them further. Task 26 in the
+    plan — <b>“SOLIDWORKS COM API licence + seat + Office for the runner”</b> — was due today and is not
+    started.</p>
+
+    <p><b>What this stops.</b> The engine reads <code>.sldprt</code> and <code>.sldasm</code> through the
+    native SOLIDWORKS COM API, which is what gives a part its true material, gauge, flat pattern and
+    weldment cut list. Without a seat it falls back to reading PDFs, which is materially less accurate,
+    and the run says so rather than pretending otherwise. <b>Model-dependent development and testing is
+    paused</b> — including the tube/weldment reader, which is written and waiting on a seat to be proven.</p>
+
+    <div class="strip red">
+      <b>Cost, and the offsetting case.</b> SOLIDWORKS Design Standard is <b>£240 per user per month</b>.
+      Two seats are needed now (James, Yogesh) at <b>£480 a month</b>, with a third for the server when
+      it is commissioned. A separate case has been put to the MD and FD covering these alongside the
+      server, and offsetting them against <b>approximately £50,000 over three years</b> of PDM upgrade
+      that SDI Technical Intelligence can avoid.
+    </div>
+  </div>
+
+  <!-- ===================== SOLIDWORKS API ===================== -->
+  <h2><span class="ic">⌬</span> SOLIDWORKS API — the fortnight's largest piece of engineering</h2>
+
+  <div class="panel">
+    <h3>Reading the model itself, not a picture of it <span class="badge b-live"><span class="dot ok"></span>Built · Proving blocked</span></h3>
+    <div class="owner">Owner · James Gray &nbsp;·&nbsp; Plan tasks 20, 26</div>
+
+    <p>The bulk of development and testing over the past two weeks has gone into <b>integrating the
+    native SOLIDWORKS COM API into the estimating pipeline</b>. This is the difference between
+    <b>inferring</b> a part's material and gauge from a printed drawing and <b>reading</b> them from the
+    model the shop actually builds from. It is the single largest accuracy step available to us, and it
+    has been the hardest to build — not because the API is difficult to call, but because a CAD
+    application is a live, stateful, licensed piece of software that a designer may be using at the same
+    moment the engine wants to read from it.</p>
+
+    <div class="strip green">
+      <b>Scoped on evidence, not on the brochure.</b> Before a line of production code was written, a
+      read-only <b>discovery probe</b> opened a batch of SDI's own models over the full API and produced a
+      <b>coverage matrix</b> — for how many models is material actually populated? Cut lists? Flat
+      patterns? Surface area? That answered which capabilities were worth building against and which were
+      promises the files could not keep. <b>Phase scope followed the matrix.</b>
+    </div>
+
+    <h3 style="margin-top:18px">What the connector reads, and the rule for each</h3>
+    <table>
+      <thead><tr><th>Datum</th><th>Rule — and why it is not simply "take the model's word"</th></tr></thead>
+      <tbody>
+        <tr><td><b>Material</b></td><td>Fills a gap always. Overrides the drawing only where the
+            <i>family</i> is wrong (metal ↔ non-metal). A same-family grade disagreement is <b>flagged and the
+            drawing kept</b> — the title block is what Purchasing buys to.</td></tr>
+        <tr><td><b>Flat blank, gauge,<br>bend radius</b></td><td>From the sheet-metal cut list. Written only where the
+            part is not already DXF-backed; where it is, the two blanks are compared and a disagreement over
+            <b>10% by area</b> is flagged, with the measured DXF kept.</td></tr>
+        <tr><td><b>Bends</b></td><td>From the feature tree. Where a Base Flange bakes its bends into the
+            sketch, the part is flagged <i>formed, bend count unreadable</i> rather than silently counted flat.</td></tr>
+        <tr><td><b>Weldment / tube<br>cut list</b></td><td><b>New this fortnight.</b> Section profile and
+            member length parsed from cut-list properties, so a welded frame is priced from its real bar
+            sections instead of being absent. Needs <b>no additional API call</b> — the existing enumeration
+            already read these properties and was discarding them.</td></tr>
+        <tr><td><b>Quantities</b></td><td>From the full-depth assembly BOM, which is structural fact rather
+            than a reading of a printed table.</td></tr>
+        <tr><td><b>Assemblies</b></td><td>Marked as parents so their material is never costed twice
+            alongside their children — the GA double-count rule.</td></tr>
+        <tr><td><b>Imported bodies</b></td><td>A supplier body with no modelled fabrication is marked
+            bought-in and takes no fabrication route.</td></tr>
+        <tr><td><b>Nothing derivable</b></td><td><b>Flag, never zero.</b> If the model names a material but
+            yields no blank, mass or section, the part is flagged <i>cost not derivable</i>. A £0 line must
+            never read as "free".</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:18px">The hard parts — where the two weeks actually went</h3>
+    <ul class="clean">
+      <li class="ok"><b>Never touch a designer's open work.</b> The analyser opens documents read-only and
+      <b>closes only the documents it opened</b>; anything already open is read in place, left open, and
+      recorded in the manifest. An earlier version used a blanket close that shut everything it touched —
+      that hazard is removed, and it is why the in-pipeline call had been switched off for weeks while jobs
+      with models sitting beside them were quietly costed from PDF alone.</li>
+      <li class="ok"><b>Session and integrity-level binding.</b> COM attaches within a Windows session and
+      at a matching integrity level. An elevated console cannot take over a SOLIDWORKS a designer already
+      has open. <b>This is precisely why the server needs its own seat</b> — a licence in use on somebody's
+      desktop cannot serve the engine.</li>
+      <li class="ok"><b>Old jobs re-read when the code improves.</b> The extract now carries a
+      <b>schema version</b>. Previously an extract was only refreshed when the models changed, so a 2019 or
+      2025 pack kept a stale read for ever and every reader improvement bypassed it. A fix now reaches every
+      job, not only the ones being redrawn.</li>
+      <li class="ok"><b>Self-gating, so it can never break a normal run.</b> The connector fires when an
+      extract is present and does nothing when it is not — no seat, no models, no effect; the job runs on
+      PDF and DXF exactly as before, and says which it used.</li>
+      <li class="risk"><b>Known limits, measured from the code rather than the documentation:</b> a
+      30-minute analyser timeout in-pipeline (41 models is comfortable, several hundred is not); one
+      instance; a 1–2500 mm flat-blank window outside which the model's blank is refused and the part falls
+      back — now flagged, where it used to be silent.</li>
+      <li class="risk"><b>Proving is blocked on the licence, not on engineering.</b> The tube/weldment
+      reader is written and tested offline. It needs a seat and a pack with models — the Dyson 10575-01
+      component packs — to be demonstrated end to end.</li>
+    </ul>
+  </div>
+
+  <!-- ===================== ARCHITECTURE ===================== -->
+  <h2><span class="ic">▤</span> Architecture — how a drawing pack becomes a price</h2>
+
+  <div class="panel">
+    <h3>The flow, and the merge model that arbitrates between sources <span class="badge b-done"><span class="dot acc"></span>Reference</span></h3>
+    <div class="owner">Source waterfall · arbitration · canonical BOM and route · deliverables</div>
+
+    <p>Every source that can say something about a part is read, and <b>none of them is trusted blindly.</b>
+    Each carries a rank. The rule is absolute and it is the reason the engine can be audited: <b>a weaker
+    source may FILL a datum, it may never REPLACE a stronger one</b> — and where the two disagree, the
+    disagreement is written onto the part and the stronger value kept. Nothing is decided by whichever pass
+    happens to run last.</p>
+
+    <div class="arch">
+      <div class="lane">
+        <div class="tag">Inputs</div>
+        <div class="cells">
+          <div class="cell"><b>SOLIDWORKS models</b><br>.sldprt · .sldasm</div>
+          <div class="cell"><b>DXF / DWG</b><br>flat cut files</div>
+          <div class="cell"><b>PDF pack</b><br>GA · details · BOM</div>
+          <div class="cell"><b>Price sources</b><br>UDEF catalogue · rates</div>
+        </div>
+      </div>
+
+      <div class="arrow">▼ &nbsp; READ &nbsp; ▼</div>
+
+      <div class="lane">
+        <div class="tag">Layer 0<br>Native model</div>
+        <div class="cells"><div class="cell sw"><span class="rk">RANK 90</span><b>SOLIDWORKS COM API</b>
+          Material, gauge, flat blank, bend count, <b>weldment cut list</b>, full-depth assembly BOM. What the
+          shop builds from.</div></div>
+      </div>
+      <div class="lane">
+        <div class="tag">Layer 1<br>Measured</div>
+        <div class="cells"><div class="cell"><span class="rk">RANK 80</span><b>DXF geometry</b>
+          Measured blank area, cut length, pierce count — geometry, not a reading.</div></div>
+      </div>
+      <div class="lane">
+        <div class="tag">Layer 2<br>Printed fact</div>
+        <div class="cells">
+          <div class="cell"><span class="rk">RANK 70</span><b>Deterministic drawing read</b>
+            Title-block fields read exactly — material, finish, revision, quantity.</div>
+          <div class="cell"><span class="rk">RANK 60</span><b>PDF BOM tree</b>
+            Structure read from the printed BOM table.</div>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="tag">Layer 3<br>Final fallback</div>
+        <div class="cells"><div class="cell fb"><span class="rk">RANK 40</span><b>xAI vision — the coverage net</b>
+          The <b>upscaled</b> drawing image is put to the vision model to recover what the deterministic
+          readers could not see: BOM rows, route operations, and bought-in identification for pricing.
+          <b>It never overwrites a measurement — it fills the gaps a measurement left.</b></div></div>
+      </div>
+
+      <div class="arrow">▼ &nbsp; ARBITRATE &nbsp; ▼</div>
+
+      <div class="lane">
+        <div class="tag">Merge model</div>
+        <div class="cells"><div class="cell"><b>Ranked arbitration + dual-path BOM reconciliation</b>
+          Fill a gap always; replace a stronger source never; record every disagreement. No silent miss:
+          anything found by only one path, or where two paths differ, is emitted <b>and flagged</b>.</div></div>
+      </div>
+
+      <div class="arrow">▼</div>
+
+      <div class="lane">
+        <div class="tag">Canonical</div>
+        <div class="cells">
+          <div class="cell"><b>Canonical BOM</b> — one agreed parts list with provenance per field</div>
+          <div class="cell"><b>Canonical Route</b> — one agreed operation list per part</div>
+          <div class="cell"><b>Invariants</b> — BLOCKING / WARNING gates on quoting firm</div>
+        </div>
+      </div>
+
+      <div class="arrow">▼ &nbsp; ONE READER &nbsp; ▼</div>
+
+      <div class="lane">
+        <div class="tag">Deliverables</div>
+        <div class="cells">
+          <div class="cell out"><b>Estimate workbook</b></div>
+          <div class="cell out"><b>Client quotation</b></div>
+          <div class="cell out"><b>Job report</b></div>
+          <div class="cell out"><b>AI Provenance</b></div>
+          <div class="cell out"><b>Decision Report</b></div>
+        </div>
+      </div>
+      <div class="caption">All five deliverables read from one costed-facts layer, so they cannot contradict
+      one another. Human confirmation outranks every machine source at rank 100.</div>
+    </div>
+
+    <div class="strip">
+      <b>The dual-path BOM, in one line each.</b> Both readers run on every job and are reconciled per
+      (parent, item): <b>agree</b> → one row, high confidence, no flag · <b>differ</b> → the vision row wins,
+      flagged as a possible drawing inconsistency · <b>deterministic only</b> → kept, flagged ·
+      <b>vision only</b> → kept, flagged as LLM-recovered. Nothing either path found is ever dropped.
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Upscaling the drawings put to xAI <span class="badge b-prog"><span class="dot warn"></span>In progress</span></h3>
+    <div class="owner">Engine · vision path &nbsp;·&nbsp; Owner · James Gray</div>
+
+    <p>The vision fallback is only as good as the image it is given, and <b>that is where it has been
+    losing information.</b> Pages are rendered at 300 DPI, but the image put to xAI is then capped at
+    <b>2000 pixels on the long side</b> to control cost. On an A4 detail that cap never binds. <b>On an A1
+    general arrangement it binds hard</b> — 2000 px across an 841 mm sheet is an effective resolution
+    around <b>60 DPI</b>, at which a 2.5 mm BOM digit and a material callout are simply not legible. The
+    local OCR path already runs to a 4000 px cap; the paid vision path was the one still throttled.</p>
+
+    <div class="strip blue">
+      <b>What changes.</b> The drawings put to xAI are <b>upscaled</b> — the cap raised so a large sheet
+      reaches the model at a resolution its BOM and callouts can actually be read at, with dense sheets
+      handled region-by-region rather than squeezed whole into one frame. The purpose is narrow and
+      deliberate: <b>better recovery of BOM rows, route operations and bought-in identification for
+      pricing</b> — the three things the vision layer exists to backstop.
+    </div>
+
+    <ul class="clean">
+      <li><b>It changes what is recovered, not who wins.</b> The vision layer stays at rank 40. A sharper
+      image lets it fill more gaps; it still cannot overwrite a model or a measured DXF.</li>
+      <li><b>Cost is the trade, and it is bounded.</b> A larger image costs more per call, so it applies to
+      the sheets where the cap actually binds. Every vision result is <b>cached per page</b>, so a re-run of
+      a job — including every estimator re-issue — is free.</li>
+      <li class="next"><b>Re-priming the cache is part of the change</b> — existing cached reads were taken
+      at the old resolution and have to be re-taken for a job to benefit.</li>
+      <li class="next"><b>Measured, not assumed.</b> The test is whether BOM rows recovered by vision alone
+      rise, and whether flagged disagreements fall, on packs already run at the old cap.</li>
+    </ul>
+  </div>
+
+  <!-- ===================== SERVER ===================== -->
+  <h2><span class="ic">▥</span> Server — specification known, waiting on IT</h2>
+
+  <div class="panel alert">
+    <h3>The engine still runs on a personal laptop <span class="badge b-risk"><span class="dot bad"></span>Dependency · IT</span></h3>
+    <div class="owner">Owner · James Gray &nbsp;·&nbsp; Dependency · IT hardware resource</div>
+
+    <p><b>SDI Estimating Intelligence currently runs on my laptop</b> — 64GB RAM, Intel Core Ultra 9. A
+    single estimating run hammers it. That is acceptable for development and it is not acceptable for a
+    tool estimating is meant to depend on from September: there is no resilience, no second user, and no
+    separation between someone's working machine and a production service. <b>Getting the server in place
+    is the aim as soon as possible</b>, and it is now the gating item behind the go-live host.</p>
+
+    <h3 style="margin-top:16px">What we know about the specification</h3>
+    <table>
+      <thead><tr><th>Component</th><th>Specification — and the reason for it</th><th class="n">Indicative</th></tr></thead>
+      <tbody>
+        <tr><td><b>CPU</b></td><td>Workstation class, <b>high clock, 16–24 cores</b>. SOLIDWORKS rebuilds are
+            largely single-threaded, so <b>a typical many-core low-clock server CPU would be slower than the
+            laptop it replaces</b>. This is the specification point most easily got wrong.</td><td class="n">£2,000–2,800</td></tr>
+        <tr><td><b>Memory</b></td><td>128GB ECC DDR5. 64GB is what the laptop has and it is at its limit on a
+            large pack; 128GB is the headroom to run an estimate alongside other hosted processes.</td><td class="n">£700–1,200</td></tr>
+        <tr><td><b>GPU</b></td><td>Professional card certified for SOLIDWORKS — required for the viewport, and
+            for the further processes we intend to host on the same machine.</td><td class="n">£500–1,400</td></tr>
+        <tr><td><b>Motherboard</b></td><td>8-channel memory, high PCIe lane count — the GPU and fast storage
+            need lanes at the same time.</td><td class="n">£700–1,000</td></tr>
+        <tr><td><b>Storage</b></td><td>2 × 2TB NVMe.</td><td class="n">£300–500</td></tr>
+        <tr><td><b>PSU / chassis / cooling</b></td><td>Sized to accept a larger GPU later.</td><td class="n">£500–800</td></tr>
+        <tr><td><b>Windows Server licence</b></td><td>If not already covered by existing agreements.</td><td class="n">£700–1,000</td></tr>
+        <tr class="star"><td><b>Total</b></td><td>Self-built · vendor-built with warranty
+            <b>£8,000 – £12,000</b></td><td class="n"><b>£5,400–8,700</b></td></tr>
+      </tbody>
+    </table>
+
+    <div class="strip red">
+      <b>Outstanding request — a new server account.</b> A dedicated service account for the estimating
+      server has been requested and is <b>not yet provided</b>. It is needed for the SOLIDWORKS seat to bind
+      to a session that is not somebody's desktop, for scheduled runs to execute unattended, and for access
+      to the CAD share to be granted to the service rather than to an individual. <b>This is a small piece of
+      IT work that gates a large one</b>, and it can be actioned before any hardware arrives.
+    </div>
+
+    <ul class="clean">
+      <li class="risk"><b>The dependency is IT hardware resource, not budget approval alone.</b> Even with
+      the spend signed off, specification review, procurement, build and domain join all sit with IT. The
+      go-live host task in the plan is unstarted with 13 working days to launch.</li>
+      <li class="next"><b>An interim virtual machine is the sensible bridge</b> — a VM on existing
+      infrastructure can be stood up in a couple of days and would carry the portal and the pipeline. It
+      would not carry the SOLIDWORKS seat well without a GPU, so it de-risks the launch date without
+      removing the need for the physical machine.</li>
+      <li class="next"><b>A live run will be measured before purchase</b> — peak memory, and whether the
+      load falls on one core or spreads. That decides whether 128GB is headroom or necessity, and whether we
+      are buying clock speed or core count.</li>
+      <li><b>Third SOLIDWORKS seat belongs to the server</b>, not to a person, for the session-binding
+      reason set out above.</li>
+    </ul>
+  </div>
+
+  <!-- ===================== PORTAL ===================== -->
+  <h2><span class="ic">▣</span> Portal — from a run button to a working tool</h2>
+
+  <div class="panel">
+    <h3>The estimating page, its guide and its documentation <span class="badge b-live"><span class="dot ok"></span>Landed</span></h3>
+    <div class="owner">Owner · James Gray</div>
+    <ul class="clean">
+      <li class="ok"><b>Amended-sheet regeneration</b> — the item above.</li>
+      <li class="ok"><b>SDI Estimating Intelligence Guide published</b> on the portal at
+      <code>/guide</code>. Written for estimators, not engineers: what each deliverable is for, what the
+      numbers mean, and what the engine is asking them to decide. Covers the Estimate sheet, the AI
+      Provenance and Decision Report tabs, the job report, the client quote, how to run a job and how to
+      re-issue one. <b>This is plan task 32 (SOP and estimator user guide, due 28 August) substantially
+      delivered early.</b></li>
+      <li class="ok"><b>Navigation fixed across every page.</b> The estimating page and the guide lost
+      the portal's menu when opened, leaving the browser Back button as the only way out. Both now carry
+      the full navigation.</li>
+      <li class="ok"><b>AI Tools documentation corrected and extended</b> — it described a version of the
+      engine from before the arbitration layer existed, and named the wrong vision model. Now accurate.</li>
+      <li class="ok"><b>Go-Live Guide brought back in step</b> — it still described numeric confidence
+      scores the engine no longer produces, and a plastics defect that has since been fixed.</li>
+      <li class="ok"><b>The service reports its own version</b> on every response, so “which code is
+      actually running?” is one command rather than an investigation. This cost an afternoon to diagnose
+      once; it will not again.</li>
+    </ul>
+  </div>
+
+  <!-- ===================== ENGINE ===================== -->
+  <h2><span class="ic">◈</span> Model Engine — accuracy and honesty work</h2>
+
+  <div class="panel">
+    <h3>What landed since the last update <span class="badge b-live"><span class="dot ok"></span>Landed</span></h3>
+    <div class="owner">Owner · James Gray</div>
+    <ul class="clean">
+      <li class="ok"><b>Incomplete packs are now stated everywhere the estimator looks.</b> A BOM naming
+      drawings the pack does not contain is named on the Estimate sheet, the AI Provenance tab, the
+      Decision Report and the job report — <b>and deliberately not on the customer's quotation</b>, where
+      scope is the estimator's to word. Proven on the Dyson 10575-02 pack, which is missing four welded
+      assemblies.</li>
+      <li class="ok"><b>New materials costed rather than silently zeroed</b> — Dibond and composite panel
+      recognised, routed correctly (CNC router, not laser, which would melt it) and priced; a standard
+      pallet given a stable price instead of a figure that changed every run.</li>
+      <li class="ok"><b>A phantom part removed.</b> The draughtsman named in a title block was being
+      costed as an 18mm MDF panel at £28 on a job with no MDF in it. A person is no longer a part.</li>
+      <li class="ok"><b>Provenance made trustworthy.</b> The tab reported “0 HIGH / 22 LOW” on a job it
+      had read well, because it scored each part by its weakest field — almost always the price, which an
+      estimator has not yet entered. Reading and pricing are now reported separately.</li>
+      <li class="ok"><b>Old jobs pick up engine improvements automatically.</b> Previously a fix only
+      reached a job whose models had changed since — so 2019 and 2025 packs kept using a stale read
+      indefinitely.</li>
+      <li class="risk"><b>Still open — the weldment/tube reader.</b> Written and tested offline; needs a
+      SOLIDWORKS seat and a pack with models to prove. <b>Blocked on the licence, not on engineering.</b></li>
+    </ul>
+  </div>
+
+
+  <!-- ===================== SUPPLIERS ===================== -->
+  <h2><span class="ic">▦</span> Waiting on — a key supplier list</h2>
+
+  <div class="panel">
+    <h3>Catalogues and API integration <span class="badge b-prog"><span class="dot warn"></span>Awaiting input</span></h3>
+    <div class="owner">Dependency · Purchasing / Estimating &nbsp;·&nbsp; Owner · James Gray</div>
+
+    <p><b>A list of key suppliers is needed so that catalogues can be loaded and, where they offer one,
+    their APIs integrated.</b> This is the fix for the single most common reason an estimate cannot be
+    quoted firm today.</p>
+
+    <div class="strip red">
+      <b>Why it matters more than it sounds.</b> Where the engine has no catalogue price for a bought-in
+      item, it falls back to a market estimate. That figure is real and clearly labelled, but it is
+      <b>not reproducible</b> — the same job can price differently on the same inputs — and every job
+      carrying one raises a blocking finding that says so. On the jobs run this fortnight, the
+      outstanding estimator inputs are <b>largely bought-in prices the engine holds no rate for</b>:
+      three on the Side Panel, four on 12392-02, six on 12422-24, eight on the Fragrance Coffret.
+    </div>
+
+    <ul class="clean">
+      <li class="next"><b>What is needed:</b> the suppliers SDI actually buys from most, so the catalogue
+      work is aimed at the lines that appear on real jobs rather than at everything.</li>
+      <li class="ok"><b>Every catalogue loaded removes estimator inputs permanently</b> — the number
+      outstanding on each sheet falls, and reproducibility rises, on every job from then on.</li>
+      <li><b>Already integrated:</b> the UDEF purchasing catalogue is queried live, so items SDI already
+      buys under a code are priced from it rather than estimated.</li>
+    </ul>
+  </div>
+
+  <!-- ===================== PLAN ===================== -->
+  <h2><span class="ic">→</span> Delivery — plan position at 19 August</h2>
+
+  <div class="panel">
+    <h3>Date held; several August tasks now overdue <span class="badge b-prog"><span class="dot warn"></span>Amber</span></h3>
+    <div class="owner">Accountable · Charlotte Blackwell &nbsp;·&nbsp; Delivery · James Gray &amp; James Ryan</div>
+
+    <p>Thirteen working days remain to the committed launch of 7 September, with the release-candidate
+    freeze on 25 August. The following plan tasks are past their end date and not complete.</p>
+
+    <table>
+      <thead><tr><th>Task</th><th class="n">Due</th><th>Status</th><th>Consequence</th></tr></thead>
+      <tbody>
+        <tr class="star">
+          <td><b>Standard feedback form and return route</b></td><td class="n">7 Aug</td>
+          <td><b class="bad">Not started</b></td><td>The direct cause of zero feedback. 8 hours.</td></tr>
+        <tr class="star">
+          <td><b>Protected estimator testing calendar</b></td><td class="n">7 Aug</td>
+          <td><b class="bad">Not started</b></td><td>Reviews compete with the live queue and lose. 4 hours.</td></tr>
+        <tr><td><b>Clear the feedback backlog</b></td><td class="n">14 Aug</td>
+          <td><b class="bad">Delayed · 10%</b></td><td>Gate evidence for four of the eight gates.</td></tr>
+        <tr><td><b>Benefit baseline</b></td><td class="n">14 Aug</td>
+          <td><b class="bad">Not started</b></td><td>“Measured benefit” gate cannot be evidenced by 4 Sep without it.</td></tr>
+        <tr><td><b>SOLIDWORKS COM licence + seat + Office</b></td><td class="n">19 Aug</td>
+          <td><b class="bad">Not started</b></td><td>Now blocking; the trial licences have expired.</td></tr>
+        <tr><td><b>Price-origin labelling · silent-settings audit · DWG read path</b></td><td class="n">14–18 Aug</td>
+          <td><b class="bad">Not started</b></td><td>In the release-candidate scope, frozen 25 Aug.</td></tr>
+        <tr><td><b>Windows Authentication + AD group control</b></td><td class="n">21 Aug</td>
+          <td><b class="bad">Not started</b></td><td>A go-live gate. The portal has no user authentication today.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="strip red">
+      <b>Honest read.</b> The engine and the portal are ahead of where they were, and the estimator guide
+      is delivered early. What has not moved is everything that depends on <b>other people's time and on
+      a purchase order</b> — validation, the benefit baseline, licences and hosting. Those are what the
+      gates are measured on, so the date is held at Amber on the assumption that the two 7 August tasks
+      are done this week and licences are ordered. <b>If validation has still returned nothing by the
+      release-candidate freeze on 25 August, the go/no-go on 4 September should expect a dated slip
+      rather than a launch</b> — the capability would be there, the evidence would not.
+    </div>
+  </div>
+
+  <!-- ===================== DECISIONS ===================== -->
+  <h2><span class="ic">✦</span> Decisions and asks this week</h2>
+  <div class="panel">
+    <ul class="clean">
+      <li class="next"><b>Approve the SOLIDWORKS subscriptions</b> — two seats at £240 per user per month
+      (£480 a month), third seat on server commissioning. Work is blocked without them.</li>
+      <li class="next"><b>Name the protected review slots</b> with Dave and James Ryan for week
+      commencing 24 August, sized to what the live queue leaves.</li>
+      <li class="next"><b>Authorise 8 hours to build the feedback return route</b> before any further
+      sheets are issued.</li>
+      <li class="next"><b>Confirm whether the benefit baseline can still start</b> — without a fortnight
+      of data the measured-benefit gate cannot be closed on 4 September, and that should be a conscious
+      decision rather than a discovery.</li>
+      <li class="next"><b>Provide the key supplier list</b> so catalogues can be loaded and APIs
+      integrated — this is what turns market estimates into reproducible prices and removes estimator
+      inputs permanently.</li>
+      <li class="next"><b>Release the server</b> — specification is settled and the constraint is IT
+      hardware resource. An interim VM in the meantime would de-risk the launch date at low cost.</li>
+      <li class="next"><b>Provide the requested server service account</b> — outstanding, needed for the
+      SOLIDWORKS seat to bind, for unattended runs and for CAD-share access held by the service rather
+      than by an individual. It can be actioned now, before any hardware arrives.</li>
+      <li class="next"><b>Note the interim-host and authentication tasks</b> are unstarted with 13 working
+      days to launch.</li>
+    </ul>
+  </div>
+
+  <!-- ===================== SUMMARY ===================== -->
+  <h2><span class="ic">✓</span> Week at a Glance</h2>
+  <div class="panel">
+    <ul class="clean">
+      <li class="ok"><b>This week's ask is delivered</b> — estimators can amend a sheet, upload it and get
+      a fresh client quote carrying their own figure, with their sheet kept as the record.
+      <span class="badge b-live">Built &amp; Working</span></li>
+      <li class="ok"><b>Estimator guide published</b> on the portal, delivering plan task 32 early, plus
+      corrected AI Tools and Go-Live documentation and navigation fixed across every page.
+      <span class="badge b-live">Landed</span></li>
+      <li class="risk"><b>Six jobs run, none tested, no feedback returned</b> — against four returned
+      previously. The feedback route and protected review time, both due 7 August, are unstarted.
+      <span class="badge b-risk">Gate at risk</span></li>
+      <li class="risk"><b>User adoption, on the full record</b> — 19 estimates issued since 5 May, 7
+      answered, <b>1 formally signed off</b>, and no response of any kind in 22 days. The register is now a
+      standing section of this report. <span class="badge b-risk">Evidence thin</span></li>
+      <li class="risk"><b>SOLIDWORKS licences expired</b> — model reading and the weldment work are
+      paused until seats are in place. £480 a month for two.
+      <span class="badge b-risk">Spend Decision</span></li>
+      <li class="ok"><b>SOLIDWORKS API integration</b> — the fortnight's largest engineering piece.
+      Material, gauge, flat blank, bends, weldment cut list and assembly quantities read from the model,
+      arbitrated by rank so nothing silently overwrites a stronger source, with old jobs re-read when the
+      code improves. Proving is blocked on the licence, not on engineering.
+      <span class="badge b-live">Built</span></li>
+      <li class="ok"><b>Engine</b> — incomplete packs stated on every internal document, new materials
+      costed rather than zeroed, a phantom part removed, provenance made trustworthy, and old jobs now
+      pick up improvements automatically. <span class="badge b-live">Landed</span></li>
+      <li><b>Vision fallback being upscaled</b> — the drawings put to xAI were capped at 2000 px, around
+      60 DPI on an A1 sheet. Raising it improves recovery of BOM rows, routes and bought-in prices without
+      changing which source wins. <span class="badge b-prog">In progress</span></li>
+      <li class="risk"><b>Server — specification known, waiting on IT.</b> The engine still runs on a
+      personal laptop. Hardware resource and a requested service account are both outstanding.
+      <span class="badge b-risk">Dependency</span></li>
+      <li><b>Awaiting a key supplier list</b> to load catalogues and integrate APIs — the fix for
+      non-reproducible market prices and the main source of outstanding estimator inputs.
+      <span class="badge b-prog">Awaiting input</span></li>
+      <li><b>Delivery</b> — 7 September held at Amber. Release-candidate freeze 25 August, go/no-go
+      4 September. Seven plan tasks are past due, all of them dependent on people's time or a purchase
+      order rather than on engineering. <span class="badge b-prog">Amber</span></li>
+    </ul>
+  </div>
+
+  <!-- ===================== ADOPTION ===================== -->
+  <h2><span class="ic">◎</span> SDI Estimating Intelligence — User Adoption</h2>
+
+  <div class="panel">
+    <h3>Every sheet issued, and what came back <span class="badge b-done"><span class="dot acc"></span>Standing record · updated each report</span></h3>
+    <div class="owner">Source · SDI Intelligence Estimating Test Log &nbsp;·&nbsp; 5 May – 13 August 2026 &nbsp;·&nbsp; Maintained by James Gray</div>
+
+    <p>This register is carried forward in <b>every status report from now on</b>. It records each estimate
+    e-mailed to an estimator, when it went, who it went to and what came back. It exists for three reasons:
+    it is the <b>validation evidence</b> the go/no-go gate is measured on, it is the only record of <b>how
+    long a review actually takes</b>, and where an estimator moves a number it tells us <b>which part of the
+    engine is off and by how much</b>. Nothing else the programme holds can do that.</p>
+
+    <div class="kpis" style="margin:14px 0 2px">
+      <div class="k">
+        <div class="lab">Estimates issued</div>
+        <div class="big acc">19</div>
+        <div class="meta">5 May – 13 Aug · 15 weeks</div>
+      </div>
+      <div class="k risk">
+        <div class="lab">Responses received</div>
+        <div class="big bad">7</div>
+        <div class="meta">37% · 12 never answered</div>
+      </div>
+      <div class="k risk">
+        <div class="lab">Formally signed off</div>
+        <div class="big bad">1</div>
+        <div class="meta">Gillette Mobile Cage · 5 May</div>
+      </div>
+      <div class="k risk">
+        <div class="lab">Since the last response</div>
+        <div class="big bad">22 Days</div>
+        <div class="meta">Last response 28 July</div>
+      </div>
+    </div>
+
+    <div class="strip red">
+      <b>The single number that matters.</b> Nineteen estimates have been issued for review since 5 May.
+      <b>Seven drew a response and one has been formally signed off.</b> The last response of any kind was
+      <b>28 July</b> — five estimates have been issued since and none has been answered. This is the whole
+      of the validation evidence available to the 4 September gate.
+    </div>
+
+    <table>
+      <thead>
+        <tr><th class="n">E-mailed</th><th>Job</th><th>Issued to</th><th>Response received</th>
+            <th>Action taken following review</th></tr>
+      </thead>
+      <tbody>
+        <tr class="star"><td class="n">05 May</td><td><b>Gillette Mobile Cage</b></td><td>Andy Baxter</td>
+            <td><b class="good">Immediate response</b></td>
+            <td>None requested. <b>Signed off 5 May</b> — the only formal sign-off to date.</td></tr>
+        <tr><td class="n">04 Jun</td><td><b>1282</b> Milwaukee Wall Bay</td><td>Tim Wilkes</td>
+            <td><b class="bad">None</b></td><td>— <b>Outstanding 11 weeks.</b></td></tr>
+        <tr><td class="n">04 Jun</td><td><b>10897-01</b></td><td>Tim Wilkes</td>
+            <td><b class="bad">None</b></td><td>— <b>Outstanding 11 weeks.</b></td></tr>
+        <tr class="star"><td class="n">06 Jul</td><td><b>1282</b> Milwaukee — s/sheet format</td><td>James Ryan / Dave Wright</td>
+            <td><b class="good">Verbal feedback</b> from James Ryan</td>
+            <td>Numerous changes integrated; multiple copies sent and resent for second check.</td></tr>
+        <tr><td class="n">07 Jul</td><td><b>1298</b> Drill Holder</td><td>James Ryan / Dave Wright</td>
+            <td><b class="bad">None</b></td><td>James Ryan asked Dave Wright to check on 08/07. Nothing returned.</td></tr>
+        <tr><td class="n">10 Jul</td><td><b>12532-03</b> Recipe Card</td><td>James Ryan / Dave Wright</td>
+            <td><b class="bad">None</b></td><td>—</td></tr>
+        <tr><td class="n">10 Jul</td><td><b>1304-01</b> Grinder Holder</td><td>James Ryan / Dave Wright</td>
+            <td><b class="bad">None</b></td><td>—</td></tr>
+        <tr><td class="n">12 Jul</td><td><b>1303-a</b> Large Circular Shelf</td><td>James Ryan / Dave Wright</td>
+            <td><b class="bad">None</b></td><td>—</td></tr>
+        <tr class="star"><td class="n">14 Jul</td><td><b>1310</b> Drill Stud Holder</td><td>Dave Wright</td>
+            <td><b class="good">Substantive</b> — powder coating, welding, one measurement difference</td>
+            <td>Changes integrated where relevant. <b>The most useful single response received.</b></td></tr>
+        <tr><td class="n">22 Jul</td><td><b>12120-01</b> GA Digital Ticketing Bracket</td><td>Tim Wilkes</td>
+            <td><b class="bad">None</b></td><td>—</td></tr>
+        <tr class="star"><td class="n">28 Jul</td><td><b>0348837</b> Horti Crate</td><td>James Ryan</td>
+            <td><b class="good">Various improvements suggested</b></td>
+            <td>Single PDF file — on hold pending phase 2.</td></tr>
+        <tr class="star"><td class="n">28 Jul</td><td><b>357299_2</b> Wide Arch</td><td>James Ryan</td>
+            <td><b class="good">Various improvements suggested</b></td>
+            <td>Single PDF file — on hold pending phase 2.</td></tr>
+        <tr class="star"><td class="n">28 Jul</td><td><b>0357831</b> Madrid Style</td><td>James Ryan</td>
+            <td><b class="good">Various improvements suggested</b></td>
+            <td>Single PDF file — on hold pending phase 2.</td></tr>
+        <tr class="star"><td class="n">28 Jul</td><td><b>0359131</b> Cocktail</td><td>James Ryan</td>
+            <td><b class="good">Various improvements suggested</b></td>
+            <td>Single PDF file — on hold pending phase 2.</td></tr>
+        <tr><td class="n">03 Aug</td><td><b>11350</b> Boots Ladder Rack Comms Bar</td><td>Tim Wilkes</td>
+            <td><b class="bad">None</b></td><td>—</td></tr>
+        <tr><td class="n">04 Aug</td><td><b>12422</b> End Cap</td><td>Tim Wilkes</td>
+            <td><b class="bad">None</b></td><td>Re-run on the current engine 10 Aug. Still outstanding.</td></tr>
+        <tr><td class="n">06 Aug</td><td><b>12392-02</b></td><td>Tim Wilkes / James Ryan</td>
+            <td><b class="bad">None</b></td><td>—</td></tr>
+        <tr><td class="n">13 Aug</td><td><b>11650</b> Fragrance Coffret</td><td>Tim Wilkes</td>
+            <td><b class="bad">None</b></td><td>—</td></tr>
+        <tr><td class="n">13 Aug</td><td><b>11650-04</b> Side Panel</td><td>Tim Wilkes / James Ryan</td>
+            <td><b class="bad">None</b></td><td>—</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:20px">By reviewer</h3>
+    <table>
+      <thead><tr><th>Reviewer</th><th class="n">Issued</th><th class="n">Responded</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td><b>Tim Wilkes</b></td><td class="n">8</td><td class="n"><b class="bad">0</b></td>
+            <td>Six sole, two shared. <b>No response on any estimate issued since 4 June.</b></td></tr>
+        <tr><td><b>James Ryan</b></td><td class="n">11</td><td class="n"><b class="up">5</b></td>
+            <td>Four sole reviews all answered on 28 July, plus verbal feedback on the sheet format in
+            July. <b>The most engaged reviewer by a distance.</b></td></tr>
+        <tr><td><b>Dave Wright</b></td><td class="n">6</td><td class="n"><b class="up">1</b></td>
+            <td>One sole review, answered substantively. Five shared with James Ryan, unanswered.</td></tr>
+        <tr class="star"><td><b>Andy Baxter</b></td><td class="n">1</td><td class="n"><b class="good">1</b></td>
+            <td>Immediate response and same-day sign-off — the only estimate formally closed.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="strip">
+      <b>Issued is not the same as run, and the register only counts issued.</b> Six jobs were run on the
+      engine since the last update; <b>two of them were e-mailed for review</b> (both on 13 August).
+      10575-02 and 12392 have been run and are <b>not yet issued</b>. That distinction is kept deliberately —
+      a job that has not been put in front of an estimator cannot be counted against them, and should not be
+      counted as validation evidence either.
+    </div>
+
+    <div class="strip red">
+      <b>What the register makes visible that a fortnightly view does not.</b> The pattern is not a recent
+      dip. <b>Two estimates issued on 4 June have never been answered</b> — eleven weeks. Of nineteen
+      issued over fifteen weeks, twelve drew no response at all. And of the seven responses received,
+      <b>only one recorded what was actually changed at the level of a number</b> — the 1310 Drill Stud
+      Holder, where powder coating, welding and one measurement difference were raised and integrated.
+      Four more were logged as "various improvements suggested" with the detail not captured.
+      <b>The programme's most valuable dataset is being received and not written down.</b>
+    </div>
+
+    <ul class="clean">
+      <li class="risk"><b>Zero responses since 28 July</b>, across five estimates issued in that time.</li>
+      <li class="risk"><b>One formal sign-off in fifteen weeks</b>, and it was the first job issued.</li>
+      <li class="risk"><b>Coverage gap unchanged</b> — TTi and hand-drawn packs have still not been run with
+      an estimator. Hand-drawn remains recommended for explicit exclusion from v1.</li>
+      <li class="next"><b>The agreed parallel-run target was roughly twenty jobs a week</b> across two
+      reviewers. The actual rate since 5 May is <b>1.3 issued per week and 0.5 answered</b>.</li>
+      <li class="next"><b>From the next issue onward the log gains one column</b> — the estimator's figure
+      against the engine's, wherever a number was changed. That is what turns adoption tracking into engine
+      tuning, and it is the reason the feedback return route is worth eight hours of anyone's time.</li>
+      <li class="next"><b>Issue to a named person, not to a pair.</b> Seven of the nineteen went to two
+      names at once and <b>only one of those seven drew a response — 14%</b>. Of the twelve issued to a
+      single named person, <b>six were answered — 50%</b>. Shared ownership is measurably no ownership.</li>
+    </ul>
+  </div>
+
+  <footer>
+    SDI Intelligence · Digital Transformation Programme &nbsp;·&nbsp; Latest Update &nbsp;·&nbsp; <b>Wednesday 19 August 2026</b><br>
+    Previous update: Friday 7 August 2026 &nbsp;·&nbsp; Accompanying: Delivery Plan &amp; Gantt V10, Controlled Launch v1
+  </footer>
+
+</div>
+</body>
+</html>

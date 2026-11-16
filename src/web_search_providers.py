@@ -97,6 +97,82 @@ def resolve_search_provider(explicit: Optional[str] = None) -> str:
     return "none"
 
 
+# ── an answer about the ACCOUNT is not an answer about the query ────────────────────
+# 429 (out of quota / rate limited), 401 and 403 (key rejected) are the provider talking
+# about the subscription, not about what was asked. Trying a different material cannot change
+# any of them, so asking again is time spent to be told the same thing -- one 11650 run put
+# seven identical "HTTP Error 429: Too Many Requests" lines through the console, each one a
+# network round trip, and the only information in the last six was already in the first.
+#
+# So the refusal is remembered for the run and said ONCE, plainly: web price lookup is off,
+# and every line that would have used it is left for the estimator rather than priced at
+# nothing. Keyed by provider, so a dead SerpAPI key does not silence Google CSE.
+_PROVIDER_REFUSED: Dict[str, str] = {}
+_ACCOUNT_LEVEL = ("429", "401", "403", "Too Many Requests", "quota", "Unauthorized",
+                  "Forbidden")
+
+
+def _account_level_refusal(exc: BaseException) -> bool:
+    text = f"{exc}"
+    return any(t.lower() in text.lower() for t in _ACCOUNT_LEVEL)
+
+
+def _remember_refusal(provider: str, reason: str) -> None:
+    if provider in _PROVIDER_REFUSED:
+        return
+    _PROVIDER_REFUSED[provider] = reason
+    print(f"   [web-price] {provider} refused on the ACCOUNT, not the query ({reason}). "
+          f"Asking again with a different material cannot change that, so web price lookup "
+          f"is off for the rest of this run. Lines that needed it are left for the "
+          f"estimator, not priced at nothing.", flush=True)
+
+
+def forget_provider_refusals() -> None:
+    """Clear the latch. For tests and for a caller that knows the account was topped up."""
+    _PROVIDER_REFUSED.clear()
+    _TRANSPORT_FAILURES.clear()
+
+
+# ── A PROVIDER THAT NEVER ANSWERS IS COSTING WALL CLOCK, NOT BUYING INFORMATION ──────
+# The latch above is for what the provider SAYS. This one is for what it does not say at
+# all. A timeout is transient and must not latch on the first one — a blip should not turn
+# web pricing off for a whole job — but the failure mode actually seen is not a blip: on
+# 12552 every SerpAPI call timed out, and each part waited the full web_ai_call_timeout_s
+# (25s) to learn nothing. A run takes twenty to forty minutes and that is a slice of it
+# spent on a provider that was never going to reply.
+#
+# Two CONSECUTIVE failures is the threshold, and any success resets the count, so a network
+# that is merely slow keeps its lookups and a network where the provider is unreachable
+# stops paying for the discovery once. Deliberately per-run and in memory: nothing is
+# remembered into the next job, because the next job may be on a working connection.
+_TRANSPORT_FAILURES: Dict[str, int] = {}
+_TRANSPORT_STRIKES = 2
+
+
+#
+# KEYED THE WAY THE GUARD READS IT. search_serpapi opens with `if "serpapi" in
+# _PROVIDER_REFUSED`, lowercase — so a latch written under "SerpAPI" would be set, printed,
+# and then never consulted: the run would announce that lookups were off and keep making
+# them. The key is the caller's own lowercase token; the display name is passed separately
+# and used only in the message.
+def _note_transport_failure(key: str, shown_as: str, reason: str) -> None:
+    _TRANSPORT_FAILURES[key] = _TRANSPORT_FAILURES.get(key, 0) + 1
+    if _TRANSPORT_FAILURES[key] < _TRANSPORT_STRIKES:
+        logger.warning("%s search failed: %s", shown_as, reason)
+        return
+    if key in _PROVIDER_REFUSED:
+        return
+    _PROVIDER_REFUSED[key] = f"unreachable ({reason})"
+    print(f"   [web-price] {shown_as} did not answer {_TRANSPORT_STRIKES} times running "
+          f"({reason}). Every further call would wait the full timeout to learn the same "
+          f"thing, so web price lookup is off for the rest of this run. Lines that needed "
+          f"it are left for the estimator, not priced at nothing.", flush=True)
+
+
+def _note_transport_success(key: str) -> None:
+    _TRANSPORT_FAILURES.pop(key, None)
+
+
 def search_serpapi(
     query: str,
     *,
@@ -105,6 +181,8 @@ def search_serpapi(
     region: str = "uk",
     hl: str = "en",
 ) -> Tuple[List[SearchHit], Optional[str]]:
+    if "serpapi" in _PROVIDER_REFUSED:
+        return [], _PROVIDER_REFUSED["serpapi"]
     key = (api_key or os.environ.get("SERPAPI_API_KEY", "")).strip()
     if not key:
         return [], "SERPAPI_API_KEY not set"
@@ -121,8 +199,12 @@ def search_serpapi(
     try:
         body = _http_get_json(url)
     except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
-        logger.warning("SerpAPI search failed: %s", exc)
+        if _account_level_refusal(exc):
+            _remember_refusal("serpapi", str(exc))
+        else:
+            _note_transport_failure("serpapi", "SerpAPI", str(exc))
         return [], str(exc)
+    _note_transport_success("serpapi")
 
     hits: List[SearchHit] = []
     for i, item in enumerate(body.get("organic_results") or [], start=1):
@@ -152,6 +234,8 @@ def search_google_cse(
     gl: str = "uk",
     hl: str = "en",
 ) -> Tuple[List[SearchHit], Optional[str]]:
+    if "google_cse" in _PROVIDER_REFUSED:
+        return [], _PROVIDER_REFUSED["google_cse"]
     key = (api_key or os.environ.get("GOOGLE_CSE_API_KEY", "")).strip()
     engine_id = (cx or os.environ.get("GOOGLE_CSE_CX", "")).strip()
     if not key:
@@ -171,7 +255,10 @@ def search_google_cse(
     try:
         body = _http_get_json(url)
     except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as exc:
-        logger.warning("Google CSE search failed: %s", exc)
+        if _account_level_refusal(exc):
+            _remember_refusal("google_cse", str(exc))
+        else:
+            logger.warning("Google CSE search failed: %s", exc)
         return [], str(exc)
 
     if body.get("error"):

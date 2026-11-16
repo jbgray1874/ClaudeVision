@@ -36,10 +36,12 @@ import glob
 import io
 import json
 import os
+import threading
 import re
 import sys
 import hashlib
 import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Load C:\ClaudeVision\.env the same way the rest of the project does, so the
@@ -55,45 +57,19 @@ except Exception:
 # Oracles (same known-good sets used to prove Path A). Match on (item, token, qty)
 # so minor description wording differences don't fail the check.
 # ----------------------------------------------------------------------------
-ORACLE = {
-    "12120-01-GA": [
-        ("1", "SA01", 1), ("2", "103", 1), ("3", "04M", 1),
-        ("4", "THUM620", 4), ("5", "08M", 1), ("6", "FIXINGTBC", 2),
-    ],
-    "12120-01-SA01": [("1", "101", 1), ("2", "05M", 1)],
-    "12120-01-101": [
-        ("1", "02M", 1), ("2", "03M", 1), ("3", "PEM", 2), ("4", "CLINCH", 4),
-    ],
-    "12120-01-103": [
-        ("1", "01M", 1), ("2", "06M", 1),
-        # item 3 = keyhole pem qty 2. Its description ("KEYHOLE PEM SIZE REQUIRED")
-        # is a NOTE, not the table cell - vision correctly returns item 3/qty 2 with
-        # a blank desc (obeying the strict "blank if only in a note" prompt rule).
-        # Match on item+qty, same as Path A's oracle.
-        ("3", "", 2),
-    ],
-    # 1282 (2013 template) — the job where Path A only reached ~90%.
-    "1282-GA": [
-        ("1", "1448-GA", 2), ("2", "1449-01C", 3), ("3", "1450-GA", 1),
-        ("4", "1453-GA-C", 1), ("5", "2621-01C", 1), ("6", "3886-GA", 2),
-        ("7", "1455-C-GA", 1),
-    ],
-    "1448-GA": [("1", "1448-01", 1), ("2", "1448-02", 1)],
-    "1455-C-GA": [
-        ("1", "1455-C-101", 1), ("2", "1455-C-005", 1),
-        ("3", "LOOM", 1), ("4", "RIVET", 2),
-    ],
-    # weldment 1455-C-101's own children (nested sub-BOM on its detail page)
-    "1455-C-101": [
-        ("1", "1455-C-001", 1), ("2", "1455-C-002", 1),
-        ("3", "1455-C-003", 1), ("4", "1455-C-004", 1),
-    ],
-    # 3886 lower-leg sub-assembly (note the drawing's trailing-hyphen codes)
-    "3886-GA": [
-        ("1", "3886-01", 1), ("2", "3886-02", 1), ("3", "3886-03", 1),
-        ("4", "FIXING", 2), ("5", "FIXING", 2),  # nutsert x2, glide x2
-    ],
-}
+# The self-test answers for this reader are regression data, not engine code (D-454):
+# tests/fixtures/bom_reader_oracles.json["vision"], read only by verify().
+def _load_oracle(_key: str = "vision"):
+    import json as _json
+    from pathlib import Path as _Path
+    _p = _Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "bom_reader_oracles.json"
+    try:
+        return {k: [tuple(t) for t in v] for k, v in _json.loads(_p.read_text(encoding="utf-8"))[_key].items()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+ORACLE = _load_oracle()
 
 
 # ----------------------------------------------------------------------------
@@ -135,30 +111,58 @@ def count_pages(pdf_path: str) -> int:
 # ----------------------------------------------------------------------------
 # Bump PROMPT_VERSION whenever _VISION_PROMPT changes — it is part of the cache
 # key, so a prompt change correctly invalidates every cached page result.
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v3"  # v3: per-row material + weight columns (0359342: the customer's own
+#                        table printed "MDF, 18mm" / "Corian, 6mm" / "4.28 kg" on every row
+#                        and the v2 schema never asked for them — so the engine invented a
+#                        blanket 6mm instead of reading the 18 printed beside each part)
 
 _VISION_PROMPT = """You are reading a single page of an engineering CAD drawing (SDI Displays).
-Your ONLY task is to transcribe any Bill of Materials (BOM) / parts table on this page.
+Transcribe ONLY what is VISIBLY PRINTED on this page. NEVER infer, guess, invent, or
+calculate. If a value is not printed on this page, use null (or an empty list).
 
-A BOM table has columns for: an ITEM number, a PART NUMBER / DWG NO / PartNo, a
-DESCRIPTION, and a QUANTITY (QTY). The header words vary between drawings.
-
-STRICT RULES:
+PRIMARY TASK — the Bill of Materials (BOM) / parts table:
+A BOM table has columns for an ITEM number, a PART NUMBER / DWG NO / PartNo, a DESCRIPTION,
+and a QUANTITY (QTY). The header words vary between drawings.
 - Transcribe ONLY rows that are visibly present in a BOM/parts table on THIS page.
-- Do NOT infer, guess, invent, or add rows that are not in a table. If a description
-  is only in a note (not the table cell), leave the description blank for that row.
+- Do NOT infer, guess, invent, or add rows that are not in a table. If a description is
+  only in a note (not the table cell), leave that row's description blank.
 - Read part numbers and quantities EXACTLY as printed (including hyphens/spaces).
-- Also read the drawing's own DWG NO from the title block (bottom-right) — that is
-  the PARENT assembly this table belongs to.
+- Some BOM tables also print a MATERIAL column (e.g. "MDF, 18mm", "Corian, 6mm",
+  "Mild Steel") and/or a WEIGHT column (e.g. "4.28 kg") per row. When such a column is
+  visibly present, transcribe each row's cell VERBATIM into "material" / "weight".
+  When the table has no such column, use null — NEVER infer a material or weight.
+- Read the drawing's own DWG NO from the title block (bottom-right) — that is the PARENT
+  assembly this table belongs to.
 - If there is NO BOM/parts table on this page, return an empty "rows" list.
 
-Return ONLY valid JSON, no markdown, in exactly this shape:
+SECONDARY — if THIS sheet details ONE part, capture its PRINTED detail (else leave null):
+material, thickness (mm), tube/section (e.g. "30 x 30 x 1.5mm"), cut length (mm), overall
+size, weight in grams (ONLY a printed weight — NEVER computed), finish, hole count (only if
+a count or hole table is printed), whether fold/bend lines are shown, and any verbatim
+manufacturing callouts (e.g. "SEAM THIS FACE", "CHROME").
+
+SECONDARY — the repeated notes/spec block, if present (else null): powder-coat micron
+range, weld specification, tolerances, material grades, timber note.
+
+Return ONLY valid JSON, no markdown, in EXACTLY this shape:
 {
   "parent": "<title-block DWG NO, or null>",
   "rows": [
-    {"item": "1", "part_code": "1448-GA", "description": "UPPER LEG ASSEMBLY", "qty": 2}
-  ]
+    {"item": "<item no>", "part_code": "<code as printed>", "description": "<as printed>", "qty": <number>,
+     "material": null, "weight": null}
+  ],
+  "part_details": {
+    "material": null, "thickness_mm": null, "tube_section": null, "cut_length_mm": null,
+    "overall_size": null, "weight_g": null, "finish": null, "hole_count": null,
+    "fold_or_bend": null, "process_notes": []
+  },
+  "spec_block": {
+    "powder_micron": null, "weld_spec": null, "tolerances": null,
+    "material_grades": [], "timber_note": null
+  }
 }
+Fill part_details / spec_block ONLY from values printed on THIS sheet; any field not printed
+stays null. NEVER compute weight, area, or cut length — transcribe a printed number or null.
 """
 
 
@@ -202,7 +206,28 @@ def call_vision_llm(png_bytes: bytes, model: str) -> str:
 # deterministic). The raw response is stored too, so a PARSER change can re-parse
 # the cached raw WITHOUT re-calling Grok — only a model/prompt change re-fetches.
 # ---------------------------------------------------------------------------
-DEFAULT_CACHE_DIR = r"C:\ClaudeVision\cache\vision_bom"
+def _default_cache_dir() -> str:
+    """Where cached vision reads live. Derived from the installed tree, not from the
+    path one machine happened to be checked out at: a hardcoded C:\\ClaudeVision means
+    every re-run on any other machine pays for Grok again and silently gets nothing
+    when the drive is absent."""
+    try:
+        import config
+        return str(config.BASE_DIR / "cache" / "vision_bom")
+    except Exception:
+        return str(Path(__file__).resolve().parents[1] / "cache" / "vision_bom")
+
+
+DEFAULT_CACHE_DIR = _default_cache_dir()
+
+
+def _reuse(store: str, hit: bool) -> None:
+    """Count the answer on the run's timing record (D-553); never a failure."""
+    try:
+        import run_timing
+        run_timing.reuse(store, hit)
+    except Exception:                                        # noqa: BLE001
+        pass
 
 
 def _cache_key(png_bytes: bytes, model: str, prompt_version: str) -> str:
@@ -221,14 +246,21 @@ def _cache_path(cache_dir: str, key: str) -> str:
 
 def get_vision_bom_cached(png_bytes: bytes, model: str, pdf_name: str, page_index: int,
                           cache_dir: str, use_cache: bool = True,
-                          refresh: bool = False) -> Dict[str, Any]:
+                          refresh: bool = False, cache_only: bool = False) -> Dict[str, Any]:
     """Return {'parsed':..., 'raw_response':..., 'cache_hit':bool} for a page.
 
     - use_cache False  -> always call Grok, never read/write cache.
     - refresh True     -> ignore any existing entry, call Grok, overwrite it.
+    - cache_only True  -> use an existing entry if there is one, but NEVER call Grok;
+                          a miss returns parsed=None with 'skipped': True.
     - otherwise        -> load from cache if present; else call Grok and store.
     Re-parsing: on a cache hit we RE-PARSE the stored raw_response with the current
     parser (so parser fixes take effect for free), but do NOT re-call Grok.
+
+    cache_only exists so the decision NOT to spend on a page never becomes a decision
+    not to KNOW about it. The cache is keyed on the page image, so an already-read page
+    costs nothing to read again — being selective about which pages are worth paying for
+    should not throw away pages already paid for.
     """
     key = _cache_key(png_bytes, model, PROMPT_VERSION)
     path = _cache_path(cache_dir, key)
@@ -239,11 +271,16 @@ def get_vision_bom_cached(png_bytes: bytes, model: str, pdf_name: str, page_inde
                 entry = json.load(fh)
             raw = entry.get("raw_response", "")
             parsed = parse_vision_response(raw)  # re-parse fresh (free parser fixes)
+            _reuse("vision_bom", True)
             return {"parsed": parsed, "raw_response": raw, "cache_hit": True}
         except Exception:
             pass  # corrupt/old cache entry -> fall through and re-fetch
 
+    if cache_only:
+        return {"parsed": None, "raw_response": "", "cache_hit": False, "skipped": True}
+
     # miss (or refresh / no-cache): call Grok
+    _reuse("vision_bom", False)
     raw = call_vision_llm(png_bytes, model=model)
     parsed = parse_vision_response(raw)
 
@@ -260,8 +297,19 @@ def get_vision_bom_cached(png_bytes: bytes, model: str, pdf_name: str, page_inde
                 "raw_response": raw,
                 "parsed": parsed,
             }
-            with open(path, "w", encoding="utf-8") as fh:
+            # WRITTEN WHOLE OR NOT AT ALL. The key is a hash of the page IMAGE, so two
+            # identical pages in a pack — a repeated title block, the same GA sheet in two
+            # PDFs — share one cache file. Read sequentially that never mattered. Read
+            # concurrently, two threads can be part-way through writing it while a third
+            # reads, and json.dump into an open handle is not atomic.
+            #
+            # The existing reader catches a corrupt entry and re-fetches, so the worst case
+            # was a wasted call rather than a wrong answer. os.replace is atomic on Windows
+            # and POSIX alike, which removes the window instead of tolerating it.
+            tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(entry, fh, indent=2, ensure_ascii=False)
+            os.replace(tmp, path)
         except Exception as exc:
             print(f"  [cache write failed for {pdf_name} p{page_index}: {exc}]")
 
@@ -276,6 +324,43 @@ def _strip_fences(s: str) -> str:
     s = re.sub(r"^```(?:json)?", "", s).strip()
     s = re.sub(r"```$", "", s).strip()
     return s
+
+
+def material_thickness_mm(material_text: Any) -> Optional[float]:
+    """The thickness a BOM material cell prints beside its material, or None.
+
+    "MDF, 18mm" -> 18.0; "Corian, 6mm" -> 6.0; "Mild Steel" -> None. Transcription
+    parsing only — a cell with no printed millimetre figure yields nothing, because a
+    thickness this function invents becomes a gauge somebody cuts.
+
+    TWO REFUSALS, both from review probes of the first cut:
+    - A DIAMETER IS NOT A THICKNESS. "Mild Steel Wire, diameter 8mm" was returning 8 —
+      a wire's Ø published as a sheet gauge. Any diameter marker in the cell refuses
+      the whole reading; the verbatim material_text still travels on the row.
+    - TWO FIGURES ARE A DECISION, NOT A PICK. "MDF, 6mm and 9mm" was silently
+      returning 6. A cell printing more than one distinct millimetre value is
+      ambiguous evidence, and this function does not resolve ambiguity — it reports
+      none, and the retained text is what a person (or a decision row) rules on."""
+    s = str(material_text or "")
+    if re.search(r"Ø|⌀|\bDIA\b|\bDIAMETER\b", s, re.I):
+        return None
+    # No trailing word boundary: extract_tables squashes spaces, and in
+    # "FlexiMDF6mmand9mm" the \b after "6mm" fails against the glued "and" — so a
+    # two-value cell counted ONE value and published 9.0 as a fact. Both figures
+    # must be seen for the two-figures-refusal to fire.
+    vals = {float(v) for v in re.findall(r"(\d+(?:\.\d+)?)\s*mm", s, re.I)}
+    return vals.pop() if len(vals) == 1 else None
+
+
+def weight_kg(weight_text: Any) -> Optional[float]:
+    """The printed per-row weight in kilograms, or None. "4.28 kg" -> 4.28;
+    "270 g" -> 0.27; a bare number is refused — with no unit printed there is no fact."""
+    s = str(weight_text or "").strip()
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(kg|g)\b", s, re.I)
+    if not m:
+        return None
+    v = float(m.group(1))
+    return v if m.group(2).lower() == "kg" else v / 1000.0
 
 
 def parse_vision_response(raw: str) -> Optional[Dict[str, Any]]:
@@ -301,14 +386,36 @@ def parse_vision_response(raw: str) -> Optional[Dict[str, Any]]:
             qty = int(qty_raw)
         except Exception:
             continue  # a row without a clean integer qty isn't a usable BOM row
-        rows.append({
+        row: Dict[str, Any] = {
             "item_number": item,
             "part_ref": code,
             "description": desc,
             "quantity": qty,
             "kind": "vision",       # provenance tag; classification happens in merge
-        })
-    return {"parent": parent, "rows": rows}
+        }
+        # THE ROW'S OWN MATERIAL AND WEIGHT COLUMNS, where the table prints them.
+        # 0359342's tables carried "MDF, 18mm" / "Corian, 6mm" / "4.28 kg" on every
+        # row and the schema never asked — so parts reached costing with mat null and
+        # a document-default 6mm, and the one population that KNEW each component's
+        # own specification was the table nobody kept. Verbatim text plus the parsed
+        # figures, so downstream evidence rules can rank them; absent columns stay
+        # absent (the model returns null and nothing is stamped).
+        _mat = str(r.get("material") or "").strip()
+        if _mat:
+            row["material_text"] = _mat
+            _thk = material_thickness_mm(_mat)
+            if _thk is not None:
+                row["thickness_mm"] = _thk
+        _wkg = weight_kg(r.get("weight"))
+        if _wkg is not None:
+            row["stated_weight_kg"] = _wkg
+        rows.append(row)
+    # Capture the v2 enrichment (part_details + spec_block) if present. Additive: consumers that
+    # only read "rows"/"parent" are unaffected. These are the LLM (Layer-3) view; the deterministic
+    # drawing_facts (Layer 2) remains authoritative — this is the cross-check / no-DXF backup.
+    part_details = obj.get("part_details") if isinstance(obj.get("part_details"), dict) else None
+    spec_block = obj.get("spec_block") if isinstance(obj.get("spec_block"), dict) else None
+    return {"parent": parent, "rows": rows, "part_details": part_details, "spec_block": spec_block}
 
 
 # ----------------------------------------------------------------------------
@@ -328,8 +435,14 @@ def _bare_code(s: str) -> str:
     """Match-normalise a code: uppercase, strip ALL separators (spaces, hyphens).
     So '1455-C GA', '1455-C-GA', '1455-C- GA', '1455 C GA' all become '1455CGA'.
     This makes code matching robust to the stray-space / hyphen-split variants
-    SDI drawings produce (the class the bom_table_extractor docstring names)."""
-    return re.sub(r"[\s\-]+", "", (s or "").upper())
+    SDI drawings produce (the class the bom_table_extractor docstring names).
+
+    The rule itself lives in part_code_conventions, because the dual-path reconciler
+    compares this reader's codes with the deterministic reader's and must go on doing
+    so when this module is unavailable. Kept as a name here so callers of the vision
+    reader are unaffected."""
+    from part_code_conventions import bare_code
+    return bare_code(s)
 
 
 def _token_matches(exp_tok: str, part_ref: str, desc: str) -> bool:

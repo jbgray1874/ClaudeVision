@@ -1,13 +1,13 @@
 # ==============================================================================
 # Detect-SDIIntelligenceService.ps1
-# SDI Intelligence Portal — Intune Proactive Remediation DETECTION script
+# SDI Intelligence Portal - Intune Proactive Remediation DETECTION script
 #
 # PURPOSE: Checks whether the SDI Intelligence portal is registered as a
 #          Windows Service and is set to auto-start.
 #
 # INTUNE BEHAVIOUR:
-#   Exit 0 = service exists, is auto-start and running — no remediation needed
-#   Exit 1 = service missing, wrong start type, or stopped — trigger remediation
+#   Exit 0 = service exists, is auto-start and running - no remediation needed
+#   Exit 1 = service missing, wrong start type, or stopped - trigger remediation
 # ==============================================================================
 
 $ServiceName = "SDIIntelligence"

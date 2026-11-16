@@ -139,14 +139,15 @@ Part specification:
 Respond with ONLY a JSON object in this exact format (no other text):
 {{
   "price_gbp": <number — unit price in GBP, realistic UK trade/subcontract price>,
-  "unit": "<each|per_kg|per_metre|per_m2>",
+  "unit": "<each|per_kg|per_metre|per_m2, or per_<the unit this request is sold by> when one is named>",
   "price_basis": "<brief explanation of what drives this price>",
   "low_estimate_gbp": <lower bound>,
   "high_estimate_gbp": <upper bound>,
   "confidence": <0.3 to 0.65 — your confidence in this estimate>,
   "key_assumptions": ["<assumption 1>", "<assumption 2>"],
   "verify_against": ["<where to verify: e.g. 'Metals4U', 'RS Components', 'local powder coat supplier'>"],
-  "review_note": "<one sentence plain English note for the estimator about what to check>"
+  "review_note": "<one sentence plain English note for the estimator about what to check>",
+  "item_priced": "<what you priced, in plain words, and what ONE unit of your price is — e.g. 'M4 x 12 binding screw, one screw' or 'set of 4 screws'>"
 }}
 
 Be conservative — if you are unsure, use the low estimate. Do not invent specificity you don't have."""
@@ -164,8 +165,18 @@ def _build_spec_block(
     width_mm: Optional[float] = None,
     weight_kg: Optional[float] = None,
     operations: Optional[List[str]] = None,
+    wanted_unit: Optional[str] = None,
+    ask: Optional[str] = None,
+    supply: Optional[str] = None,
 ) -> str:
     lines = []
+    # A BOUGHT-IN ITEM IS BOUGHT, NOT MADE. This prompt is written for fabricated parts
+    # ("a part from an engineering drawing", "trade/subcontract price"), and a supplier code
+    # with no noun reads as something to fabricate: the Yiree binding screw came back at
+    # £126.04. Said first, so the rest is read in that light.
+    if str(supply or "").strip().lower() == "bought_in":
+        lines.append("Supply: a PURCHASED catalogue component, bought in ready-made — price "
+                     "it as the item a distributor sells, not as a part to be fabricated.")
     if part_code:
         lines.append(f"Part code: {part_code}")
     if description:
@@ -190,6 +201,21 @@ def _build_spec_block(
     if operations:
         ops_human = [o.replace("_", " ").title() for o in operations[:8]]
         lines.append(f"Manufacturing operations: {', '.join(ops_human)}")
+    # HOW THIS LINE IS BOUGHT. Most parts are bought each and nothing needs saying; ABS
+    # edging is bought by the metre, and a model asked for "the price" of it will price a
+    # REEL. The caller multiplies whatever comes back by the line's quantity — metres — so
+    # a reel price answered here becomes hundreds of pounds of tape on a tray. Asking in
+    # the right unit is cheaper than refusing the answer, which is what happens otherwise.
+    if wanted_unit and str(wanted_unit).strip().lower() not in ("", "each"):
+        _wu = str(wanted_unit).strip()
+        lines.append(f"Sold by: the {_wu}. Give the price PER {_wu.upper()} and set "
+                     f"\"unit\" accordingly. If the listing is for a reel, roll, pack or "
+                     f"coil, divide it down to one {_wu} and say so in price_basis.")
+    # THE BRIEF'S OWN REQUEST, WHICH NEVER REACHED THE MODEL. research_brief writes it — per
+    # unit, the pack it is sold in, a real current listing — and this block read only its own
+    # fixed fields, so every bought-in line was asked the generic question instead.
+    if ask:
+        lines.append(f"What is needed: {ask}")
     lines.append("Customer: UK retail/commercial display manufacturer")
     return "\n".join(lines)
 
@@ -241,6 +267,33 @@ def _call_anthropic_llm(prompt: str, model: str = "claude-sonnet-4-20250514") ->
         return None
 
 
+def _offline() -> bool:
+    """True when the process has declared itself offline.
+
+    The rules suite sets SDI_OFFLINE=1 before importing anything so that fixtures cannot
+    reach a live service. Exactly one module honoured it, and every outbound path in
+    costing went straight past -- including this one, which is a paid LLM call. A fixture
+    that prices a part was therefore billing real money on any machine with a key.
+
+    Guarded at the network primitives rather than at each of the four call sites
+    (pricing_service, note_scan, bay_rollup, probe_pipeline), so a fifth caller added later
+    inherits it instead of having to remember.
+    """
+    return bool(os.environ.get("SDI_OFFLINE"))
+
+
+# A CAPACITY REFUSAL IS ACCOUNT-LEVEL, NOT PER-LINE (D-478, the serpapi rule applied to the
+# model). The 11 Oct 21:20 K-Wellness run met "HTTP 429 resource-exhausted — the model is
+# currently at capacity" and kept asking, line after line, each with its own timeout into
+# the same wall — the exact failure the serpapi breaker already names: "Asking again with a
+# different material cannot change that." Two capacity refusals trip the breaker for the
+# rest of the run; lines that needed a model price are left for the estimator, not priced
+# at nothing, and the one printed line says so. Scoped to THIS module's pricing calls —
+# the concept read is a different client and is not touched.
+_XAI_CAPACITY_SEEN = 0
+_XAI_CAPACITY_TRIPPED = False
+
+
 def _call_xai_llm(
     prompt: str,
     *,
@@ -258,6 +311,11 @@ def _call_xai_llm(
     budget + lower reasoning effort + temperature 0 so the same notes prompt returns the
     same item list run-to-run (the reasoning trace, not sampling, was the instability).
     """
+    if _offline():
+        return None          # SDI_OFFLINE: no paid call from a fixture
+    global _XAI_CAPACITY_SEEN, _XAI_CAPACITY_TRIPPED
+    if _XAI_CAPACITY_TRIPPED:
+        return None          # capacity breaker: the account-level refusal already said why
     import urllib.request
     import urllib.error
     # Importing config runs its os.environ.setdefault(...) for the keys and carries
@@ -327,6 +385,15 @@ def _call_xai_llm(
         except Exception:
             pass
         logger.warning("xAI HTTP %s for model=%s — %s", exc.code, model, detail or exc.reason)
+        if exc.code == 429 and ("resource-exhausted" in detail
+                                or "capacity" in detail.lower()):
+            _XAI_CAPACITY_SEEN += 1
+            if _XAI_CAPACITY_SEEN >= 2 and not _XAI_CAPACITY_TRIPPED:
+                _XAI_CAPACITY_TRIPPED = True
+                print("   [pricing] xAI refused on CAPACITY (HTTP 429, resource-exhausted) "
+                      "twice — model price lookups are off for the rest of this run. Lines "
+                      "that needed one are left for the estimator, not priced at nothing.",
+                      flush=True)
         return None
     except urllib.error.URLError as exc:
         logger.warning("xAI could not reach api.x.ai: %s", getattr(exc, "reason", exc))
@@ -336,7 +403,39 @@ def _call_xai_llm(
         return None
 
 
-def _llm_market_estimate(spec: Dict[str, Any], provider: str = "auto") -> Dict[str, Any]:
+def _llm_market_estimate(spec: Dict[str, Any], provider: str = "auto",
+                         *, use_cache: bool = True, refresh: bool = False) -> Dict[str, Any]:
+    """Ask the model for an indicative UK trade price, once per distinct specification.
+
+    The same part asked four times returned £35.62, £95.62, £75.62 and £85.62. That is
+    what kept this number out of the price column — not that it was uncertain, but that
+    it moved sixty pounds while the job stood still. An uncertain number an estimator can
+    weigh; a number that answers differently every time it is asked cannot be weighed at
+    all, because there is nothing stable to weigh.
+
+    So it is asked once and stored against the spec that produced it. It changes when the
+    part changes, when the model or prompt changes, or when somebody refreshes it.
+    """
+    import generated_price_cache as _gpc
+
+    _model = os.environ.get("XAI_MODEL", "grok-4.3") if provider != "anthropic" else "anthropic"
+    _t0 = time.time()
+    _res = _gpc.cached_estimate(
+        spec, provider, _model,
+        lambda: _llm_market_estimate_uncached(spec, provider),
+        use_cache=use_cache, refresh=refresh,
+    )
+    try:                                     # a partner run's call count (D-529); else nothing
+        import run_timing as _rt
+        _rt.count("market research", time.time() - _t0,
+                  cache_hit=bool((_res or {}).get("price_from_cache")),
+                  failed=not (_res or {}).get("found"))
+    except Exception:                                                # noqa: BLE001
+        pass
+    return _res
+
+
+def _llm_market_estimate_uncached(spec: Dict[str, Any], provider: str = "auto") -> Dict[str, Any]:
     """
     Ask LLM for indicative UK trade price.
     Returns a standardised result dict.
@@ -344,7 +443,8 @@ def _llm_market_estimate(spec: Dict[str, Any], provider: str = "auto") -> Dict[s
     spec_block = _build_spec_block(**{
         k: spec.get(k)
         for k in ["material", "description", "thickness_mm", "part_code", "finish",
-                  "colour", "quantity", "length_mm", "width_mm", "weight_kg", "operations"]
+                  "colour", "quantity", "length_mm", "width_mm", "weight_kg", "operations",
+                  "wanted_unit", "ask", "supply"]
     })
     prompt = _LLM_PROMPT_TEMPLATE.format(spec_block=spec_block)
 
@@ -387,6 +487,7 @@ def _llm_market_estimate(spec: Dict[str, Any], provider: str = "auto") -> Dict[s
         "key_assumptions": list(parsed.get("key_assumptions") or []),
         "verify_against": list(parsed.get("verify_against") or []),
         "review_note": str(parsed.get("review_note") or "Verify against supplier quote before using for customer pricing."),
+        "item_priced": str(parsed.get("item_priced") or ""),
         "review_flag": True,
         "review_reason": (
             "This price was estimated by AI reasoning from part specification — "
@@ -500,7 +601,8 @@ def _web_search_price_anthropic(query: str, spec: Dict[str, Any]) -> Dict[str, A
 
     spec_summary = _build_spec_block(**{
         k: spec.get(k)
-        for k in ["material", "description", "thickness_mm", "part_code", "finish", "quantity"]
+        for k in ["material", "description", "thickness_mm", "part_code", "finish", "quantity",
+                  "wanted_unit", "ask", "supply"]
     })
 
     user_content = (
@@ -509,7 +611,7 @@ def _web_search_price_anthropic(query: str, spec: Dict[str, Any]) -> Dict[str, A
         f"Part specification:\n{spec_summary}\n\n"
         f"Search for: {query}\n\n"
         f"Return ONLY a JSON object:\n"
-        f'{{"price_gbp": <number>, "unit": "<each|per_kg|per_metre>", "source_url": "<url>", '
+        f'{{"price_gbp": <number>, "unit": "<each|per_kg|per_metre, or per_<the unit this request is sold by> when one is named>", "source_url": "<url>", '
         f'"supplier_name": "<name>", "price_basis": "<brief note>", "confidence": <0.4-0.65>}}'
     )
 
@@ -665,6 +767,19 @@ def lookup_web_ai_price(
         web_query (str)
         + source-specific fields
     """
+    if _offline():
+        # Same shape the exhausted-every-source path returns, so callers need no new branch.
+        return {
+            "found": False,
+            "source_type": "none",
+            "price_gbp": None,
+            "unit": None,
+            "confidence": 0.0,
+            "review_flag": True,
+            "review_reason": "SDI_OFFLINE is set - no catalogue, web or AI lookup was "
+                             "attempted. This is a test/offline run, not evidence that no "
+                             "price exists.",
+        }
     # 1. Catalogue URLs
     if catalogue_sources:
         result = _catalogue_lookup(catalogue_sources, spec)
@@ -745,6 +860,70 @@ def lookup_web_ai_price(
 
 
 # ─────────────────── plain-English JSON summary ─────────────────────────────
+
+def market_sheet_rate_indication(material: Any, thickness_mm: Any,
+                                 sheet_l_mm: Any = None, sheet_w_mm: Any = None,
+                                 ) -> Optional[Dict[str, Any]]:
+    """What a full sheet of this material costs on the open market. An INDICATION, never a rate.
+
+    THE ENGINE MUST NOT BE THE REASON A NUMBER DOES NOT EXIST. config deliberately carries no
+    rate for ABS, PETG, PVC, FOAMEX, PP or PS -- and it is right to: "a price is a commercial
+    fact and SDI owns it; inventing one would put a number on a quote that nobody has agreed
+    to". But refusing to INVENT a rate is not the same as refusing to LOOK ONE UP, and the
+    consequence of conflating those was 11650-01-05A DOOR at GBP 0.00 with nobody told why.
+
+    So this asks the same web/LLM lookup the bought-in fallback already uses, about a SHEET
+    rather than a part: material, thickness, and the standard sheet size. What comes back is
+    stamped exactly for what it is -- non-reproducible, an AI estimate, not firm -- and this
+    module has a whole vocabulary for that. It goes IN FRONT OF AN ESTIMATOR, not into a
+    total. price_provenance.AI_ESTIMATE is neither reproducible nor firm, and a figure that
+    changes between runs must never be the difference between winning and losing a job.
+
+    Returns {gbp_per_sheet, gbp_per_m2, sheet_mm, confidence, source} or None. Never raises:
+    a lookup that fails leaves the material exactly as unpriceable as it was.
+    """
+    name = str(material or "").strip()
+    if not name:
+        return None
+    try:
+        thickness = float(thickness_mm) if thickness_mm is not None else None
+    except (TypeError, ValueError):
+        thickness = None
+    if not thickness or thickness <= 0:
+        return None                      # a sheet price without a gauge is not a sheet price
+    sheet_l = float(sheet_l_mm or 3050.0)
+    sheet_w = float(sheet_w_mm or 2050.0)
+    spec = {
+        "material": name,
+        "description": (f"{name} sheet {thickness:g}mm, {sheet_l:.0f} x {sheet_w:.0f}mm, "
+                        f"full sheet, trade price"),
+        "thickness_mm": thickness,
+        "length_mm": sheet_l,
+        "width_mm": sheet_w,
+        "quantity": 1,
+    }
+    try:
+        result = lookup_web_ai_price(spec, enable_web_search=True, enable_llm_estimate=True)
+    except Exception:                                        # noqa: BLE001
+        return None
+    if not result or not result.get("found"):
+        return None
+    try:
+        per_sheet = float(result.get("price_gbp") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if per_sheet <= 0:
+        return None
+    area_m2 = (sheet_l * sheet_w) / 1_000_000.0
+    return {
+        "gbp_per_sheet": round(per_sheet, 2),
+        "gbp_per_m2": round(per_sheet / area_m2, 2) if area_m2 else None,
+        "sheet_mm": [sheet_l, sheet_w],
+        "thickness_mm": thickness,
+        "confidence": result.get("confidence"),
+        "source": result.get("source_type") or "web_ai_fallback",
+    }
+
 
 def summarise_estimate_json(summary: Dict[str, Any], *, verbose: bool = False) -> str:
     """

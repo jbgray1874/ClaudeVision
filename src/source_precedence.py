@@ -1,0 +1,1500 @@
+"""
+source_precedence.py — which source is allowed to overwrite which, per datum.
+
+The pipeline runs a dozen passes over one shared list of part records, and each pass writes
+what it knows. Nothing arbitrated between them, so the LAST writer won regardless of what it
+knew — and the last writer is usually the weakest, because the strong sources (a model, a
+measured DXF) are read early and the inferential ones run late. Two live examples:
+
+  - the PDF GA-tree pass overwrote quantities that came from the SolidWorks assembly BOM,
+    which is the structure the shop actually builds from;
+  - knowledge-base and rule overrides replaced native material, because the reliability test
+    listed only knowledge_base and override_rule as strong and had never heard of the model.
+
+Both were silent. A silent overwrite of the best source available is the worst failure this
+codebase has, because the result looks exactly like a correct answer.
+
+THE RULE: a lower-ranked source may FILL a datum, never REPLACE a higher-ranked one. Where it
+disagrees, the disagreement is recorded on the part and the stronger value kept. Nothing is
+resolved by whoever happens to run last.
+
+Ranking, and the reasoning:
+
+  100  estimator_confirmed / knowledge_base   a person looked at it and said so
+   90  solidworks_api                         the model itself; what the shop builds from
+   80  dxf                                    measured geometry
+   70  drawing_deterministic                  printed title-block fields, read exactly
+   60  bom_tree                               PDF BOM structure — a reading of a table
+   50  override_rule                          a pattern rule, not an observation
+   40  llm_extract                            transcribed, cross-checked, still a reading
+   20  inference                              provisional by construction
+    0  unknown                                fills gaps only
+
+Human confirmation outranks the model deliberately: an estimator correcting a part is the one
+signal that carries knowledge the drawing does not.
+"""
+from __future__ import annotations
+
+import re
+from typing import Any, Dict, List, Mapping, Optional, Tuple
+
+__all__ = [
+    "rank", "may_overwrite", "apply_field", "source_of", "SOURCE_RANK", "MISSING",
+    "corroboration_defends",
+    "SOURCE_DISPLAY_NAME", "MEASURED_SOURCES", "display_name", "was_measured",
+    "SOURCE_TIEBREAK", "tiebreak_priority", "FIELD_TIEBREAK",
+    "field_rank", "FIELD_RANK_OVERRIDE",
+    "evidence_family", "EVIDENCE_FAMILY", "QUORUM_BY_FAMILY_FIELDS",
+    "raise_manufacturing_question",
+]
+
+
+class _Missing:
+    """Distinguishes 'no value' from a value that happens to be zero or empty.
+
+    This is not pedantry. `if cut_out_count:` read an explicit model value of ZERO — a plain
+    blank with one outer profile — as no data at all, and let a weaker PDF-derived count
+    survive against the strongest source available. Truthiness cannot tell "the model says
+    none" from "nobody has looked", and those two facts must never resolve the same way.
+    """
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __bool__(self):
+        return False
+
+    def __repr__(self):
+        return "MISSING"
+
+
+MISSING = _Missing()
+
+# Values that mean "nothing is recorded here". ZERO IS NOT ONE OF THEM, and neither is
+# False: both are statements. Compared by identity, because `0 == False` and `"" == ""`
+# make `in` unreliable for exactly the cases this has to get right.
+_EMPTY = (None, "", (), [], {})
+
+
+def _is_empty(v: Any) -> bool:
+    if v is MISSING:
+        return True
+    for e in _EMPTY:
+        if type(v) is type(e) and v == e:
+            return True
+    return v is None
+
+
+def _split(field: str):
+    """'geometry_rollup.estimated_pierce_count' -> (['geometry_rollup'], 'estimated_pierce_count')"""
+    parts = str(field).split(".")
+    return parts[:-1], parts[-1]
+
+
+def _walk(part: Dict[str, Any], path, create: bool = False) -> Optional[Dict[str, Any]]:
+    """The dict a dotted field lives in. Geometry does not sit at the top of a part record —
+    pierce counts, blank dimensions and cut lengths live inside geometry_rollup and
+    manufacturing_features — so a resolver that can only see top-level keys cannot arbitrate
+    the very fields that drive the laser."""
+    node = part
+    for key in path:
+        nxt = node.get(key)
+        if not isinstance(nxt, dict):
+            if not create:
+                return None
+            nxt = {}
+            node[key] = nxt
+        node = nxt
+    return node
+
+SOURCE_RANK: Dict[str, int] = {
+    # THE CUSTOMER CHANGED THE PRODUCT AFTER THE DRAWINGS WERE ISSUED (D-507). Not a reading
+    # of the drawing, so no reading — nor a person reading or correcting one at 100 — can stand
+    # against it: the drawing is right about what was drawn, and the customer has since asked
+    # for something else. Written only from an e-mail line or a stated reason a named estimator
+    # ticked (customer_changes.py), and the book shows the drawn value beside it.
+    "customer_change": 101,
+    "estimator_confirmed": 100,
+    "knowledge_base": 100,
+    # A PRODUCTION RULE THE SHOP CONFIRMED (config.PRODUCTION_MATERIAL_SUBSTITUTIONS —
+    # "0.9mm steel: production use 1mm in lieu"). It sits ABOVE every reading of the
+    # drawing, because it is not a reading: the drawing says 0.9 and is right, the shop
+    # buys 1.0 and is also right. It sits BELOW a person, who can stand it down by
+    # confirming the drawn gauge. The first cut wrote the substitute straight into the
+    # field with no source recorded, so any later reader at the old source's rank could
+    # put the drawn figure back — and the 17:36 7332-01 book printed 0.9 everywhere.
+    "production_substitution": 95,
+    # A PERSON'S REASONED INFERENCE, WHICH IS NOT THE SAME AS A PERSON'S READING.
+    #
+    # estimator_confirmed at 100 means "I read this off the sheet". Plenty of real facts are
+    # not printed anywhere: JAE823 on 0359342 is a thermoformed Corian tray whose drawing
+    # gives the FINISHED size and no flat pattern, so its blank has to be worked out from the
+    # section — 650 x 550 plan, 95 sides, 24 returns. That is a defensible figure and it is
+    # NOT a reading, so it must not wear a reading's rank.
+    #
+    # The alternative was to leave it out, and leaving it out is worse. A drawing pack is
+    # never perfect; an estimate with holes in it cannot be quoted from, and a hole is not
+    # more honest than a stated assumption — it is just less useful. An estimator can
+    # overturn an assumption they can see. They can do nothing with a blank.
+    #
+    # Ranked 45: above llm_extract (a machine transcription) and above inference (a category
+    # default), below bom_tree (a table someone actually typed) and everything measured. So
+    # a real reading always displaces it, and it always displaces a guess.
+    "estimator_inferred": 45,
+    # A PERSON READING THE DRAWING IS STILL READING THE DRAWING.
+    #
+    # estimator_confirmed at 100 is for an estimator OVERRULING what the files say — the one
+    # signal that carries knowledge the drawing does not. Reading a figure off a PDF is a
+    # different act, and it must not borrow that rank: the DXF is the file the laser actually
+    # cuts from and the model is what the shop builds, so where either disagrees with a sheet,
+    # they win. A person transcribing "1680 x 560" off a page has not overturned a flat
+    # pattern; they have read the same drawing the engine read, more reliably.
+    #
+    # Ranked 72: the best PDF-derived source there is — above the deterministic title-block
+    # read (70) and the machine's own overall-dimension read (65), because a person looking at
+    # the sheet beats a parser looking at the sheet — and below every measurement. An
+    # estimator who knows a DXF is stale says so explicitly and gets rank 100 for it.
+    "estimator_read_drawing": 72,
+    # A PART READ LARGER THAN THE ASSEMBLY IT SITS IN (D-508), costed on that assembly's
+    # outline developed for its folds. Above the drawing readings the assembly contradicts
+    # (title block 70, printed overall 65), below a person reading the sheet (72) and
+    # everything measured — so the part's own blank, a DXF or a model displaces it at once.
+    "assembly_envelope_allowance": 71,
+    # AN ASSEMBLY IS MADE OF ITS MEMBERS (D-589). Offered only for a record the compiled graph
+    # gives made members that all agree on one material. Above a title-block read of the
+    # assembly's own sheet (70) — 0351292's support assembly sheet says "SEE DWGS", and the
+    # page's boilerplate "304 - STAINLESS STEEL" was read in its place, so its weld and powder
+    # rows said STAINLESS on a mild-steel weldment — below a person (72) and every measurement.
+    "assembly_members": 71,
+    # THE PART'S OWN SHEET OVER A SHEET THAT LISTS IT (D-592). A title block read on an assembly
+    # sheet is the deterministic read of THAT sheet; its parts-list column put 0351292's top
+    # blank at 5 mm (the T arm's gauge) while the top blank's own sheet says 2 mm. Offered only by
+    # detail_page_geometry.revalidate_from_own_sheets, for a part bound to its own sheet and to
+    # others, when its own sheet states one value. Above the page reads (70), below a person
+    # (72) and every measurement.
+    "own_sheet_title_block": 71,
+    # A SECTION'S WALL AS ITS OWN SHEET PRINTS THE SECTION (D-592a). 0351292's cross rail kept
+    # the support assembly's 3 mm while its own sheet reads RECT TUBE 50X20X2MM. Offered only by
+    # revalidate_from_own_sheets, when its own sheets name exactly one section. Same footing as
+    # the own sheet's title block: above the page reads, below a person and every measurement.
+    "own_sheet_section": 71,
+    # ── AN OPEN QUESTION, DELIBERATELY NOT SETTLED HERE (raised 11 Sep 2026) ──────────
+    #
+    # The order below is MODEL FIRST: solidworks_api 90, dxf 80. The review position is the
+    # other way round — "DXF reigns supreme, then the .sld files, then the pdf files" — on the
+    # reasoning that the DXF is the file the laser actually runs, so where a model and an issued
+    # flat disagree, the flat is what gets made.
+    #
+    # Both are defensible and they are not the same claim. The model is the designer's intent
+    # and the structure the shop builds from; the flat is what was issued to the machine and may
+    # be a revision ahead or behind it.
+    #
+    # NOT FLIPPED, and the reason is scope rather than doubt. These two ranks arbitrate every
+    # geometric fact on every job — blank size, cut length, hole count, bend count, thickness —
+    # so reversing them is a costing change across the whole history, not a display change. It
+    # needs an explicit instruction and a parity run against accepted sheets, exactly like
+    # drawing_notes' rank further down this file, which is held at 0 for the same reason.
+    #
+    # ── SETTLED 11 Sep 2026, NARROWLY, AND THIS IS THE ANSWER ─────────────────────────
+    #
+    # The blanket flip was WITHDRAWN for identity and quantity: "treat 'DXF reigns supreme for
+    # routes' as withdrawn for identity/qty". Model first stands here, and these ranks are
+    # unchanged. What SolidWorks wins was locked at the same time, which is what made it safe:
+    #
+    #   whether a part is on the job, and how many in ONE quoted unit   the model (90)
+    #   a line the model never built — a packer, bumpons, screws        the PDF GA (60), filling
+    #   an extra flat the model never bound                             the DXF
+    #
+    # ONE exception was authorised, and it is in FIELD_RANK_OVERRIDE below rather than here: for
+    # `normalized_thickness_mm` ONLY, the cut file outranks the model, because the CNC runs the
+    # DXF and its filename is the shop ticket. Not material — the model's appearance already
+    # loses to the printed material at 68 against 70. Not quantity — that is the model's
+    # instance count. With no DXF present, the model stands.
+    #
+    # I had described gauge as already DXF-first on the strength of FIELD_TIEBREAK. That was
+    # wrong, and the correction is why the override exists: a tiebreak is consulted only WITHIN
+    # one rank, and 90 against 80 is not a tie, so it never reached the decision it was about.
+    "solidworks_api": 90,
+    "solidworks_flat_pattern": 90,
+    "dxf": 80,
+    "dxf_flat_pattern": 80,
+    # A MIRROR OF A MEASUREMENT IS STILL A MEASUREMENT — of the other hand.
+    #
+    # Job 11350's right arm had no DXF of its own, so it had no blank, so it fell through
+    # to a web lookup, so it fell through to an LLM market estimate: GBP 79.04 one run,
+    # GBP 86.04 the next, 97% of the whole material total. Its left hand was measured at
+    # 258.35 x 84.8 x 2.0 the entire time. A mirrored derivation has the SAME flat pattern
+    # as the part it mirrors — same blank, same cut length, same holes, same bends — and
+    # that is geometry, not a guess.
+    #
+    # Ranked just BELOW the flat it came from, and for one reason: it rests on the naming
+    # convention holding as well as on the measurement. It must never displace a DXF or a
+    # model of the mirror ITSELF, and it beats every inferred and generated source.
+    "mirror_of_measured": 75,
+    "drawing_deterministic": 70,
+    "title_block": 70,
+    # THE TWO READERS THAT PRODUCE EVERY BOM ROW, AND NEITHER WAS IN THIS TABLE.
+    #
+    # rank("bom_table") and rank("vision") both returned 0 — below `inference` (20), below
+    # everything. So the arbiter that decides which reading of a part wins could not rank the
+    # very rows it was merging, and any BOM reading lost to any other source automatically,
+    # including a category default.
+    #
+    # bom_table at 70: a parts table PRINTED ON THE SHEET, read by rule. That is exactly what
+    # drawing_deterministic describes and it sits at the same rank — a ruled table with columns
+    # is if anything the most reliable thing on a drawing to parse. Above bom_tree (60), which
+    # is a structure the engine BUILT rather than one the drawing office typed.
+    #
+    # vision at 40: the same table read as an IMAGE by a model. It sees tables a parser cannot,
+    # which is why it exists, and it can misread a character — a machine transcription, which is
+    # what llm_extract (40) already means. It must never silently displace the deterministic
+    # read of the same table; where the two disagree that is a question for a person, and the
+    # extract now prints both.
+    "bom_table": 70,
+    "vision": 40,
+    # WHAT THE DRAWING OFFICE TYPED ON THE EXPORT THAT GOES TO THE LASER.
+    #
+    # "11650-04-01A_2MM PETG_REVG.DXF" is not a guess and never was. It is a deliberate
+    # label, applied by the person who issued the flat, on the file the machine cuts from —
+    # and it was ranked `inference` (20) and applied only into a GAP, which meant that on a
+    # part already carrying a material it was never recorded at all.
+    #
+    # 11650-04 is what that costs. The title block says PETG, an options list says PETG or
+    # PC, SIX exports across five revisions are named 2MM PETG, and the parts catalogue
+    # stocks 37 rows of it. One SolidWorks model property said ABS and won, because the only
+    # other observation the record held was the title block: everything else had been
+    # skipped rather than submitted, so the corroboration rule had one source to count where
+    # the honest answer was two.
+    #
+    # Ranked WITH the drawing text, not above it. A filename is as good as the convention
+    # behind it, which is exactly what a title block is; it must still lose to a measured
+    # DXF or a model on its own. What changes is that it is now an OBSERVATION, and two
+    # independent observations are what the quorum is for.
+    "dxf_filename": 70,
+    # A MATERIAL THE MODEL CARRIES BY APPEARANCE, NOT BY SPEC.
+    #
+    # SolidWorks reports two kinds of material through the same API field: an EXPLICIT custom
+    # property the designer typed (the spec the part is bought to — that stays solidworks_api,
+    # rank 90) and the library-APPLIED material, which is the appearance/simulation template
+    # the model happens to carry. The applied material is frequently just a default the
+    # designer never revisited — "Plain Carbon Steel" on a part the drawing calls MDF, a
+    # birch-faced ply visual on a panel the title block calls MDF — so it must NOT overrule an
+    # explicit drawing callout. Ranked one step below the drawing text (drawing_deterministic /
+    # title_block / dxf_filename, all 70) so a lone SW library material loses to the drawing's
+    # word, yet above the PDF's inferred overall (65) and everything reasoned — because it is
+    # still a reading off the model, and when the drawing says nothing it is the best material
+    # evidence in the pack. The analyser tags which kind it is; an extract that predates the
+    # tag carries no applied-material observation and so behaves exactly as before.
+    "solidworks_applied_material": 68,
+    # THE SHEET THAT DRAWS A PART WITH NO SHEET OF ITS OWN (D-426). 8188-08's wave layers 014
+    # and 015 are drawn on 013's sheet, whose title block states ACRYLIC; neither has a title
+    # block of its own, so the model's library appearance (MILD_STEEL — the same default the
+    # sheet overruled on 013) was the only reading, and both were lasered, folded and powder
+    # coated as 3 mm steel. The sheet's callout covers what it draws: above the appearance,
+    # because it is the drawing's word; below the drawing text, because it is not the part's
+    # own title block.
+    "drawn_on_sheet": 69,
+    # The overall size the DETAIL prints, read as a blank. Deterministic — it is a number
+    # off the drawing, not a guess — but it is one inference away from a measurement: an
+    # overall is the finished part, and only a flat one has the same extent as its blank.
+    # So it ranks below anything measured and above anything reasoned, and every consumer
+    # must go on showing it as inferred. A pack with no model is priced from this or not
+    # priced at all, which is why it exists; it is not a substitute for a flat pattern.
+    "pdf_overall_dims": 65,
+    "bom_tree": 60,
+    # THE TREE'S PER-UNIT COUNT OUTRANKS THE ROW'S OWN (D-552). A parts-list row states how
+    # many of a part its assembly holds; the tree multiplies that by how many of the assembly
+    # one unit holds. Both are the bill of materials, and submitted under one name the second
+    # read as "one reader, two readings" and was refused — 401's members stayed at 1 and 2.
+    # A measured or modelled count (the SolidWorks tree) still outranks both.
+    "bom_tree_per_unit": 61,
+    "override_rule": 50,
+    "llm_extract": 40,
+    "llm_full_extract": 40,
+    "inference": 20,
+    "geometry_inference": 20,
+    # THE SHEET'S OWN LARGEST PRINTED DIMENSIONS, DEVELOPED FOR ITS FOLDS (D-505). Read off the
+    # part's own detail sheet when it prints no usable overall pair — above a category default
+    # (which knows nothing about this part) and below the printed overall (which names the
+    # overall). A provisional blank, labelled as one wherever it is shown.
+    "printed_extents_provisional": 30,
+    # A FLAT BOARD'S GAUGE FROM ITS MODEL'S SMALLEST EXTENT (D-512): a labelled fallback
+    # for a verified flat, constant-thickness board whose model carries no cut list — below
+    # every stated gauge (drawing callout, DXF filename, cut list), above a bare inference.
+    "model_extents_board_gauge": 30,
+    # SIGHTED FROM A RENDER, NOT READ FROM A DRAWING. The concept read (concept_scan.py)
+    # looks at a customer's visual — a photoreal render with no dimensions, no title block,
+    # no BOM — and names what it can SEE: a carcass, a header, castors, a printed panel, a
+    # material each part appears to be, an envelope guessed off human-scale cues. That is
+    # weaker than the vision read of a drawing ("vision", 40), which transcribes printed
+    # figures; here there are no figures to transcribe, so every number is an assumption
+    # wearing its own name. Rank 20, with the inferences: anything anybody ever reads off a
+    # real drawing displaces it field by field, which is exactly the lifecycle a concept
+    # estimate is for — budget first, tightened when the pack arrives.
+    "vision_concept": 20,
+    # STATED IN THE ENQUIRY BRIEF (D-360). Typed by SDI estimating for this job and put to the
+    # concept read as fact: "600 x 600 x 1200mm … plywood". Above anything sighted or
+    # reasoned, below the LLM's read of a drawing and anything measured — a real pack still
+    # displaces it field by field. A part size the model DERIVED from the brief's overall is
+    # stamped here too, and its note says it was worked out, not stated.
+    "enquiry_brief": 45,
+}
+
+# ── WHICH OF TWO EQUALLY-RANKED SOURCES WINS ────────────────────────────────────────
+# Only ever consulted WITHIN a rank. Across ranks the waterfall has already decided, and
+# this must never be able to reach across one.
+#
+# WHAT THIS CAN AND CANNOT SETTLE, because it is easy to expect too much of it. Only six
+# pairs share a rank at all, and they are the pairs below. "SolidWorks beats the LLM" is
+# not in here and never should be — that is the RANK (90 against 40), and writing it here
+# too would be a second copy of the waterfall that could drift out of step with the first.
+#
+# It also cannot break the commonest tie, which is ONE SOURCE DISAGREEING WITH ITSELF: two
+# DXF claims about the same fold, two LLM claims about the same weld. Nothing about the
+# source name separates those, which is why this is the first key and not the only one.
+#
+# Higher wins. A source absent from this table scores 0 and falls through to the next key,
+# which is the honest default — an ordering nobody can justify is worse than none.
+SOURCE_TIEBREAK: Dict[str, int] = {
+    # A person in the room beats a stored default. The knowledge base is what we believed
+    # before anybody looked at this job.
+    "estimator_confirmed": 2,
+    "knowledge_base": 1,
+    # A FLAT PATTERN IS THE BLANK ITSELF. The model and the generic DXF describe the
+    # finished part and may be a view of it; the flat pattern is the thing that goes on the
+    # bed. For every question this arbiter actually settles — folds, cut length, blank size
+    # — the flat pattern is the more direct measurement of the two.
+    "solidworks_flat_pattern": 2,
+    "solidworks_api": 1,
+    "dxf_flat_pattern": 2,
+    "dxf": 1,
+    # The title block is a controlled field on the sheet. "Deterministic" covers anything
+    # else read off the drawing by rule, including body text, which is looser.
+    "title_block": 2,
+    "drawing_deterministic": 1,
+    # Below both at the same rank. A filename is a controlled convention like a title block,
+    # but it is a NAME rather than a field on the sheet -- so where the two disagree outright
+    # the printed drawing is the one that was issued.
+    "dxf_filename": 0,
+    # The whole-job pass has seen the pack and can hold one sheet against another; the
+    # per-part pass has seen one page. Same model, more context.
+    "llm_full_extract": 2,
+    "llm_extract": 1,
+    # Inference FROM measured geometry rests on something; inference in general does not.
+    "geometry_inference": 2,
+    "inference": 1,
+}
+
+
+# ── WITHIN-RANK ORDER THAT DEPENDS ON WHICH FACT IS BEING SETTLED ───────────────────
+#
+# SOURCE_TIEBREAK above says that where a DXF filename and a title block disagree, "the printed
+# drawing is the one that was issued". That is written for a filename against A DIMENSION ON
+# THAT PART'S OWN SHEET. It is NOT the rule for gauge, and applying it there would have been
+# expensive:
+#
+#   7332-01's details are cut at 2.5 (003, 004), 5 (001), 1.5 (005), 0.9 (008) and 2 (007) —
+#   every one of those figures is the DXF name, "7332-01-003_2.5mm MS_revK.DXF". The 1.2 is a
+#   GA/title note repeated across five detail sheets. Costing 1.2 changes the nest, the laser
+#   time and the weight: a different quote, on a sheet that was accepted twice at GBP 80.34.
+#
+# On this office's packs the cut file IS the issued flat, and the filename is the name of what
+# the laser runs rather than decoration. So for gauge, the DXF sources win a tie — measured flat
+# first, then the file, then the name on it — and the title block is still stored and still shown
+# beside them. Estimating can reverse this; nothing else may.
+#
+# drawing_job_merge already applies the filename gauge as the authority in COSTING
+# (`_apply_field(part, "normalized_thickness_mm", thk, "dxf_filename")`), which is why 7332 was
+# cut at 2.5. This makes the reported precedence agree with the one the engine actually uses —
+# a provenance column that contradicts the sheet it sits in is worse than no column at all.
+_GAUGE_TIEBREAK: Dict[str, int] = {
+    "solidworks_flat_pattern": 5,
+    "dxf_flat_pattern": 5,
+    "dxf": 4,
+    "dxf_filename": 3,
+    "title_block": 1,
+    "drawing_deterministic": 1,
+}
+
+# The same fact travels under more than one name and they must not disagree about their own
+# order, so all three point at ONE dict rather than being assigned in afterwards — a subscript
+# assignment here reads to the arbitrated-fact guard exactly like a direct write of a resolved
+# value, and it was right to stop it.
+FIELD_TIEBREAK: Dict[str, Dict[str, int]] = {
+    "thickness_mm": _GAUGE_TIEBREAK,
+    "normalized_thickness_mm": _GAUGE_TIEBREAK,
+    "gauge_mm": _GAUGE_TIEBREAK,
+}
+
+
+# ── THE ONE FACT WHERE THE CUT FILE OUTRANKS THE MODEL ──────────────────────────────
+#
+# WHY A TIEBREAK WAS NOT ENOUGH, WHICH I GOT WRONG AND SAID SO. _GAUGE_TIEBREAK above orders the
+# gauge readers — measured flat, then the file, then the name on it — but `tiebreak_priority` is
+# consulted ONLY to break a tie WITHIN one rank, by the observation display and the route claim
+# sort. `may_overwrite` never asks it. SolidWorks is 90 and every DXF source is 80 or 70, so they
+# are never at the same rank and the tiebreak never fires between them: the model's thickness won
+# every time, and describing gauge as "DXF-first" was describing a table that could not reach the
+# decision it was about.
+#
+# WHAT THE SHOP ACTUALLY CUTS. The CNC runs the DXF. `12349-02-69-04M_2MM_HIA.DXF`,
+# `..._3MM_HIA`, `..._MS_3MM`, `..._6mm_MDF` are the shop ticket — the name of the thing the
+# laser runs — and SolidWorks' 5 mm on 01A is a library default the estimator has already called
+# wrong. Costing 5 where the file cuts 2 changes the nest, the laser time and the weight.
+#
+# SCOPED AS NARROWLY AS IT CAN BE WRITTEN: one field. NOT material — the model's appearance
+# already loses to the printed material at 68 against 70, and nothing here touches that. NOT
+# quantity — quantity is the model's instance count, and the work that made the sheet read it is
+# the opposite of this exception. A person still outranks everything at 100.
+#
+# WHERE THE AUTHORISED NAMES AND THE CODE DISAGREED. The exception was authorised for
+# `dxf_filename` and `dxf_flat_pattern`. In this tree `dxf_flat_pattern` is a `geometry_source`
+# VALUE and never the source of a thickness write, so on its own the exception would have been
+# half-inert: the measured flat thickness is applied as plain `dxf` (drawing_job_merge:508) and
+# the filename as `dxf_filename` (:590). Both of those are named here, which is what the
+# authorisation meant — "filename plus measured DXF thickness" — and `dxf_flat_pattern` is
+# included too so a future write under that name is covered rather than silently excluded.
+#
+# IF THERE IS NO DXF, SOLIDWORKS STANDS. This raises the DXF readers; it does not lower the
+# model. A pack with no cut file is costed on the model exactly as before.
+_CUT_FILE_GAUGE_RANK: Dict[str, int] = {
+    "dxf": 95,
+    "dxf_flat_pattern": 95,
+    "dxf_filename": 95,
+    # The confirmed production rule outranks every READING of the gauge here too — the
+    # cut file is right about what was drawn, the rule is about what is bought — and
+    # stays below a person (estimator_confirmed 100). Equal to the cut file it would only
+    # ever be refused, which is how the 17:36 7332-01 book kept 0.9 mm on every line.
+    "production_substitution": 97,
+}
+
+FIELD_RANK_OVERRIDE: Dict[str, Dict[str, int]] = {
+    "normalized_thickness_mm": _CUT_FILE_GAUGE_RANK,
+}
+
+
+def field_rank(source: Any, field: Any = None) -> int:
+    """Rank of a source FOR THIS FACT — the ordinary rank unless the fact publishes its own.
+
+    Every precedence decision goes through this rather than `rank` directly, so a field that
+    reorders its readers reorders them for the write, the refusal, the provenance stamp and the
+    flag alike. A decision taken on one ordering and recorded under another is the defect that
+    makes a provenance column worse than no column.
+
+    `rank` itself is unchanged and still answers the general question, which is what the report
+    and the route compiler ask it.
+    """
+    _leaf = str(field or "").strip().rsplit(".", 1)[-1]
+    _over = FIELD_RANK_OVERRIDE.get(_leaf)
+    if _over:
+        s = str(source or "").strip().lower()
+        if s in _over:
+            return _over[s]
+        # Same prefix matching as rank(), longest name first, so "dxf_filename" is not
+        # swallowed by "dxf".
+        for name, r in sorted(_over.items(), key=lambda kv: -len(kv[0])):
+            if s.startswith(name) or name in s:
+                return r
+    return rank(source)
+
+
+def tiebreak_priority(source: Any, field: Any = None) -> int:
+    """Within-rank precedence. 0 means "no published ordering" — fall through.
+
+    `field` is optional and changes nothing for callers that omit it. Where a fact has its own
+    published order — gauge, today — that order wins, because the general rule about printed
+    sheets beating filenames was written about dimensions and is wrong about stock.
+    """
+    key = str(source or "").strip().lower()
+    per_field = FIELD_TIEBREAK.get(str(field or "").strip().lower())
+    if per_field and key in per_field:
+        return per_field[key]
+    return SOURCE_TIEBREAK.get(key, 0)
+
+
+# ── WHERE A DECISION WAS TAKEN, IN THE ESTIMATOR'S WORDS ────────────────────────────
+# The rank keys above are internal join fields. An estimator reading a report needs the
+# thing that actually decided it — the model, the flat pattern, the title block, the AI —
+# and needs to be able to tell a measurement from a language model at a glance.
+#
+# ONE OWNER. job_decision_report kept its own eight-entry version of this dict, which is
+# how a source the waterfall knows about ("mirror_of_measured", "pdf_overall_dims") renders
+# as a blank in the one document written to explain the decision. Anything not named here
+# falls back to the raw key rather than to silence — an unfamiliar source is still a source,
+# and printing nothing is the failure this exists to prevent.
+SOURCE_DISPLAY_NAME: Dict[str, str] = {
+    "vision_concept":         "sighted from the customer's render (assumed, unconfirmed)",
+    "enquiry_brief":          "the enquiry brief typed for this job (stated, unconfirmed by a drawing)",
+    "production_substitution": "a confirmed production rule (the gauge the shop buys)",
+    "customer_change":        "the customer's change since the drawings, accepted by an estimator",
+    "estimator_confirmed":    "an estimator, overruling the files",
+    "estimator_read_drawing": "an estimator reading the drawing",
+    "estimator_inferred":     "an estimator's stated inference from the drawing",
+    "knowledge_base":         "SDI's knowledge base",
+    "solidworks_api":         "the SolidWorks model",
+    "solidworks_flat_pattern": "the SolidWorks flat pattern",
+    "solidworks_applied_material": "the SolidWorks library material (appearance, not a spec)",
+    "drawn_on_sheet":         "the sheet that draws the part (it has no sheet of its own)",
+    "dxf":                    "the DXF",
+    "dxf_flat_pattern":       "the DXF flat pattern",
+    "mirror_of_measured":     "the measured opposite hand",
+    "drawing_deterministic":  "the drawing",
+    "title_block":            "the title block",
+    "dxf_filename":           "the DXF filename the drawing office typed",
+    # THE TWO BOM READERS, now that they are ranked. Both name the parts table, because that is
+    # what an estimator is looking at — the difference between them is HOW it was read, and that
+    # is the part that decides which one wins an arbitration.
+    "bom_table":              "the parts table on the drawing",
+    "vision":                 "the parts table, read from the image by the vision model",
+    "pdf_overall_dims":       "the drawing's overall dimensions",
+    "bom_tree":               "the bill of materials",
+    "bom_tree_per_unit":      "the bill of materials, times its assembly's own count",
+    "override_rule":          "an SDI override rule",
+    "llm_extract":            "Grok (xAI)",
+    "llm_full_extract":       "Grok (xAI)",
+    "llm_full_job":           "Grok (xAI)",
+    "inference":              "engine inference",
+    "geometry_inference":     "engine inference from geometry",
+    "printed_extents_provisional": "the largest dimensions printed on its own sheet (provisional)",
+    "model_extents_board_gauge": "the model's smallest extent — a flat board's gauge (provisional)",
+    "assembly_envelope_allowance": "the outline of the assembly it sits in (provisional — the part read larger)",
+    "assembly_members": "its members' material — the parts the compiled hierarchy gives it",
+    "own_sheet_title_block": "its own sheet's title block",
+    "own_sheet_section":      "the section its own sheet names",
+    "mirror_of_provisional":  "its other hand's provisional reading",
+    "compiler_default":       "an engine default",
+    # A NAME FOR THE THING THAT WAS CALLED NOTHING.
+    #
+    # James, reading section 12 of the 10575-02 report — forty-odd operations, every one of them
+    # "an unrecorded source", rank 0: "what is an unrecorded source?"
+    #
+    # They were operations recognised in the drawing's own note text. route_compiler's adapter
+    # fell back to "unknown" for the textual_operations field, so a keyword recogniser reading
+    # WELD AND DRESS off a note produced a claim indistinguishable from one nobody could account
+    # for. The drawing said it; the record did not say the drawing said it.
+    #
+    # RANK IS DELIBERATELY UNCHANGED AT 0 (this key is absent from SOURCE_RANK, which ranks
+    # anything it does not hold at 0). Naming a source is a reporting change; ranking it is a
+    # costing change — it decides which claim wins an arbitration and therefore what the job is
+    # priced at. Those two must not travel together, least of all in the week before this engine
+    # is walked through with the estimators. Whether a recognised note should outrank a bare
+    # inference is a real question and it needs a parity run, not a commit message.
+    "drawing_notes":          "a note on the drawing",
+    "unknown":                "an unrecorded source",
+    # A textual op with no recorded source and no quoted words (D-586): rank 0 like unknown
+    # (absent from SOURCE_RANK), but a distinct key so the demotion is a LABELLING change —
+    # the stranded-assembly status rule keys on "unknown" and must not start firing on every
+    # op this demotes; whether it should is a parity-run question, not a side effect.
+    "unrecorded":             "an unrecorded source",
+}
+
+# Sources that MEASURED the part rather than reasoned about it. Reports mark these
+# differently because the distinction is the whole point of the waterfall: a number off a
+# model can be held against the model, and a number off a language model cannot.
+MEASURED_SOURCES = frozenset({
+    "estimator_confirmed", "knowledge_base", "solidworks_api", "solidworks_flat_pattern",
+    "solidworks_applied_material",
+    "dxf", "dxf_flat_pattern", "mirror_of_measured", "drawing_deterministic",
+    "title_block", "pdf_overall_dims", "bom_tree",
+})
+
+
+def display_name(source: Any) -> str:
+    """What to print for `source`. Never empty for a non-empty source."""
+    key = str(source or "").strip().lower()
+    if not key:
+        return ""
+    return SOURCE_DISPLAY_NAME.get(key, key.replace("_", " "))
+
+
+def was_measured(source: Any) -> bool:
+    """True when this source read the part rather than reasoned about it."""
+    return str(source or "").strip().lower() in MEASURED_SOURCES
+
+
+# Where a datum's source is recorded. Falling back to a per-field convention
+# ("<field>_source") keeps this usable for fields that have no dedicated key yet.
+_SOURCE_FIELDS = {
+    "normalized_material": "material_source",
+    "quantity": "quantity_source",
+    "normalized_thickness_mm": "thickness_source",
+}
+
+
+def rank(source: Any) -> int:
+    """Rank of a source name. Unknown or absent sources rank 0, so they fill gaps but
+    never displace anything. Matched on a prefix so a decorated value such as
+    'knowledge_base (92%)' or 'override_rule:timber_panels' still resolves."""
+    s = str(source or "").strip().lower()
+    if not s:
+        return 0
+    if s in SOURCE_RANK:
+        return SOURCE_RANK[s]
+    for name, r in sorted(SOURCE_RANK.items(), key=lambda kv: -len(kv[0])):
+        if s.startswith(name) or name in s:
+            return r
+    return 0
+
+
+def _source_key(leaf: str) -> str:
+    return _SOURCE_FIELDS.get(leaf, f"{leaf}_source")
+
+
+def value_of(part: Dict[str, Any], field: str) -> Any:
+    """The current value of a datum, MISSING when there is none. Never conflates a recorded
+    zero with an absent value."""
+    if not isinstance(part, dict):
+        return MISSING
+    path, leaf = _split(field)
+    node = _walk(part, path)
+    if node is None or leaf not in node:
+        return MISSING
+    v = node.get(leaf)
+    return MISSING if _is_empty(v) else v
+
+
+def source_of(part: Dict[str, Any], field: str) -> str:
+    """The recorded source for one datum on a part."""
+    if not isinstance(part, dict):
+        return ""
+    path, leaf = _split(field)
+    node = _walk(part, path)
+    if node is None:
+        return ""
+    return str(node.get(_source_key(leaf)) or "")
+
+
+def _same_value(a: Any, b: Any) -> bool:
+    """Do two observations say the same thing? Numbers compare numerically (2 and 2.0 are one
+    fact), everything else case- and space-insensitively."""
+    try:
+        fa, fb = float(str(a).strip()), float(str(b).strip())
+        return abs(fa - fb) < 1e-9
+    except (TypeError, ValueError):
+        pass
+    return " ".join(str(a).split()).strip().lower() == " ".join(str(b).split()).strip().lower()
+
+
+def confidence_of(part: Dict[str, Any], field: str) -> Optional[float]:
+    if not isinstance(part, dict):
+        return None
+    path, leaf = _split(field)
+    node = _walk(part, path)
+    if node is None:
+        return None
+    try:
+        return float(node.get(f"{leaf}_confidence"))
+    except (TypeError, ValueError):
+        return None
+
+
+def may_overwrite(part: Dict[str, Any], field: str, new_source: Any,
+                  new_value: Any = MISSING, new_confidence: Optional[float] = None) -> bool:
+    """May `new_source` REPLACE a value that disagrees with it?
+
+    Yes when the datum is empty — anything may fill a gap. Otherwise only a STRICTLY stronger
+    source may replace a value it disagrees with.
+
+    Equal rank used to be enough, on the reasoning that two passes of equal standing refining
+    each other is normal and the later one usually knows more. That is not true of this
+    pipeline. Two title-block readings of the same rank disagreeing is not refinement, it is
+    a conflict — and resolving it by letting the later one win makes the answer depend on page
+    order, silently, with no flag raised because the write succeeded. The first observation is
+    kept and the disagreement recorded, unless the newcomer carries a strictly higher
+    confidence, which is a real reason to prefer it rather than an accident of ordering.
+
+    A recorded ZERO is a value, not a gap. A model reporting no cut-outs has answered the
+    question, and a weaker source must not treat that answer as an opening."""
+    if not isinstance(part, dict):
+        return False
+    _cur = value_of(part, field)
+    if _cur is MISSING:
+        return True
+    _new_rank, _cur_rank = (field_rank(new_source, field),
+                            field_rank(source_of(part, field), field))
+    if _new_rank > _cur_rank:
+        return True
+    if _new_rank < _cur_rank:
+        return False
+    # Equal rank. Agreement is not a replacement at all, so it is allowed and handled by
+    # apply_field as a provenance question.
+    if new_value is not MISSING and _same_value(_cur, new_value):
+        return True
+    _cur_conf = confidence_of(part, field)
+    if new_confidence is not None and _cur_conf is not None and new_confidence > _cur_conf:
+        return True
+    return False
+
+
+def _observe(part: Dict[str, Any], field: str, value: Any, source: Any,
+             applied: bool, displaced_by: Any = None) -> None:
+    """Record that a source said this about this field, whatever became of it.
+
+    ONE LIST, ONE QUESTION: what else has been said about this datum. Until now only a
+    SUCCESSFUL replacement was recorded, so the evidence base was exactly backwards — a
+    reading that lost was kept, and a reading that was REFUSED was written into review_flags
+    as English prose and into the record not at all.
+
+    11650-04 is what that costs. The title block says PETG, the options list says PETG or PC,
+    six DXF exports are named 2MM PETG, and the parts catalogue stocks PETG — against one
+    SolidWorks model property saying ABS. Every one of those PETG readings after the first was
+    refused, so nothing could count them, and the question "did independent sources agree
+    against the winner" had no data behind it however the rule was written.
+
+    Duplicates are not evidence. The same source saying the same thing twice is one
+    observation seen twice, and counting it as two is how a single stale filename would come
+    to outvote a model.
+    """
+    if _is_empty(value) or not str(source or "").strip():
+        return
+    entry: Dict[str, Any] = {"value": value, "source": str(source), "applied": bool(applied)}
+    if displaced_by:
+        entry["displaced_by"] = str(displaced_by)
+    log = part.setdefault("_displaced", {}).setdefault(field, [])
+    for seen in log:
+        if str(seen.get("source") or "") == entry["source"] and \
+                _norm_value_key(seen.get("value")) == _norm_value_key(value):
+            return
+    log.append(entry)
+
+
+def _agree(part: Dict[str, Any], field: str, value: Any, source: Any) -> None:
+    """Record that a source CONFIRMED what this field already held.
+
+    Agreement was the one outcome that left no trace. A replacement was logged and (now) a
+    refusal is too, but a source arriving and saying "yes, that" returned early from
+    apply_field as "nothing to change" — so the value's support was permanently undercounted
+    at one, however many readers had confirmed it.
+
+    That is not a bookkeeping detail once a quorum can overrule a singleton: two drawing
+    sources would have outvoted a model that two other sources had independently confirmed,
+    because only one of those confirmations was on the record. My own test caught it.
+    """
+    if _is_empty(value) or not str(source or "").strip():
+        return
+    log = part.setdefault("_agreed", {}).setdefault(field, [])
+    for seen in log:
+        if str(seen.get("source") or "") == str(source) and \
+                _norm_value_key(seen.get("value")) == _norm_value_key(value):
+            return
+    log.append({"value": value, "source": str(source)})
+
+
+def support_for(part: Dict[str, Any], field: str, value: Any) -> List[str]:
+    """The DISTINCT sources that have named this value for this field, from every direction it
+    could have been said: the source currently holding it, sources that confirmed it, and
+    sources whose reading of it was overwritten or refused.
+
+    Distinct sources, not distinct readings: two passes of one reader agreeing with itself is
+    one observation seen twice, and counting it twice is how a single stale filename would
+    come to outvote a model.
+    """
+    want = _norm_value_key(value)
+    sources = {str(e.get("source")) for e in displaced_values(part, field)
+               if str(e.get("source") or "") and _norm_value_key(e.get("value")) == want}
+    for e in ((part.get("_agreed") or {}).get(field) or []) if isinstance(part, dict) else []:
+        if str(e.get("source") or "") and _norm_value_key(e.get("value")) == want:
+            sources.add(str(e["source"]))
+    _cur = value_of(part, field)
+    _cur_src = source_of(part, field)
+    if _cur is not MISSING and _cur_src and _norm_value_key(_cur) == want:
+        sources.add(str(_cur_src))
+    return sorted(sources)
+
+
+# How many INDEPENDENT sources must agree before they outweigh a single stronger one. Two,
+# because that is the smallest number that is not one source seen twice, and because the case
+# this exists for is exactly that shape: a drawing and its DXF export against a model.
+CORROBORATION_QUORUM = 2
+
+# ── WHAT "INDEPENDENT" MEANS, AND IT IS NOT "A DIFFERENT READER" ─────────────────────
+#
+# THE DEFECT, WHICH COST 12349-02 TWICE. The quorum counted distinct SOURCE NAMES, and quantity
+# is written in this codebase by exactly two sources — `bom_tree` and `drawing_deterministic` —
+# which are both readings of the SAME PDF. Two of them agreeing on the general arrangement's 3
+# therefore formed a quorum and displaced the SolidWorks instance count of 1, with ranks
+# completely untouched: 90 lost to 60 + 70, and the write SUCCEEDED, so it never looked like a
+# defect and produced no KEPT line in any log. "SW qty outranks the GA" was true and irrelevant.
+#
+# A quorum is supposed to weigh EVIDENCE, and two readers of one document are one piece of
+# evidence read twice. What separates real corroboration is the artefact behind the reading: the
+# model the shop builds from, the file the laser runs, the drawing as issued, a person.
+#
+# THIS DOES NOT DEVALUE THE DUAL-PATH BOM READER. The table parser and the vision model reading
+# the same parts table independently is genuinely worth having — it settles WHAT THE TABLE SAYS,
+# and their agreement is recorded as agreement and raises confidence. What it must not do is
+# manufacture a second independent voice against a stronger source: establishing that the table
+# says 3 is not evidence that 3 is the per-unit quantity.
+#
+# An unlisted source is its OWN family, so nothing silently merges into a voice it was never
+# part of, and adding a reader cannot quietly strengthen or weaken an existing quorum.
+EVIDENCE_FAMILY: Dict[str, str] = {
+    # The model the shop builds from.
+    "solidworks_api": "the model",
+    "solidworks_flat_pattern": "the model",
+    "solidworks_applied_material": "the model",
+    # The file the laser runs, and the name on it.
+    "dxf": "the cut file",
+    "dxf_flat_pattern": "the cut file",
+    "dxf_filename": "the cut file",
+    # The drawing as issued — every way of reading it, parser or model, is still the drawing.
+    "title_block": "the drawing",
+    "drawing_deterministic": "the drawing",
+    "drawing_notes": "the drawing",
+    "drawn_on_sheet": "the drawing",
+    "bom_table": "the drawing",
+    "bom_tree": "the drawing",
+    "bom_tree_per_unit": "the drawing",
+    "pdf_overall_dims": "the drawing",
+    "llm_extract": "the drawing",
+    "llm_full_extract": "the drawing",
+    "vision": "the drawing",
+    # The customer, asking for something other than what was drawn.
+    "customer_change": "the customer",
+    # A person, however they arrived at it.
+    "estimator_confirmed": "a person",
+    "estimator_read_drawing": "a person",
+    "estimator_inferred": "a person",
+    # Not a reading of this job at all.
+    "knowledge_base": "the knowledge base",
+    # Derived rather than observed, and a derivation is not a witness.
+    "override_rule": "a derivation",
+    "inference": "a derivation",
+    "geometry_inference": "a derivation",
+    # A MIRROR IS THE OTHER HAND'S READING WEARING A NEW NAME. Kept in its own family here; the
+    # rule that stops it voting for its own base lives in drawing_job_merge and is untouched.
+    "mirror_of_measured": "a mirrored measurement",
+}
+
+
+def evidence_family(source: Any) -> str:
+    """Which artefact a reading ultimately comes from — the model, the cut file, the drawing, a
+    person. Two readings of the same artefact are one voice however different the readers are.
+
+    Matched on a prefix like `rank`, longest name first, so a decorated source still resolves.
+    An unrecognised source is its own family: it may corroborate, but nothing is assumed about
+    what it read."""
+    s = str(source or "").strip().lower()
+    if not s:
+        return ""
+    if s in EVIDENCE_FAMILY:
+        return EVIDENCE_FAMILY[s]
+    for name, fam in sorted(EVIDENCE_FAMILY.items(), key=lambda kv: -len(kv[0])):
+        if s.startswith(name) or name in s:
+            return fam
+    return s
+
+
+# ── WHERE THE FAMILY RULE APPLIES, AND WHY IT IS NOT EVERYWHERE YET ──────────────────
+#
+# QUANTITY ONLY, for now, and that is a deliberate limit rather than an oversight.
+#
+# Quantity is where the defect is proven and where the families are unambiguous: a per-unit
+# count comes from the model's instance count, from a BOM line, or from a person, and the two
+# sources that write it here are both readings of one PDF.
+#
+# MATERIAL AND GAUGE ARE NOT THE SAME CASE, and 11650-04 is why. That pack states PETG four
+# ways — the title block, the options list, six DXF exports and 37 catalogue rows — against one
+# SolidWorks library default of ABS, and the model winning cost four panels priced at GBP 175,
+# 245 and 115 for the same nominal material plus two BLOCKING invariants. Its real evidence
+# spans families (the drawing AND the cut file), so it would survive this rule; but the tests
+# that protect it build the quorum from two readings of the drawing alone, and a pack whose only
+# evidence is two parsers of one title block would lose that protection. Widening this is a
+# costing change to every material decision on every job, and it needs its own authorisation and
+# its own parity run — not a side effect of a quantity fix.
+QUORUM_BY_FAMILY_FIELDS = {"quantity"}
+
+
+def _voices(sources, field: Any = None) -> set:
+    """The independent voices among these sources.
+
+    For a field that counts by evidence family, two readings of one artefact collapse to one.
+    Everywhere else this is the distinct source names, exactly as before."""
+    _leaf = str(field or "").strip().rsplit(".", 1)[-1]
+    if _leaf in QUORUM_BY_FAMILY_FIELDS:
+        return {f for f in (evidence_family(s) for s in sources) if f}
+    return {str(s) for s in sources if str(s or "")}
+
+
+def _families(sources) -> set:
+    return {f for f in (evidence_family(s) for s in sources) if f}
+
+
+def corroboration_overrules(part: Dict[str, Any], field: str, new_value: Any,
+                            new_source: Any) -> Optional[Dict[str, Any]]:
+    """Do independent sources agreeing on `new_value` outweigh the single source now held?
+
+    THE RULE, STATED ONCE, FOR EVERY ARBITRATED FIELD. A lone high-ranked reading is evidence;
+    it is not proof, and a model's material property is the least reliable thing a model
+    carries — it is whatever was assigned in CAD, while the title block is what was ISSUED and
+    what the shop buys to.
+
+    It takes a QUORUM against a SINGLETON. Two independent sources beat one; they do not beat
+    two, because then nothing distinguishes the sides and order would decide it. Returns the
+    evidence when the rule fires, so the caller can write down what outvoted what — a
+    precedence rule that silently reverses an earlier decision is worse than the one it
+    replaces.
+    """
+    _cur = value_of(part, field)
+    if _cur is MISSING or _same_value(_cur, new_value):
+        return None
+    # A DECISION IS NOT OUTVOTED BY READERS. Readers agreeing answer "what does the drawing
+    # say"; a person's confirmation or a confirmed production rule answers a different
+    # question ("what is bought / what is true regardless"), so however many readings agree
+    # about the drawn value they are not evidence against it. Without this, the DXF and the
+    # model — both correctly reporting 0.9 mm — outvoted the shop's 1.0 mm substitution
+    # rule on 7332-01-008 the moment the model was read after the rule had applied.
+    _held_src = source_of(part, field)
+    if _held_src in _NOT_A_READING or field_rank(_held_src, field) >= _DECISION_RANK:
+        return None
+    against = set(support_for(part, field, new_value)) | {str(new_source or "")}
+    against.discard("")
+    holding = support_for(part, field, _cur)
+    # COUNTED BY EVIDENCE FAMILY, NOT BY READER NAME. See EVIDENCE_FAMILY: two readings of one
+    # document are one voice, so a second reader of the same drawing cannot make up a quorum.
+    _against_fams, _holding_fams = _voices(against, field), _voices(holding, field)
+    if len(_against_fams) < CORROBORATION_QUORUM:
+        return None
+    if len(_holding_fams) >= len(_against_fams):
+        # NOT A TIE-BREAK. Two against two is a disagreement a person has to settle, and
+        # letting the newcomer win would make the answer depend on the order pages were read.
+        return None
+    return {"value": new_value, "sources": sorted(against),
+            "families": sorted(_against_fams),
+            "displaced_value": _cur, "displaced_sources": holding,
+            "displaced_families": sorted(_holding_fams)}
+
+
+# A PERSON DECIDING IS NOT A READER, AND IS NEVER OUTVOTED BY READERS.
+_DECISION_RANK = 100
+# Nor is a confirmed production rule: it does not dispute what was drawn, it states what is
+# bought. Named by kind, not by rank, so the exemption is a decision rather than a number.
+_NOT_A_READING = frozenset({"estimator_confirmed", "knowledge_base", "production_substitution",
+                            "customer_change",
+                            # An assembly's material IS its members' (D-589): a derivation
+                            # from the parts, not a reading of its sheet, so readers of that
+                            # sheet's boilerplate do not outvote it. A person still outranks it.
+                            "assembly_members"})
+
+
+def corroboration_defends(part: Dict[str, Any], field: str, new_value: Any,
+                          new_source: Any) -> Optional[Dict[str, Any]]:
+    """Do independent sources agreeing on the value HELD outweigh a single stronger newcomer?
+
+    THE OTHER HALF OF THE QUORUM RULE, AND THE HALF THE CASES NEEDED.
+
+    `corroboration_overrules` is asked by apply_field only after ordinary precedence has
+    REFUSED — that is, only when the newcomer was weaker or equal. So the quorum could
+    protect a value from a weaker source, which it never needed protecting from, and could
+    do nothing at all when a STRONGER one arrived. Every job cited in this module as the
+    reason the rule exists is the stronger-source shape:
+
+      * 11650-04's door — title block, an options list and six DXF exports all say PETG;
+        one SolidWorks property says ABS, outranks them 90 to 70, writes, and the part
+        goes from GBP 35.28 to GBP 0.00 because ABS has no rate in config.
+      * 12349-02-69-04M's gauge — the DXF is named `1.2MM_MS`, the title block reads
+        "1.2 THK", and the model's cut list says 6mm. Two readings against one, and the
+        one wins by rank: a 1.2mm bracket costed as 6mm plate.
+
+    In both, the losing evidence was recorded, countable, and never counted, because the
+    only question asked of a stronger source was its rank.
+
+    A quorum (>= CORROBORATION_QUORUM distinct sources) holding the current value turns a
+    stronger singleton's overwrite into a refusal — a flagged conflict for a person to
+    settle, not a silent replacement.
+
+    It defends only while it is STRICTLY the larger side. Once as many sources have named
+    the challenger's value, the count no longer separates them and the question goes back to
+    rank, which is the resolver's ordinary job. That matters: a defence that held at parity
+    would be a veto the first two readers could impose on any amount of later evidence, and
+    the point of this is to weigh readings, not to freeze whichever arrived first.
+    """
+    _cur = value_of(part, field)
+    if _cur is MISSING or _same_value(_cur, new_value):
+        return None
+    # A DECISION IS NOT OUTVOTED BY READERS — IN THIS DIRECTION TOO. corroboration_overrules
+    # already exempts a HELD decision or production rule from a quorum of readings; the
+    # defence did not exempt an ARRIVING one. So on 12567-02-09M the DXF, the model and an
+    # inference all read the drawn 0.9 mm, the shop's confirmed 1.0 mm substitution arrived,
+    # and this refused it with "'1.0' from production_substitution was NOT applied" — while
+    # the sheet, correctly, costed the part at 1 mm. Readers answer what was drawn; a rule
+    # answers what is bought, and however many agree about the drawing they are not
+    # evidence against it (D-267).
+    if str(new_source or "") in _NOT_A_READING or field_rank(new_source, field) >= _DECISION_RANK:
+        return None
+    holding = set(support_for(part, field, _cur))
+    holding.discard("")
+    # A READER IS NOT OUTVOTED BY ITSELF (D-379). 12173-07-2-GA prints 12173-07-2-02M on two
+    # item rows, one per hand. The parts-list reader first read one row (1), then the table
+    # (2); its own first reading was counted as one of "2 independent sources" defending 1,
+    # and the trough was built with one side. A source revising its reading is one voice, and
+    # the voice it revises cannot stand against it.
+    _new_voice = _voices({str(new_source or "")}, field)
+    holding = {s for s in holding if not (_voices({s}, field) & _new_voice)}
+    # SAME COUNT, SAME RULE, BOTH DIRECTIONS. A defence must be worth as much as an overrule, or
+    # the two halves of one mechanism disagree about what independence is.
+    _holding_fams = _voices(holding, field)
+    if len(_holding_fams) < CORROBORATION_QUORUM:
+        # One piece of evidence held it, however many readers saw it. A stronger reading
+        # correcting a lone stale filename is precedence working, and nothing here should
+        # stand in its way.
+        return None
+    against = set(support_for(part, field, new_value)) | {str(new_source or "")}
+    against.discard("")
+    if len(_voices(against, field)) >= len(_holding_fams):
+        return None
+    return {"value": _cur, "sources": sorted(holding),
+            "refused_value": new_value, "refused_sources": sorted(against)}
+
+
+def displaced_values(part: Dict[str, Any], field: str) -> List[Dict[str, Any]]:
+    """Every observation this field does not currently hold, oldest first — refused as well as
+    overwritten. Each entry says which it was, in `applied`.
+
+    THE ARBITER KEPT ONLY THE LOSER OF A REFUSAL. When an incoming value was refused the
+    disagreement was flagged with both sides; when it WON, whatever it replaced was
+    overwritten and nothing recorded that anything had been. So a datum that arrived from
+    three sources looked identical to one that arrived from a single source that nobody
+    contradicted.
+
+    11650's door is what that costs. The model said ABS, a DXF filename said POLYCARBONATE
+    and the drawing text said POLYCARBONATE; the model outranked both and the part went from
+    GBP 35.28 to GBP 0.00, because ABS has a sheet size and a density in config and no rate.
+    Asking afterwards whether two independent sources had agreed against the winner was
+    impossible: the answer had been thrown away at the moment it was needed.
+
+    Recording it changes no outcome. It is the prerequisite for any rule that would.
+    """
+    if not isinstance(part, dict):
+        return []
+    record = part.get("_displaced")
+    return list((record or {}).get(field) or []) if isinstance(record, dict) else []
+
+
+def corroboration_against(part: Dict[str, Any], field: str) -> Dict[str, Any]:
+    """How many DISTINCT sources named a value other than the one now held, and which.
+
+    Distinct sources, not distinct readings: two passes of the same reader agreeing with
+    itself is one observation seen twice, and counting it as two is how a single stale
+    filename would come to outvote a model.
+    """
+    current = value_of(part, field)
+    against: Dict[str, set] = {}
+    for entry in displaced_values(part, field):
+        val, src = entry.get("value"), str(entry.get("source") or "")
+        if src and not (current is not MISSING and _same_value(current, val)):
+            against.setdefault(_norm_value_key(val), set()).add(src)
+    if not against:
+        return {"count": 0, "value": None, "sources": []}
+    _val_key, _srcs = max(against.items(), key=lambda kv: (len(kv[1]), kv[0]))
+    _value = next(e["value"] for e in displaced_values(part, field)
+                  if _norm_value_key(e.get("value")) == _val_key)
+    return {"count": len(_srcs), "value": _value, "sources": sorted(_srcs)}
+
+
+def _norm_value_key(value: Any) -> str:
+    return str(value).strip().upper().replace("_", " ")
+
+
+def _same_token(a: Any, b: Any) -> bool:
+    """One value in two spellings ('MILD_STEEL' / 'MILD STEEL' / 'MILD-STEEL')."""
+    na = re.sub(r"\s+", " ", str(a).replace("_", " ").replace("-", " ")).strip().upper()
+    nb = re.sub(r"\s+", " ", str(b).replace("_", " ").replace("-", " ")).strip().upper()
+    return bool(na) and na == nb
+
+
+def _same_material(a: Any, b: Any) -> bool:
+    """A callout and its lexicon reading are one fact (D-403). '400 MIC' from the sheet and
+    BOUGHT_IN from the normaliser, 'MILD STEEL' and MILD_STEEL: the second is what the first
+    resolves to, not a second opinion. 9598-02-02G's sheet asked "confirm which is right"
+    between the two. True when the lexicon reads both to one code, or one IS the other's code."""
+    if _same_token(a, b):
+        return True
+    try:
+        from json_normaliser import normalise_material as _nm             # noqa: PLC0415
+    except Exception:                                                    # noqa: BLE001
+        return False
+    sa, sb = str(a or "").strip(), str(b or "").strip()
+    if not sa or not sb:
+        return False
+    ca, cb = _nm(sa), _nm(sb)
+    if ca and cb and ca == cb:
+        return True
+    return bool((ca and _same_token(ca, sb)) or (cb and _same_token(cb, sa)))
+
+
+# Readings that describe a cut blank: on a record that is not cut from one (an assembly), two
+# such readings are not a disagreement anybody has to settle (D-455).
+_FIELDS_OF_A_CUT_PART = frozenset({"normalized_thickness_mm", "blank_length_mm", "blank_width_mm"})
+
+
+def _is_an_assembly_record(part: Mapping[str, Any]) -> bool:
+    """The same evidence detail_page_geometry.not_cut_from_a_blank weighs, asked of the record
+    alone: an assembly flag or children, or a code naming an assembly drawing where nothing —
+    an explicit is_assembly_parent=False or a measured flat — says otherwise."""
+    if not isinstance(part, Mapping):
+        return False
+    if (part.get("is_assembly_parent") or part.get("is_sub_assembly")
+            or part.get("assembly_children")):
+        return True
+    if part.get("is_assembly_parent") is False or part.get("dxf_augmented")             or part.get("dxf_measured_outline"):
+        return False
+    try:
+        from part_code_conventions import carries_assembly_role
+        return bool(carries_assembly_role(part.get("part_number")))
+    except Exception:                                            # noqa: BLE001
+        return False
+
+
+def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
+                note: Optional[str] = None, confidence: Optional[float] = None) -> bool:
+    """Set a datum if this source is entitled to, and record where it came from.
+
+    `field` may be dotted for nested records — "geometry_rollup.estimated_pierce_count" —
+    because the fields that drive cost mostly do not live at the top of a part.
+
+    An explicit zero IS a value and will be written, and will be defended afterwards against
+    weaker sources. Only MISSING, None and genuinely empty containers count as no-data.
+
+    Returns True if the value was written. When it was not, the disagreement is flagged on
+    the part with both values and both sources — the estimator can then see that two sources
+    disagreed and which one was kept, instead of only ever seeing the survivor."""
+    if not isinstance(part, dict) or _is_empty(value):
+        return False
+    path, leaf = _split(field)
+    key = _source_key(leaf)
+    _cur = value_of(part, field)
+    _cur_src = source_of(part, field)
+
+    # AGREEMENT UPGRADES PROVENANCE. A source that confirms the value already present has
+    # told us something real: this datum now rests on stronger evidence than it did. Callers
+    # used to skip the resolver entirely when the numbers matched — "nothing to change" — and
+    # the datum kept the weaker source's name, so a later medium-ranked pass could still
+    # displace a figure the model had independently confirmed. Submitting agreement is how
+    # the strong source's rank actually attaches to the value.
+    # A CALLOUT AND ITS LEXICON READING ARE ONE FACT (D-403): on normalized_material the
+    # agreement test reads both through the lexicon, so '400 MIC' held from the sheet and
+    # BOUGHT_IN offered by the normaliser agree instead of asking a person to choose.
+    _material_field = (leaf == "normalized_material")
+    if _cur is not MISSING and (_same_value(_cur, value)
+                                or (_material_field and _same_material(_cur, value))):
+        # CONFIRMATION IS EVIDENCE AND HAS TO BE COUNTED. Without this the value's support is
+        # stuck at one however many readers confirm it, and a quorum of two would overrule a
+        # figure three sources had independently agreed on.
+        _agree(part, field, value, source)
+        _new_rank, _cur_rank = field_rank(source, field), field_rank(_cur_src, field)
+        node = _walk(part, path, create=True)
+        if node is not None:
+            if _new_rank > _cur_rank:
+                # SOURCE AND CONFIDENCE MOVE TOGETHER. Updating the source while leaving the
+                # weaker source's confidence behind produces a datum labelled with a strong
+                # source and scored with a weak one — a record that reads as better evidence
+                # than anything actually supplied. When the stronger source gives no
+                # confidence, the stale figure is cleared rather than inherited.
+                node[key] = source
+                if confidence is not None:
+                    node[f"{leaf}_confidence"] = confidence
+                else:
+                    node.pop(f"{leaf}_confidence", None)
+            elif _new_rank == _cur_rank and confidence is not None:
+                # Corroboration at equal rank. Two independent readings agreeing is a
+                # genuine strengthening even though neither outranks the other, so the
+                # higher confidence stands. The source is unchanged: nothing was replaced.
+                _prev = confidence_of(part, field)
+                if _prev is None or confidence > _prev:
+                    node[f"{leaf}_confidence"] = confidence
+        # The value did not change, so this is not a change to report. Callers gate their
+        # audit messages on the return, and "SolidWorks replaced X with X" is noise at best
+        # and a false claim at worst.
+        return False
+
+    # ONE READER, TWO READINGS, IS ITS OWN OUTCOME (review of D-379). 12173-07-2-02M: the
+    # parts-list reader submitted one row's 1 as bom_tree, then the table's 2 as bom_tree. D-379
+    # stopped the first reading defending against the second, and the second then met either
+    # the "two sources of equal standing" sentence — there were not two sources — or, with a
+    # higher confidence, a silent write: title_block naming PETG beside a PETG filename, then
+    # ABS at 0.9, wrote ABS with nothing said. A reader that contradicts itself is not evidence
+    # either way, so it never writes, the held value stays, and the record says what happened.
+    #
+    # Two exemptions, both statements rather than readings. A person or a confirmed rule
+    # changing its answer goes to rank exactly as before. A held value whose stamp was CLEARED
+    # is a reader saying its earlier figure is superseded (file_scan clears the tree's stale
+    # stamp once it recognises an arrangement), so it is not held against the new one. And one
+    # value in two spellings is not a contradiction.
+    if (_cur is not MISSING and _cur_src and str(source or "").strip()
+            and str(source) not in _NOT_A_READING
+            and field_rank(source, field) < _DECISION_RANK
+            and not _same_token(_cur, value)
+            and not (_material_field and _same_material(_cur, value))
+            and str(source) in support_for(part, field, _cur)):
+        _observe(part, field, value, source, applied=False)
+        # A GAUGE ON AN ASSEMBLY IS NOBODY'S DECISION (D-455). 8188-08_GA's sheet prints the
+        # gauges of the parts it draws; read onto the assembly record they are two readings of
+        # a field that prices nothing there, and the book asked "3 or 10 mm?" of a record that
+        # is not cut. Recorded, not asked.
+        # Decided from the record and the code's own shape (part_code_conventions, already in
+        # this module's closure) — never by importing the geometry stack, which the pricing
+        # service does not carry.
+        if leaf in _FIELDS_OF_A_CUT_PART and _is_an_assembly_record(part):
+            return False
+        part.setdefault("_self_revisions", {}).setdefault(field, []).append(
+            {"source": str(source), "from": _cur, "to": value})
+        _others = [s for s in support_for(part, field, _cur) if s != str(source)]
+        part.setdefault("review_flags", []).append(
+            f"{field}: {source} read both '{_cur}' and '{value}' — one reader, two readings, "
+            f"so neither counts against the other. '{_cur}' is kept"
+            + (f" ({', '.join(_others)} also say{'s' if len(_others) == 1 else ''} '{_cur}')"
+               if _others else "")
+            + "; confirm which is right")
+        return False
+
+    # A QUORUM DEFENDS, AS WELL AS OVERRULES. Asked BEFORE precedence, because precedence
+    # cannot ask it: by the time a stronger source has been allowed to write, the thing worth
+    # weighing — that several independent readers already agreed against it — has been
+    # overwritten. Where one source holds the value this is a no-op and rank decides as before.
+    _defence = corroboration_defends(part, field, value, source)
+    if _defence is not None:
+        _observe(part, field, value, source, applied=False)
+        part.setdefault("_corroboration", {})[field] = _defence
+        # "OUTRANKS" IS A FACT ABOUT TWO RANKS, SO IT IS COMPUTED. The sentence said it of
+        # every refused newcomer; a defence also turns away an equal or weaker one.
+        _outranks = field_rank(source, field) > field_rank(_cur_src, field)
+        part.setdefault("review_flags", []).append(
+            f"{field}: '{value}' from {source} was NOT applied"
+            f"{' although it outranks what is held' if _outranks else ''} — "
+            f"{len(_defence['sources'])} independent sources say '{_cur}' "
+            f"({', '.join(_defence['sources'])}) against it. "
+            + ("The stronger single reading has been set aside because several others agree "
+               "against it" if _outranks else
+               "Several independent readings agree against it")
+            + "; confirm which is right")
+        return False
+
+    if may_overwrite(part, field, source, new_value=value, new_confidence=confidence):
+        node = _walk(part, path, create=True)
+        if node is None:
+            return False
+        # WHAT THIS REPLACED, KEPT. A refusal has always been flagged with both sides; a
+        # SUCCESSFUL replacement recorded nothing, so a datum three sources argued over
+        # looked exactly like one nobody contradicted. Asking afterwards whether two
+        # independent sources had agreed against the winner was impossible — the answer was
+        # discarded at the moment it became worth having.
+        #
+        # Nothing here changes an outcome. It is the prerequisite for any rule that would.
+        if _cur is not MISSING and not _same_value(_cur, value):
+            _observe(part, field, _cur, _cur_src or "an earlier pass",
+                     applied=True, displaced_by=source)
+        node[leaf] = value
+        node[key] = source
+        if confidence is not None:
+            node[f"{leaf}_confidence"] = confidence
+        if note:
+            part.setdefault("review_flags", []).append(note)
+        return True
+
+    # REFUSED, AND ON THE RECORD BEFORE THE RULE IS ASKED. Every reading that loses is still
+    # a reading, and until now the only trace of one was a sentence in review_flags that
+    # nothing could count.
+    _observe(part, field, value, source, applied=False)
+
+    # A QUORUM OVERRULES A SINGLETON. Asked only after ordinary precedence has refused, so a
+    # stronger source still wins on its own merits and this changes nothing where sources
+    # agree. Where they do not, the question stops being "who ranks highest" and becomes "how
+    # many independent readings say each thing" -- which is the question an estimator asks in
+    # front of the drawing.
+    _corr = corroboration_overrules(part, field, value, source)
+    if _corr is not None:
+        node = _walk(part, path, create=True)
+        if node is not None:
+            _observe(part, field, _cur, _cur_src or "an earlier pass",
+                     applied=True, displaced_by=source)
+            node[leaf] = value
+            node[key] = source
+            if confidence is not None:
+                node[f"{leaf}_confidence"] = confidence
+            else:
+                node.pop(f"{leaf}_confidence", None)
+            part.setdefault("review_flags", []).append(
+                f"{field}: '{_corr['displaced_value']}' from "
+                f"{', '.join(_corr['displaced_sources']) or 'an earlier pass'} was OUTVOTED — "
+                f"{len(_corr['sources'])} independent sources say '{value}' "
+                f"({', '.join(_corr['sources'])}). The stronger single source has been set "
+                f"aside because several weaker ones agree against it; confirm which is right")
+            part.setdefault("_corroboration", {})[field] = _corr
+            return True
+
+    _cur_src_txt = _cur_src or "an earlier pass"
+    # ONE VALUE, TWO SPELLINGS, NO DISAGREEMENT. 'MILD_STEEL' from a filename and
+    # 'MILD STEEL' from the drawing are the same token; asking an estimator to "confirm
+    # which is right" between an underscore and a space is noise dressed as a decision.
+    # The refusal above still records the observation — only the flag is withheld.
+    if _same_token(_cur, value) or (_material_field and _same_material(_cur, value)):
+        return False
+    if field_rank(source, field) == field_rank(_cur_src, field):
+        # EQUAL RANK, DIFFERENT ANSWERS. Neither observation outranks the other, so nothing
+        # here can resolve it — and letting the later one win would make the result depend on
+        # the order pages happened to be read in. Keep the first, and say so.
+        part.setdefault("review_flags", []).append(
+            f"{field}: two sources of equal standing disagree — '{_cur}' from "
+            f"{_cur_src_txt} was kept, '{value}' from {source} was not applied. Neither "
+            f"outranks the other; a person must decide which is right")
+    else:
+        part.setdefault("review_flags", []).append(
+            f"{field}: '{value}' from {source} NOT applied — '{_cur}' from {_cur_src_txt} is "
+            f"the stronger source and was kept. The two disagree; confirm which is right")
+    return False
+
+
+# ── FACTS THAT ARE BOUGHT TOGETHER ARE DECIDED TOGETHER ──────────────────────────────
+
+# Fields that name ONE THING between them. A material and a gauge are not two independent
+# facts about a part: they are a stock key, the thing that gets ordered, and the catalogue is
+# keyed on the pair. Resolving them separately lets each half come from a different reading —
+# which produces a key that no source ever asserted and no supplier stocks.
+CO_ASSERTED_GROUPS: List[Tuple[str, ...]] = [
+    ("normalized_material", "normalized_thickness_mm"),
+]
+
+
+def asserted_pairs(part: Dict[str, Any], group: Tuple[str, ...]) -> Dict[str, Tuple[Any, ...]]:
+    """What each distinct source said about EVERY field in `group`, as whole readings.
+
+    A source that spoke about only part of the group is recorded with MISSING for the rest —
+    a title block naming a material and no gauge has not asserted a pair, and must not be read
+    as having agreed to whatever gauge happened to be lying around.
+    """
+    said: Dict[str, Dict[str, Any]] = {}
+    for field in group:
+        for entry in displaced_values(part, field):
+            src = str(entry.get("source") or "")
+            if src:
+                said.setdefault(src, {}).setdefault(field, entry.get("value"))
+        for entry in ((part.get("_agreed") or {}).get(field) or []) if isinstance(part, dict) else []:
+            src = str(entry.get("source") or "")
+            if src:
+                said.setdefault(src, {}).setdefault(field, entry.get("value"))
+        _cur, _src = value_of(part, field), source_of(part, field)
+        if _cur is not MISSING and _src:
+            said.setdefault(str(_src), {}).setdefault(field, _cur)
+    return {src: tuple(vals.get(f, MISSING) for f in group) for src, vals in said.items()}
+
+
+def settle_companion_facts(part: Dict[str, Any]) -> List[str]:
+    """When a reading is overruled, the facts it carried alongside lose the standing they
+    borrowed from it.
+
+    11650-04 IS WHAT THIS COSTS, AND IT COST IT TWICE. The panels are read by a SolidWorks
+    model saying ABS 2.2mm, by a title block saying PETG, and by six DXF exports named
+    `11650-04-01A_2MM PETG_REVG.DXF`. Promoting the filename to a real source let two
+    independent readings outvote the model on MATERIAL — correctly — while the gauge stayed at
+    2.2 on the model's authority, because only one source had named 2.0 and a quorum needs two.
+
+    The result was PETG at 2.2mm. Nobody said that. The model said ABS at 2.2, the export said
+    PETG at 2.0, and the engine took one half from each — then looked up a rate keyed on the
+    pair, matched the gauge exactly as it must, found nothing stocked at 2.2, and priced the
+    part at nothing. A defensible decision on each field separately, and a purchase order that
+    cannot be placed.
+
+    THE RULE, AND IT IS NOT ABOUT SHEET. A source that is overruled on one half of a joint fact
+    does not keep its authority over the other half by default: the two came from one reading,
+    and that reading has been set aside. Where the sources that WON also named the companion,
+    theirs is the one that goes with it, because it is the reading that survived intact.
+
+    NOT A LICENCE TO MIX THE OTHER WAY. A source that never spoke about the companion has not
+    lost an argument about it, so a title block naming a material and no gauge leaves the
+    model's gauge exactly where it was. Only a reading that asserted BOTH and was overruled on
+    one gives up the other.
+
+    Returns the fields it moved, for the caller to report. Changes nothing when no
+    corroboration fired, which is almost every part.
+    """
+    if not isinstance(part, dict):
+        return []
+    corr = part.get("_corroboration") or {}
+    if not corr:
+        return []
+    moved: List[str] = []
+    for group in CO_ASSERTED_GROUPS:
+        overruled = [f for f in group if f in corr]
+        if not overruled:
+            continue
+        winners: set = set()
+        losers: set = set()
+        for f in overruled:
+            winners |= {str(s) for s in (corr[f].get("sources") or [])}
+            losers |= {str(s) for s in (corr[f].get("displaced_sources") or [])}
+        winners.discard("")
+        losers.discard("")
+        pairs = asserted_pairs(part, group)
+        for i, field in enumerate(group):
+            if field in overruled:
+                continue
+            held_src = source_of(part, field)
+            # ONLY A READING THAT LOST. A source still holding this field on its own merits,
+            # having never been contradicted on the companion, is untouched.
+            if not held_src or held_src not in losers:
+                continue
+            # Being in `losers` IS having asserted both halves: a source only lands there by
+            # having named the overruled value, and it is here by holding this one. An extra
+            # "did it assert both" check looked prudent and was unreachable — no mutant could
+            # kill it, which is the tell. Removed rather than kept as decoration.
+            candidates = [(src, pairs[src][i]) for src in sorted(winners)
+                          if src in pairs and pairs[src][i] is not MISSING]
+            if not candidates:
+                # NOTHING TO PUT IN ITS PLACE IS NOT A REASON TO PRETEND. The half-rejected
+                # reading stays, and the record says the pair rests on two readings that
+                # disagreed — which is a question for a person, not a number to invent.
+                part.setdefault("review_flags", []).append(
+                    f"{field}: kept '{value_of(part, field)}' from {held_src}, whose reading of "
+                    f"{'/'.join(f for f in overruled)} was outvoted. No source that won named "
+                    f"a {field}, so this half of the pair rests on a reading that was set "
+                    f"aside — confirm it")
+                continue
+            _src, _val = candidates[0]
+            _was, _was_src = value_of(part, field), held_src
+            if _same_value(_was, _val):
+                continue
+            path, leaf = _split(field)
+            node = _walk(part, path, create=True)
+            if node is None:
+                continue
+            _observe(part, field, _was, _was_src, applied=True, displaced_by=_src)
+            node[leaf] = _val
+            node[_source_key(leaf)] = _src
+            node.pop(f"{leaf}_confidence", None)
+            part.setdefault("review_flags", []).append(
+                f"{field}: '{_was}' from {_was_src} replaced by '{_val}' from {_src} — "
+                f"{_was_src} was overruled on {'/'.join(overruled)}, and a material and a "
+                f"gauge are one stock key. Taking one half from each reading produced "
+                f"'{_was}' with a material nobody paired it with, which is not a stock item "
+                f"anyone can buy; confirm the pair")
+            part.setdefault("_companion_settled", {})[field] = {
+                "value": _val, "source": _src, "displaced_value": _was,
+                "displaced_source": _was_src, "because_of": sorted(overruled)}
+            moved.append(field)
+    return moved
+
+
+# ── WHAT A READER CANNOT SETTLE, IT ASKS ─────────────────────────────────────────────────
+
+def raise_manufacturing_question(part: Dict[str, Any], issue: str, assumption: str,
+                                 action: str, source: str) -> bool:
+    """Put a question a reader cannot settle on the part, once (D-382's channel, D-383).
+
+    costed_facts counts every part's manufacturing_questions as manufacturing decisions, beside
+    the money of the part's line, so a question raised here is never silent and never moves
+    money on its own. The same issue is held once however many passes raise it. Returns True
+    when the question was added."""
+    if not isinstance(part, dict) or not str(issue or "").strip():
+        return False
+    qs = part.setdefault("manufacturing_questions", [])
+    if not isinstance(qs, list):
+        return False
+    if any(isinstance(q, dict) and q.get("issue") == issue for q in qs):
+        return False
+    qs.append({"issue": str(issue), "assumption": str(assumption or ""),
+               "action": str(action or ""), "source": str(source or "")})
+    return True

@@ -1,20 +1,10 @@
-import pyodbc
-
-conn_str = (
-    "DRIVER={ODBC Driver 18 for SQL Server};"
-    "SERVER=10.0.0.200;"
-    "DATABASE=SDILive;"
-    "UID=AIBot;"
-    "PWD=AIAgentPW2026;"
-    "TrustServerCertificate=yes;"
-    "Encrypt=yes;"
-)
+import config
 
 TABLES = ["COR_TBL", "CUS_TBL", "PMA_TBL", "SUP_TBNL", "WOR_TBL"]
 
 try:
     print("Connecting to SDILive at 10.0.0.200...")
-    conn = pyodbc.connect(conn_str, timeout=10)
+    conn = config.get_connection(timeout=10)
     print("✅ Connection SUCCESSFUL!\n")
 
     cursor = conn.cursor()

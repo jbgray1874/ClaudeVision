@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0d0d0f">
+<title>SDI Remote Control Intelligence</title>
+<style>
+:root{--bg:#0d0d0f;--panel:#17171b;--line:#303037;--text:#f3f2ee;--muted:#a3a3aa;
+      --yellow:#ffd400;--green:#62d694;--amber:#ffd77a;--red:#ff7777;
+      font-family:Arial,Helvetica,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);line-height:1.5}
+button,input,select{font:inherit}a{color:var(--yellow)}button{cursor:pointer}
+button:disabled{cursor:wait;opacity:.55}
+.top{border-bottom:1px solid var(--line);background:#101013;
+     padding:15px max(18px,calc((100vw - 1100px)/2));display:flex;align-items:center;
+     gap:14px;flex-wrap:wrap}
+.logo{background:var(--yellow);color:#080808;font-weight:900;width:38px;height:38px;
+      display:grid;place-items:center;border-radius:4px;font-size:22px}
+.brand{font-size:13px;font-weight:800;letter-spacing:.14em}
+.subbrand{font-size:10px;letter-spacing:.22em;color:var(--muted)}
+.topnav{margin-left:auto;display:flex;gap:10px}
+.topnav a{border:1px solid var(--line);color:var(--text);border-radius:4px;
+          padding:9px 12px;text-decoration:none;font-size:13px}
+main{max-width:1100px;margin:0 auto;padding:22px 18px 70px}
+.eyebrow{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--yellow);
+         font-weight:700}
+h1{font-size:clamp(24px,5vw,38px);line-height:1.1;letter-spacing:-.04em;margin:8px 0}
+p{margin:0}.hint{color:var(--muted);font-size:14px;margin-top:6px}
+.readonly{border-left:3px solid var(--amber);background:#1c1c22;padding:11px 13px;
+          margin:16px 0;border-radius:0 4px 4px 0;font-size:14px}
+.tools{display:flex;gap:10px;align-items:center;margin:18px 0;flex-wrap:wrap}
+.primary{background:var(--yellow);color:#111;border:1px solid var(--yellow);font-weight:800;
+         padding:11px 16px;border-radius:4px}
+.secondary{background:#202026;color:var(--text);border:1px solid var(--line);
+           padding:11px 16px;border-radius:4px}
+input[type=search],select{background:#101013;border:1px solid var(--line);color:var(--text);
+                          border-radius:4px;padding:10px 12px}
+input[type=search]{flex:1 1 180px;min-width:0}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+.card{border:1px solid var(--line);background:var(--panel);border-radius:5px;padding:14px 16px}
+.card h3{margin:0 0 8px;font-size:14px;letter-spacing:.06em;text-transform:uppercase;
+         color:var(--muted)}
+.big{font-size:22px;font-weight:800;word-break:break-all}
+.row{display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-size:14px}
+.row span:last-child{font-family:ui-monospace,Consolas,monospace;color:var(--muted);
+                     text-align:right;word-break:break-all}
+.yes{color:var(--green)}.no{color:var(--red)}
+pre{background:#0a0a0c;border:1px solid var(--line);border-radius:4px;padding:12px;
+    overflow:auto;font-size:12px;line-height:1.45;max-height:60vh;margin:0}
+.status{min-height:44px;padding:11px 14px;border:1px solid var(--line);background:var(--panel);
+        border-radius:4px;color:var(--muted);margin:14px 0}
+.status.error{border-color:#8d4545;color:#ffd1d1}
+h2{font-size:16px;margin:24px 0 10px;letter-spacing:.04em}
+@media(max-width:700px){.top{padding:13px 14px}main{padding:16px 14px 60px}
+  .topnav{margin-left:0;width:100%}}
+</style></head>
+<body>
+<header class="top">
+  <div class="logo" aria-hidden="true">S</div>
+  <div><div class="brand">SDI INTELLIGENCE</div>
+       <div class="subbrand">REMOTE CONTROL INTELLIGENCE</div></div>
+  <nav class="topnav"><a href="/app/">← App portal</a></nav>
+</header>
+<main>
+  <div class="eyebrow">Systems · phase one</div>
+  <h1>The service, from your phone</h1>
+  <p class="hint">What is running, what it can reach, which apps mounted, and what the
+    log says — without reaching for the laptop.</p>
+
+  <div class="readonly"><b>Read only.</b> This page cannot restart anything, run a
+    command, or change a setting. For a real shell on the server, use Remote Desktop —
+    it is already gated and already audited.</div>
+
+  <div class="tools">
+    <button class="primary" id="refresh" type="button">Refresh</button>
+    <select id="lines" aria-label="Log lines">
+      <option value="40">Last 40 lines</option>
+      <option value="100">Last 100</option>
+      <option value="200">Last 200</option>
+    </select>
+    <input id="find" type="search" placeholder="Filter the log — e.g. private-email, ERROR"
+           aria-label="Filter the log">
+  </div>
+
+  <div id="status" class="status" role="status" aria-live="polite">Loading…</div>
+
+  <div class="cards" id="cards"></div>
+
+  <h2>Apps mounted</h2><div class="card" id="mounted"></div>
+  <h2>Settings present</h2>
+  <p class="hint">Whether each is set — never its value.</p>
+  <div class="card" id="configured"></div>
+  <h2>Shares</h2><div class="card" id="roots"></div>
+  <h2>Log <span class="hint" id="logmeta"></span></h2>
+  <pre id="log">—</pre>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const el = (t, text, parent, cls) => { const n = document.createElement(t);
+  if(text != null) n.textContent = text; if(cls) n.className = cls;
+  if(parent) parent.append(n); return n; };
+
+function row(parent, label, value, good){
+  const r = el("div", null, parent, "row");
+  el("span", label, r);
+  const v = el("span", value, r);
+  if(good === true) v.className = "yes"; else if(good === false) v.className = "no";
+}
+
+async function get(path){
+  const r = await fetch(path, {cache:"no-store", credentials:"same-origin"});
+  let j = {}; try{ j = await r.json(); }catch(e){}
+  if(!r.ok) throw new Error(typeof j.detail === "string" ? j.detail
+                            : "Request failed (" + r.status + ").");
+  return j;
+}
+
+function ago(seconds){
+  if(seconds < 90) return seconds + "s";
+  if(seconds < 5400) return Math.round(seconds/60) + " min";
+  if(seconds < 172800) return Math.round(seconds/3600) + " hours";
+  return Math.round(seconds/86400) + " days";
+}
+
+async function load(){
+  $("refresh").disabled = true;
+  $("status").className = "status";
+  $("status").textContent = "Reading…";
+  try{
+    const s = await get("/api/ops/status");
+
+    $("cards").replaceChildren();
+    const a = el("div", null, $("cards"), "card");
+    el("h3", "Running commit", a); el("div", s.commit, a, "big");
+    const b = el("div", null, $("cards"), "card");
+    el("h3", "Up for", b); el("div", ago(s.up_for_seconds), b, "big");
+    el("p", "since " + new Date(s.started).toLocaleString("en-GB"), b, "hint");
+    const c = el("div", null, $("cards"), "card");
+    el("h3", "Host", c); el("div", s.host, c, "big");
+    el("p", "Python " + s.python, c, "hint");
+
+    $("mounted").replaceChildren();
+    for(const [name, up] of Object.entries(s.mounted || {}))
+      row($("mounted"), name, up ? "mounted" : "not mounted", up);
+
+    $("configured").replaceChildren();
+    for(const [name, set] of Object.entries(s.configured || {}))
+      row($("configured"), name, set ? "set" : "not set", set);
+
+    $("status").textContent = "Service up, commit " + s.commit + ".";
+
+    // Health is a separate call: it touches the shares and the database, and a
+    // slow share should not stop the rest of this page rendering.
+    try{
+      const h = await get("/api/ops/health");
+      $("roots").replaceChildren();
+      for(const r of h.file_roots || []) row($("roots"), r.root,
+        r.reachable ? "reachable" : "NOT reachable", r.reachable);
+      row($("roots"), "database", (h.database||{}).status || "?",
+          ((h.database||{}).status === "ok"));
+      row($("roots"), "workbook template",
+          (h.workbook_template||{}).reachable ? "reachable" : "NOT reachable",
+          (h.workbook_template||{}).reachable);
+      if(h.status !== "ok"){
+        $("status").className = "status error";
+        $("status").textContent = "Service up, commit " + s.commit
+          + " — but health reports DEGRADED. See Shares below.";
+      }
+    }catch(e){
+      $("roots").replaceChildren();
+      row($("roots"), "health", e.message, false);
+    }
+
+    const l = await get("/api/ops/log?lines=" + encodeURIComponent($("lines").value)
+                        + "&find=" + encodeURIComponent($("find").value.trim()));
+    $("log").textContent = (l.lines || []).join("\n") || "(nothing matched)";
+    $("logmeta").textContent = l.matched + " matching line(s) · query strings and "
+                             + "anything token-shaped are removed before this leaves the server";
+  }catch(e){
+    $("status").className = "status error";
+    $("status").textContent = e.message;
+  }finally{ $("refresh").disabled = false; }
+}
+
+$("refresh").onclick = load;
+$("lines").onchange = load;
+$("find").addEventListener("keydown", e => { if(e.key === "Enter") load(); });
+load();
+</script>
+</body>
+</html>

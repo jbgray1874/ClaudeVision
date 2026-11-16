@@ -1,0 +1,35 @@
+# ClaudeVision / SDI Intelligence — Python dependencies
+# Derived from the imports actually used across src/*.py.
+# Install:  pip install -r requirements.txt
+
+# ── Core pipeline (required) ─────────────────────────────────────────────
+openpyxl        # read/write the .xlsx estimate workbook
+xlrd            # read legacy .xls manual estimate sheets
+pyodbc          # SQL Server (SDILive) access via ODBC Driver 18
+ezdxf           # DXF (flat-pattern) geometry extraction
+shapely         # geometry / net-area calculations
+pdfplumber      # PDF text extraction
+PyMuPDF         # PDF rendering / text (imported as `fitz`)
+pandas          # tabular data handling
+python-dotenv   # load configuration from .env (imported as `dotenv`)
+requests        # web / LLM price-lookup calls
+Pillow          # image handling (imported as `PIL`)
+openai          # xAI is OpenAI-compatible; the client the VISION BOM reader calls Grok
+                # through (_bom_vision_reader.call_vision_llm). Undeclared until now, so
+                # a machine without it read every BOM with one reader instead of two and
+                # said nothing — the drawing's own parts list, unread, on a print.
+
+# ── SolidWorks native extraction (Windows only) ──────────────────────────
+# COM bridge used by tools/solidworks/*.py to read .SLDPRT/.SLDASM/.SLDDRW
+# read-only via the SolidWorks API. The marker keeps it off non-Windows installs
+# (CI / Linux), where the rest of the pipeline still runs on PDF + DXF.
+# Requires a licensed SolidWorks seat on the machine — no key is held in this repo.
+pywin32; sys_platform == "win32"
+
+# ── Optional / feature-specific ──────────────────────────────────────────
+# Uncomment as needed; these are heavier and not on the core estimate path.
+# numpy                    # numerics (usually pulled in transitively)
+# opencv-python            # vision helpers (imported as `cv2`)
+# pytesseract              # OCR fallback (requires system Tesseract)
+# qdrant-client            # vector DB for RAG (roadmap)
+# sentence-transformers    # embeddings for RAG (roadmap)

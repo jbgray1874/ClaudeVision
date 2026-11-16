@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0f">
+<title>Brief to Book · SDI Intelligence</title>
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0d0d0f; --surface:#17171b; --surface-2:#1d1d22;
+    --line:#2a2a31; --line-soft:#202026;
+    --ink:#f3f2ee; --ink-dim:#a3a3aa; --ink-faint:#6b6b73;
+    --accent:#ffd400; --ok:#5fd08a; --warn:#ff9d42; --fail:#ff5d5d;
+    --r:4px;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --disp:'Archivo',sans-serif;
+    --body:'Hanken Grotesk',sans-serif;
+    --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;
+       line-height:1.5;-webkit-font-smoothing:antialiased;min-height:100vh;overflow-wrap:anywhere;
+       background-image:radial-gradient(900px 500px at 88% -8%,rgba(255,212,0,.06),transparent 60%)}
+  a{color:var(--accent);text-decoration:none}
+  .top{position:sticky;top:0;z-index:20;background:rgba(13,13,15,.92);backdrop-filter:blur(12px);
+       border-bottom:1px solid var(--line);padding:calc(12px + var(--safe-t)) 16px 12px}
+  .back{display:flex;align-items:center;gap:7px;background:none;border:0;color:var(--ink-dim);
+        font-family:var(--body);font-size:14px;cursor:pointer;padding:2px}
+  .back svg{width:17px;height:17px}
+  .wrap{padding:18px 16px calc(32px + var(--safe-b));max-width:840px;margin:0 auto}
+  .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--accent);text-transform:uppercase}
+  h1{font-family:var(--disp);font-weight:800;font-size:25px;line-height:1.15;margin:8px 0 10px}
+  .sub{color:var(--ink-dim);font-size:14.5px}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:15px;margin-top:14px}
+  .panel h4{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-faint);
+            text-transform:uppercase;font-weight:500;margin-bottom:10px}
+  .panel.warn{border-color:rgba(255,157,66,.35);background:rgba(255,157,66,.06)}
+  .panel.ok{border-color:rgba(95,208,138,.35);background:rgba(95,208,138,.06)}
+  label{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+        color:var(--ink-dim);margin:12px 0 5px}
+  input,textarea{width:100%;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);
+        color:var(--ink);font-family:var(--body);font-size:15px;padding:10px 11px}
+  textarea{min-height:170px;resize:vertical;font-family:var(--body)}
+  input:focus,textarea:focus{outline:none;border-color:var(--accent)}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .btn{display:inline-block;margin-top:16px;background:var(--accent);color:#000;font-family:var(--disp);
+       font-weight:800;font-size:15px;padding:12px 18px;border:0;border-radius:var(--r);cursor:pointer}
+  .btn[disabled]{opacity:.45;cursor:not-allowed}
+  .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line);margin-left:8px}
+  .chip{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
+        padding:4px 7px;border-radius:2px;border:1px solid transparent;white-space:nowrap}
+  .c-ok{background:rgba(95,208,138,.12);color:var(--ok);border-color:rgba(95,208,138,.3)}
+  .c-warn{background:rgba(255,157,66,.12);color:var(--warn);border-color:rgba(255,157,66,.3)}
+  .c-fail{background:rgba(255,93,93,.12);color:var(--fail);border-color:rgba(255,93,93,.3)}
+  .c-off{background:rgba(163,163,170,.1);color:var(--ink-dim);border-color:var(--line)}
+  .log{font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--ink-dim);white-space:pre-wrap;
+       max-height:260px;overflow:auto;background:var(--surface-2);border:1px solid var(--line-soft);
+       border-radius:var(--r);padding:10px}
+  .files a{display:block;padding:9px 0;border-bottom:1px solid var(--line-soft);font-size:14.5px}
+  .files a:last-child{border-bottom:0}
+  .muted{color:var(--ink-faint);font-size:12.5px}
+  .err{color:var(--fail);font-size:14px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="top">
+  <button class="back" onclick="location.href='./'"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>All apps</button>
+</div>
+<div class="wrap">
+  <div class="kicker">SDI Intelligence app</div>
+  <h1>Brief to Book</h1>
+  <p class="sub">Describe the product the way you would tell an estimator, press Run, and the
+  estimating engine reads the brief, sights the parts and files a provisional costing workbook
+  for the estimators to look over. Nothing goes to a customer from here: the book is marked
+  provisional and every size and count the brief did not fix is listed for confirmation.</p>
+
+  <form class="panel" id="f" autocomplete="off">
+    <h4>The enquiry</h4>
+    <div class="row">
+      <div><label for="client">Customer</label><input id="client" placeholder="M&amp;S" required></div>
+      <div><label for="ref">Enquiry or drawing number</label><input id="ref" placeholder="0359962 or 9598-02" required></div>
+    </div>
+    <div class="row">
+      <div><label for="units">Quantity</label><input id="units" type="number" min="1" value="1" required></div>
+      <div><label for="breaks">Also price at (optional)</label><input id="breaks" placeholder="20, 50, 100"></div>
+    </div>
+    <label for="brief">The brief</label>
+    <textarea id="brief" maxlength="4000" required placeholder="What it is, overall sizes in mm, materials and gauges, finish and colour, print, fixings, how it is packed. One construction, not alternatives. Example: 20 off half-A4 landscape ticket holders, 1.2 mm mild steel, 212 x 150 face with a 120 x 170 base, powder coated RAL 7021, a 400 micron printed card insert, four clear stick-on bumpers."></textarea>
+    <label for="email">Send the finished book to (optional)</label>
+    <input id="email" placeholder="estimator@wearesdi.com; second@wearesdi.com">
+    <div>
+      <button class="btn" id="run" type="submit">Run the estimate</button>
+      <button class="btn ghost" id="again" type="button" style="display:none">Another brief</button>
+    </div>
+    <div class="err" id="err"></div>
+  </form>
+
+  <div class="panel" id="status" style="display:none">
+    <h4>The run <span class="chip c-off" id="chip">queued</span></h4>
+    <p class="muted" id="meta"></p>
+    <div class="log" id="log"></div>
+  </div>
+
+  <div class="panel ok" id="done" style="display:none">
+    <h4>The book</h4>
+    <p class="muted">Provisional. Read the AI Explanation tab first: it lists what the brief fixed and what was assumed.</p>
+    <div class="files" id="files"></div>
+  </div>
+
+  <div class="panel warn">
+    <h4>What this is, and is not</h4>
+    <p class="muted">A brief is read by the vision model as stated facts and the ordinary pricing
+    waterfall prices what it sights. It is a costing draft for an estimator, not a quotation; the
+    customer quote is withheld until an estimator releases it on the estimating page.</p>
+  </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const API='../api/estimate';
+let runId=null, timer=null;
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+$('f').addEventListener('submit', async e=>{
+  e.preventDefault(); $('err').textContent='';
+  const breaks=($('breaks').value||'').split(/[,\s;]+/).filter(Boolean).map(Number).filter(n=>n>0);
+  const body={client:$('client').value.trim(), reference:$('ref').value.trim(),
+              units:parseInt($('units').value,10)||1, quantity_breaks:breaks,
+              brief:$('brief').value.trim(), email_to:$('email').value.trim()||null};
+  $('run').disabled=true;
+  try{
+    const r=await fetch(API+'/brief',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/brief-estimate.html'); return; }
+    const j=await r.json();
+    if(!r.ok){ $('err').textContent=j.detail||('The service refused the run ('+r.status+').'); $('run').disabled=false; return; }
+    runId=j.run_id;
+    $('status').style.display=''; $('meta').textContent='Run '+runId+' · filing to '+(j.output_path||'');
+    $('again').style.display='';
+    poll();
+  }catch(ex){ $('err').textContent='The estimating service did not answer: '+ex; $('run').disabled=false; }
+});
+
+$('again').addEventListener('click',()=>{ location.reload(); });
+
+async function poll(){
+  try{
+    const r=await fetch(API+'/'+runId,{cache:'no-store'});
+    if(!r.ok){ $('log').textContent='The service lost the run ('+r.status+'). It may have restarted; the book, if filed, is on the share.'; return; }
+    const j=await r.json();
+    const chip=$('chip'); chip.textContent=j.status;
+    chip.className='chip '+(j.status==='done'?'c-ok':j.status==='error'?'c-fail':j.status==='running'?'c-warn':'c-off');
+    $('log').textContent=(j.log||[]).slice(-40).join('\n');
+    $('log').scrollTop=$('log').scrollHeight;
+    if(j.status==='done'){
+      const d=(j.deliverables||[]).filter(x=>/\.(xlsx|html|pdf)$/i.test(x.name||''));
+      $('files').innerHTML=d.length? d.map(x=>'<a href="'+API+'/'+runId+'/deliverables/'+encodeURIComponent(x.name)+'">'+esc(x.name)+'</a>').join('')
+                                   : '<span class="muted">No files were reported. The run log above says what happened.</span>';
+      $('done').style.display='';
+      return;
+    }
+    if(j.status==='error'){ $('err').textContent=j.error||'The run failed; the log says why.'; return; }
+    timer=setTimeout(poll,5000);
+  }catch(ex){ timer=setTimeout(poll,8000); }
+}
+</script>
+</body>
+</html>
