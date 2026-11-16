@@ -567,6 +567,32 @@ def is_on_site(record):
     return activity in [v.upper() for v in cfg.INVENTRY_ACTIVITY_IN_VALUES]
 
 
+def activity_day(record):
+    """The day of the person's last InVentry event, as InVentry wrote it.
+
+    LastActivityDate carries no timezone (see format_datetime), so its first
+    ten characters are the day. None when it is missing or unreadable.
+    """
+    text = str(_field(record, "LastActivityDate") or "").strip()
+    try:
+        return datetime.date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def inventry_day(value):
+    """The day InVentry would record for a timestamp, in its own time.
+
+    value: an aware datetime, or an ISO string with Z or an offset (BrightHR's
+    clock-in times). Converted the same way our sign-ins are, so the two days
+    compare like for like. None when it cannot be read.
+    """
+    try:
+        return datetime.date.fromisoformat(format_datetime(value)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
 def last_location(record):
     """Where InVentry recorded the person's last event.
 

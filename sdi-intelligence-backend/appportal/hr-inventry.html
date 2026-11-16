@@ -221,7 +221,7 @@
   <h1>HRInventry Anywhere</h1>
   <p class="sub">See who is clocked in on BrightHR, and update InVentry's on-site list, the fire roll
   call, to match. Clocked in and not signed in: signed in. Clocked out and signed in by this sync:
-  signed out. Anyone signed in at reception is left alone, and nothing in BrightHR is changed.</p>
+  signed out. Anyone who signed in on the console is left alone, and nothing in BrightHR is changed.</p>
   </section>
 
   <div class="panel" id="gate" style="display:none"></div>
@@ -491,7 +491,7 @@ const PENDING={};                    // ticks not yet saved: kept and resent, ne
 function whereFrom(p){
   const bits=[];
   if(p.inventry) bits.push('InVentry'+(p.inventry.name?' (as '+p.inventry.name+')':'')+' since '
-    +(when(p.inventry.since)||'?')+(p.inventry.by==='sync'?'':' (reception)'));
+    +(when(p.inventry.since)||'?')+(p.inventry.by==='sync'?'':' (console)'));
   if(p.brighthr) bits.push('clocked in '+(when(p.brighthr.since)||'?'));
   if(p.brighthr && !p.inventry) bits.push('not on InVentry');
   if(p.inventry && !p.brighthr) bits.push('not clocked in on BrightHR');
@@ -652,7 +652,7 @@ function renderToday(){
       '<div class="kpi"><span>Clocked in on BrightHR</span><b>'+bh.length+'</b><small>'
         +(TODAY.roll.forgotten_left_out?TODAY.roll.forgotten_left_out+' forgotten clock-outs left out':'now')+'</small></div>'
     +'<div class="kpi"><span>On InVentry\'s fire list</span><b>'+(invDown?'?':inv.length)+'</b><small>'
-        +(invDown?'InVentry did not answer':reception?reception+' signed in at reception':'now')+'</small></div>'
+        +(invDown?'InVentry did not answer':reception?reception+' signed in on the console':'now')+'</small></div>'
     +'<div class="kpi"><span>In step</span><b>'+(invDown?'?':pct+'%')+'</b><small>'
         +(invDown?'':both.length+' of '+bh.length+' clocked in are on InVentry')+'</small>'
         +(invDown?'':'<div class="meter'+(pct===100?' done':'')+'" role="img" aria-label="'+pct+' percent in step"><span style="width:'+pct+'%"></span></div>')+'</div>'
@@ -767,7 +767,7 @@ function renderIssues(){
   let h='';
   h+=table('Duplicate InVentry records','warn',['Person','Shared','Copies (last used)'],
     (r.duplicates||[]).map(d=>[esc(d.name),esc(d.shared),d.records.map(x=>esc(when(x.last_seen)||'never')+(x.used?' <b>(used)</b>':'')).join('<br>')]),
-    'One person on several InVentry records. The sync uses the copy marked (used); reception may sign in on another. Merge or remove the extras.');
+    'One person on several InVentry records. The sync uses the copy marked (used); the console may sign them in on another. Merge or remove the extras.');
   h+=table('One email or ID shared by different people','warn',['Shared','People'],
     (r.shared_identifiers||[]).map(d=>[esc(d.shared),esc(d.names.join(', '))]),
     'These people are matched by full name only until each has their own email or ID in InVentry.');

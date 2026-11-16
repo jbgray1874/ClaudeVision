@@ -66,6 +66,7 @@ def from_push(summary: dict, by: str) -> dict:
         "inventry_on_site_after": len(summary.get("on_site_after") or []) or None,
         "signed_in": summary.get("signed_in_names") or [],
         "signed_out": summary.get("signed_out_names") or [],
+        "left_over": [p.get("name") for p in summary.get("left_over") or []],
         "held_back": len(summary.get("sign_outs_held_back") or []),
         "unmatched": len(summary.get("unmatched") or []),
         "failures": len(summary.get("failures") or []),

@@ -95,6 +95,33 @@ def _pick(records):
                                        str(api._field(r, "LastActivityDate"))))
 
 
+def _left_over(record, person, now=None):
+    """The day of an InVentry sign-in that predates this BrightHR clocking.
+
+    InVentry's API keeps saying IN until someone signs out, so a sign-in made
+    on the console one day and never signed out still reads IN the next
+    morning. The console on the wall does not show it: on 16 Nov 2026 two
+    people clocked in on BrightHR were missing from the console all morning,
+    while this sync counted them as already on site and so never signed them
+    in. A sign-in from before the day the clocking began is not presence now.
+
+    Returns that earlier day, or None when the sign-in is current (or its date
+    is unknown, which is left as it always was). Days are compared, not times:
+    someone who signs in on the console a minute before clocking in on Blip is
+    on the console's list for today, and a night shift that began yesterday is
+    one clocking that started yesterday.
+    """
+    signed_in = api.activity_day(record)
+    if signed_in is None:
+        return None
+    clocked_in = api.inventry_day(person.get("signed_in")) if person.get("signed_in") else None
+    if clocked_in is None:
+        clocked_in = api.inventry_day(now or _now())
+    if clocked_in is None or signed_in >= clocked_in:
+        return None
+    return signed_in
+
+
 def _first_last(record):
     return (str(api._field(record, "FirstName")).strip().lower(),
             str(api._field(record, "Surname")).strip().lower())
@@ -340,6 +367,9 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         "signed_out_names": [],
         "sign_outs_held_back": [],
         "already_on_site": 0,
+        # Clocked in, and InVentry said IN - but from a sign-in on an earlier
+        # day, so they were signed in again. See _left_over.
+        "left_over": [],
         "unmatched": [],
         "matched_by": {"PersonID": 0, "email": 0, "name": 0},
         "failures": [],
@@ -418,7 +448,7 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
             f"{len(duplicates)} person(s) have more than one InVentry record sharing an "
             f"email or PersonID ({', '.join(names[:5])}{', ...' if len(names) > 5 else ''}). "
             f"The copy already on site, else the most recently used, is the one matched. "
-            f"Worth merging in InVentry: reception may sign people in on the other copy."
+            f"Worth merging in InVentry: the console may sign people in on the other copy."
         )
         for what, g in duplicates:
             _log(f"  DUPLICATE {_display(g[0])}: {len(g)} records share a {what} - "
@@ -459,8 +489,16 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         ident = api.inventry_id(record)
         should_be_on_site.add(ident)
         if ident in inventry_on_site:
-            summary["already_on_site"] += 1
-            continue
+            earlier = _left_over(record, person, now)
+            if earlier is None:
+                summary["already_on_site"] += 1
+                continue
+            # Signed in on an earlier day and never signed out: the console
+            # does not list them today, so sign them in for this clocking.
+            # Ours from here on, so they are signed out when they clock out.
+            summary["left_over"].append({"name": label, "since": earlier.isoformat()})
+            _log(f"  LEFT OVER {label}: InVentry has had them signed in since "
+                 f"{earlier.isoformat()}, not today - signing in again")
         to_sign_in.append((ident, label, person.get("signed_in")))
 
     # ── plan sign-outs ──
@@ -505,7 +543,7 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
             summary["warnings"].append(
                 f"{summary['skipped_not_ours']} person(s) left signed in: their last event "
                 f"was not ours (LastEventLocation != {cfg.INVENTRY_ACTION_LOCATION!r}), so "
-                f"signing them out could undo a sign-in made at reception."
+                f"signing them out could undo a sign-in made on the console."
             )
 
         if len(to_sign_out) > cfg.INVENTRY_MAX_SIGN_OUTS_PER_RUN and not force:
@@ -579,7 +617,9 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         by_id = {api.inventry_id(r): r for r in people}
         gone = set(summary["signed_out"])
         after = [r for i, r in inventry_on_site.items() if i not in gone]
-        after += [by_id[i] for i in summary["signed_in"] if i in by_id]
+        # A left-over sign-in is in both: already counted above.
+        after += [by_id[i] for i in summary["signed_in"]
+                  if i in by_id and i not in inventry_on_site]
         summary["on_site_after_read_back"] = False
     summary["on_site_after"] = sorted({_display(r) for r in after}, key=str.lower)
 
