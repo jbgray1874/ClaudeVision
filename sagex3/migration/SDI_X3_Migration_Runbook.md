@@ -3581,3 +3581,9 @@ It isn't a replacement for Production's sheet now.
   - Selina: her 19 Oct list; a TTI schedule session.
 - **Promised:** training-site logins, once Acuity confirm the environment.
 - **Next:** Claire's guide and covering email; Marc's validation email (user filter, 200-result limit, load dates on migrated orders, environment, MRP list, stock valuation, BOM / subcontract).
+
+**16 Nov – call with Acuity at 14:15 (Marc, Jim, Sergio).**
+- **Brief:** the 10 Nov integrations email, item by item; the register as at 16 Nov, Acuity copy (`deliver/SDI_SageX3_Programme_Register_for_Acuity.*`, without the REP-22 / REP-23 rebate rows and figures).
+- **The 13 Nov connection-details email** (to Neil, Marc, Jim, Sergio and Roberto; questions A1–A5 connections, B6–B14 estimating, C15–C21 Live Orders, D22–D24 opportunity, E outstanding) has **no reply yet**. James has sent the connection details to Sergio.
+- **On the call:** chase an owner and date for each section of the 13 Nov email.
+- **Rule:** the register shared with Acuity never carries the rebate rows or figures. Build the Acuity copy from a filtered `register_data.py`.
