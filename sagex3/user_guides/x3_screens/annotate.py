@@ -89,6 +89,13 @@ MARKS = {
         (1, (104, 618, 264, 650)),       # Invoices to be issued
         (2, (104, 538, 254, 570)),       # Invoice receivables
     ],
+    "33_printouts_menu_sales.png": [
+        (1, (106, 296, 184, 326)),       # Printouts
+        (2, (84, 788, 284, 980)),        # Prints/group > Sales
+    ],
+    "34_printouts_menu_stock.png": [
+        (1, (84, 764, 284, 992)),        # Prints/group > Stock
+    ],
     "05_GESPTH_purchase_receipt_entry.png": [
         (1, (6, 180, 357, 440)),         # list of receipts on the left
         (2, (412, 922, 870, 992)),       # invoiced status / quantity

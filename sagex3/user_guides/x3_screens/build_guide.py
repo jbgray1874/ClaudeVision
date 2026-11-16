@@ -182,6 +182,17 @@ INV_TO_ISSUE = (
     [("32_financials_closing_processes_menu.png",
       "the same Closing processes menu also holds Invoice receivables (2) – the matching accrual for goods received but not yet invoiced by suppliers.")])
 
+PRINTOUTS = (
+    "Ready-made printed reports", "Printouts (left-hand menu)",
+    "33_printouts_menu_sales.png",
+    [(1, "Printouts → Printouts runs any report by name; View Requests shows the ones you have run."),
+     (2, "Prints/group lists the reports by area – Common data, Customer Relation, Purchasing, Sales (External documents, "
+         "Internal documents, Prices, Analyse), Stock, and more.")],
+    "The Analyse groups under Sales and Stock hold the sales statistics and stock valuation reports – the candidates for "
+    "Total revenue, Manufactured sales and month-end stock.",
+    [("34_printouts_menu_stock.png",
+      "Stock (1): Internal documents, Counts, Reordering, Stock to be moved and Analyse.")])
+
 STD_CHECKS = ["It shows the same items as my Access report", "The columns I use are there",
               "I can filter it the way I need", "The Excel export gives me what I need"]
 
@@ -262,6 +273,12 @@ GUIDES = {
                     "Every component at every level, with quantities (for Sam).",
                     "Common data → BOMs, then the Multi-level button.",
                     [BOM_MULTI], ["It shows every level, like Access", "The call-off cartons show", "The quantities are right"]),
+            section("Ready-made printed reports (Printouts)", "Crystal reports in Access",
+                    "Formatted, printable reports.",
+                    "Printouts → Prints/group: the standard reports, grouped by area.",
+                    [PRINTOUTS], ["Which of your reports do you print rather than view on screen?"],
+                    note="The reports inside Sales → Analyse and Stock → Analyse are being checked against your list.",
+                    ready=False),
             section("Reports we need you to define (REP-05, 11, 12, 14, 15, 16, 17)",
                     "Your list, 13 October",
                     "These aren't standard in Sage X3 the way they work at SDI, so we need to know how they work today before we build them.",
