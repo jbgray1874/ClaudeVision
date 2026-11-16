@@ -26,6 +26,12 @@ MARKS = {
         (4, (1420, 230, 1541, 285)),     # Search
         (5, (1645, 458, 1860, 548)),     # Global export
     ],
+    "11_CONSCSP_order_lines_selection.png": [
+        (1, (40, 938, 495, 1002)),       # start / end date
+        (2, (804, 662, 1095, 698)),      # closed / not closed
+        (3, (1420, 230, 1541, 285)),     # Search
+        (4, (1645, 458, 1860, 548)),     # Global export
+    ],
     "05_GESPTH_purchase_receipt_entry.png": [
         (1, (6, 180, 357, 440)),         # list of receipts on the left
         (2, (412, 922, 870, 992)),       # invoiced status / quantity

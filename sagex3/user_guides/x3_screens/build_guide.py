@@ -48,13 +48,13 @@ SHIPMENTS_BY_PERIOD = (
     "Memo / Recall means you set your filters once and reuse them every day.")
 ORDER_LINES = (
     "Order lines", "Sales → Enquiries → Orders → Order lines",
-    "04_CONSCSP_order_lines_selection_menu.png",
-    [(1, "Open Sales → Enquiries → Orders → Order lines (or type Order lines in the menu search)."),
-     (2, "Set the Start date and End date. Move the Start date back far enough to include old orders."),
-     (3, "Under Order State, untick Closed. Leave Not Closed ticked, so only open lines show."),
-     (4, "Press Search. Every open sales-order line is listed."),
-     (5, "Excel export on the right-hand panel takes the list into Excel.")],
-    "The same menu has List of orders (one line per order) and Orders per period (totals), if you prefer a summary.")
+    "11_CONSCSP_order_lines_selection.png",
+    [(None, "Click All (top left) → Sales → Enquiries → Orders → Order lines. The screen is called Consultation order line. Company C01 and Sales Site S01A are filled in."),
+     (1, "Set the Start date and End date. Move the Start date back far enough to include old orders (e.g. 01/01/20)."),
+     (2, "Under Order State, untick Closed. Leave Not Closed ticked, so only open lines show."),
+     (3, "Press Search. Every open sales-order line is listed."),
+     (4, "Excel export on the right-hand panel takes the list into Excel.")],
+    "Optional filters: Customer, Product or Order Type. The same Orders menu has List of orders (one line per order) and Orders per period (totals).")
 RECEIPT_LINES = (
     "Receipt lines – every item received and not yet invoiced", "Purchasing → Enquiries → Receipts → Receipt lines",
     None,
