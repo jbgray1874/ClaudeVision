@@ -3564,3 +3564,5 @@ It isn't a replacement for Production's sheet now.
 - **Q2 (rate):** Claire confirmed that **Morrisons invoice SDI for the 6% rebate separately once agreed**. So it's a flat 6%, a separate agreement from the customer-account rebate % in Access. The assumption stands.
 - **Q3 (part list complete? other 10932-00-GA variants such as PEP, DOV, CCE, REG):** Debbie isn't sure; **Nick Garrish to discuss later this week**. Still open.
 - **Next:** re-run after Debbie's date change; settle Q3 with Nick; then switch the report to live Access data and build it in X3.
+- **No reply sent (James, 16 Nov):** Debbie and Claire answered, and Q3 is with Nick Garrish and Debbie. Wait for Nick.
+- **To correct in the next rebate email:** the 12 Nov email said "months are taken from the invoice date". **It's the order line's due date** (the code default `--basis due`, as the Access report does; the 16 Nov email had it right).
