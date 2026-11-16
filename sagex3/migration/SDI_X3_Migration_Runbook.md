@@ -3497,3 +3497,12 @@ It isn't a replacement for Production's sheet now.
 2. To Dave: building the converter into the estimating portal and/or a spreadsheet (22.25).
 - **Still to send:** the rebate reply to Nick (cc Claire, Charlotte): install line removed, now £535,441.31 sales and £32,126.48 rebate (22.19).
 - **Still to do, in order:** Simon's email, then Claire's and Debbie's messages.
+
+**16 Nov – rebate reply SENT to Nick Garrish (cc Claire Newall, Charlotte Blackwell).**
+- **Says:** the install line (HHA-INSTALL M&M, £13,770.00) is removed from the part list, so the rebate is on goods only.
+- **New figures, Dec 2025 – Nov 2026:** £535,441.31 sales and £32,126.48 rebate at 6% (was £549,211.31 and £32,952.68).
+- **Attachments:** SDI_Rebate_Rolling_2026-11.xlsx and .html, each explained in the email.
+- **Three questions to Claire, reply by Fri 20 Nov:**
+  - the HHA01 72-unit order re-dated to 9 Nov;
+  - whether 6% is paid to Morrisons under a separate agreement;
+  - whether the 21 codes are complete (other 10932-00-GA variants).
