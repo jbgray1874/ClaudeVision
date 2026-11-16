@@ -127,11 +127,30 @@ MRP_MENUS = (
     [("17_manufacturing_menu_enquiries.png",
       "Manufacturing → Enquiries → Reorder Results (1) holds the MRP results; List of WOs (2) lists the works orders.")])
 STOCK_MENU = (
-    "Stock enquiries", "Stock → Enquiries",
-    "18_stock_menu_enquiries.png",
-    [(1, "Stock → Enquiries holds Stock (what is where, and its value), Transactions (every movement – usage), Products, "
-         "Allocations, Locations, MRP/MPS replenishment and Quality History.")],
-    None)
+    "Stock enquiries", "Stock → Enquiries → Stock",
+    "25_stock_enquiries_stock_menu.png",
+    [(1, "Stock → Enquiries → Stock: Stock by Site, Stock by product, Stock by Lots, Detailed Stock (by lot and location), "
+         "Projected Stock, Available Stock, Obsolete Stock and more."),
+     (2, "Stock → Enquiries → Transactions: every movement in and out – the usage report."),
+     (None, "Stock → Enquiries → Locations: what is in each location.")],
+    "Month-end stock value is usually a printout (stock valuation) – being confirmed.")
+MRP_RESULTS = (
+    "MRP results for one product", "Manufacturing → Enquiries → Reorder Results → MRP - MPS Results",
+    "26_CONSSCBB1_mrp_mps_results.png",
+    [(1, "Site S01A is filled in."),
+     (2, "Enter the Product (it must be filled in – this screen is one product at a time)."),
+     (3, "Press Search: stock, allocations, shortages and MRP's suggestions for that product."),
+     (4, "Excel export on the right-hand panel.")],
+    "For the full list of suggestions across all products, use the Planning Workbench (Purchasing → Ordering).")
+BOM_MULTI = (
+    "Exploded BOM – Multi-level", "Common data → BOMs (BOMs BOMP)",
+    "27_GESBODP_boms_multilevel.png",
+    [(None, "Click All → Common data → BOMs."),
+     (2, "Pick the part from the BOM list on the left (filter by Parent)."),
+     (3, "Its Parent Product shows at the top."),
+     (1, "Press Multi-level: every component at every level, with quantities."),
+     (4, "The SDI Drawing Number and SDI Revision Number fields are on the BOM too.")],
+    "Routings and Production Slip, next to Multi-level, show the route and the shop-floor slip for the same part.")
 
 STD_CHECKS = ["It shows the same items as my Access report", "The columns I use are there",
               "I can filter it the way I need", "The Excel export gives me what I need"]
@@ -198,8 +217,8 @@ GUIDES = {
             section("MRP suggestions (REP-08)", "MRP suggestions",
                     "What to make and buy, and when.",
                     "Planning Workbench (Purchasing) and Reorder Results (Manufacturing).",
-                    [MRP_MENUS], ["Which suggestions do you act on today?", "Do you filter by buyer, product group or date?"],
-                    note="The menus are found; which screen matches your Access MRP report is being confirmed with Acuity.",
+                    [MRP_MENUS, MRP_RESULTS], ["Which suggestions do you act on today?", "Do you filter by buyer, product group or date?"],
+                    note="MRP - MPS Results is one product at a time; the list across all products is the Planning Workbench – being confirmed with Acuity.",
                     ready=False),
             section("Stock: month end, usage, locations and movements (REP-09, REP-10, REP-13)",
                     "End-of-month stock; Stock usage; Stock tracking, booking-in, locations and movements",
@@ -207,12 +226,11 @@ GUIDES = {
                     "Stock → Enquiries: Stock, Transactions and Locations.",
                     [STOCK_MENU], ["Which totals do you need at month end (quantity, value, by location)?",
                                    "Over what period do you look at usage?"],
-                    note="The menu is found; the individual screens will be added once confirmed.", ready=False),
+                    note="The Stock enquiries are found; Transactions and Locations screens and the month-end valuation will be added once confirmed.", ready=False),
             section("Exploded BOMs, incl. carton call-offs (REP-03)", "Exploded BOMs",
                     "Every component at every level, with quantities (for Sam).",
-                    "A multi-level BOM enquiry – the Product design menu holds only the design screen, so its location is being confirmed with Acuity.",
-                    [], ["Which parts do you explode, and how often?", "Which call-off cartons need to show?"],
-                    note="Being confirmed with Acuity.", ready=False),
+                    "Common data → BOMs, then the Multi-level button.",
+                    [BOM_MULTI], ["It shows every level, like Access", "The call-off cartons show", "The quantities are right"]),
             section("Reports we need you to define (REP-05, 11, 12, 14, 15, 16, 17)",
                     "Your list, 13 October",
                     "These aren't standard in Sage X3 the way they work at SDI, so we need to know how they work today before we build them.",

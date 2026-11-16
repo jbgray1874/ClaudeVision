@@ -52,6 +52,16 @@ MARKS = {
     "24_APAR_enquiries_menu.png": [
         (1, (100, 566, 300, 682)),       # customer situation / customer aged balance
     ],
+    "25_stock_enquiries_stock_menu.png": [
+        (1, (128, 330, 352, 892)),       # Stock enquiries: by site / product / lots / detailed ...
+        (2, (82, 894, 214, 926)),        # Transactions
+    ],
+    "26_CONSSCBB1_mrp_mps_results.png": [
+        (1, (40, 436, 218, 476)),        # site
+        (2, (40, 538, 404, 578)),        # product
+        (3, (1420, 230, 1541, 285)),     # Search
+        (4, (1640, 640, 1860, 728)),     # Excel export
+    ],
     "05_GESPTH_purchase_receipt_entry.png": [
         (1, (6, 180, 357, 440)),         # list of receipts on the left
         (2, (412, 922, 870, 992)),       # invoiced status / quantity
@@ -86,6 +96,12 @@ PRIVATE_MARKS = {
     ],
     "19_purchasing_menu_ordering_orders.png": [
         (1, (100, 362, 268, 394)),       # Planning Workbench
+    ],
+    "27_GESBODP_boms_multilevel.png": [
+        (1, (1436, 229, 1592, 287)),     # Multi-level
+        (2, (8, 182, 632, 950)),         # list of BOMs
+        (3, (694, 503, 1060, 542)),      # parent product
+        (4, (694, 666, 1164, 708)),      # SDI drawing / revision number
     ],
     "16_purchasing_subcontract_menu.png": [
         (1, (206, 258, 458, 418)),       # Subcontract submenu
