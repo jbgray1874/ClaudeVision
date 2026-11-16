@@ -375,7 +375,7 @@ def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, le
     meta["carried"] = sum(1 for w in wos if w["carry"])
     write_xlsx(out / f"{name}.xlsx", meta, wos, wc_cols, wcnames, load, sug, checks, compare)
     write_html(out / f"{name}.html", meta, wos, wc_cols, wcnames, load, sug, compare)
-    return dict(meta=meta, files=[f"{name}.xlsx", f"{name}.html"], compare=compare and compare["summary"])
+    return dict(meta=meta, files=[f"{name}.xlsx", f"{name}.html"], compare=compare and compare["summary"], wos=wos, wcnames=wcnames)
 
 
 def compare_dave(path, wos):

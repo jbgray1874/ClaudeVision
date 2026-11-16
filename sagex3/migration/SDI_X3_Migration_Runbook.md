@@ -3434,3 +3434,23 @@ These are saved in the scratchpad `outbox_16Nov/` (not git).
 - the fallback for any gap X3 can't cover.
 
 It isn't a replacement for Production's sheet now.
+
+**16 Nov – Live Orders: Production's sheet reconciled automatically and mapped onto the X3 templates (James's direction: keep the work, make it useful to Acuity).**
+- **`sagex3/production/live_orders/reconcile_dave.py`** is read-only. It compares Production's sheet (Dave's Crystal export of 26 Oct) with the Access extract nearest that date (4 Nov), works order by works order and column by column. It then traces every column to its Access source and to the X3 import template it was loaded with (YA004MFG, YA004SOHPJ, YA004POH, YA004SMR, ZSDIITM, ZSDIROU2, YA00408BOM).
+- **Output: `LiveOrders_reconciliation_and_SageX3_mapping.xlsx`.** Tabs: Read me, Findings, Column map, By works order, Dept hours, Not open.
+- **Results (102 of 220 works orders still open in both):**
+  - part 102 / 102;
+  - quantity 102 / 102;
+  - balance 98 / 102 and booked-in 98 / 102 (made since);
+  - sales order 98 / 102 ("Stock" = none);
+  - due date 76 / 102 (25 of the 26 rescheduled later);
+  - Metal / Joinery / Acrylics 63 / 102 (definition);
+  - department hours: 297 of 334 work-centre lines agree where both have hours.
+- **Gaps found between Production's sheet and X3 as loaded:**
+  1. **Department hours:** the sheet uses each WO's own open operations. YA004MFG loads WOs at the remaining quantity with **all** operations open, so hours already done would show as still to do.
+  2. **WO → SO link not loaded**, so there's no customer date.
+  3. **Access WO number not carried** (MFGNUM blank; X3 renumbers).
+  4. **Made-to-date not carried** (EXTQTY = remaining).
+  5. **REV:** blank on 757 of 769 Access WOs; typed by Production. In X3 it's on the product only.
+  6. **Notes and material status are typed:** they need WO user fields, or a calculation from WO materials.
+- **Email to Marc and Ethan (cc Neil, Dave):** is there a process in Sage X3 today to provide this report, with the full explanation and the two attachments? It replaces the 22.26 requirement-only workbook.
