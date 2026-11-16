@@ -7,6 +7,7 @@
 Each report gets: an Access -> Sage X3 panel, numbered steps whose numbers match the red callouts on the
 screenshot, a tip, and a 'What to check' table for the user to fill in. The tracker is screens.json.
 """
+import os
 import sys
 from pathlib import Path
 
@@ -19,6 +20,15 @@ from docx.shared import Cm, Pt, RGBColor
 
 HERE = Path(__file__).parent
 MARKED = HERE / "shots_marked"
+PRIVATE = Path(os.environ["X3_PRIVATE_SHOTS"]) / "marked" if os.environ.get("X3_PRIVATE_SHOTS") else None
+
+
+def image_path(name):
+    """Marked screenshot: the committed set, or the private set (screens showing customer / supplier names)."""
+    for d in (MARKED, PRIVATE):
+        if d and (d / name).exists():
+            return d / name
+    return None
 INK = RGBColor(0x1F, 0x2A, 0x30)
 GREEN = RGBColor(0x00, 0x6B, 0x45)
 GREY = RGBColor(0x6B, 0x72, 0x78)
@@ -37,7 +47,10 @@ DELIVERY_LINE_LIST = (
      (3, "Untick Subcontract and Not invoiceable – these are never invoiced to a customer. Leave Normal ticked."),
      (4, "Press Search. The deliveries not yet invoiced are listed, one line per item delivered."),
      (5, "To work on it in Excel, choose Excel export on the right-hand panel.")],
-    "Put a Customer or a Product in to see just one account or part.")
+    "Put a Customer or a Product in to see just one account or part.",
+    [("14_CONSCSF_delivery_lines_not_invoiced_results.png",
+      "with Invoiced unticked (1), the deliveries not yet invoiced are listed underneath, with the number of results (2): "
+      "shipment number, customer, delivery date, product and description, one line per item.")])
 SHIPMENTS_BY_PERIOD = (
     "Shipments by period – totals by week or month", "Sales → Enquiries → Shipments → Shipments by period",
     "02_FUNGRHSDH1_shipments_by_period_selection.png",
@@ -54,16 +67,19 @@ ORDER_LINES = (
      (2, "Under Order State, untick Closed. Leave Not Closed ticked, so only open lines show."),
      (3, "Press Search. Every open sales-order line is listed."),
      (4, "Excel export on the right-hand panel takes the list into Excel.")],
-    "Optional filters: Customer, Product or Order Type. The same Orders menu has List of orders (one line per order) and Orders per period (totals).")
+    "Optional filters: Customer, Product or Order Type. The same Orders menu has List of orders (one line per order) and Orders per period (totals).",
+    [("13_CONSCSP_order_lines_results.png",
+      "the open order lines are listed underneath: order number, customer, date, product and description. "
+      "The count and page numbers are at the top of the list (1); Excel export (2) takes all of them into Excel.")])
 RECEIPT_LINES = (
     "Receipt lines – every item received and not yet invoiced", "Purchasing → Enquiries → Receipts → Receipt lines",
-    None,
-    [(None, "Type Receipt lines in the menu search and open it (the screen is called Receipt lines inquiry). Company C01 and Receiving Site S01A are filled in."),
-     (None, "Set the Start date back far enough – it defaults to about three months."),
-     (None, "Under Status, untick Invoiced and leave Not Invoiced ticked."),
-     (None, "Optional: a Starting and Ending Supplier, or a Product."),
-     (None, "Press Search, then Excel export on the right-hand panel.")],
-    "List of receipts (one line per receipt) and Receipts by period (monthly totals, with Memo / Recall) sit in the same menu and work the same way.")
+    "15_CONSCPS_receipt_lines_selection.png",
+    [(None, "Click All (top left) → Purchasing → Enquiries → Receipts → Receipt lines. The screen is called Receipt lines inquiry. Company C01 and Receiving Site S01A are filled in."),
+     (1, "Set the Start date back far enough – it defaults to about three months."),
+     (2, "Under Status, untick Invoiced and leave Not Invoiced ticked."),
+     (3, "Press Search. The receipt lines are listed underneath: receipt number, supplier, receipt date, product and description."),
+     (4, "Excel export on the right-hand panel takes the list into Excel.")],
+    "Optional: a Starting and Ending Supplier, or a Product. List of receipts (one line per receipt) and Receipts by period (monthly totals, with Memo / Recall) sit in the same menu and work the same way.")
 RECEIPT_ENTRY = (
     "Checking one receipt", "Purchasing → Receipts → Receipts",
     "05_GESPTH_purchase_receipt_entry.png",
@@ -76,9 +92,9 @@ STD_CHECKS = ["It shows the same items as my Access report", "The columns I use 
               "I can filter it the way I need", "The Excel export gives me what I need"]
 
 
-def section(title, access_path, access_what, x3_what, blocks, checks, note=None):
+def section(title, access_path, access_what, x3_what, blocks, checks, note=None, ready=None):
     return dict(title=title, access_path=access_path, access_what=access_what, x3_what=x3_what,
-                blocks=blocks, checks=checks, note=note)
+                blocks=blocks, checks=checks, note=note, ready=bool(blocks) if ready is None else ready)
 
 
 GUIDES = {
@@ -131,9 +147,14 @@ GUIDES = {
                     note="Being confirmed with Acuity."),
             section("Subcontract orders not booked in", "Subcontract orders waiting to be booked in (with Sam)",
                     "Work sent out to subcontractors and not yet received back.",
-                    "Purchasing → Enquiries → Subcontract.",
-                    [], ["Which orders do you and Sam check today?"],
-                    note="Being confirmed with Acuity."),
+                    "Purchasing → Enquiries → Subcontract: Allocations, Allocation Shortages and Subcontract consumption.",
+                    [("Where the subcontract enquiries are", "Purchasing → Enquiries → Subcontract",
+                      "16_purchasing_subcontract_menu.png",
+                      [(1, "Click All → Purchasing → Enquiries, then open Subcontract. It holds Allocations, Allocation Shortages and Subcontract consumption.")],
+                      "Which of these shows orders still out with the subcontractor is being confirmed with Acuity.")],
+                    ["Which orders do you and Sam check today?"],
+                    note="The menu is found; the exact screen for “not yet received back” is being confirmed with Acuity.",
+                    ready=False),
         ]),
 }
 
@@ -266,7 +287,7 @@ def build(name, out):
         run(r[0].paragraphs[0], f"{i}. {s['title']}", bold=True)
         para(r[0], s["access_path"], size=9, color=GREY, after=0)
         run(r[1].paragraphs[0], s["x3_what"], size=10)
-        ready = bool(s["blocks"])
+        ready = s["ready"]
         shade(r[2], LIGHT_HEX if ready else TIP_HEX)
         run(r[2].paragraphs[0], "Yes – try it" if ready else "Being confirmed", bold=True,
             color=GREEN if ready else RGBColor(0x8A, 0x60, 0x00))
@@ -310,7 +331,9 @@ def build(name, out):
         if s.get("note"):
             box(doc, s["note"], TIP_HEX if s["blocks"] else WARN_HEX, "Note")
 
-        for hd, where, img, steps, tip in s["blocks"]:
+        for blk in s["blocks"]:
+            hd, where, img, steps, tip = blk[:5]
+            results = blk[5] if len(blk) > 5 else []
             heading(doc, hd, 2).paragraph_format.keep_with_next = True
             p = para(doc, after=6); p.paragraph_format.keep_with_next = True; run(p, "Where:   ", bold=True, color=GREY, size=10); run(p, where, size=10)
             for n, text in steps:
@@ -319,11 +342,17 @@ def build(name, out):
                 if n: callout(p, n)
                 else: run(p, "  •    ", bold=True, color=GREEN)
                 run(p, text, size=10.5)
-            if img and (MARKED / img).exists():
-                doc.add_picture(str(MARKED / img), width=Cm(17.4))
+            if img and image_path(img):
+                doc.add_picture(str(image_path(img)), width=Cm(17.4))
                 pic = doc.paragraphs[-1]; pic.alignment = WD_ALIGN_PARAGRAPH.CENTER; pic.paragraph_format.space_after = Pt(2)
                 para(doc, f"{hd.split(' – ')[0]} on the Sage X3 training site. The red numbers match the steps above.",
                      size=8.5, color=GREY, after=6, align=WD_ALIGN_PARAGRAPH.CENTER)
+            for rimg, rcap in results:
+                if image_path(rimg):
+                    rp = para(doc, after=4); rp.paragraph_format.keep_with_next = True
+                    run(rp, "What you get:  ", bold=True, color=GREEN, size=10.5); run(rp, rcap, size=10.5)
+                    doc.add_picture(str(image_path(rimg)), width=Cm(17.4))
+                    pic = doc.paragraphs[-1]; pic.alignment = WD_ALIGN_PARAGRAPH.CENTER; pic.paragraph_format.space_after = Pt(6)
             if tip:
                 box(doc, tip, LIGHT_HEX, "Tip", GREEN)
 

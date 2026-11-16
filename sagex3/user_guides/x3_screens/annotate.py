@@ -1,5 +1,6 @@
 """Draw numbered callouts on the screenshots (shots/ -> shots_marked/). Boxes are in screenshot pixels (1920 wide).
 Each callout number matches a step in the guide."""
+import os
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
@@ -40,6 +41,29 @@ MARKS = {
 }
 
 
+# Screenshots that show customer or supplier names are kept OUT of git: they live in the folder named by
+# X3_PRIVATE_SHOTS (raw) and are marked into <that folder>/marked. The guides read them from there.
+PRIVATE_MARKS = {
+    "13_CONSCSP_order_lines_results.png": [
+        (1, (1050, 428, 1550, 462)),     # result count and pages
+        (2, (1645, 458, 1860, 548)),     # Excel export
+    ],
+    "14_CONSCSF_delivery_lines_not_invoiced_results.png": [
+        (1, (804, 612, 1140, 642)),      # Invoiced unticked
+        (2, (1185, 692, 1390, 722)),     # result count
+    ],
+    "15_CONSCPS_receipt_lines_selection.png": [
+        (1, (1040, 540, 1496, 584)),     # start / end date
+        (2, (40, 786, 372, 816)),        # invoiced / not invoiced
+        (3, (1420, 230, 1541, 285)),     # Search
+        (4, (1645, 458, 1860, 548)),     # Excel export
+    ],
+    "16_purchasing_subcontract_menu.png": [
+        (1, (206, 258, 458, 418)),       # Subcontract submenu
+    ],
+}
+
+
 def font(size):
     for f in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"):
         if Path(f).exists():
@@ -48,11 +72,21 @@ def font(size):
 
 
 def main():
-    out = HERE / "shots_marked"
-    out.mkdir(exist_ok=True)
+    jobs = [(HERE / "shots", HERE / "shots_marked", MARKS)]
+    priv = os.environ.get("X3_PRIVATE_SHOTS")
+    if priv:
+        jobs.append((Path(priv), Path(priv) / "marked", PRIVATE_MARKS))
+    for src, out, marks_map in jobs:
+        out.mkdir(exist_ok=True)
+        mark_all(src, out, marks_map)
+
+
+def mark_all(src, out, marks_map):
     f = font(30)
-    for name, marks in MARKS.items():
-        im = Image.open(HERE / "shots" / name).convert("RGB")
+    for name, marks in marks_map.items():
+        if not (src / name).exists():
+            continue
+        im = Image.open(src / name).convert("RGB")
         d = ImageDraw.Draw(im)
         for n, (x1, y1, x2, y2) in marks:
             d.rounded_rectangle((x1, y1, x2, y2), radius=8, outline=RED, width=5)

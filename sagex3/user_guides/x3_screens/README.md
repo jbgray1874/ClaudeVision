@@ -10,3 +10,6 @@ How the users' Access reports are replaced by Sage X3 standard screens, with scr
 **Process:** James captures the selection screen and the results screen → the tracker is updated → the guide is rebuilt → Marc (Acuity) validates → the guide goes to Debbie, who fills in the "What to check" tables.
 
 The guide itself is not kept in git; rebuild it.
+
+**Screenshots with customer or supplier names (results lists) are never committed.** Keep them in a private folder and set
+`X3_PRIVATE_SHOTS=<folder>` before running `annotate.py` and `build_guide.py`; the marks for them are in `PRIVATE_MARKS`.
