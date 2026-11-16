@@ -3481,3 +3481,13 @@ It isn't a replacement for Production's sheet now.
   - Dave: which drawing folder to use for the REV check;
   - Production's own rules: call-off list, sub-assembly rows, old overdue orders, capacities;
   - how "live" the report must be, and printing.
+
+**16 Nov – Live Orders follow-up SENT to Marc and Ethan (cc Neil, Dave), as a reply on the same thread.**
+- **Says:** Live Orders is a **view**, not a new import. Every figure comes from data X3 will hold:
+  - at go-live, from the migration files (YA004MFG, YA004SOHPJ, YA00408BOM, ZSDIROU2, YA004SMR, YA004POH, ZSDIITM, YITC);
+  - after go-live, from X3's own transactions, with the **estimating import** supplying BOMs and routes for new parts.
+- **Gaps 1–4** (hours, customer date, WO number, made-to-date) affect **only the works orders migrated as open at go-live**. They are fixes to YA004MFG, not a new import, but they matter on day one.
+- **Gaps 5–6** (revision per WO, Production's notes) are ongoing and need user fields on the works order.
+- **What we need:** the YA004MFG fixes (questions 6–9), user fields, the standard view (or a proposal), capacities / MRP in TEST, and a demo with Dave.
+- **Reply by:** questions 6–9 by **Wed 18 Nov** if possible (re-extract this week); everything else by **Fri 27 Nov**.
+- **Lesson:** questions pasted from an email can lose their numbering. Refer to a question by its number **and** its heading or wording.
