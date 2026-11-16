@@ -19,6 +19,7 @@ import hr_config as cfg  # noqa: E402
 import hr_inventry_api as api  # noqa: E402
 import hr_blip_inventry as source_loader  # noqa: E402
 import hr_onsite_push as push  # noqa: E402
+import hr_history  # noqa: E402
 
 
 class StubResponse:
@@ -72,12 +73,16 @@ def make_client(responses=None, **kw):
 
 def person(inventry_id="INV-1", first="John", surname="Smith",
            email="john.smith@wearesdi.com", person_id="BH-1", activity="OUT",
-           location=""):
+           location="", since=None):
     """Shaped like a real GetPersonnel record - LastActivity, not
-    LastActivityType, which is what the field-information PDF wrongly implied."""
+    LastActivityType, which is what the field-information PDF wrongly implied.
+
+    since: LastActivityDate as InVentry writes it (local, no offset). Defaults
+    to now, so a record that is IN is a sign-in from today."""
     return {"ID": inventry_id, "FirstName": first, "Surname": surname,
             "EmailAddress": email, "PersonID": person_id,
-            "LastActivity": activity, "LastActivityDate": "2026-09-21T07:45:00.000",
+            "LastActivity": activity,
+            "LastActivityDate": since or api.format_datetime(None) + ".000",
             "LastEventLocation": location, "MemberOfStaff": True}
 
 
@@ -356,6 +361,102 @@ def test_person_already_on_site_is_not_signed_in_again(snapshot):
     assert result["already_on_site"] == 1
 
 
+_MONDAY_9AM = datetime.datetime(2026, 11, 16, 9, 0, tzinfo=datetime.timezone.utc)
+
+
+def test_a_sign_in_left_over_from_an_earlier_day_is_signed_in_again(snapshot):
+    """16 Nov 2026: InVentry's API said IN, from a console sign-in days earlier
+    that was never signed out. The console on the wall did not show them, but
+    the sync counted them as already on site and never signed them in."""
+    snapshot([clocked_in(start="2026-11-16T07:31:00Z")])
+    fake = FakeAPI([person(person_id="BH-1", activity="IN", location="CONSOLE",
+                           since="2026-11-13T08:02:00.000")])
+
+    result = push.run_push(apply=True, client=fake, now=_MONDAY_9AM)
+
+    assert fake.signed_in == ["INV-1"]
+    assert result["already_on_site"] == 0
+    assert result["left_over"] == [{"name": "John Smith", "since": "2026-11-13"}]
+    assert result["status"] == "ok"
+    # Signed in once, counted once.
+    assert result["on_site_after"] == ["John Smith"]
+    assert hr_history.from_push(result, "test")["left_over"] == ["John Smith"]
+
+
+def test_a_left_over_sign_in_is_named_in_the_log(snapshot, capsys):
+    snapshot([clocked_in(start="2026-11-16T07:31:00Z")])
+    fake = FakeAPI([person(person_id="BH-1", activity="IN", since="2026-11-13T08:02:00.000")])
+
+    push.run_push(apply=False, client=fake, now=_MONDAY_9AM)
+
+    out = capsys.readouterr().out
+    assert "LEFT OVER John Smith" in out and "2026-11-13" in out
+    assert "[DRY RUN] would SIGN IN  John Smith" in out
+    assert fake.signed_in == []
+
+
+def test_a_console_sign_in_earlier_the_same_day_is_left_alone(snapshot):
+    """Signing in on the console a few minutes before clocking in on Blip is
+    today's sign-in: the console lists them, and the sync must not touch it."""
+    snapshot([clocked_in(start="2026-11-16T07:31:00Z")])
+    fake = FakeAPI([person(person_id="BH-1", activity="IN", location="CONSOLE",
+                           since="2026-11-16T07:25:00.000")])
+
+    result = push.run_push(apply=True, client=fake, now=_MONDAY_9AM)
+
+    assert fake.signed_in == []
+    assert result["already_on_site"] == 1
+    assert result["left_over"] == []
+
+
+def test_a_night_shift_signed_in_yesterday_is_not_signed_in_again_after_midnight(snapshot):
+    """One clocking that began yesterday: its sign-in is yesterday's too.
+    Comparing with the clocking's day, not today's, stops a sign-in every
+    five minutes all night."""
+    start = datetime.datetime(2026, 11, 15, 22, 0, tzinfo=datetime.timezone.utc)
+    snapshot([clocked_in(start=start.isoformat().replace("+00:00", "Z"))])
+    # Written as InVentry writes it: local time, no offset.
+    since = api.format_datetime(start + datetime.timedelta(minutes=4)) + ".000"
+    fake = FakeAPI([person(person_id="BH-1", activity="IN",
+                           location=cfg.INVENTRY_ACTION_LOCATION, since=since)])
+
+    result = push.run_push(apply=True, client=fake,
+                           now=datetime.datetime(2026, 11, 16, 2, 0, tzinfo=datetime.timezone.utc))
+
+    assert fake.signed_in == []
+    assert result["already_on_site"] == 1
+
+
+def test_a_sign_in_with_no_date_is_still_taken_as_on_site(snapshot):
+    """No date to judge by: behave exactly as before rather than guess."""
+    snapshot([clocked_in(start="2026-11-16T07:31:00Z")])
+    record = person(person_id="BH-1", activity="IN")
+    record["LastActivityDate"] = None
+    fake = FakeAPI([record])
+
+    result = push.run_push(apply=True, client=fake, now=_MONDAY_9AM)
+
+    assert fake.signed_in == []
+    assert result["already_on_site"] == 1
+
+
+def test_a_left_over_sign_in_for_someone_not_clocked_in_is_not_touched(snapshot):
+    """Not clocked in, and not signed in by us: still never signed out."""
+    snapshot([clocked_in(start="2026-11-16T07:31:00Z")])
+    fake = FakeAPI([
+        person(person_id="BH-1", activity="OUT"),
+        person(inventry_id="INV-2", first="Ann", surname="Other", email="ann@wearesdi.com",
+               person_id="BH-2", activity="IN", location="CONSOLE",
+               since="2026-11-13T08:02:00.000"),
+    ])
+
+    result = push.run_push(apply=True, client=fake, enable_sign_out=True, now=_MONDAY_9AM)
+
+    assert fake.signed_in == ["INV-1"]
+    assert fake.signed_out == []
+    assert result["left_over"] == []
+
+
 def test_unmatched_staff_are_reported_not_invented(snapshot):
     snapshot([clocked_in(bh_id="BH-NEW", first="New", surname="Starter", email="new@wearesdi.com")])
     fake = FakeAPI([person(person_id="BH-1")])
@@ -428,7 +529,7 @@ def test_a_reception_sign_in_is_never_undone(snapshot):
 
     assert fake.signed_out == []
     assert result["skipped_not_ours"] == 1
-    assert any("reception" in w for w in result["warnings"])
+    assert any("console" in w for w in result["warnings"])
 
 
 def test_mass_sign_out_is_capped(snapshot, monkeypatch):

@@ -195,7 +195,7 @@ def attention(d: dict) -> list:
                     "the Data issues tab in the app says what's wrong. The Roll call in the app includes them."
                     if d.get("automatic") else
                     "Clocked in on BrightHR, but not signed in on InVentry, so InVentry's own list (the one "
-                    "reception would use in a fire) does not include them. The Roll call in the app does. "
+                    "used in a fire) does not include them. The Roll call in the app does. "
                     "To fix it, press Update InVentry in the app: it signs them in.",
                     d["not_on_inventry"]))
     if d["not_clocked_in"]:
@@ -245,7 +245,7 @@ def compose(d: dict, link: str) -> tuple:
     figures = [("Clocked in on BrightHR", f"{d['clocked_in']} of {d['staff_checked']} staff checked"
                 + (f" (not counting {forgot} forgotten clock-out{'' if forgot == 1 else 's'})" if forgot else "")),
                ("On InVentry's fire list", "InVentry did not answer" if d["on_inventry"] is None else
-                f"{d['on_inventry']}" + (f" ({d['at_reception']} signed in at reception)" if d["at_reception"] else ""))]
+                f"{d['on_inventry']}" + (f" ({d['at_reception']} signed in on the console)" if d["at_reception"] else ""))]
     if d["on_inventry"] is not None and d["clocked_in"]:
         # The evidence the two are in step: of everyone clocked in, how many
         # InVentry's list has.

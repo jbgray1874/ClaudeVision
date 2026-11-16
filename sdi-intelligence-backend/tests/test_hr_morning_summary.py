@@ -100,7 +100,7 @@ def test_the_email_has_the_figures_the_names_and_the_link(server):
     subject, page, text = ms.compose(ms.gather(now=NOW), ms.app_url())
     assert subject == "HR morning summary: 2 clocked in, 4 to check"
     for said in ("New Starter", "Old Leaver", "Sam Forgot (80 days)", "press Update InVentry",
-                 "https://sdi.example/app/hr-inventry.html#roll", "1 signed in at reception"):
+                 "https://sdi.example/app/hr-inventry.html#roll", "1 signed in on the console"):
         assert said in text, said
     assert "https://sdi.example/app/hr-inventry.html#roll" in page
 
@@ -214,7 +214,7 @@ def test_a_long_list_gives_twenty_names_and_points_to_the_app(server):
     _, _, text = ms.compose(d, ms.app_url())
     assert "Person 19" in text and "Person 20" not in text and "and 69 more: see the app" in text
     assert "Missing from InVentry's fire list: 89 people" in text
-    assert "the one reception would use in a fire" in text and "The Roll call in the app does" in text
+    assert "the one used in a fire" in text and "The Roll call in the app does" in text
 
 
 def test_one_day_is_a_day():

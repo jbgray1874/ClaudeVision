@@ -137,7 +137,7 @@
   </div>
 
   <h2 id="what">1. What it does</h2>
-  <p>Staff clock in and out on <b>BrightHR Blip</b>. <b>InVentry</b> is the reception system, and its list of who
+  <p>Staff clock in and out on <b>BrightHR Blip</b>. <b>InVentry</b> is the sign-in system (the self-service console on the wall), and its list of who
   is on site is the fire roll call. On its own InVentry does not know about Blip clockings. This app:</p>
   <ul>
     <li><b>shows who is clocked in</b> on BrightHR right now;</li>
@@ -215,7 +215,7 @@
   </div>
   <h3>Roll call</h3>
   <p>Everyone who should be in the building, each with a tick box. It combines <b>everyone InVentry shows on
-  site</b> (including people signed in at reception) with <b>everyone clocked in on BrightHR</b> at the last
+  site</b> (including people who signed in on the console) with <b>everyone clocked in on BrightHR</b> at the last
   check. Each name says where it comes from, for example <span class="msg">clocked in 08:05 · not on InVentry</span>. Where InVentry knows someone by a different name, such as Rob for Robert, it shows in brackets, for
   example <span class="msg">InVentry (as Rob Lane)</span>: they are one person, matched by their email.</p>
   <ul>
@@ -225,7 +225,7 @@
     <li><b>Show only people not yet accounted for</b> narrows the list to who is still missing.</li>
     <li><span class="btnname">Group by manager</span> folds the list by BrightHR manager, each section saying
     how many of that manager's team are accounted for (for example <span class="msg">2 of 5 accounted for</span>).
-    People signed in at reception who are BrightHR staff go under their manager too. Sections you open stay
+    People who signed in on the console and are BrightHR staff go under their manager too. Sections you open stay
     open as the list refreshes. Visitors, and anyone without a manager in the HR managers list, are under
     <b>No manager listed</b>.</li>
     <li><b>Start a new roll call</b> clears every tick on every phone. The roll call before it stays in
@@ -255,7 +255,7 @@
   <table>
     <tr><th>Section</th><th>What to do</th></tr>
     <tr><td><b>Duplicate InVentry records</b></td><td>One person on several records. The app uses the copy marked
-    <b>(used)</b>. Merge or remove the others, as reception may sign in on them.</td></tr>
+    <b>(used)</b>. Merge or remove the others, as the console may sign people in on them.</td></tr>
     <tr><td><b>One email or ID shared by different people</b></td><td>Give each person their own email or ID in
     InVentry. Until then they are matched by full name only.</td></tr>
     <tr><td><b>BrightHR staff with no InVentry match</b></td><td>These people are never signed in to InVentry,
@@ -293,7 +293,7 @@
   <h2 id="fire">5. In a fire evacuation</h2>
   <div class="panel fail">
     <h4>Visitors and contractors</h4>
-    <p>This roll call is <b>staff only</b>. Take the visitor and contractor list from reception as usual.</p>
+    <p>This roll call is <b>staff only</b>. Take the visitor and contractor list from InVentry as usual.</p>
   </div>
   <ol>
     <li>Open the app and tap <b>Roll call</b>. The list appears in seconds; <b>do not wait for a new check</b>.</li>
@@ -302,7 +302,7 @@
     <li>Tick each person as they are accounted for. Every marshal's phone shows the same ticks.</li>
     <li>Turn on <b>Show only people not yet accounted for</b>. That list is who is still missing.</li>
     <li>Give the missing names to the fire service. Each name shows where it came from, which helps judge
-    whether the person is really in: for example, clocked in on BrightHR, or signed in at reception.</li>
+    whether the person is really in: for example, clocked in on BrightHR, or signed in on the console.</li>
   </ol>
   <p>The panel says when BrightHR was last checked. Names from InVentry are always current. Names from
   BrightHR are as of that check, so someone who clocked out after it may still be listed.</p>
@@ -342,13 +342,14 @@
   <ul>
     <li><b>Clocked in on Blip, not signed in on InVentry:</b> signed in.</li>
     <li><b>Clocked out on Blip, signed in by the app:</b> signed out.</li>
-    <li><b>Signed in at reception:</b> never signed out by the app; reception signs them out as usual.</li>
+    <li><b>Signed in on the console:</b> never signed out by the app; people sign out on the console as usual.</li>
+    <li><b>Left signed in from an earlier day:</b> InVentry keeps a console sign-in until it is signed out, but the console does not show it the next day. The app does not count it as today's: when that person clocks in on BrightHR it signs them in afresh, and from then on signs them out when they clock out.</li>
     <li><b>Matching:</b> by ID, then email (only if the name also agrees), then full name (only if exactly one
     record has it). If it is not sure, it does nothing and lists the person as not matched.</li>
     <li><b>Forgotten clock-outs:</b> a clock-in open for more than 20 hours is ignored.</li>
     <li><b>Bad data:</b> it changes nothing if BrightHR's answer is more than 15 minutes old, if more than 2% of the
     BrightHR lookups failed, or if BrightHR's staff list cannot be read.</li>
-    <li>Every change in InVentry is marked <b>BRIGHTHR SYNC</b>, so it can be told apart from reception's.</li>
+    <li>Every change in InVentry is marked <b>BRIGHTHR SYNC</b>, so it can be told apart from sign-ins on the console.</li>
   </ul>
 
   <h2 id="pay">8. Hours and pay</h2>
