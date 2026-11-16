@@ -3534,3 +3534,17 @@ It isn't a replacement for Production's sheet now.
 - **SDI MRP by operator (REP-18):** only partly standard. There's a shortage inquiry and MRP results, but **no standard filter by the user who entered the order**, so it's likely a custom inquiry. Ask Acuity.
 - **James has admin access to the training site (sdi-displays-trn)** and checks each screen there (the menu search box takes the function names).
 - **Lesson:** check function codes against the help URL before quoting them. The first list gave two wrong codes (CONSSCD / CONSSCF for CONSCSD / CONSCSF).
+
+**16 Nov – Sage X3 screens guide for Debbie started (`sagex3/user_guides/x3_screens/`).**
+- **What it is:** James captures each screen on the training site (sdi-displays-trn, X3ERPV12 / SDIMIG, Super administrator), **five at a time**. `screens.json` tracks all 13 screens and their status. `build_guide.py` builds the Word guide: per report, the Access path today, the X3 path and code, numbered steps, screenshots, and a "What to check" table.
+- **Batch 1 (16 Nov):**
+  - Delivery line list (CONSCSF), Shipments by period (FUNGRHSDH1) and Order lines (CONSCSP): selection screens captured;
+  - the Sales invoice entry screen (GESSIH) was sent as "Invoices to be issued", but **it's the invoice entry screen**. Invoices to be issued is FUNAUTFAE, a Finance closing process, and still to find.
+- **Seen on the screens:**
+  - Start and End dates are mandatory (default about 3 months);
+  - every enquiry has an Excel / CSV export;
+  - Shipments by period has Memo / Recall, a saved selection;
+  - Sales > Enquiries > Orders also holds List of orders (CONSCSO) and Orders per period.
+- **Still to capture:** a results screen for each; Sales order status; Delivery list; Invoices to be issued; List of receipts; Receipt lines; Subcontract; Shortage; MRP results; Requester.
+- **Then:** Marc validates (email drafted), then the guide goes to Debbie.
+- **Open:** does Debbie have a login to the training site?
