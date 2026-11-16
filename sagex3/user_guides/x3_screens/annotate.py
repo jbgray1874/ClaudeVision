@@ -33,6 +33,25 @@ MARKS = {
         (3, (1420, 230, 1541, 285)),     # Search
         (4, (1645, 458, 1860, 548)),     # Global export
     ],
+    "20_CONSSMQ_shortage_selection.png": [
+        (1, (40, 442, 200, 482)),        # site
+        (2, (220, 442, 972, 482)),       # first / last product
+        (3, (40, 518, 700, 558)),        # document type / document
+        (4, (1420, 230, 1541, 285)),     # Search
+        (5, (1640, 442, 1860, 532)),     # Excel export
+    ],
+    "21_purchasing_enquiries_orders_menu.png": [
+        (1, (126, 586, 272, 736)),       # List of orders / Order lines / Subcontract lines / Orders per period
+    ],
+    "22_CONSCPO_purchase_order_enquiry_selection.png": [
+        (1, (436, 516, 1004, 558)),      # starting / ending supplier
+        (2, (706, 684, 1160, 724)),      # start / end date
+        (3, (1420, 230, 1541, 285)),     # Search
+        (4, (1645, 458, 1860, 548)),     # Excel export
+    ],
+    "24_APAR_enquiries_menu.png": [
+        (1, (100, 566, 300, 682)),       # customer situation / customer aged balance
+    ],
     "05_GESPTH_purchase_receipt_entry.png": [
         (1, (6, 180, 357, 440)),         # list of receipts on the left
         (2, (412, 922, 870, 992)),       # invoiced status / quantity
@@ -57,6 +76,16 @@ PRIVATE_MARKS = {
         (2, (40, 786, 372, 816)),        # invoiced / not invoiced
         (3, (1420, 230, 1541, 285)),     # Search
         (4, (1645, 458, 1860, 548)),     # Excel export
+    ],
+    "17_manufacturing_menu_enquiries.png": [
+        (1, (100, 572, 236, 606)),       # Reorder Results
+        (2, (100, 656, 214, 690)),       # List of WOs
+    ],
+    "18_stock_menu_enquiries.png": [
+        (1, (100, 666, 300, 958)),       # Stock enquiries
+    ],
+    "19_purchasing_menu_ordering_orders.png": [
+        (1, (100, 362, 268, 394)),       # Planning Workbench
     ],
     "16_purchasing_subcontract_menu.png": [
         (1, (206, 258, 458, 418)),       # Subcontract submenu

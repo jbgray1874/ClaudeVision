@@ -3,6 +3,7 @@
     python annotate.py                          (once, after new screenshots: shots/ -> shots_marked/)
     python build_guide.py debbie <out.docx>     Customer Services (Debbie Freeth)
     python build_guide.py claire <out.docx>     Finance year end (Claire Newall)
+    python build_guide.py simon <out.docx>      Simon Foister, Sam, Ewa (report list of 13 Oct)
 
 Each report gets: an Access -> Sage X3 panel, numbered steps whose numbers match the red callouts on the
 screenshot, a tip, and a 'What to check' table for the user to fill in. The tracker is screens.json.
@@ -88,6 +89,50 @@ RECEIPT_ENTRY = (
      (3, "Receipt situation and Receipt Enquiry on the right-hand panel show the whole receipt's position.")],
     "This screen is for one receipt at a time. For the full list, use Receipt lines above.")
 
+SHORTAGE = (
+    "Shortage – materials short on orders", "Stock → Enquiries → Allocations → Shortage",
+    "20_CONSSMQ_shortage_selection.png",
+    [(None, "Click All → Stock → Enquiries → Allocations → Shortage."),
+     (1, "Site S01A is filled in."),
+     (2, "Optional: a First and Last Product to look at a range of parts."),
+     (3, "Document Type: leave All Types, or choose sales orders or works orders. Document: one order number."),
+     (4, "Press Search. Each shortage is listed: product, shortage type, document type, order number and line, and the quantity short."),
+     (5, "Excel export on the right-hand panel.")],
+    "To see just your own orders today, put one order number in Document. A filter by who entered the order is with Acuity.")
+PO_ENQUIRY = (
+    "Order Enquiry – purchase orders", "Purchasing → Enquiries → Orders → List of orders",
+    "22_CONSCPO_purchase_order_enquiry_selection.png",
+    [(None, "Click All → Purchasing → Enquiries → Orders → List of orders. The screen is called Order Enquiry. Company C01 and Purchasing Site S01A are filled in."),
+     (1, "Optional: a Starting and Ending Supplier."),
+     (2, "Set the Start date back far enough to include older orders."),
+     (3, "Press Search."),
+     (4, "Excel export on the right-hand panel.")],
+    "Order lines in the same menu gives one line per item ordered, with its expected receipt date – the one for “PO delivery by date”.")
+PO_MENU = (
+    "Line by line, with delivery dates", "Purchasing → Enquiries → Orders",
+    "21_purchasing_enquiries_orders_menu.png",
+    [(1, "The Orders menu holds List of orders (one line per order), Order lines (one line per item, with the expected receipt date), "
+         "Subcontract lines and Orders per period (totals).")],
+    None)
+DEBTORS = (
+    "Customer aged balance", "A/P-A/R Accounting → Enquiries",
+    "24_APAR_enquiries_menu.png",
+    [(1, "Click All → A/P-A/R Accounting → Enquiries. Customer aged bal to date gives the aged debtors; Customer situation gives one customer's full position.")],
+    "Supplier aged bal to date in the same menu is the creditors' equivalent.")
+MRP_MENUS = (
+    "Where MRP lives", "Purchasing → Ordering → Planning Workbench;  Manufacturing → Enquiries → Reorder Results",
+    "19_purchasing_menu_ordering_orders.png",
+    [(1, "Purchasing → Ordering → Planning Workbench: the buyer's view of MRP's suggestions – what to buy and when.")],
+    None,
+    [("17_manufacturing_menu_enquiries.png",
+      "Manufacturing → Enquiries → Reorder Results (1) holds the MRP results; List of WOs (2) lists the works orders.")])
+STOCK_MENU = (
+    "Stock enquiries", "Stock → Enquiries",
+    "18_stock_menu_enquiries.png",
+    [(1, "Stock → Enquiries holds Stock (what is where, and its value), Transactions (every movement – usage), Products, "
+         "Allocations, Locations, MRP/MPS replenishment and Quality History.")],
+    None)
+
 STD_CHECKS = ["It shows the same items as my Access report", "The columns I use are there",
               "I can filter it the way I need", "The Excel export gives me what I need"]
 
@@ -118,11 +163,68 @@ GUIDES = {
                     [ORDER_LINES], STD_CHECKS),
             section("SDI MRP (your orders)", "SDI Reports → SDI MRP, filtered to DF",
                     "Stock shortages on the orders you entered yourself.",
-                    "Sage X3 has standard shortage and MRP screens. Filtering them to the orders one person entered "
-                    "is being confirmed with Acuity.",
-                    [], ["Which filters do you set in Access?", "What do you look for in the results?",
-                         "What do you do next with it?"],
-                    note="Being confirmed with Acuity – we'll go through this one together on our call."),
+                    "The standard Shortage enquiry (Stock → Enquiries → Allocations → Shortage). It filters by product, "
+                    "document type and document – not yet by who entered the order.",
+                    [SHORTAGE], ["Which filters do you set in Access?", "What do you look for in the results?",
+                                 "What do you do next with it?"],
+                    note="The screen is found. Filtering it to the orders you entered (your “DF”) is not a standard filter – "
+                         "we're checking with Acuity, and we'll go through it together on our call.", ready=False),
+        ]),
+    "simon": dict(
+        title="Your reports in Sage X3",
+        subtitle="Purchasing, stock, sales and finance reports – for Simon, Sam and Ewa",
+        prepared_for="Simon Foister (with Sam and Ewa)",
+        intro=("On 13 October you sent us the 17 Access reports you, Sam and Ewa use. This guide shows where the standard "
+               "ones live in Sage X3 and how to run them, and lists the ones we need you to define. The red numbers on "
+               "each picture match the numbered steps beside it."),
+        sections=[
+            section("Purchase orders: delivery dates and outstanding POs (REP-01, REP-04)",
+                    "PO delivery by date; Outstanding purchase orders, to Excel",
+                    "Open purchase orders and when the goods are due in (for Sam).",
+                    "Order Enquiry (List of orders) and Order lines, each with Excel export.",
+                    [PO_ENQUIRY, PO_MENU], STD_CHECKS),
+            section("Receiving goods (REP-02)", "Receive goods on site",
+                    "Goods booked in from suppliers (for Sam).",
+                    "Receipt lines, List of receipts and Receipts by period.",
+                    [RECEIPT_LINES], STD_CHECKS),
+            section("Outstanding sales orders (REP-07)", "Outstanding sales orders",
+                    "Sales-order lines still open.",
+                    "The standard Order lines enquiry, filtered to lines that are not closed.",
+                    [ORDER_LINES], STD_CHECKS),
+            section("Debtors (REP-06)", "Debtors reports (for Ewa)",
+                    "Aged debtors and customer balances.",
+                    "Customer aged bal to date and Customer situation (A/P-A/R Accounting → Enquiries).",
+                    [DEBTORS], STD_CHECKS),
+            section("MRP suggestions (REP-08)", "MRP suggestions",
+                    "What to make and buy, and when.",
+                    "Planning Workbench (Purchasing) and Reorder Results (Manufacturing).",
+                    [MRP_MENUS], ["Which suggestions do you act on today?", "Do you filter by buyer, product group or date?"],
+                    note="The menus are found; which screen matches your Access MRP report is being confirmed with Acuity.",
+                    ready=False),
+            section("Stock: month end, usage, locations and movements (REP-09, REP-10, REP-13)",
+                    "End-of-month stock; Stock usage; Stock tracking, booking-in, locations and movements",
+                    "Stock value at month end, what has been used, and where stock is.",
+                    "Stock → Enquiries: Stock, Transactions and Locations.",
+                    [STOCK_MENU], ["Which totals do you need at month end (quantity, value, by location)?",
+                                   "Over what period do you look at usage?"],
+                    note="The menu is found; the individual screens will be added once confirmed.", ready=False),
+            section("Exploded BOMs, incl. carton call-offs (REP-03)", "Exploded BOMs",
+                    "Every component at every level, with quantities (for Sam).",
+                    "A multi-level BOM enquiry – the Product design menu holds only the design screen, so its location is being confirmed with Acuity.",
+                    [], ["Which parts do you explode, and how often?", "Which call-off cartons need to show?"],
+                    note="Being confirmed with Acuity.", ready=False),
+            section("Reports we need you to define (REP-05, 11, 12, 14, 15, 16, 17)",
+                    "Your list, 13 October",
+                    "These aren't standard in Sage X3 the way they work at SDI, so we need to know how they work today before we build them.",
+                    "Built as Sage X3 printouts or enquiries once defined.",
+                    [], ["REP-14 Production vs Proto Live (most important): how do we tell a prototype order from a production one?",
+                         "REP-11 Internal revenue: how is it calculated today? An example with figures would be ideal.",
+                         "REP-12 Total revenue: what's included and excluded, and by invoice or order date?",
+                         "REP-15 Project tracker: could you send the current layout?",
+                         "REP-16 Manufactured sales: what counts as manufactured?",
+                         "REP-17 Department on-time delivery: measured how, and by which department?",
+                         "REP-05 Export invoices (Ewa): one or two recent examples, and what the report must show"],
+                    note="Please answer in the table below, or by email.", ready=False),
         ]),
     "claire": dict(
         title="Year-end checks in Sage X3",
@@ -295,7 +397,10 @@ def build(name, out):
         for c, w in zip(row.cells, (Cm(5.6), Cm(8.2), Cm(3.6))):
             c.width = w; cell_margins(c, 0.2)
 
-    spacer(doc, 8)
+    if len(g["sections"]) > 4:
+        doc.add_page_break()
+    else:
+        spacer(doc, 8)
     heading(doc, "Before you start", 2)
     t = doc.add_table(rows=0, cols=2); set_borders(t)
     for k, v in (("Finding a screen", "Type its name into “Search the navigation menu…” at the top of Sage X3."),
@@ -343,7 +448,7 @@ def build(name, out):
                 else: run(p, "  •    ", bold=True, color=GREEN)
                 run(p, text, size=10.5)
             if img and image_path(img):
-                doc.add_picture(str(image_path(img)), width=Cm(17.4))
+                doc.add_picture(str(image_path(img)), width=Cm(15.8))
                 pic = doc.paragraphs[-1]; pic.alignment = WD_ALIGN_PARAGRAPH.CENTER; pic.paragraph_format.space_after = Pt(2)
                 para(doc, f"{hd.split(' – ')[0]} on the Sage X3 training site. The red numbers match the steps above.",
                      size=8.5, color=GREY, after=6, align=WD_ALIGN_PARAGRAPH.CENTER)
@@ -351,23 +456,27 @@ def build(name, out):
                 if image_path(rimg):
                     rp = para(doc, after=4); rp.paragraph_format.keep_with_next = True
                     run(rp, "What you get:  ", bold=True, color=GREEN, size=10.5); run(rp, rcap, size=10.5)
-                    doc.add_picture(str(image_path(rimg)), width=Cm(17.4))
+                    doc.add_picture(str(image_path(rimg)), width=Cm(15.8))
                     pic = doc.paragraphs[-1]; pic.alignment = WD_ALIGN_PARAGRAPH.CENTER; pic.paragraph_format.space_after = Pt(6)
             if tip:
                 box(doc, tip, LIGHT_HEX, "Tip", GREEN)
 
-        heading(doc, "What to check", 2).paragraph_format.keep_with_next = True
-        t = doc.add_table(rows=1, cols=3); set_borders(t)
-        for c, txt in zip(t.rows[0].cells, ("Check", "Yes / No", "Your comments")):
+        answers = not s["blocks"]                     # questions for the user: an answer column, not Yes / No
+        heading(doc, "Your answers" if answers else "What to check", 2).paragraph_format.keep_with_next = True
+        cols = ("Question", "Your answer") if answers else ("Check", "Yes / No", "Your comments")
+        widths = (Cm(8.4), Cm(9)) if answers else (Cm(7.2), Cm(3.2), Cm(7))
+        t = doc.add_table(rows=1, cols=len(cols)); set_borders(t)
+        for c, txt in zip(t.rows[0].cells, cols):
             shade(c, G_HEX); run(c.paragraphs[0], txt, bold=True, size=10, color=WHITE)
         for chk in s["checks"] + ["Anything else?"]:
-            a, b, _ = t.add_row().cells
-            run(a.paragraphs[0], chk, size=10)
-            run(b.paragraphs[0], "☐ Yes    ☐ No", size=10)
+            cells = t.add_row().cells
+            run(cells[0].paragraphs[0], chk, size=10)
+            if not answers:
+                run(cells[1].paragraphs[0], "☐ Yes    ☐ No", size=10)
         for row in t.rows:
-            for c, w in zip(row.cells, (Cm(7.2), Cm(3.2), Cm(7))):
+            for c, w in zip(row.cells, widths):
                 c.width = w; cell_margins(c, 0.2)
-            row.height = Cm(0.9)
+            row.height = Cm(1.1 if answers else 0.8)
         for row in t.rows[:-1]:                       # keep the table on one page, with its heading
             for c in row.cells:
                 for pp in c.paragraphs:
