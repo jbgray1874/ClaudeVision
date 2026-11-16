@@ -3079,6 +3079,13 @@ SDI has **three kinds of rebate**. They are separate, and each needs its own dat
 8. **BISY checks** in `build_bicy_bisy.py`: every Document is all digits and unique, none equals N, and Line = 1. On an old extract the build stops with "a Document is not an Access transaction number", which is correct.
 9. BICY is unchanged: still the order number, with suffixes. Ethan has been asked about using ST_PRIMARY instead; **not changed**.
 
+**C2. Works orders (YA004MFG): Live Orders questions 6–9, sent to Marc and Ethan on 16 Nov (22.26). Settle these before the works orders are loaded again:**
+- **Q6, operations already done.** Today WOs load at the remaining quantity with **all** operations open, so hours already worked in Access show as still to do. Options: load the completed quantity per operation, or load only the open operations.
+- **Q7, WO → SO link.** Can YA004MFG carry the originating sales order and line, so the customer date shows?
+- **Q8, Access WO number.** Carry it in a reference field (MFGNUM is blank, so X3 renumbers).
+- **Q9, made to date.** Load the original quantity plus completed, not just the remaining quantity (EXTQTY).
+- **If there's no answer by the run,** build as now and record that these four are open. Don't guess field names.
+
 **D. Before Ethan imports:**
 10. **ACCCOD** back from Claire (`deliver/Finance_Customer_Accounting_Codes.xlsx`: STD / EU / ID). Then put it into YA004BPC column Q and reload customers **before** BICY.
 11. The aged debtors / creditors sign-off is compared **as at the extract moment**, not 31/10. Use the run's control totals.
@@ -3464,3 +3471,13 @@ It isn't a replacement for Production's sheet now.
 - **Fixed:** the Findings tab had been added to the sent workbook by a one-off script, so a re-run would have left it out. It's now generated inside `reconcile_dave.py`, from the comparison itself, including the REV count over all 769 open works orders.
 - **Proof:** re-running both commands on the original inputs reproduces every tab and row of the two workbooks as sent. The only difference is that the Findings text is now generated, with no fixed dates.
 - **Lesson:** every tab of a deliverable must come from committed code, never from a one-off edit, so it can be re-run.
+
+**16 Nov – Live Orders email SENT to Marc and Ethan (cc Neil Morphew, Dave Wright).**
+- **Subject:** "Live Orders – how Production's report works today, reconciled to Access, mapped to Sage X3, and what we need from you".
+- **Content:** how it works today; the three parts; the reconciliation; the mapping to X3; the example of the target; the six gaps; 12 questions (report 1–5, migration load 6–9, set-up / demo 10–12).
+- **Attachments (3):** LiveOrders_reconciliation_and_SageX3_mapping.xlsx; Live_Orders (Dave, current sheet).xlsx; SDI_Live_Orders_2026-11-13.xlsx.
+- **Reply due Fri 27 Nov.** Q6–9 asked for sooner, and added to the 22.17 re-extract checklist (C2).
+- **Still open on our side:**
+  - Dave: which drawing folder to use for the REV check;
+  - Production's own rules: call-off list, sub-assembly rows, old overdue orders, capacities;
+  - how "live" the report must be, and printing.
