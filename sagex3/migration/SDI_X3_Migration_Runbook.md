@@ -3491,3 +3491,9 @@ It isn't a replacement for Production's sheet now.
 - **What we need:** the YA004MFG fixes (questions 6–9), user fields, the standard view (or a proposal), capacities / MRP in TEST, and a demo with Dave.
 - **Reply by:** questions 6–9 by **Wed 18 Nov** if possible (re-extract this week); everything else by **Fri 27 Nov**.
 - **Lesson:** questions pasted from an email can lose their numbering. Refer to a question by its number **and** its heading or wording.
+
+**16 Nov – estimating emails SENT (James confirmed):**
+1. To Dave Wright, James Ryan, Tim, Ethan and Marc: Tim's estimate converted into the Sage X3 BOM and route load files.
+2. To Dave: building the converter into the estimating portal and/or a spreadsheet (22.25).
+- **Still to send:** the rebate reply to Nick (cc Claire, Charlotte): install line removed, now £535,441.31 sales and £32,126.48 rebate (22.19).
+- **Still to do, in order:** Simon's email, then Claire's and Debbie's messages.
