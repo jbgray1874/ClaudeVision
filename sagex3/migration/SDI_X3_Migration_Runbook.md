@@ -3557,3 +3557,10 @@ It isn't a replacement for Production's sheet now.
 - **Debbie (7 pages):** Delivered not Invoiced; Outstanding Orders; SDI MRP (being confirmed).
 - **Claire (8 pages):** Delivered not invoiced; Received not invoiced; Invoices to be issued (being confirmed); Subcontract (being confirmed).
 - **Screenshots sent while Claude is working are not saved as files.** Send them after a reply has finished, or as one zip file. Never ask James to re-send what has already been read.
+
+**16 Nov – rebate rolling report (REP-22): answers from Claire and Debbie.**
+- **Correction:** the 16 Nov reply (and the 12 Nov sample email) went to **Nick Hedge**, not Nick Garrish. Claire forwarded it to Nick Garrish at 12:06. The rebate contact is **Nick Garrish**; check the recipient's surname before sending.
+- **Q1 (HHA01 M&M, 72 units, £19,080, order 10016441):** Debbie says the due date should be **September**; the 9 November date is wrong, and **she will change it back in Access**. The next run puts it in September. The 12-month total doesn't change (£535,441.31 sales, £32,126.48 rebate): both months are in the window, and 6% of £19,080 is exactly £1,144.80, so per-month rounding is unaffected.
+- **Q2 (rate):** Claire confirmed that **Morrisons invoice SDI for the 6% rebate separately once agreed**. So it's a flat 6%, a separate agreement from the customer-account rebate % in Access. The assumption stands.
+- **Q3 (part list complete? other 10932-00-GA variants such as PEP, DOV, CCE, REG):** Debbie isn't sure; **Nick Garrish to discuss later this week**. Still open.
+- **Next:** re-run after Debbie's date change; settle Q3 with Nick; then switch the report to live Access data and build it in X3.
