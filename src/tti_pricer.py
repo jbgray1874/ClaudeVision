@@ -40,6 +40,7 @@ import os
 import re
 import shutil
 import sys
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -518,18 +519,83 @@ class SheetWriter:
                           f"in the ledger and written then, without pricing again")
         self._openpyxl(row, value)
 
+    # ONE EXCEL, ASKED AGAIN WHILE IT IS BUSY, AND NEVER LEFT HOLDING THE FILE (16 Nov 2026).
+    # Every write since Sat 20:13 failed the same way: try 1 met "Call was rejected by callee"
+    # while Excel was still opening the tracker; the exception left that Excel alive with the
+    # workbook open; every later try started a new Excel, which opened the file read-only and
+    # could not save. Now a busy reply is waited out in the same Excel; a workbook opened
+    # read-only is refused at once; and the Excel this write started is ended, whatever happened.
+    BUSY = (-2147418111, -2147417846)          # RPC_E_CALL_REJECTED, RPC_E_SERVERCALL_RETRYLATER
+    BUSY_WAIT_S = 1.0
+    BUSY_TRIES = 120
+
+    def _patient(self, call: Callable[[], Any], tries: Optional[int] = None) -> Any:
+        for i in range(tries or self.BUSY_TRIES):
+            try:
+                return call()
+            except Exception as exc:                                     # noqa: BLE001
+                code = getattr(exc, "hresult", None)
+                if code is None and getattr(exc, "args", None):
+                    code = exc.args[0]
+                if code not in self.BUSY or i == (tries or self.BUSY_TRIES) - 1:
+                    raise
+                time.sleep(self.BUSY_WAIT_S)
+
+    @staticmethod
+    def _pid_of(xl: Any) -> Optional[int]:
+        try:
+            import win32process
+            return int(win32process.GetWindowThreadProcessId(int(xl.Hwnd))[1])
+        except Exception:                                                # noqa: BLE001
+            return None
+
+    @staticmethod
+    def _end(pid: Optional[int], wait_s: float = 10.0) -> None:
+        """End the Excel this write started, if Quit left it running. Only that one process."""
+        if not pid:
+            return
+        sys.path.insert(0, str(ROOT / "sdi-intelligence-backend"))
+        try:
+            from tti_batch_lock import pid_alive
+        except Exception:                                                # noqa: BLE001
+            return
+        end = time.time() + wait_s
+        while time.time() < end and pid_alive(pid):
+            time.sleep(0.5)
+        if pid_alive(pid):
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+
     def _excel(self, row: int, value: float) -> None:
         import win32com.client
         xl = win32com.client.DispatchEx("Excel.Application")
-        xl.DisplayAlerts = False
-        wb = xl.Workbooks.Open(str(self.sheet))
+        pid = self._pid_of(xl)
+        wb = None
         try:
-            ws = wb.Worksheets(self.sheet_name) if self.sheet_name else wb.ActiveSheet
-            ws.Cells(row, col_index(self.col)).Value = float(value)
-            wb.Save()
+            for name, val in (("DisplayAlerts", False), ("AskToUpdateLinks", False), ("EnableEvents", False)):
+                try:
+                    self._patient(lambda: setattr(xl, name, val), tries=10)
+                except Exception:                                        # noqa: BLE001
+                    pass
+            wb = self._patient(lambda: xl.Workbooks.Open(str(self.sheet), 0, False))
+            if self._patient(lambda: bool(wb.ReadOnly)):
+                raise OSError(f"the tracker copy is open somewhere else, so Excel opened it read-only; "
+                              f"close it there (or end the Excel holding it) and run these rows again")
+            ws = self._patient(lambda: wb.Worksheets(self.sheet_name) if self.sheet_name else wb.ActiveSheet)
+            cell = self._patient(lambda: ws.Cells(row, col_index(self.col)))
+            self._patient(lambda: setattr(cell, "Value", float(value)))
+            self._patient(lambda: wb.Save())
         finally:
-            wb.Close(SaveChanges=False)
-            xl.Quit()
+            if wb is not None:
+                try:
+                    self._patient(lambda: wb.Close(SaveChanges=False), tries=20)
+                except Exception:                                        # noqa: BLE001
+                    pass
+            try:
+                self._patient(lambda: xl.Quit(), tries=20)
+            except Exception:                                            # noqa: BLE001
+                pass
+            wb = xl = None
+            self._end(pid)
 
     def _openpyxl(self, row: int, value: float) -> None:
         import openpyxl
