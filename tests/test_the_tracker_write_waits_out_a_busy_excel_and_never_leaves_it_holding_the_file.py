@@ -93,6 +93,7 @@ def excel(monkeypatch):
     monkeypatch.setitem(sys.modules, "win32com.client", client)
     monkeypatch.setitem(sys.modules, "win32process", types.SimpleNamespace(GetWindowThreadProcessId=lambda h: (1, 4242)))
     monkeypatch.setattr(tp.SheetWriter, "_end", staticmethod(lambda pid, wait_s=10.0: ended.append(pid)))
+    monkeypatch.setattr(tp.SheetWriter, "_excel_pids", staticmethod(lambda: set()))
     monkeypatch.setattr(tp.SheetWriter, "BUSY_WAIT_S", 0)
     monkeypatch.setattr(tp.SheetWriter, "EXCEL_WAIT_S", 0)
     return made, ended
@@ -125,3 +126,20 @@ def test_an_error_that_is_not_busy_is_not_waited_on_and_its_excel_is_still_ended
     with pytest.raises(OSError):
         w.write(3, 1.0)
     assert len(Excel.made) == 1 and ended == [4242] and Excel.made[0].quit
+
+
+def test_an_excel_still_starting_is_waited_for_and_only_one_is_started(excel, tmp_path, monkeypatch):
+    """19:35, 16 Nov: "The message filter indicated that the application is busy" on the first call."""
+    made, ended = excel
+    starts = {"n": 0}
+    client = sys.modules["win32com.client"]
+    real = client.DispatchEx
+
+    def slow_start(name):
+        starts["n"] += 1
+        if starts["n"] < 3:
+            raise ComError(-2147417846)
+        return real(name)
+    monkeypatch.setattr(client, "DispatchEx", slow_start)
+    tp.SheetWriter(tmp_path / "t.xlsx", "Milwaukee", "P").write(3, 451.94)
+    assert starts["n"] == 3 and len(Excel.made) == 1 and Excel.made[0].value == 451.94 and ended == [4242]

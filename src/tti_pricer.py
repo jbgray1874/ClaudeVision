@@ -542,6 +542,16 @@ class SheetWriter:
                 time.sleep(self.BUSY_WAIT_S)
 
     @staticmethod
+    def _excel_pids() -> set:
+        """The Excel processes running now, to tell which one a try started."""
+        try:
+            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq EXCEL.EXE", "/FO", "CSV", "/NH"],
+                                 capture_output=True, text=True, timeout=30).stdout
+            return {int(line.split('","')[1]) for line in out.splitlines() if line.startswith('"EXCEL.EXE"')}
+        except Exception:                                                # noqa: BLE001
+            return set()
+
+    @staticmethod
     def _pid_of(xl: Any) -> Optional[int]:
         try:
             import win32process
@@ -567,8 +577,17 @@ class SheetWriter:
 
     def _excel(self, row: int, value: float) -> None:
         import win32com.client
-        xl = win32com.client.DispatchEx("Excel.Application")
-        pid = self._pid_of(xl)
+        # AN EXCEL STILL STARTING ANSWERS "the application is busy" (16 Nov 2026, 19:35: try 1
+        # failed on its very first call, before the tracker was opened). The start is waited out
+        # too, and each try that does start an Excel ends it.
+        before = self._excel_pids()
+        try:
+            xl = self._patient(lambda: win32com.client.DispatchEx("Excel.Application"), tries=60)
+        except Exception:
+            for _p in self._excel_pids() - before:
+                self._end(_p, wait_s=0)
+            raise
+        pid = self._pid_of(xl) or next(iter(self._excel_pids() - before), None)
         wb = None
         try:
             for name, val in (("DisplayAlerts", False), ("AskToUpdateLinks", False), ("EnableEvents", False)):
