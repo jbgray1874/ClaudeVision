@@ -25,6 +25,22 @@
       "date": "16 Nov 2026",
       "files": [],
       "note": "5 screenshots seen but NOT saved to disk (sent mid-turn): Delivery entry GESSDH, Purchasing > Enquiries menu, Receipt enquiry CONSCPR, Receipt lines CONSCPS, Receipts by period FUNGRHPR. James to re-send so they can go in the guide."
+    },
+    {
+      "batch": 4,
+      "date": "16 Nov 2026",
+      "files": [
+        "11_CONSCSP_order_lines_selection.png (git)",
+        "private: 12-16 (results lists, receipt lines, subcontract menu)"
+      ],
+      "note": "Taken in endpoint X3ERPV12_ACUX3 ('We are SDI'), not SDIMIG. Order lines dated 21/10/26 and 28/10/26 only (load dates?); Order lines and Receipt lines show exactly 200 results (display cap?); Delivery not invoiced = 13 test deliveries."
+    },
+    {
+      "batch": 5,
+      "date": "16 Nov 2026",
+      "files": [
+        "private: 17 Manufacturing menu, 18 Stock menu, 19 Purchasing menu"
+      ]
     }
   ],
   "screens": [
@@ -238,5 +254,10 @@
     "export": "Every enquiry has GLOBAL EXPORT > CSV export / Excel export in the right-hand panel.",
     "memo": "Shipments by period has Memo / Recall / Delete Memo: a saved selection, so a user can keep their own filters.",
     "orders_menu": "Sales > Enquiries > Orders holds: List of orders (CONSCSO), Order lines (CONSCSP), Orders per period, Routes, Order hitlist; also Shipments, Invoices, Returns, Allocations, Picking tickets, Parcel content, Document traceability."
+  },
+  "menu_map": {
+    "Manufacturing": "Planning; Batch Processes; Production Tracking; Enquiries (Loads, Allocations, WIP, Stock, Reorder Results, Track, List of WOs, Subcontract); Analyses; Utilities; Finite scheduler",
+    "Stock": "Flow of receipts/issues; Internal flows; License plate numbers; Counts; Shipment preparation; Reordering; Assignments; Periodic Processing; Labeling; Enquiries (Stock, Transactions, Products, Allocations, Locations, MRP/MPS replenishment, Quality History); Utilities",
+    "Purchasing": "Prices; Ordering (Enterprise Planning, Planning Workbench, Grouping workbench); Requests; RFQs; Subcontract; Orders (Buyer Planning, Orders, Contracts, Shipment Requests, Shipment Request Enquiry, Back-to-back orders, Close and Re-open Orders, Prepayment Management); Shipments; Enquiries (Requests, Subcontract, Orders, Receipts, Invoices, Returns, Document traceability, Products by supplier, Shipments)"
   }
 }
