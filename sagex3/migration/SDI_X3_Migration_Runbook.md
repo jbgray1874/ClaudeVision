@@ -3418,3 +3418,19 @@ These are saved in the scratchpad `outbox_16Nov/` (not git).
      - Excel, the portal, or both;
      - the macros;
      - template changes (a Material column on sheet steel, a code column on other sheet).
+
+### 22.26 Live Orders – focus on the Sage X3 piece (James, 16 Nov)
+
+**Decision:** we are **not** replacing Rachael and Liz's sheet now. The follow-up email to them is dropped. The focus is **how Sage X3 delivers Live Orders**.
+
+**Approach:** standard X3 first, then fill the gaps. Acuity confirm, for each of Dave's columns, which standard X3 screen or report covers it. They demo those screens, and propose how to deliver anything X3 doesn't cover (inquiry, report, WO user fields, or an export).
+
+**For Acuity (Ethan, Neil, Marc; cc Dave):**
+- `LiveOrders_requirement_to_SageX3.xlsx` takes every column of Dave's three tabs (Live Orders, WO Suggestions, BOM Report). For each it gives: what the column means; the Access source today; the X3 data; a possible standard X3 screen (ours, to confirm); and two answer columns for Acuity.
+- Dave's current sheet goes with it.
+
+**The SDI-built board (live_orders_app) stays as:**
+- the reference for what each column means;
+- the fallback for any gap X3 can't cover.
+
+It isn't a replacement for Production's sheet now.
