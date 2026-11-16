@@ -3454,3 +3454,13 @@ It isn't a replacement for Production's sheet now.
   5. **REV:** blank on 757 of 769 Access WOs; typed by Production. In X3 it's on the product only.
   6. **Notes and material status are typed:** they need WO user fields, or a calculation from WO materials.
 - **Email to Marc and Ethan (cc Neil, Dave):** is there a process in Sage X3 today to provide this report, with the full explanation and the two attachments? It replaces the 22.26 requirement-only workbook.
+
+**16 Nov – Live Orders process written up so both workbooks can be re-created (`sagex3/production/live_orders/README.md`).**
+- **The board** (`SDI_Live_Orders_<date>.xlsx`, the "example of the target") comes from `build_live_orders.py`: extract + products + BOMs + routes (+ `--costs`, `--dave`, `--carry`).
+- **The reconciliation** (`LiveOrders_reconciliation_and_SageX3_mapping.xlsx`) comes from `reconcile_dave.py`: Production's sheet + the extract nearest its date + the same master files.
+- **Inputs used on 16 Nov:**
+  - extracts: 4 Nov pm (`extract_transactions.txt`) for the reconciliation, and 13 Nov (`live_orders.sql` .rpt) for the board;
+  - master files: the 4 Nov pm mapped set (BOMs, costs), with Ethan's 5 Nov fixes for products and routes.
+- **Fixed:** the Findings tab had been added to the sent workbook by a one-off script, so a re-run would have left it out. It's now generated inside `reconcile_dave.py`, from the comparison itself, including the REV count over all 769 open works orders.
+- **Proof:** re-running both commands on the original inputs reproduces every tab and row of the two workbooks as sent. The only difference is that the Findings text is now generated, with no fixed dates.
+- **Lesson:** every tab of a deliverable must come from committed code, never from a one-off edit, so it can be re-run.

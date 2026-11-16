@@ -116,6 +116,7 @@ def main():
 
     stats = defaultdict(lambda: [0, 0])        # column -> [same, compared]
     rows, hours_rows, not_open, dave_rows = [], [], [], 0
+    due_later, rev_typed_only = 0, 0
     for r in ws.iter_rows(min_row=2, values_only=True):
         if not r[col["WO Num"]]:
             continue
@@ -137,11 +138,13 @@ def main():
         cmp("Part code", dp, w["code"], lo.product_code(dp) == w["code"])
         dd, ad = d(r[col["Due date"]]), w["due"]
         cmp("Due date", dd, ad, dd == ad)
+        due_later += 1 if dd and ad and ad > dd else 0
         ds = str(r[col["SO Num"]] or "").strip()
         so_d = "" if ds.upper() in ("", "STOCK") else ds.lstrip("0")
         cmp("SO Num", ds, w["so"], so_d == str(w["so"] or "").strip().lstrip("0"))
         drev = str(r[col["REV"]] or "").strip()
         cmp("REV", drev, w["rev"], drev.upper() == str(w["rev"] or "").strip().upper())
+        rev_typed_only += 1 if drev and not str(w["rev"] or "").strip() else 0
         cmp("QTY", r[col["QTY"]], w["qty"], same_num(r[col["QTY"]], w["qty"]))
         cmp("Booked in", r[col["Booked in"]], w["done"], same_num(r[col["Booked in"]], w["done"]))
         cmp("Balance", r[col["Balance"]], w["bal"], same_num(r[col["Balance"]], w["bal"]))
@@ -180,7 +183,8 @@ def main():
                    f"{len(not_open)} had been completed since the sheet was saved."),
         (None, None),
         ("Tab", "What it shows"),
-        ("Column map", "START HERE. Every column of the sheet: what it means, the Access source, how it is worked out, the Sage X3 template "
+        ("Findings", "START HERE: what the reconciliation shows, and the gaps between Production's sheet and the Sage X3 data as loaded."),
+        ("Column map", "Every column of the sheet: what it means, the Access source, how it is worked out, the Sage X3 template "
                        "and field it lands in, whether it reaches X3, and how well it reconciles."),
         ("By works order", "Each matched works order: the sheet's value, the Access value and ✓ / ✗ for every column."),
         ("Dept hours", "The sheet's department hours (summed onto Sage X3 work centres) against the hours worked out from the route."),
@@ -195,6 +199,62 @@ def main():
     rm["A8"].fill = rm["B8"].fill = INK
     rm["A8"].font = rm["B8"].font = Y
     rm.column_dimensions["A"].width, rm.column_dimensions["B"].width = 20, 120
+
+    # ------------------------------------------------------------------ findings (worked out from the comparison)
+    def st(k):
+        return stats[k][0], stats[k][1]
+    both = [h for h in hours_rows if h[4] and h[5]]
+    close = sum(1 for h in both if abs(h[6]) <= max(0.05, 0.02 * max(h[4], h[5])))
+    sheet_only = sum(1 for h in hours_rows if h[4] and not h[5])
+    board_only = sum(1 for h in hours_rows if h[5] and not h[4])
+    all_wor = lo.read_extract(a.extract)[0]["WOR"]          # every open works order in Access (incl. nothing left to make)
+    acc_rev = sum(1 for w in all_wor if str(w["rev"] or "").strip())
+    due_s, due_n = st("Due date")
+    fw = wb.create_sheet("Findings")
+    for line in [
+        (f"What the reconciliation shows (Production's sheet against Access as at {as_at}, {matched} works orders still open in both)", None),
+        (None, None),
+        ("Finding", "Detail"),
+        ("Part, quantity, balance – the same",
+         f"Part code {'%d / %d' % st('Part code')}, quantity ordered {'%d / %d' % st('QTY')}, balance {'%d / %d' % st('Balance')} and "
+         f"booked-in {'%d / %d' % st('Booked in')}. Differences are works orders where more was made after the sheet was saved."),
+        ("Sales order – the same",
+         f"{'%d / %d' % st('SO Num')} once 'Stock' on the sheet is read as 'no sales order' (as in Access). Those left are mostly "
+         "sub-assembly orders where the sheet leaves the sales order blank."),
+        ("Due date – moved, not wrong",
+         f"{due_s} / {due_n} the same. {due_later} of the {due_n - due_s} that differ have a LATER date in Access: "
+         "orders were rescheduled after the sheet was saved."),
+        ("REV – typed by Production",
+         f"Access holds a revision on only {acc_rev} of {len(all_wor)} open works orders. Production type the rev from the drawing "
+         f"(the sheet has it where Access has none on {rev_typed_only} more). In Sage X3 the rev is migrated onto the product "
+         "(Description 2), not the works order."),
+        ("Metal / Joinery / Acrylics – a definition to agree",
+         f"{'%d / %d' % st('Metal / Joinery / Acrylics')} the same. The sheet marks the shops still to come; working it out from the "
+         "route gives every shop the part ever goes through."),
+        ("Department hours – the important one",
+         f"Per work centre: {close} of {len(both)} lines where both have hours agree. {sheet_only} lines have hours only on the sheet "
+         f"and {board_only} only from the route. The sheet's hours come from each works order's OWN operations, with finished "
+         "operations dropping off; the route can't know what is finished. In Sage X3 the migrated works orders (YA004MFG) are "
+         "loaded at the remaining quantity with ALL operations open, so hours already done in Access would show as still to do."),
+        ("Customer date – broken today",
+         "The sheet's formula shows #REF!. Access has the date on the sales-order line; Sage X3 needs the works order linked to its "
+         "sales order to show it, and YA004MFG doesn't load that link."),
+        ("Material status, comments, Prog, tube – typed",
+         "Not held in Access or the templates. Material status can be worked out from Sage X3 (WO materials, stock, POs); the notes "
+         "need user fields on the works order or a separate store."),
+        ("WO number – not carried",
+         "YA004MFG leaves the order number blank, so Sage X3 gives each works order a new number. Production's sheet is keyed on "
+         "the Access number."),
+    ]:
+        fw.append(line)
+    fw["A1"].font = Font(bold=True, size=13)
+    fw["A3"].fill = fw["B3"].fill = INK
+    fw["A3"].font = fw["B3"].font = Y
+    for row in fw.iter_rows(min_row=4):
+        row[0].font = B
+        for c in row:
+            c.alignment = WRAP
+    fw.column_dimensions["A"].width, fw.column_dimensions["B"].width = 36, 120
 
     cm = wb.create_sheet("Column map")
     cm.append(["Production's column", "What it means", "Access source", "How it is worked out", "Sage X3 template / field",
