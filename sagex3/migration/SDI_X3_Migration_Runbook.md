@@ -3365,3 +3365,5 @@ These are saved in the scratchpad `outbox_16Nov/` (not git).
   - the gap left is small and itemised;
   - one final email replaces the 14 Nov draft.
 - **Lesson:** when checking a user's workbook, **read the cell comments first**. They're the user's own explanations. Never ask a question their workbook already answers.
+
+**16 Nov – SENT to Charlotte (finance only):** the quantity-rebate email with two attachments (the check workbook with 33 questions, 15 answered by her own notes; the provision workbook). Reply due Wed 25 Nov. Next: a full November run on 1 Dec and a side-by-side with her November.
