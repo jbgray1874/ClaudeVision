@@ -3548,3 +3548,12 @@ It isn't a replacement for Production's sheet now.
 - **Still to capture:** a results screen for each; Sales order status; Delivery list; Invoices to be issued; List of receipts; Receipt lines; Subcontract; Shortage; MRP results; Requester.
 - **Then:** Marc validates (email drafted), then the guide goes to Debbie.
 - **Open:** does Debbie have a login to the training site?
+
+**16 Nov – the Sage X3 user guides redesigned (James: "an impressive document").**
+- **`annotate.py`** crops each screenshot to the Sage X3 frame (no browser bars) and draws numbered red callouts on the boxes to set.
+- **`build_guide.py debbie|claire`** builds a designed Word guide:
+  - a cover page, then "At a glance" (Access report → X3 screen → ready / being confirmed) and "Before you start";
+  - one chapter per report: a Today-in-Access / In-Sage-X3 panel, steps numbered to match the callouts, the marked screenshot, a tip, and a "What to check" table.
+- **Debbie (7 pages):** Delivered not Invoiced; Outstanding Orders; SDI MRP (being confirmed).
+- **Claire (8 pages):** Delivered not invoiced; Received not invoiced; Invoices to be issued (being confirmed); Subcontract (being confirmed).
+- **Screenshots sent while Claude is working are not saved as files.** Send them after a reply has finished, or as one zip file. Never ask James to re-send what has already been read.
