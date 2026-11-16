@@ -52,12 +52,14 @@ Because the master data is the migration's X3 files, codes and work centres are 
 
 ## 4. Re-creating the two workbooks sent on 16 Nov
 
-Set the folder that holds the inputs (on James's PC, the worktree `C:\ClaudeVision_X3`; never check this branch out in `C:\ClaudeVision`):
+**Safest way to run it: no git at all.** Unzip `SDI_Live_Orders_python.zip` into its own new folder (e.g. `C:\SDI_LiveOrders`), and the master files into `C:\X3_inputs`. That folder shares nothing with `C:\ClaudeVision` or the estimating code. Never check this branch out in `C:\ClaudeVision`.
+
+PowerShell:
 
 ```
-cd C:\ClaudeVision_X3\sagex3\production\live_orders
-set IN=C:\X3_inputs
-set M=--products %IN%\ZSDIITM_products_MAPPED.xlsx --boms %IN%\YA00408BOM_boms_MAPPED.txt --routes %IN%\ZSDIROU2_routes_MAPPED.txt
+cd C:\SDI_LiveOrders\production\live_orders
+$IN = "C:\X3_inputs"
+$M = @("--products", "$IN\ZSDIITM_products_MAPPED.xlsx", "--boms", "$IN\YA00408BOM_boms_MAPPED.txt", "--routes", "$IN\ZSDIROU2_routes_MAPPED.txt")
 ```
 
 The master files used on 16 Nov were the 4 Nov pm mapped set, with Ethan's 5 Nov fixes for products and routes.
@@ -65,7 +67,7 @@ The master files used on 16 Nov were the 4 Nov pm mapped set, with Ethan's 5 Nov
 **a) The reconciliation** (Production's sheet of 26 Oct against the 4 Nov extract):
 
 ```
-python reconcile_dave.py "%IN%\Live_Orders.xlsx" %IN%\extract_transactions.txt LiveOrders_reconciliation_and_SageX3_mapping.xlsx %M%
+python reconcile_dave.py "$IN\Live_Orders.xlsx" "$IN\extract_transactions.txt" LiveOrders_reconciliation_and_SageX3_mapping.xlsx @M
 ```
 
 It prints the score per column:
@@ -81,7 +83,7 @@ sheet 220 rows, compared 102, not open 118
 **b) The board** (13 Nov extract, with costs, Production's notes carried forward, and the check against Dave's sheet):
 
 ```
-python build_live_orders.py %IN%\live_orders_2026-11-13.rpt out %M% --costs %IN%\YITC_product_costs_MAPPED.txt --dave "%IN%\Live_Orders.xlsx" --carry "%IN%\Live_Orders.xlsx"
+python build_live_orders.py "$IN\live_orders_2026-11-13.rpt" out @M --costs "$IN\YITC_product_costs_MAPPED.txt" --dave "$IN\Live_Orders.xlsx" --carry "$IN\Live_Orders.xlsx"
 ```
 
 This writes `out\SDI_Live_Orders_2026-11-13.xlsx` and `.html`, and prints a summary (703 works orders still to make; 169 green, 261 amber, 273 red; 8,125 hours; 118 WO suggestions; 45 rows with Production's notes carried).
