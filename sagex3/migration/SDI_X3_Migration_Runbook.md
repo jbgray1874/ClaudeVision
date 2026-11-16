@@ -3566,3 +3566,18 @@ It isn't a replacement for Production's sheet now.
 - **Next:** re-run after Debbie's date change; settle Q3 with Nick; then switch the report to live Access data and build it in X3.
 - **No reply sent (James, 16 Nov):** Debbie and Claire answered, and Q3 is with Nick Garrish and Debbie. Wait for Nick.
 - **To correct in the next rebate email:** the 12 Nov email said "months are taken from the invoice date". **It's the order line's due date** (the code default `--basis due`, as the Access report does; the 16 Nov email had it right).
+
+**16 Nov – Sage X3 report guides SENT to Debbie Freeth and Simon Foister (cc Selina, Sam, Ewa).**
+- **Attachments:** Sage_X3_guide_Debbie_Customer_Services (9 pp) and Sage_X3_guide_Simon_Sam_Ewa_reports (25 pp), each as PDF and Word (Word to fill in).
+- **Ready to try:**
+  - Debbie: Delivered not Invoiced; Outstanding Orders.
+  - Simon: POs (REP-01/04), receipts (REP-02), sales orders (REP-07), debtors (REP-06), exploded BOMs (REP-03), stock usage and movements (REP-10/13).
+- **Being confirmed:** SDI MRP by user (REP-18), MRP all-products list (REP-08), month-end stock value (REP-09), printouts.
+- **Asked of them, reply by Fri 27 Nov:**
+  - Debbie: a call Tue 17 / Wed 18 Nov; her MRP filters.
+  - Simon: definitions for REP-11, 12, 14 (most important), 15, 16, 17; MRP and month-end needs; what he prints.
+  - Sam: BOM call-off cartons.
+  - Ewa: export-invoice samples (REP-05).
+  - Selina: her 19 Oct list; a TTI schedule session.
+- **Promised:** training-site logins, once Acuity confirm the environment.
+- **Next:** Claire's guide and covering email; Marc's validation email (user filter, 200-result limit, load dates on migrated orders, environment, MRP list, stock valuation, BOM / subcontract).
