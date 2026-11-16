@@ -3476,7 +3476,7 @@ It isn't a replacement for Production's sheet now.
 - **Subject:** "Live Orders – how Production's report works today, reconciled to Access, mapped to Sage X3, and what we need from you".
 - **Content:** how it works today; the three parts; the reconciliation; the mapping to X3; the example of the target; the six gaps; 12 questions (report 1–5, migration load 6–9, set-up / demo 10–12).
 - **Attachments (3):** LiveOrders_reconciliation_and_SageX3_mapping.xlsx; Live_Orders (Dave, current sheet).xlsx; SDI_Live_Orders_2026-11-13.xlsx.
-- **Reply due Fri 27 Nov.** Q6–9 asked for sooner, and added to the 22.17 re-extract checklist (C2).
+- **Correction (checked against the email as sent):** the sent version has **no reply-by date**, and nothing asks for Q6–9 sooner. It also doesn't say that no import is needed, that the after-go-live data comes from X3 itself, or that gaps 1–4 only affect the works orders migrated as open. A short follow-up was drafted to cover these, with a reply by Fri 27 Nov and Q6–9 before the migration run. Q6–9 are on the 22.17 re-extract checklist (C2).
 - **Still open on our side:**
   - Dave: which drawing folder to use for the REV check;
   - Production's own rules: call-off list, sub-assembly rows, old overdue orders, capacities;
