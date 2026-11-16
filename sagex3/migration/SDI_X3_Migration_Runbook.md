@@ -3506,3 +3506,13 @@ It isn't a replacement for Production's sheet now.
   - the HHA01 72-unit order re-dated to 9 Nov;
   - whether 6% is paid to Morrisons under a separate agreement;
   - whether the 21 codes are complete (other 10932-00-GA variants).
+
+**16 Nov – Simon's email SENT (to Simon Foister, cc Ewa).**
+- **What it is:** a reply to his 13 Oct list. All 17 reports are on the register as REP-01 to REP-17, each with its Jira ticket.
+- **Attachment:** Simon_Foister_reports_for_Sage_X3.xlsx. It has a Read me tab and a "Your 17 reports" tab with a "Your answer" column.
+- **Reports:**
+  - 10 look standard (REP-01–04, 06–10, 13): Acuity confirming, then we test with Simon;
+  - 6 need his definition (REP-11, 12, 14–17). REP-14 (Production vs Proto Live) is the most important, because Live Orders needs the same split;
+  - REP-05: export invoice samples from Ewa.
+- **Reply by Fri 27 Nov** (moved from 20 Nov in the attachment).
+- **Next:** Claire's and Debbie's messages from last week.
