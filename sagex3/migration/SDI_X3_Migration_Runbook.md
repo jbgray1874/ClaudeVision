@@ -3751,3 +3751,32 @@ It isn't a replacement for Production's sheet now.
 
 - **Shadow value removed again (17 Nov, James).** The Terminal Services policy key is back to empty, as it most likely was before. Still open: the planned restart, and the MSP email.
 - **About 17:40: tested with `SDI\james.gray` (a new user, saved username cleared). It hangs the same way.** That confirms no new session can start for any user. The way forward is the vSphere console now, or the planned out-of-hours restart.
+
+**17 Nov – new product requests: two emails SENT (James confirmed).**
+1. **To Acuity (Marc, Ethan): product fields and cost / sales by manufacturing route. Jira SCRUM-330, register MIG-12. Reply asked by Wed 25 Nov.**
+   - **Fields wanted on the product, labelled in SDI's wording:** drawing number, drawing revision, commodity code, stock nominal, COS nominal, sales analysis account.
+     - Asked Acuity to add them to the product record **and to the ZSDIITM template** (13 fields today, none of these six).
+     - X3 has a standard commodity code field. The BOM screen already has SDI Drawing / Revision fields: can they go on the product?
+     - **Nominals:** in X3 these normally come from the product's **accounting code**, which holds the stock / COS / sales accounts, not three fields per product. If Acuity agree, Finance agree the codes and one goes on each product (as ACCCOD for customers).
+   - **Cost / sales by route:** in-house, UK sub-contract, Poland sub-contract, Chinese sub-contract. The request was to rename the categories. Asked whether a **statistical group** is better, because:
+     - categories drive made / bought behaviour;
+     - the import won't change the category of an existing product (the PHANT lesson).
+   - **Our side, once the fields exist:**
+     - drawing = the part code without the customer prefix;
+     - rev = as now (Description 2);
+     - commodity and nominal codes: **find the source in Access** (not known yet).
+2. **To TTI Customer Services: reviewing the TTI top-level parts before the transfer. Jira SCRUM-331, register MIG-13. SDI builds this; Acuity aren't needed.**
+   - **Asked, by Wed 25 Nov:**
+     - how to identify a TTI top-level part (customer prefix, TTI sales orders, or their own list; a date cut-off; top level only or with sub-assemblies);
+     - which columns (proposed: code, description, drawing, rev, category, unit, price, cost; BOM and route tabs; the new fields);
+     - which columns they'll edit;
+     - how changes get in;
+     - any data not held in Access;
+     - who reviews.
+   - **How changes get in:**
+     - **(a) Corrections in Access before the final run.** Recommended: one source of truth.
+     - **(b) An override sheet** that every run applies, with a change log.
+   - **Edits made only in the spreadsheet are lost at the next rebuild.**
+   - **Timeline:** the workbook goes out after their answers; changes back by **Fri 4 Dec**, in time for the trial run.
+   - **On standby (James, 17 Nov):** build the workbook from the latest rebuilt product / BOM / route / cost files as soon as TTI answer. If they choose (b), add an override step to `rebuild/run.py` that logs every change it applies.
+
