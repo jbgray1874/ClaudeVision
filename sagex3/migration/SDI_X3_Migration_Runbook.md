@@ -3685,3 +3685,31 @@ It isn't a replacement for Production's sheet now.
 - Rule 1 applies: live data, extracted on the day, every file rebuilt and sent to Ethan, with the reconciliation workbook rebuilt on the new extract.
 - **Not affected, no rebuild needed:** the Live Orders workbooks (sent 16–17 Nov) and the X3 report guides. Live Orders' master files get refreshed from the new run's rebuilt set afterwards (22.17 E).
 
+**17 Nov (late) – Remote Desktop to ACCESS-DB01 fixed without restarting the server: the Remote Desktop service was hung.**
+- **The account is `sdi.local\access.group`, not `sdi.local\access`.** That's why `net user access /domain`, `qwinsta` and the first `Invoke-Command` failed: we were sending a name the server doesn't have. It's the name saved in James's Remote Desktop connection.
+- **The symptoms, in order:**
+  - a hang at "Securing remote connection";
+  - with the right account, a certificate warning: the certificate is `Access-DB01.sdi.local`, and we connected by IP. Accept it, or connect by name;
+  - "Remote Desktop Services is currently busy". **The service itself was hung.**
+- **Cause:** one hung `administrator` session (session 1). Even `logoff 1` hung. No other users were on the server.
+- **Fix:** James is IT. It was done over WinRM (port 5985), which keeps working when Remote Desktop is hung:
+  ```
+  $c = Get-Credential sdi.local\access.group
+  $s = New-PSSession -ComputerName ACCESS-DB01 -Credential $c
+  Invoke-Command -Session $s { quser }                                   # who is on: warn any Active users first
+  Invoke-Command -Session $s { logoff <ID> }                             # gentle fix; hung here
+  Invoke-Command -Session $s { tasklist /svc /fi "services eq TermService" }   # must list ONLY TermService
+  Invoke-Command -Session $s { taskkill /PID <pid> /F; Start-Sleep 5; sc.exe start TermService; sc.exe query TermService; sc.exe query UmRdpService }
+  Remove-PSSession $s
+  ```
+  Both services came back **RUNNING**.
+- **What this touches:** only Remote Desktop sessions on ACCESS-DB01. SQL Server, Access SupplyChain Server and users on their own PCs are unaffected.
+- **Never:**
+  - kill `csrss` or `winlogon` (it crashes the server);
+  - kill a svchost that hosts other services as well;
+  - restart the server or SQL Server (it cuts off every Access user).
+- **Oddities to look at later:**
+  - **`Get-CimInstance` failed in the remote session.** A file named `Get-CimInstance` exists in `C:\Windows\system32` on ACCESS-DB01, probably from a stray output redirect. Check it and remove it.
+  - The `access.group` account being an administrator, and the stale `server2k8` reverse DNS, are still open with IT.
+- **Lesson:** read the username saved in the Remote Desktop connection before trying other account names.
+
