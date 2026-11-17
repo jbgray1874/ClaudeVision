@@ -41,7 +41,8 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 
 SCHEMA = "design_sweep.v1"
 DRAWING_EXT = {".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp"}
-SKIP_WORDS = re.compile(r"\b(archive|archived|old|superseded|backup|back up|obsolete|recycle)\b|^[._~$]",
+# Joined by an underscore counts too: "M&S fonts_ARCHIVED" was listed as a new pack (16 Nov 2026).
+SKIP_WORDS = re.compile(r"(?<![A-Za-z])(archive|archived|old|superseded|backup|back up|obsolete|recycle)(?![A-Za-z])|^[._~$]",
                         re.IGNORECASE)
 JOB_LEAD = re.compile(r"^\s*(\d{3,})")
 
@@ -76,6 +77,17 @@ def settings(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         "show_changed": str(e.get("SDI_DESIGN_SWEEP_SHOW_CHANGED") or "").strip().lower()
                         in ("1", "true", "yes", "on"),
     }
+
+
+def _made_after(folder: str, when: float) -> bool:
+    """Whether the folder was made after `when` (its creation time on the share). Unreadable:
+    taken as made after, so a real new job is never hidden by a read that failed."""
+    if not when:
+        return True
+    try:
+        return os.stat(folder).st_ctime > when
+    except OSError:
+        return True
 
 
 def is_client_folder(name: str) -> bool:
@@ -243,8 +255,13 @@ def sweep(cfg: Dict[str, Any], ledger: Dict[str, Any], now: Optional[float] = No
         else:
             fp = fingerprinter(Path(f["folder"]))
         if old is None:
+            # A FOLDER SEEN FOR THE FIRST TIME IS NOT NEW IF IT WAS MADE BEFORE THE BASELINE (16 Nov
+            # 2026: the panel listed jobs from February, July and September as "first detected
+            # 10 Nov"). One the share hid until now, or one the baseline missed, is an old folder.
+            is_new = not first and _made_after(f["folder"], float(ledger.get("baseline_at") or 0))
             packs[key] = dict(f, first_seen=now, last_seen=now, fingerprint=fp["sha1"], files=fp["files"], dirsig=sig,
-                              newest=fp["newest"], status="baseline" if first else "new", flagged_at=None if first else now)
+                              newest=fp["newest"], status="new" if is_new else "baseline",
+                              flagged_at=now if is_new else None)
         else:
             old.update(last_seen=now, client=f["client"], name=f["name"], job=f["job"], dirsig=sig)
             if fp["sha1"] != old.get("fingerprint"):
@@ -260,8 +277,16 @@ def sweep(cfg: Dict[str, Any], ledger: Dict[str, Any], now: Optional[float] = No
     for key, p in packs.items():
         p["present"] = key in seen
     ledger["sweeps"] = int(ledger.get("sweeps") or 0) + 1
-    if first:
+    # A SWEEP THAT COULD NOT READ THE SHARE IS NOT THE BASELINE: with nothing recorded, the next
+    # sweep would have called every folder on the share new.
+    if first and found and not errors:
         ledger["baseline_at"] = now
+    # THE ONES ALREADY FLAGGED THAT WAY ARE PUT RIGHT: a pack marked new whose folder was made
+    # before the baseline goes back to the baseline.
+    _base = float(ledger.get("baseline_at") or 0)
+    for p in packs.values():
+        if p.get("status") == "new" and _base and not _made_after(p["folder"], _base):
+            p.update(status="baseline", flagged_at=None)
     keep = cfg["keep_days"] * 86400
     candidates = []
     # A FOLDER MADE AFTER THE FIRST SWEEP IS NEW, whatever the sweep saw of it first (a folder
@@ -278,6 +303,9 @@ def sweep(cfg: Dict[str, Any], ledger: Dict[str, Any], now: Optional[float] = No
     # NEW FOLDERS ONLY, UNLESS ASKED (SDI_DESIGN_SWEEP_SHOW_CHANGED=1 lists changed packs too).
     shown = ("new", "changed") if cfg.get("show_changed") else ("new",)
     for key, p in packs.items():
+        # A JOB IS NAMED BY ITS NUMBER: "Presentations", "3D" and "Design" are folders, not jobs.
+        if not p.get("job"):
+            continue
         if p.get("status") in shown and p.get("present") and p.get("flagged_at") \
                 and now - float(p["flagged_at"]) <= keep:
             candidates.append({"folder": p["folder"], "client": p["client"], "name": p["name"], "job": p["job"],

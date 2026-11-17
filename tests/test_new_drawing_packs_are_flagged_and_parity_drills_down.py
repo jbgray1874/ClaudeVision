@@ -249,3 +249,64 @@ def test_the_panel_draws_jobs_says_what_it_is_and_flags_an_overdue_sweep():
     assert "d.jobs" in page and "data-dsjob" in page and "OVERDUE" in page
     for col in ("First detected", "PDF", "CAD", "Other", "Newest drawing file", "Stage"):
         assert f">{col}<" in page, col
+
+
+# ── 16 Nov 2026: the panel listed old folders and non-job folders as new ───────────────────
+def _cfg_for(root, tmp_path):
+    cfg = ds.settings({"SDI_DESIGN_SWEEP_ROOT": str(root), "SDI_DESIGN_SWEEP_LEDGER": str(tmp_path / "led.json")})
+    return dict(cfg, root=Path(root), estimates=tmp_path / "none")
+
+
+def test_a_sweep_that_could_not_read_the_share_is_not_the_baseline(tmp_path):
+    root = tmp_path / "W"
+    old = root / "M&S" / "10019 - Dried Fruit"
+    old.mkdir(parents=True)
+    (old / "a.pdf").write_text("x")
+    cfg = _cfg_for(root, tmp_path)
+    led = ds.load_ledger(tmp_path / "led.json")
+    blind = ds.sweep(dict(cfg, root=tmp_path / "unreadable"), led, now=1000.0, estimated=set())
+    assert blind["errors"] and not led.get("baseline_at"), "an unread share became the baseline"
+    first = ds.sweep(cfg, led, now=2000.0, estimated=set())
+    assert first["baseline"] and first["candidates"] == [], "every folder on the share was called new"
+
+
+def test_an_old_folder_seen_late_is_not_new_and_one_already_flagged_is_put_right(tmp_path):
+    import os
+    root = tmp_path / "W"
+    (root / "M&S" / "10001 - Seen at the baseline").mkdir(parents=True)
+    cfg = _cfg_for(root, tmp_path)
+    led = ds.load_ledger(tmp_path / "led.json")
+    ds.sweep(cfg, led, now=2000.0, estimated=set())
+    late = root / "M&S" / "10013 - Bakery ticket strip"
+    late.mkdir()
+    (late / "a.pdf").write_text("x")
+    made = os.stat(late).st_ctime
+    led["baseline_at"] = made + 60                        # the folder is older than the baseline
+    r = ds.sweep(cfg, led, now=made + 120, estimated=set())
+    assert r["candidates"] == [], "a folder made before the baseline was listed as new"
+    key = os.path.normcase(str(late))
+    led["packs"][key].update(status="new", flagged_at=made + 100)   # as the 10 Nov list had it
+    r = ds.sweep(cfg, led, now=made + 180, estimated=set())
+    assert r["candidates"] == [] and led["packs"][key]["status"] == "baseline"
+    led["baseline_at"] = made - 60                        # contrast: made after the baseline
+    fresh = root / "M&S" / "10020 - New job"
+    fresh.mkdir()
+    (fresh / "b.pdf").write_text("x")
+    r = ds.sweep(cfg, led, now=made + 240, estimated=set())
+    assert [c["job"] for c in r["candidates"]] == ["10020"]
+
+
+def test_folders_with_no_job_number_and_archive_folders_are_never_listed(tmp_path):
+    root = tmp_path / "W"
+    (root / "M&S").mkdir(parents=True)
+    cfg = _cfg_for(root, tmp_path)
+    led = ds.load_ledger(tmp_path / "led.json")
+    (root / "M&S" / "10001 - Baseline").mkdir()
+    ds.sweep(cfg, led, now=1000.0, estimated=set())
+    led["baseline_at"] = 1.0
+    for name in ("Presentations", "3D", "Design", "M&S fonts_ARCHIVED", "12999 - Real new job"):
+        (root / "M&S" / name).mkdir()
+        (root / "M&S" / name / "x.pdf").write_text("x")
+    r = ds.sweep(cfg, led, now=3000.0, estimated=set())
+    assert [c["name"] for c in r["candidates"]] == ["12999 - Real new job"]
+    assert ds.SKIP_WORDS.search("M&S fonts_ARCHIVED") and not ds.SKIP_WORDS.search("Golden Fold")
