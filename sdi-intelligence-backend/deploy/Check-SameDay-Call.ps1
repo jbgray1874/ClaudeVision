@@ -53,6 +53,7 @@ Write-Host ""
 Write-Host "  SDI SAMEDAY - WHAT HAPPENED ON THE LAST CALL  (reads only)" -ForegroundColor White
 Write-Host "  $(Get-Date -Format 'dddd d MMMM yyyy, HH:mm')" -ForegroundColor DarkGray
 $hints = @()
+$noCredit = $false
 
 # -- 1. Is it running, and can it spend? -------------------------------------------
 Head "1. SameDay now"
@@ -151,6 +152,16 @@ if (-not $files.Count) {
     foreach ($f in $files) { $hits += @(Get-Content -LiteralPath $f.FullName -Tail 1500 -ErrorAction SilentlyContinue | Select-String -Pattern $pattern) }
     Say ("Read: " + (($files | ForEach-Object { $_.Name }) -join ", "))
     if (-not $hits.Count) { Yes "Nothing about errors, drawing or the voice's tools" }
+    # 17 Nov 2026: OpenAI's account ran out and this said "Nothing obvious" over a screen of "no credits remaining" lines.
+    # The newest OpenAI refusal for credit, with no voice tool working after it, means the account is still empty.
+    $all = @($hits | ForEach-Object { [string]$_.Line })
+    $last = -1
+    for ($i = 0; $i -lt $all.Count; $i++) { if ($all[$i] -match 'no credits remaining|insufficient_quota|exceeded your current quota') { $last = $i } }
+    if ($last -ge 0) {
+        $worked = @()
+        if ($last -lt $all.Count - 1) { $worked = @($all[($last + 1)..($all.Count - 1)] | Where-Object { $_ -match '^rt tool .*: ok|^turn .* took' }) }
+        if (-not $worked.Count) { $noCredit = $true }
+    }
     foreach ($h in $hits | Select-Object -Last 40) {
         $line = NoKeys ([string]$h.Line)
         if ($line.Length -gt 220) { $line = $line.Substring(0, 220) + "..." }
@@ -161,9 +172,14 @@ if (-not $files.Count) {
 # -- Verdict ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host ("=" * 72) -ForegroundColor DarkGray
+if ($noCredit) {
+    Write-Host "  OPENAI ACCOUNT HAS NO CREDIT - Sid's voice, renders and GA drawings are down. Typing still works." -ForegroundColor Red
+    Write-Host "  Top up the organisation that owns SDI Live's key: platform.openai.com > Settings > Billing, and turn on" -ForegroundColor Red
+    Write-Host "  auto-recharge. Nothing needs restarting." -ForegroundColor Red
+}
 if ($hints.Count) {
     foreach ($h in $hints) { Write-Host "  $h" -ForegroundColor Yellow }
-} else {
+} elseif (-not $noCredit) {
     Write-Host "  Nothing obvious. Send Claude everything above, with the time of the call." -ForegroundColor White
 }
 Write-Host "  Send Claude everything above." -ForegroundColor Gray

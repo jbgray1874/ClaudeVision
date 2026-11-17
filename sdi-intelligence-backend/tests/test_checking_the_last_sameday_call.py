@@ -94,5 +94,22 @@ class ItShowsATurnThatHeldTheCallUpTests(unittest.TestCase):
                 self.assertIn(word, line)
 
 
+
+class ItSaysWhenOpenAIHasNoCreditTests(unittest.TestCase):
+    """17 Nov 2026: SDI's OpenAI account ran out of credit and this printed "Nothing obvious" over a screen of
+    "You have no credits remaining" lines. It now says so in red, and what to do."""
+
+    def test_the_newest_refusal_for_credit_is_flagged_in_red(self):
+        self.assertIn("no credits remaining|insufficient_quota|exceeded your current quota", BODY)
+        self.assertIn("OPENAI ACCOUNT HAS NO CREDIT", BODY)
+        self.assertIn("platform.openai.com > Settings > Billing", BODY)
+        self.assertIn("-ForegroundColor Red", SCRIPT.split("# -- Verdict", 1)[1])
+        self.assertIn("} elseif (-not $noCredit) {", BODY)            # never "Nothing obvious" while it is empty
+
+    def test_a_voice_tool_working_afterwards_clears_it(self):
+        self.assertIn("'^rt tool .*: ok|^turn .* took'", BODY)
+        self.assertIn("if ($last -lt $all.Count - 1)", BODY)          # no reversed range when the refusal is the last line
+
+
 if __name__ == "__main__":
     unittest.main()
