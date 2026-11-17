@@ -182,12 +182,16 @@ def call_vision_llm(png_bytes: bytes, model: str) -> str:
             "(XAI_API_KEY=xai-...) or in the shell ($env:XAI_API_KEY=\"xai-...\")."
         )
 
-    client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+    import xai_models                                                # noqa: WPS433
+    # THE SAME LIMITS AS EVERY OTHER XAI CALL (17 Nov 2026): a stated time per request, no silent
+    # client retries, its waits said, and its time counted against the job's xAI limit. Built
+    # with the bare client it could wait 10 minutes three times over, unseen.
+    client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1", **xai_models.client_budget())
     b64 = base64.b64encode(png_bytes).decode("ascii")
     data_url = f"data:image/png;base64,{b64}"
 
     try:
-        resp = client.chat.completions.create(
+        resp = xai_models.call_with_retry(lambda: client.chat.completions.create(
             model=model,
             temperature=0,
             messages=[{
@@ -197,7 +201,7 @@ def call_vision_llm(png_bytes: bytes, model: str) -> str:
                     {"type": "image_url", "image_url": {"url": data_url}},
                 ],
             }],
-        )
+        ), model, what="a parts-list image read")
     except Exception as exc:                                         # noqa: BLE001
         import xai_models                                            # noqa: WPS433
         xai_models.note_exception(exc, model)                        # said once, then raised

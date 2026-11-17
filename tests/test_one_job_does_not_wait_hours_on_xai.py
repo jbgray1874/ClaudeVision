@@ -117,3 +117,14 @@ def test_without_a_fallback_or_on_a_busy_reply_xai_is_still_tried_again(fresh):
     assert xm.call_with_retry(capacity, "grok", sleep=lambda s: None, say=lambda m: None,
                               waiting_every_s=0, clock=clock, fallback_ready=True) == "ok"
     assert len(busy) == 3, "a busy reply clears by itself and is waited out"
+
+
+@pytest.mark.parametrize("module", ["_bom_vision_reader.py", "concept_scan.py"])
+def test_the_image_readers_use_the_same_limits_as_every_other_xai_call(module):
+    """17 Nov 2026: the two image readers built a bare client: 10 minutes a request, two silent
+    retries, uncounted against the job's limit, with no waiting line said."""
+    text = (ROOT / "src" / module).read_text(encoding="utf-8")
+    bare = [line for line in text.splitlines()
+            if 'base_url="https://api.x.ai/v1"' in line and "client_budget()" not in line]
+    assert bare == [], bare
+    assert "xai_models.call_with_retry(" in text

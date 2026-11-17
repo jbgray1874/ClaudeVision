@@ -1774,7 +1774,9 @@ def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "",
             "is a vision-model read and cannot run without it.")
     from openai import OpenAI                                       # noqa: WPS433
 
-    client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+    import xai_models                                               # noqa: WPS433
+    # THE SAME LIMITS AS EVERY OTHER XAI CALL (17 Nov 2026): see _bom_vision_reader.
+    client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1", **xai_models.client_budget())
     _text = concept_prompt_text(png_pages, brief, **sheet_kw)
     content: List[Dict[str, Any]] = [{"type": "text", "text": _text}]
     for png in png_pages:
@@ -1785,9 +1787,9 @@ def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "",
     _t0, _failed = _time.time(), True
     try:
         try:
-            resp = client.chat.completions.create(
+            resp = xai_models.call_with_retry(lambda: client.chat.completions.create(
                 model=model, temperature=0,
-                messages=[{"role": "user", "content": content}])
+                messages=[{"role": "user", "content": content}]), model, what="the concept image read")
         except Exception as exc:                                    # noqa: BLE001
             import xai_models                                       # noqa: WPS433
             xai_models.note_exception(exc, model)                   # said once, then raised
