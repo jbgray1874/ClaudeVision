@@ -3608,3 +3608,14 @@ It isn't a replacement for Production's sheet now.
   - Wed 18 Nov: Neil's written position, and the migration-load questions 6–9.
   - Fri 20 Nov: owner and date at Acuity for the access.
   - Fri 27 Nov: TEST access.
+
+**17 Nov – production server facts, and the Remote Desktop problem.**
+- **ACCESS-DB01** (`ACCESS-DB01.sdi.local`) is the production ERP database and app server: a Windows Server 2019 VMware VM, 32 GB RAM.
+  - SQL Server (MSSQLSERVER), 19 databases: SDILive, SDIFinance, SDI_ACBL, ASC722, ADM, ADS, AA_*, TCDatabase.
+  - Access SupplyChain Server 7.2.2 and Access NFP Server.
+  - **All our SQL against it is read-only** (production rule); administrator rights don't change that.
+- **The reverse DNS for its IP still says `server2k8`:** a stale record, reported to IT. Use `ACCESS-DB01` by name.
+- **17 Nov afternoon:** Remote Desktop timed out at "Securing remote connection" (it worked that morning). Ping and port 3389 were fine. Likely cause: server load or memory (SQL Server default max memory starving Windows) or a stuck session. Passed to IT to check from the vSphere console.
+  - **Never restart the server or SQL Server ourselves:** it cuts off every Access user.
+  - **Work-around for the extracts:** run them from SSMS on James's PC, connecting straight to ACCESS-DB01 (port 1433), not by Remote Desktop.
+- **The shared account `sdi.local\access` was made an administrator on 17 Nov.** That's a risk (shared, no audit trail); raise it with IT.
