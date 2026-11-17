@@ -3619,3 +3619,30 @@ It isn't a replacement for Production's sheet now.
   - **Never restart the server or SQL Server ourselves:** it cuts off every Access user.
   - **Work-around for the extracts:** run them from SSMS on James's PC, connecting straight to ACCESS-DB01 (port 1433), not by Remote Desktop.
 - **The shared account `sdi.local\access` was made an administrator on 17 Nov.** That's a risk (shared, no audit trail); raise it with IT.
+
+**17 Nov – Claire's sign-off reply (16 Nov): aged debtors and creditors reconciled three ways: Access report, our 4 Nov extract, X3 YBALAGEHIST (31 Oct, printed 11 Nov).**
+- **The workbook is private** (`scratchpad/ar_ap_signoff/`, names balances, never in git); builder `build_wb.py`.
+- **Debtors walk, exact to the penny:** Access £7,876,626.13 (821 items)
+  - +£148,751.02: **our sign bug.** Two Access credit notes held as type INV with a negative amount (MAR101, refs 5019602 £74,375.50 and 5018410 £0.01) were loaded as MINV, i.e. positive.
+  - −£55,342.05: **5 invoices dated 27–30 Oct missing from the extract.** Cause being checked; 3 of the 5 customers aren't in X3 yet.
+  - +£5,069.40: 2 items paid in Access since the extract.
+  - = **loaded £7,975,104.50 (814 items).**
+  - −£1,121,739.24: **81 items not loaded by the X3 import**: MAR101 (77, the whole account), TEC105 (3), UNI103 (1).
+  - = **X3 £6,853,365.26 (733 items).** Every other item matches X3 exactly.
+- **Claire's "credits missing": they aren't.** All 20 payments on account and 5 credit notes are loaded. X3 shows them as BACS-2..11, FP-2..5 and STRIPEFP because Access's references repeat. The exceptions are MAR101's (account not loaded).
+- **Claire's "Alfred Franks & Bartlett missing": it's one of the 5 invoices not in the extract** (£8,191.34, dated 30 Oct).
+- **Creditors walk:** Access £6,483,733.01 (2,691 items)
+  - −£859,654.23: most likely timing (to confirm). Entered or paid in Access after the extract but dated ≤ 4 Nov, as Claire's 24 Distribution example shows; spread over 162 suppliers.
+  - = **loaded £5,624,078.78 (2,056 items)**
+  - −£36,020.20: **8 items not loaded by the X3 import**: SOG500, BRW500 (dated after the accounting date), ECO500, BAL500.
+  - = **X3 £5,588,058.58 (2,048 items).**
+- **ACCCOD from Claire's customer list, column T:** ASSIGNED → ID, EURO → EU, NON-ASSIGNED → STD. Of the 303 X3 customers:
+  - 279 coded (204 ID, 17 EU, all EUR in X3; 58 STD);
+  - 4 where merged Access accounts disagree: MAR101, BOO102, DEL101, WHI102;
+  - 20 with no match (1 with a balance: TEC109).
+- **To fix before the re-extract:**
+  1. **BICY build:** an Access INV with a negative amount must load as a credit note (MCRN). Check BISY for the same. (Not fixed yet; only on James's go-ahead.)
+  2. Why the 5 late-October invoices weren't extracted.
+  3. ACCCOD into YA004BPC column Q.
+  4. Acuity's import log for the 81 debtor and 8 creditor items.
+  5. **Run the Access aged reports at the same moment as the extract** (Claire's request), with summary reports.
