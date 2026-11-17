@@ -3713,3 +3713,21 @@ It isn't a replacement for Production's sheet now.
   - The `access.group` account being an administrator, and the stale `server2k8` reverse DNS, are still open with IT.
 - **Lesson:** read the username saved in the Remote Desktop connection before trying other account names.
 
+**17 Nov (17:00–17:20) – the first fix wasn't the end: Remote Desktop still hangs, because of a hidden session that can't be killed.**
+- **After restarting TermService:**
+  - port 3389 was LISTENING, the firewall rules were on and no reboot was pending; the TCP test was True about a minute later;
+  - a clean `Restart-Service TermService` timed out but did no harm.
+- **The login succeeds** (RemoteConnectionManager event 1149: `access.group`, from 10.0.0.33). But no desktop appears, and the client gives up after about 90 s.
+- **Cause: session 2, the `access.group` session from earlier today, still exists but is hidden.** It's missing from `qwinsta`, and `logoff 2` says "not found". Windows reconnects every new login into it.
+  - Its Desktop Window Manager crashed: `WerFault` was running as DWM-2.
+  - Task Manager in it had used about 30 minutes of CPU.
+- **Its processes can't be killed.** After `Stop-Process -Force`, every process is still there, with its user name blank. They're stuck inside Windows' kernel, so the cause is most likely a driver. Candidates, to check after the restart:
+  - the CrowdStrike Falcon sensor;
+  - the LogMeIn Rescue driver (about 25 `LMI_Rescue*` processes in that session);
+  - the display driver after the Windows Modules Installer run (16:43–16:46).
+- **Session 1 (administrator) is in the same state:** its logoff hung.
+- **Only a server restart clears kernel-stuck processes.** Do it out of hours: warn Access users, and check what the Active `intercity` console session (session 5) runs first, so it comes back after the restart. `Jack.adm` (session 3, disconnected) is lost too.
+- **Until then:** extracts and queries go through SSMS on James's PC, straight to ACCESS-DB01:1433.
+- **Find out who ran LogMeIn Rescue on the production server.**
+- **Lesson:** if a process is still listed after `Stop-Process -Force` with a blank user name, it's stuck in the kernel. Stop trying to kill things; the way out is a planned restart.
+
