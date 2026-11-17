@@ -3060,12 +3060,17 @@ SDI has **three kinds of rebate**. They are separate, and each needs its own dat
    - Comments2 = the PO number `PT_ORDER_NUMBER`, blank if there isn't one;
    - Line = 1 on every row.
 
+   - **It also carries the 17 Nov sign fix** (vw_BICX_V2 and vw_BISX_V2): an INV with a negative open amount loads as MCRN, a CRN with a positive one as MINV. Without it the two MAR101 credit notes (£148,751.02) load as invoices again.
+
    **Check first** that the live `migration.vw_BISX_V2` on the server is the repo version. On 12 Nov the server view differed from `sql/views_v2.sql`, so compare before running.
 2. **After running it, check:** `SELECT TOP 5 Document, SourceDocument, Comments2 FROM migration.vw_BISX_V2`. Document must be all digits, and no Document may equal its SourceDocument.
+   - **Sign check:** `SELECT COUNT(*) FROM migration.vw_BICX_V2 WHERE InvoiceType='MINV' AND <open amount> < 0` must be 0 (same for MPAY / MCRN in vw_BISX_V2). On the 4 Nov data, MAR101 refs 5019602 and 5018410 must show MCRN.
 3. `sql/add_new_accounts_to_xref.sql` only if new customers or suppliers have been created since 4 Nov. Its checks show how many were added.
 
 **B. Extract (on the day):**
 4. `rebuild/sql/extract_transactions.sql`: save the **whole** output. Its CHECK "as at" line sets the accounting date.
+   - **Claire runs the Access Aged Debtors and Aged Creditors (detail and summary) at the same moment** as the extract; agree the time with her (asked 17 Nov). That removes the timing differences (£859,654 on creditors at Run 4).
+   - **Before extracting, find why the 5 invoices dated 27–30 Oct were not in the 4 Nov extract** (AFB01, MUN01, TDG03, BWS01, KOM01; £55,342.05). Check them in this extract's BICY rows; 3 of the 5 customers weren't in X3, so check they're in the customer file too.
 5. Products, BOMs and routes are re-extracted and rebuilt by `rebuild/run.py` **first**. New parts since 4 Nov exist: the 13 Nov Live Orders run found 51 works orders with no BOM / route in the 4 Nov set.
 
 **C. Build (19.14):**
@@ -3087,8 +3092,14 @@ SDI has **three kinds of rebate**. They are separate, and each needs its own dat
 - **If there's no answer by the run,** build as now and record that these four are open. Don't guess field names.
 
 **D. Before Ethan imports:**
-10. **ACCCOD** back from Claire (`deliver/Finance_Customer_Accounting_Codes.xlsx`: STD / EU / ID). Then put it into YA004BPC column Q and reload customers **before** BICY.
+10. **ACCCOD** from Claire's Customer_List_master column T (ASSIGNED → ID, EURO → EU, NON-ASSIGNED → STD): 279 of 303 coded. Before loading, Claire must decide the **4 merged-account conflicts** (MAR101, BOO102, DEL101, WHI102) and the **20 unmatched** (TEC109 has a balance, EUR, probably EU) – asked 17 Nov, by Wed 18 Nov. Then put it into YA004BPC column Q and reload customers **before** BICY.
+10a. **Customers must load before the open items.** Ethan was asked (17 Nov) to fix X3's country set-up for the 6 customers rejected on addresses (MAR101, TEC105, UNI103, TEC100, PER101, DRE100: XPOSCOD / XSAT) before Thursday. **Check all 6 load**; if MAR101 fails, £1.12m of debtors misses again.
+10b. **Suppliers:** Claire to supply VAT / SIRET for the 11 FR / ES suppliers (and BAL500's tax rule). SOG500, ECO500, BAL500's open items only load once the suppliers do.
+10c. **CAP500 £22,500 "SAVINGS" journal:** direction still open with Ethan / Jim.
 11. The aged debtors / creditors sign-off is compared **as at the extract moment**, not 31/10. Use the run's control totals.
+   - Ethan to produce X3's aged debtors and creditors as a **summary by account** as well as the detail (YBALAGEHIST), for the extract moment.
+   - Ethan to send the **import logs** for any item that doesn't load.
+   - Re-run the private reconciliation (`scratchpad/ar_ap_signoff/`: parse_access.py, parse_x3.py, recon_sl.py, recon_pl.py, build_wb.py) on the new reports and extract. **The target: Access = loaded = X3, with only explained differences.**
 12. The master-data fix lists (Run 3) are still to be cleared.
 13. Send Ethan **every file** (rule 1e), and say this is the run with the new BISY document numbers.
 
@@ -3654,3 +3665,23 @@ It isn't a replacement for Production's sheet now.
   - XSAT (missing State / Region): DRE100, MAR101, PER101, TEC105.
   - MAR101 has 1,205 delivery addresses; one failing address rejects the whole customer.
   - **Check before the re-extract** that the address fixes (Run3_master_data_fixes) are in the customer build and that all 6 load. Then their open items load too.
+
+**17 Nov – SL / PL sign-off email SENT (James confirmed) to Claire Newall and Ethan Davies, cc Charlotte Blackwell and Marc Davies.**
+- **Subject:** "Aged debtors and creditors – reconciled Access → load → Sage, and what's needed before Thursday's reload".
+- **Attachment:** SL_PL_signoff_reconciliation_4Nov_FINANCE.xlsx (private: names customers and balances; within SDI and Acuity only; never in git). Tabs: Read me, Summary, Debtors by account, Debtor items, Creditors by account, Customer codes.
+- **What it said:** both walks as above, to the penny; all 5 credit notes and **18 of 20** payments loaded (the other 2, WAT01 £4,469.40 and WRB01 £600, were entered after the extract); creditor gap **almost all** timing; SOG500 / ECO500 / BAL500 are among the 11 FR / ES suppliers missing VAT / SIRET; the sign fix applies **from the next extract**.
+- **Asked of Claire (by Wed 18 Nov):** the 4 ACCCOD conflicts, the 20 unmatched customers, the FR / ES supplier numbers, a time on Thursday to run the Access aged reports with the extract.
+- **Asked of Ethan:** the country set-up for the 6 customers before Thursday (customers before open items); the import logs for the 81 + 8 items; ACCCOD in YA004BPC column Q; the CAP500 direction (with Jim); X3 aged reports as a summary by account too.
+- **On our side:** sign fix into the extract (A1), the 5 late-October invoices found (B4), ACCCOD into the customer file (D10). All are on the 22.17 checklist.
+- **Lessons from drafting it (so they're not repeated):**
+  - Count before claiming "all": 18 of 20 payments, not 20.
+  - Say "almost all timing" until the same-moment reports prove it.
+  - Name the real reason per supplier (VAT / SIRET), not a generic "not loaded".
+  - A fix in our SQL views only takes effect on the **next extract**; it doesn't change files already built.
+
+**17 Nov – do we regenerate the files from the 4 Nov run? No. The next run is a fresh extract (Thu 19 Nov) with every file rebuilt.**
+- The sign fix lives in the SDILive views (`migration.vw_BICX_V2` / `vw_BISX_V2`). The 4 Nov extract already holds the old types, so rebuilding from it changes nothing.
+- The other fixes also need new data: BISY document numbers (A1), new parts / BOMs / routes since 4 Nov (B5), ACCCOD and address fixes in the customer file (D10, 10a), Claire's same-moment aged reports (B4).
+- Rule 1 applies: live data, extracted on the day, every file rebuilt and sent to Ethan, with the reconciliation workbook rebuilt on the new extract.
+- **Not affected, no rebuild needed:** the Live Orders workbooks (sent 16–17 Nov) and the X3 report guides. Live Orders' master files get refreshed from the new run's rebuilt set afterwards (22.17 E).
+
