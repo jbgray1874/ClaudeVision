@@ -3730,4 +3730,11 @@ It isn't a replacement for Production's sheet now.
 - **Until then:** extracts and queries go through SSMS on James's PC, straight to ACCESS-DB01:1433.
 - **Find out who ran LogMeIn Rescue on the production server.**
 - **Lesson:** if a process is still listed after `Stop-Process -Force` with a blank user name, it's stuck in the kernel. Stop trying to kill things; the way out is a planned restart.
+- **17:18–17:21: new sessions fail too, so it's not only the `access.group` session.**
+  - Session 6, a fresh session, failed while starting, at the step where Windows' screen-and-graphics layer connects it (LocalSessionManager event 36: `CsrConnected` / `EvCsrInitialized`, 0x800708CA).
+  - On disconnect, the same layer timed out (event 20, "send disconnect message to Windows video subsystem failed", 0x80070102 = timeout).
+  - **Windows' graphics subsystem is hung, so no new desktop can start.** Only a restart clears it.
+  - Remote Desktop reuses the username saved in the connection (`access.group`), even when you mean to log in as another user. Choose "Use a different account", or run `cmdkey /delete:TERMSRV/10.0.0.200` first.
+  - `SDI\james.gray` was added to the local Remote Desktop Users group on ACCESS-DB01 (17 Nov), for this test. Keep it or remove it after the restart (`net localgroup "Remote Desktop Users" SDI\james.gray /delete`).
+- **Decision (James): no rush restart.** Access, SQL Server, PowerShell remoting and SSMS all work. Restart at an agreed out-of-hours time, or the next patch window.
 
