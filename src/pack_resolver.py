@@ -83,7 +83,7 @@ def drawing_id(name: str) -> str:
     if not tokens:
         return ""
     m = _ID.match(tokens[0])
-    first = m.group(1).upper() if m else ""
+    first = _without_words(m.group(1).upper()) if m else ""
     # "12773-02 GA.SLDASM" IS DRAWING 12773-02-GA (12 Nov 2026): the assembly word stood apart
     # from its number, the file read as "12773-02", and the lower-body assembly the GA calls
     # for was never gathered; the estimate priced a lower body with no members.
@@ -96,6 +96,32 @@ def drawing_id(name: str) -> str:
             if n and "-" in n.group(1) and re.match(r"\d", n.group(1)):
                 return n.group(1).upper()
     return first
+
+
+# A DESCRIPTION JOINED TO THE NUMBER BY A HYPHEN IS NOT PART OF THE NUMBER (17 Nov 2026).
+# "12745-00-01-Universal Table Illuminated Filming Top_revB.PDF" read as drawing
+# 12745-00-01-UNIVERSAL: the GA's PDF was not recognised as the GA, its parts list was never read,
+# none of its parts was gathered, and both its revisions came along as stray files. A trailing
+# segment that is a word of four or more letters, and not an assembly word, is description.
+_WORD_SEGMENT = re.compile(r"^[A-Z]{4,}$")
+
+
+def _without_words(number: str) -> str:
+    parts = number.split("-")
+    while len(parts) > 2 and _WORD_SEGMENT.match(parts[-1]) and not _ASSEMBLY.match(parts[-1]) \
+            and re.search(r"\d", "-".join(parts[:-1])):
+        parts.pop()
+    return "-".join(parts)
+
+
+def _newest_revision_pdf(pdfs: List[FileRow]) -> FileRow:
+    """The PDF to read for a drawing: the latest revision its file names state, then the newest
+    file. By date alone an older issue copied later, or a design-intent sheet, was read instead
+    of the issued revision."""
+    def key(f: FileRow):
+        r = revision_from_name(f[0].name)
+        return (revision_rank(r) or ("", -1), f[2])
+    return max(pdfs, key=key)
 
 
 def _same(a: str, b: str) -> bool:
@@ -405,7 +431,14 @@ def _pick_revision(files: List[FileRow]) -> Tuple[List[FileRow], str, List[str],
             notes.append(f"revisions {best} and {r} use different schemes and are not compared")
         elif cmp:
             best = r
-    chosen = [f for r, f in tagged if r == best or not r]
+    # ONE REVISION OF A DRAWING, NOT TWO (JG, 17 Nov 2026: "we need to not pull in two PDFs with
+    # the same name but with a revA and revB at the end"). Untagged CAD files ride with the
+    # chosen revision; an untagged PDF beside a PDF that states the revision is another issue of
+    # the sheet (a design-intent copy, an older export) and stays out.
+    _tagged_pdf = best and any(r == best and f[0].suffix.lower() == ".pdf" for r, f in tagged)
+    chosen = [f for r, f in tagged if r == best
+              or (not r and not (_tagged_pdf and f[0].suffix.lower() == ".pdf"))]
+    left_out = [f[0].name for r, f in tagged if not r and _tagged_pdf and f[0].suffix.lower() == ".pdf"]
     by_kind: Dict[Tuple[str, str], List[FileRow]] = {}
     for f in chosen:
         if revision_from_name(f[0].name) == best and best:
@@ -445,6 +478,9 @@ def _pick_revision(files: List[FileRow]) -> Tuple[List[FileRow], str, List[str],
                 continue
             notes.append(f"{len(pf)} different {what} claim revision {r}")
     chosen = [f for f in chosen if id(f) not in dropped]
+    if left_out:
+        notes.append(f"{len(left_out)} PDF(s) with no revision in the name left out beside revision "
+                     f"{best}: {', '.join(left_out)}")
     return chosen, best, [r for r in revs if r != best], notes
 
 
@@ -519,7 +555,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     cands = []
     for folder, own, archive in found:
         pdfs = [f for f in own if f[0].suffix.lower() == ".pdf"]
-        seen = read_drawing(max(pdfs, key=lambda f: f[2])[0], drawing, read_text) \
+        seen = read_drawing(_newest_revision_pdf(pdfs)[0], drawing, read_text) \
             if pdfs and str(folder) in readable else \
             {"read": False, "carries_number": False, "revision": "", "references": []}
         name_rev = ""
@@ -654,7 +690,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         done.add(a)
         if a not in refs_of:
             pdfs = [f for f in groups.get(a, []) if f[0].suffix.lower() == ".pdf"]
-            refs_of[a] = set(read_drawing(max(pdfs, key=lambda f: f[2])[0], a, read_text)["references"]) \
+            refs_of[a] = set(read_drawing(_newest_revision_pdf(pdfs)[0], a, read_text)["references"]) \
                 if pdfs else set()
             if pdfs:
                 read_any.add(a)
@@ -667,7 +703,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             spdfs = [f for f in groups[sheet] if f[0].suffix.lower() == ".pdf"]
             if not spdfs:
                 continue
-            got = read_drawing(max(spdfs, key=lambda f: f[2])[0], a, read_text)
+            got = read_drawing(_newest_revision_pdf(spdfs)[0], a, read_text)
             if got["read"]:
                 read_any.add(a)
                 sheets_read.setdefault(a, []).append(sheet)
