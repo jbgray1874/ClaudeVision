@@ -594,7 +594,8 @@ def _call_llm(user_content: str, model: str,
     try:
         resp = xai_models.call_with_retry(
             _once, model, what=("the drawing read" if system == SYSTEM_TRANSCRIBE
-                                else "a targeted question"))
+                                else "a targeted question"),
+            fallback_ready=_claude_available())
     except Exception as exc:                                         # noqa: BLE001
         # CLAUDE WHEN XAI STAYS BUSY (10 Nov 2026): the same question, asked of Claude, and said.
         if xai_models.busy_kind(exc) and _claude_available():

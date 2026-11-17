@@ -76,3 +76,44 @@ def test_the_limit_can_be_set_and_switched_off(fresh, monkeypatch):
                               waiting_every_s=0, clock=fresh) == "ok"
     monkeypatch.setenv("SDI_XAI_JOB_BUDGET_S", "10")
     assert xm.job_budget_s() == 60, "never under a minute"
+
+
+def test_a_request_with_no_answer_goes_to_the_fallback_at_once_when_one_is_ready(fresh):
+    said, calls = [], []
+    clock = fresh
+
+    def hangs():
+        calls.append(1)
+        clock.t += 600
+        raise TimeoutError("Request timed out.")
+    with pytest.raises(TimeoutError):
+        xm.call_with_retry(hangs, "grok", what="a targeted question", sleep=lambda s: None,
+                           say=said.append, waiting_every_s=0, clock=clock, fallback_ready=True)
+    assert calls == [1], "xAI was asked again when a fallback was ready"
+    assert any("asking the fallback reader now" in m for m in said)
+
+
+def test_without_a_fallback_or_on_a_busy_reply_xai_is_still_tried_again(fresh):
+    clock = fresh
+    calls = []
+
+    def hangs():
+        calls.append(1)
+        raise TimeoutError("Request timed out.")
+    with pytest.raises(TimeoutError):
+        xm.call_with_retry(hangs, "grok", sleep=lambda s: None, say=lambda m: None,
+                           waiting_every_s=0, clock=clock, fallback_ready=False)
+    assert len(calls) == 4
+    busy = []
+
+    class Busy(Exception):
+        status_code = 429
+
+    def capacity():
+        busy.append(1)
+        if len(busy) < 3:
+            raise Busy("Error code: 429 high demand")
+        return "ok"
+    assert xm.call_with_retry(capacity, "grok", sleep=lambda s: None, say=lambda m: None,
+                              waiting_every_s=0, clock=clock, fallback_ready=True) == "ok"
+    assert len(busy) == 3, "a busy reply clears by itself and is waited out"

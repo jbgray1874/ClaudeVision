@@ -221,7 +221,7 @@ def job_spent_s() -> float:
 
 def call_with_retry(fn: Any, model: str, what: str = "the drawing read",
                     sleep: Any = None, say: Any = None, waiting_every_s: float = 60.0,
-                    clock: Any = None) -> Any:
+                    clock: Any = None, fallback_ready: bool = False) -> Any:
     """fn() again after each wait while xAI is busy; the last error is raised when it stays so.
     While a request is out, a line every minute says so, with how long and which try."""
     import time as _time
@@ -256,6 +256,15 @@ def call_with_retry(fn: Any, model: str, what: str = "the drawing read",
                 raise
             status = getattr(exc, "status_code", None)
             label = f"{kind}{f' (HTTP {status})' if isinstance(status, int) else ''}"
+            # A REQUEST THAT GOT NO ANSWER GOES TO THE FALLBACK AT ONCE (17 Nov 2026). On
+            # 11762-00-GA2 a request hung for its whole limit and the same question asked again
+            # was answered in 20 s; three more tries of xAI cost up to 43 minutes a question
+            # before the OpenAI or Claude fallback was asked. Busy and rate-limit replies, which
+            # clear on their own, are still tried again.
+            if kind == "timeout" and fallback_ready and n < tries:
+                say(f"   {XAI_WAIT_TAG} xAI gave no answer on {what} (try {n} of {tries}); "
+                    f"asking the fallback reader now instead of xAI again")
+                raise
             if n >= tries or _spent_out():
                 say(f"   {XAI_WAIT_TAG} gave up on {what} after {tries} tries and {waited:g} s: "
                     f"xAI {label}. The other readers' findings stand; this read is NOT done "
