@@ -3737,4 +3737,15 @@ It isn't a replacement for Production's sheet now.
   - Remote Desktop reuses the username saved in the connection (`access.group`), even when you mean to log in as another user. Choose "Use a different account", or run `cmdkey /delete:TERMSRV/10.0.0.200` first.
   - `SDI\james.gray` was added to the local Remote Desktop Users group on ACCESS-DB01 (17 Nov), for this test. Keep it or remove it after the restart (`net localgroup "Remote Desktop Users" SDI\james.gray /delete`).
 - **Decision (James): no rush restart.** Access, SQL Server, PowerShell remoting and SSMS all work. Restart at an agreed out-of-hours time, or the next patch window.
+- **About 17:30: a desktop got through the stuck subsystem by shadowing the console session.** Shadowing attaches to an existing session instead of starting one, so it doesn't need the hung part.
+  - The console session is session 5, `intercity`, Active. Leave its programs alone.
+  - Allow control without a prompt: set `Shadow = 2` (DWORD) under `HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services`. It wasn't set before.
+  - Run `runas /netonly /user:sdi.local\access.group "mstsc /v:10.0.0.200 /shadow:5 /control /noConsentPrompt"`.
+  - A black screen with white outline shapes is the console's screensaver: move the mouse to wake it.
+  - **Afterwards, remove the value:** `Remove-ItemProperty ... -Name Shadow`. Leaving it set lets any admin take over the console unseen.
+  - The vSphere web console is the other route, with no changes needed.
+- **OUR MISTAKE: `New-Item <key> -Force` on a registry key that exists DELETES the key and recreates it empty.** We ran it on the Terminal Services policy key above.
+  - Recovery: `gpupdate /target:computer /force` re-applied domain and local policy. Afterwards the key held only `Shadow`, so no Group Policy sets anything there. The key was most likely empty before.
+  - Only a value written there by hand, outside Group Policy, could have been lost. Told the MSP so they can compare with a backup.
+  - **Rule: to set a registry value, use `Set-ItemProperty` alone. Create the key with `New-Item` only after `Test-Path` shows it's missing, and never with `-Force`.**
 
