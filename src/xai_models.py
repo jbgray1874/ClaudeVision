@@ -192,35 +192,81 @@ def _waiting_said(what: str, n: int, tries: int, say: Any, every_s: float) -> An
     return stop.set
 
 
+# ONE JOB DOES NOT WAIT HOURS ON XAI (JG, 17 Nov 2026: "ONE JOB TAKEN 4 HOURS"). 11762-00-GA2
+# asked xAI one targeted question after another, each allowed four tries of up to ten minutes,
+# and ran 4 h 18 min. Each estimate is its own process, so the time this process has spent on
+# xAI is the job's. Past SDI_XAI_JOB_BUDGET_S (default 1800 s) no new xAI request is made: the
+# call raises at once as a timeout, the caller falls back or carries on as for an xAI that
+# stayed busy, and the book says the read is not done. "0" or "off" removes the limit.
+_SPENT = {"s": 0.0}
+
+
+class XaiJobBudgetSpent(TimeoutError):
+    """Raised instead of asking xAI once this job has spent its time on it."""
+
+
+def job_budget_s() -> float:
+    raw = _env("SDI_XAI_JOB_BUDGET_S")
+    if raw.lower() in {"0", "off", "none"}:
+        return 0.0
+    try:
+        return max(60.0, float(raw or 1800))
+    except ValueError:
+        return 1800.0
+
+
+def job_spent_s() -> float:
+    return _SPENT["s"]
+
+
 def call_with_retry(fn: Any, model: str, what: str = "the drawing read",
-                    sleep: Any = None, say: Any = None, waiting_every_s: float = 60.0) -> Any:
+                    sleep: Any = None, say: Any = None, waiting_every_s: float = 60.0,
+                    clock: Any = None) -> Any:
     """fn() again after each wait while xAI is busy; the last error is raised when it stays so.
     While a request is out, a line every minute says so, with how long and which try."""
     import time as _time
     sleep = _time.sleep if sleep is None else sleep
+    clock = _time.monotonic if clock is None else clock
     say = (lambda m: print(m, flush=True)) if say is None else say
+    budget = job_budget_s()
+
+    def _spent_out() -> bool:
+        return bool(budget) and _SPENT["s"] >= budget
+
+    if _spent_out():
+        say(f"   {XAI_WAIT_TAG} not asked: this job has already spent {_SPENT['s']:.0f} s on xAI, "
+            f"its limit (SDI_XAI_JOB_BUDGET_S {budget:.0f} s). {what} is NOT done and is said so "
+            f"on the book.")
+        raise XaiJobBudgetSpent(f"xAI timeout: this job's xAI time limit ({budget:.0f} s) is spent")
     waits = retry_waits()
     tries = len(waits) + 1
     waited = 0.0
     for n in range(1, tries + 1):
         _stop = _waiting_said(what, n, tries, say, waiting_every_s) if waiting_every_s else (lambda: None)
+        _t0 = clock()
         try:
             try:
                 out = fn()
             finally:
                 _stop()
+                _SPENT["s"] += max(0.0, clock() - _t0)
         except Exception as exc:                                     # noqa: BLE001
             kind = busy_kind(exc)
             if not kind or note_exception(exc, model):
                 raise
             status = getattr(exc, "status_code", None)
             label = f"{kind}{f' (HTTP {status})' if isinstance(status, int) else ''}"
-            if n >= tries:
+            if n >= tries or _spent_out():
                 say(f"   {XAI_WAIT_TAG} gave up on {what} after {tries} tries and {waited:g} s: "
                     f"xAI {label}. The other readers' findings stand; this read is NOT done "
                     f"and is said so on the book.")
                 raise
             w = waits[n - 1]
+            if budget and _SPENT["s"] + w >= budget:
+                say(f"   {XAI_WAIT_TAG} {label} on {what}: this job's xAI time limit "
+                    f"({budget:.0f} s) would be passed by waiting; not tried again")
+                raise
+            _SPENT["s"] += w
             say(f"   {XAI_WAIT_TAG} {label} on {what}: try {n} of {tries} failed; next try in "
                 f"{w:g} s, {waited:g} s waited so far")
             sleep(w)
