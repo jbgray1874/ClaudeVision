@@ -1767,7 +1767,13 @@ def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "",
         raise ConceptUnavailable(
             "deterministic-only run (D-753) — the concept read is a vision-model read, and "
             "this run tests the drawing reader with no language model at all.")
+    import vision_fallback                                          # noqa: WPS433
+    vision_fallback.LAST_ANSWERED_BY = ""
+    _text = concept_prompt_text(png_pages, brief, **sheet_kw)
     api_key = os.environ.get("XAI_API_KEY")
+    if not api_key and vision_fallback.ready():
+        return vision_fallback.ask(_text, png_pages, "the concept image read",
+                                   "no XAI_API_KEY is set")
     if not api_key:
         raise ConceptUnavailable(
             "XAI_API_KEY not found. Set it in .env (XAI_API_KEY=xai-...) — the concept read "
@@ -1777,7 +1783,6 @@ def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "",
     import xai_models                                               # noqa: WPS433
     # THE SAME LIMITS AS EVERY OTHER XAI CALL (17 Nov 2026): see _bom_vision_reader.
     client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1", **xai_models.client_budget())
-    _text = concept_prompt_text(png_pages, brief, **sheet_kw)
     content: List[Dict[str, Any]] = [{"type": "text", "text": _text}]
     for png in png_pages:
         b64 = base64.b64encode(png).decode("ascii")
@@ -1789,11 +1794,18 @@ def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "",
         try:
             resp = xai_models.call_with_retry(lambda: client.chat.completions.create(
                 model=model, temperature=0,
-                messages=[{"role": "user", "content": content}]), model, what="the concept image read")
+                messages=[{"role": "user", "content": content}]), model, what="the concept image read",
+                fallback_ready=vision_fallback.ready())
         except Exception as exc:                                    # noqa: BLE001
             import xai_models                                       # noqa: WPS433
             xai_models.note_exception(exc, model)                   # said once, then raised
-            raise
+            # ANY XAI FAILURE GOES TO OPENAI (17 Nov 2026, JG: "100 percent fall back").
+            if not vision_fallback.ready():
+                raise
+            text = vision_fallback.ask(_text, png_pages, "the concept image read",
+                                       vision_fallback.why_of(exc))
+            _failed = False
+            return text
         _failed = False
     finally:
         try:                                 # a partner run's call count (D-529); else nothing
@@ -2071,9 +2083,11 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     raw = (_call_vision_llm(pngs, model, brief, **_call_kw) if _call_kw
            else _call_vision_llm(pngs, model, brief))
     parsed = parse_concept_response(raw)
+    import vision_fallback                                           # noqa: WPS433
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"raw_response": raw, "model": model,
+                                    "answered_by": vision_fallback.LAST_ANSWERED_BY or model,
                                     "prompt_version": CONCEPT_PROMPT_VERSION,
                                     "sheet_prompt_version": (SHEET_PROMPT_VERSION if sheet else ""),
                                     "pages": len(pngs)}, indent=1), encoding="utf-8")

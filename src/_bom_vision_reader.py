@@ -174,8 +174,13 @@ def call_vision_llm(png_bytes: bytes, model: str) -> str:
     contract is: bytes in (PNG) -> model's text response out (expected JSON).
     """
     from openai import OpenAI  # xAI is OpenAI-compatible
+    import vision_fallback                                           # noqa: WPS433
 
+    vision_fallback.LAST_ANSWERED_BY = ""
     api_key = os.environ.get("XAI_API_KEY")
+    if not api_key and vision_fallback.ready():
+        return vision_fallback.ask(_VISION_PROMPT, [png_bytes], "a parts-list image read",
+                                   "no XAI_API_KEY is set")
     if not api_key:
         raise RuntimeError(
             "XAI_API_KEY not found. Set it in C:\\ClaudeVision\\.env "
@@ -201,10 +206,14 @@ def call_vision_llm(png_bytes: bytes, model: str) -> str:
                     {"type": "image_url", "image_url": {"url": data_url}},
                 ],
             }],
-        ), model, what="a parts-list image read")
+        ), model, what="a parts-list image read", fallback_ready=vision_fallback.ready())
     except Exception as exc:                                         # noqa: BLE001
         import xai_models                                            # noqa: WPS433
         xai_models.note_exception(exc, model)                        # said once, then raised
+        # ANY XAI FAILURE GOES TO OPENAI (17 Nov 2026, JG: "100 percent fall back").
+        if vision_fallback.ready():
+            return vision_fallback.ask(_VISION_PROMPT, [png_bytes], "a parts-list image read",
+                                       vision_fallback.why_of(exc))
         raise
     return resp.choices[0].message.content or ""
 
@@ -253,6 +262,15 @@ def _cache_path(cache_dir: str, key: str) -> str:
     return os.path.join(cache_dir, key + ".json")
 
 
+def _answered_by(model: str) -> str:
+    """xAI's model, or "openai:<model>" when the fallback answered: a cached read says who read it."""
+    try:
+        import vision_fallback                                       # noqa: WPS433
+        return vision_fallback.LAST_ANSWERED_BY or model
+    except Exception:                                                # noqa: BLE001
+        return model
+
+
 def get_vision_bom_cached(png_bytes: bytes, model: str, pdf_name: str, page_index: int,
                           cache_dir: str, use_cache: bool = True,
                           refresh: bool = False, cache_only: bool = False) -> Dict[str, Any]:
@@ -299,6 +317,7 @@ def get_vision_bom_cached(png_bytes: bytes, model: str, pdf_name: str, page_inde
             entry = {
                 "schema_version": 1,
                 "model": model,
+                "answered_by": _answered_by(model),
                 "prompt_version": PROMPT_VERSION,
                 "pdf_name": pdf_name,
                 "page_index": page_index,

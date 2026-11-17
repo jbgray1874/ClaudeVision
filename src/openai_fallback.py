@@ -52,3 +52,22 @@ def ask(system: str, user_content: str, client: Optional[object] = None) -> str:
     if getattr(choice, "finish_reason", "") == "content_filter":
         raise RuntimeError("OpenAI declined the request (content filter)")
     return choice.message.content or ""
+
+
+def ask_image(prompt: str, png_pages: list, client: Optional[object] = None) -> str:
+    """The model's text answer to one question about page images (17 Nov 2026, JG: "100 percent
+    fall back"). The same text and the same PNG pages xAI was sent, as data URLs, in one message."""
+    import base64  # noqa: PLC0415
+    if client is None:
+        from openai import OpenAI  # noqa: PLC0415
+        client = OpenAI(api_key=os.environ["OPENAI_API_KEY"], timeout=600)
+    content = [{"type": "text", "text": prompt}]
+    for png in png_pages:
+        b64 = base64.b64encode(png).decode("ascii")
+        content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
+    resp = client.chat.completions.create(model=model(),
+                                          messages=[{"role": "user", "content": content}])
+    choice = resp.choices[0]
+    if getattr(choice, "finish_reason", "") == "content_filter":
+        raise RuntimeError("OpenAI declined the request (content filter)")
+    return choice.message.content or ""
