@@ -10,7 +10,8 @@ for this?" - so a problem reaches James before it reaches a director. It checks:
   * past jobs can be found, and SameDay can read W:, S: and K:
   * the OpenAI and Anthropic keys are accepted
   * today's AI spend against SameDay's daily cap (a warning at 80%)
-  * OpenAI saying the account has no credit, in SameDay's log
+  * the OpenAI account has credit - asked directly every check (a one-word embedding, about a millionth of a cent),
+    and OpenAI saying so in SameDay's log
 
 A problem is emailed once, again every few hours while it lasts, and an "all clear" when it is fixed. A "down" result
 is checked again a minute later before it counts, so a restart during an update doesn't send an email. Outside
@@ -60,7 +61,10 @@ from typing import Callable, Optional
 
 HERE = Path(__file__).resolve().parent
 STATE = HERE / "logs" / "sameday_watch_state.json"
-NO_CREDIT = re.compile(r"insufficient_quota|has no credit|needs topping up|billing hard limit", re.I)
+# 17 Nov 2026: OpenAI's words were "You have no credits remaining" and this matched none of them - the outage was found
+# by James on a call, not by this. Both wordings OpenAI uses, and SDI Live's own.
+NO_CREDIT = re.compile(r"insufficient_quota|no credits remaining|exceeded your current quota|has no credit"
+                       r"|needs topping up|billing hard limit", re.I)
 
 
 def _opt(name: str, default: str = "") -> str:
@@ -80,6 +84,32 @@ def http_get(url: str, headers: Optional[dict] = None, timeout: float = 15, redi
     except ValueError:
         body = r.text[:500]
     return r.status_code, body, r.headers.get("location", "")
+
+
+def http_post(url: str, payload: dict, headers: Optional[dict] = None, timeout: float = 20):
+    """(status, parsed JSON or text) - status 0 when nothing answered."""
+    import httpx
+    try:
+        r = httpx.post(url, json=payload, headers=headers or {}, timeout=timeout)
+    except Exception as exc:                            # noqa: BLE001
+        return 0, f"{type(exc).__name__}: {str(exc)[:160]}"
+    try:
+        return r.status_code, r.json()
+    except ValueError:
+        return r.status_code, r.text[:500]
+
+
+def openai_credit(post: Callable, key: str) -> str:
+    """'ok', 'empty' (no credit), or '' when it can't be told. Listing models is free, so it passes with no credit;
+    the cheapest billed call there is, a one-word embedding, is refused with insufficient_quota when the account is empty.
+    OpenAI has no balance a key can read, so this sees empty, never low - auto-recharge covers low."""
+    code, body = post("https://api.openai.com/v1/embeddings", {"model": "text-embedding-3-small", "input": "ok"},
+                      headers={"Authorization": f"Bearer {key}"})
+    if code == 200:
+        return "ok"
+    if code == 429 and NO_CREDIT.search(json.dumps(body) if not isinstance(body, str) else body):
+        return "empty"
+    return ""                                           # busy (a rate limit), down, unreachable: not a credit finding
 
 
 def service_state(name: str) -> str:
@@ -144,7 +174,7 @@ def _problem(key: str, level: str, title: str, fix: str) -> dict:
 
 
 def check(get: Callable = http_get, service: Callable = service_state, env: Optional[dict] = None,
-          log_text: str = "", disk: Callable = disk_free_gb) -> tuple[list[dict], dict]:
+          log_text: str = "", disk: Callable = disk_free_gb, post: Callable = http_post) -> tuple[list[dict], dict]:
     """Every check, each on its own: (problems, facts). A check that can't run is a problem, never a pass."""
     problems: list[dict] = []
     facts: dict = {}
@@ -217,6 +247,7 @@ def check(get: Callable = http_get, service: Callable = service_state, env: Opti
 
     # the keys
     k = env.get("OPENAI_API_KEY", "")
+    credit = ""
     if not k:
         problems.append(_problem("openai", "down", "No OpenAI key in SDI Live's .env",
                                  "Live voice and renders can't work. Set OPENAI_API_KEY in C:\\SDI_Automation\\.env."))
@@ -229,6 +260,9 @@ def check(get: Callable = http_get, service: Callable = service_state, env: Opti
         elif code != 200:
             problems.append(_problem("openai", "warn", f"Couldn't check the OpenAI key ({code or 'no answer'})",
                                      "OpenAI may be having a problem, or this server can't reach it."))
+        else:
+            credit = openai_credit(post, k)
+            facts["openai credit"] = {"ok": "yes", "empty": "NONE"}.get(credit, "couldn't tell")
     k = env.get("ANTHROPIC_API_KEY", "")
     if k:
         code, _, _ = get("https://api.anthropic.com/v1/models",
@@ -237,9 +271,13 @@ def check(get: Callable = http_get, service: Callable = service_state, env: Opti
             problems.append(_problem("anthropic", "down", "Anthropic refused SDI Live's key",
                                      "The typed chat and the design step can't work. Replace ANTHROPIC_API_KEY in "
                                      "C:\\SDI_Automation\\.env and restart SDISameDay."))
-    if NO_CREDIT.search(log_text or ""):
-        problems.append(_problem("credit", "down", "OpenAI says the account has no credit",
-                                 "Renders and live voice stop until it is topped up: platform.openai.com > Billing.")
+    credit_fix = ("Sid's voice, renders and GA drawings are down; typing still works. Top up the organisation that "
+                  "owns SDI Live's key: platform.openai.com > Settings > Billing, and turn on auto-recharge. Nothing "
+                  "needs restarting.")
+    if credit == "empty":       # asked directly: an all-clear follows when it is topped up
+        problems.append(_problem("credit", "down", "OpenAI account has no credit", credit_fix))
+    elif credit != "ok" and NO_CREDIT.search(log_text or ""):
+        problems.append(_problem("credit", "down", "OpenAI says the account has no credit", credit_fix)
                         | {"sticky": True})
 
     # the server's own disk - 5 Nov 2026 (James: "this is a production server"): copying 269,000 thumbnails was

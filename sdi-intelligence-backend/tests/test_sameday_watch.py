@@ -36,6 +36,11 @@ class Fake:
         }
         self.answers.update(change)
         self.asked = []
+        self.credit = (200, {"data": [{"embedding": [0.1]}]})
+
+    def post(self, url, payload, headers=None, timeout=20):
+        self.asked.append((url, dict(headers or {})))
+        return self.credit
 
     def get(self, url, headers=None, timeout=15, redirects=True):
         self.asked.append((url, dict(headers or {})))
@@ -50,7 +55,7 @@ def run(fake=None, services=None, env=None, log="", free=28.4):
     states = {"SDISameDay": "RUNNING", "SDIIntelligence": "RUNNING", "WAPCSvc": "absent"} | (services or {})
     return W.check(get=fake.get, service=lambda n: states.get(n, ""),
                    env={"OPENAI_API_KEY": KEY, "ANTHROPIC_API_KEY": "sk-ant-" + "y" * 40} if env is None else env,
-                   log_text=log, disk=lambda path: free)
+                   log_text=log, disk=lambda path: free, post=fake.post)
 
 
 def keys(problems):
@@ -140,9 +145,35 @@ class WhatItChecksTests(unittest.TestCase):
         self.assertIsNone(W.disk_free_gb("Q:\\no-such-drive\\"))
 
     def test_no_credit_in_sameday_s_log(self):
-        p = run(log="rt done abc make_concepts: NOTHING drawn - Renders are paused ... needs topping up")[0]
+        fake = Fake(); fake.credit = (0, "timeout")                   # the direct check couldn't tell
+        p = run(fake, log="rt done abc make_concepts: NOTHING drawn - Renders are paused ... needs topping up")[0]
         self.assertEqual(keys(p).get("credit"), "down")
         self.assertTrue(p[0].get("sticky"))
+
+    def test_a_healthy_account_has_credit(self):
+        problems, facts = run()
+        self.assertEqual(facts["openai credit"], "yes")
+
+    def test_17_nov_openai_s_own_words_are_caught_in_the_log(self):
+        fake = Fake(); fake.credit = (0, "timeout")                   # the direct check couldn't tell
+        p = run(fake, log="tts openai failed: 429 You have no credits remaining. Add credits to continue.")[0]
+        self.assertEqual(keys(p).get("credit"), "down")
+        self.assertIn("platform.openai.com > Settings > Billing", p[0]["fix"])
+
+    def test_an_empty_account_is_found_without_anyone_calling_sid(self):
+        fake = Fake(); fake.credit = (429, {"error": {"code": "insufficient_quota",
+                                                      "message": "You have no credits remaining."}})
+        problems, facts = run(fake)
+        self.assertEqual(keys(problems), {"credit": "down"})
+        self.assertFalse(problems[0].get("sticky"))                  # watched, so it gets an all-clear when topped up
+        self.assertEqual(facts["openai credit"], "NONE")
+
+    def test_a_rate_limit_is_not_called_no_credit(self):
+        fake = Fake(); fake.credit = (429, {"error": {"code": "rate_limit_exceeded", "message": "Slow down"}})
+        self.assertEqual(run(fake)[0], [])
+
+    def test_old_log_lines_are_not_an_alarm_once_the_account_answers(self):
+        self.assertEqual(run(log="429 You have no credits remaining")[0], [])
 
     def test_the_keys_are_sent_only_to_their_own_service_and_never_said(self):
         fake = Fake(**{"api.openai.com": (401, {}), "api.anthropic.com": (401, {})})
@@ -282,10 +313,10 @@ class OnTheServerTests(unittest.TestCase):
 
     def test_it_only_reads_sameday(self):
         src = (BACKEND / "sameday_watch.py").read_text(encoding="utf-8")
-        for verb in ("httpx.post", ".write_text(json.dumps(state", "requests.post"):
-            if verb == ".write_text(json.dumps(state":
-                continue                            # its own state file, in SDI Intelligence's logs folder
-            self.assertNotIn(verb, src)
+        self.assertNotIn("requests.post", src)
+        # 17 Nov 2026: one POST, to OpenAI's embeddings, for the credit check - never anything sent to SameDay
+        self.assertEqual(src.count("httpx.post"), 1)
+        self.assertEqual(re.findall(r'post\("([^"]+)"', src), ["https://api.openai.com/v1/embeddings"])
         self.assertNotIn("print(env", src)
         self.assertNotIn("print(k", src)
 
