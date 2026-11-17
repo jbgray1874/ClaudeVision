@@ -3601,3 +3601,10 @@ It isn't a replacement for Production's sheet now.
   - Dates asked: owner by Fri 20 Nov, TEST access by Fri 27 Nov; migration-load questions 6–9 by Wed 18 Nov.
 - **Email to Charlotte drafted:** who holds the Sage subscription; the contract position; a written position from Neil by Wed 18 Nov; a three-way call; escalation if dates are missed; the fallback (hand-loaded imports, scheduled exports, board on Access until cut-over).
 - **Neither email confirmed as sent yet.** Update SCRUM-329 when they are.
+- **17 Nov – BOTH emails SENT (James confirmed):**
+  1. **To Acuity** (Marc, Sergio, Roberto, Jim, Ethan; cc Neil, Charlotte, Dave): the Live Orders full requirement, the in-house build, and the 10-item access request. Attachments: LiveOrders_reconciliation_and_SageX3_mapping.xlsx; Live_Orders (Dave, current sheet).xlsx; SDI_Live_Orders_2026-11-13.xlsx.
+  2. **To Charlotte:** the escalation (subscription holder, contract position, Neil's written position by Wed 18 Nov, a three-way call, escalation if dates are missed, the fallback).
+- **Watch:**
+  - Wed 18 Nov: Neil's written position, and the migration-load questions 6–9.
+  - Fri 20 Nov: owner and date at Acuity for the access.
+  - Fri 27 Nov: TEST access.
