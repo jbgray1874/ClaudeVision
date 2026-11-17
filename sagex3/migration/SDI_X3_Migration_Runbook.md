@@ -3587,3 +3587,17 @@ It isn't a replacement for Production's sheet now.
 - **The 13 Nov connection-details email** (to Neil, Marc, Jim, Sergio and Roberto; questions A1–A5 connections, B6–B14 estimating, C15–C21 Live Orders, D22–D24 opportunity, E outstanding) has **no reply yet**. James has sent the connection details to Sergio.
 - **On the call:** chase an owner and date for each section of the 13 Nov email.
 - **Rule:** the register shared with Acuity never carries the rebate rows or figures. Build the Acuity copy from a filtered `register_data.py`.
+
+**17 Nov – DECISION: SDI builds Live Orders in-house on X3 data. Acuity are asked for access, not development. Jira SCRUM-329 (In Progress; under SCRUM-241).**
+- **Why:**
+  - 13 Nov: questions to Acuity, 24 of them.
+  - 13 Nov: Marc's reply put the functional questions on his project review issues list and gave connectivity to Neil only. No answers or dates.
+  - 16 Nov call: Acuity intend to do the development themselves, with no SDI access.
+- **Email to Acuity drafted** (Marc, Sergio, Roberto, Jim, Ethan; cc Neil, Charlotte, Dave). It puts the full business and technical requirement on record and lists 10 access items (TEST first):
+  - connection details, a connected app, an integration user;
+  - read access (works orders with operations / materials / allocations, sales-order lines, stock / allocations, PO lines, products / BOMs / routes, work centres / capacities, MRP);
+  - export templates; API documentation; IP / rate / licence;
+  - three works-order user fields; webhooks; Safe X3 in TEST.
+  - Dates asked: owner by Fri 20 Nov, TEST access by Fri 27 Nov; migration-load questions 6–9 by Wed 18 Nov.
+- **Email to Charlotte drafted:** who holds the Sage subscription; the contract position; a written position from Neil by Wed 18 Nov; a three-way call; escalation if dates are missed; the fallback (hand-loaded imports, scheduled exports, board on Access until cut-over).
+- **Neither email confirmed as sent yet.** Update SCRUM-329 when they are.
