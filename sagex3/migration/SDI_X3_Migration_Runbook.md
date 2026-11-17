@@ -3750,4 +3750,4 @@ It isn't a replacement for Production's sheet now.
   - **Rule: to set a registry value, use `Set-ItemProperty` alone. Create the key with `New-Item` only after `Test-Path` shows it's missing, and never with `-Force`.**
 
 - **Shadow value removed again (17 Nov, James).** The Terminal Services policy key is back to empty, as it most likely was before. Still open: the planned restart, and the MSP email.
-- **About 17:40: tested with `SDI\\james.gray` (a new user, saved username cleared). It hangs the same way.** That confirms no new session can start for any user. The way forward is the vSphere console now, or the planned out-of-hours restart.
+- **About 17:40: tested with `SDI\james.gray` (a new user, saved username cleared). It hangs the same way.** That confirms no new session can start for any user. The way forward is the vSphere console now, or the planned out-of-hours restart.
