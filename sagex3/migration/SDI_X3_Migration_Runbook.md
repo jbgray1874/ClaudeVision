@@ -3749,3 +3749,4 @@ It isn't a replacement for Production's sheet now.
   - Only a value written there by hand, outside Group Policy, could have been lost. Told the MSP so they can compare with a backup.
   - **Rule: to set a registry value, use `Set-ItemProperty` alone. Create the key with `New-Item` only after `Test-Path` shows it's missing, and never with `-Force`.**
 
+- **Shadow value removed again (17 Nov, James).** The Terminal Services policy key is back to empty, as it most likely was before. Still open: the planned restart, and the MSP email.
