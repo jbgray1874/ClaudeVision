@@ -291,13 +291,18 @@ WITH src AS (
       AND LTRIM(RTRIM(ISNULL(t.ST_COPYCUST, ''))) <> ''
 )
 SELECT
-    CASE LTRIM(RTRIM(s.ST_TRANTYPE))
+    -- The type follows the sign of the open amount, not only Access's type (17 Nov): Access holds some
+    -- credit notes as INV with a negative amount (2 on the 4 Nov extract). As MINV with ABS() they
+    -- loaded as invoices and overstated the ledger. INV < 0 is a credit note; CRN > 0 is a debit.
+    CASE WHEN LTRIM(RTRIM(s.ST_TRANTYPE)) = 'INV' AND s.ST_UNALLOCATED < 0 THEN 'MCRN'
+         WHEN LTRIM(RTRIM(s.ST_TRANTYPE)) = 'CRN' AND s.ST_UNALLOCATED > 0 THEN 'MINV'
+         ELSE CASE LTRIM(RTRIM(s.ST_TRANTYPE))
          WHEN 'INV' THEN 'MINV'
          WHEN 'CRN' THEN 'MCRN'
          WHEN 'PAY' THEN 'MREC'
          WHEN 'ADR' THEN 'MJDT'
          WHEN 'ACR' THEN 'MJCT'
-         ELSE 'MINV' END                                        AS InvoiceType,
+         ELSE 'MINV' END END                                    AS InvoiceType,
     -- 13 references repeat (BACS, FP). The template rejects duplicates, so the second
     -- and later ones take a suffix, the same way Ethan's own examples do
     CASE WHEN s.ref_seq = 1 THEN LTRIM(RTRIM(s.ST_HEADER_REF)) COLLATE DATABASE_DEFAULT
@@ -361,13 +366,18 @@ WITH src AS (
       AND LTRIM(RTRIM(ISNULL(t.PT_COPYSUPP, ''))) <> ''
 )
 SELECT
-    CASE LTRIM(RTRIM(s.PT_TRANTYPE))
+    -- The type follows the sign of the open amount, not only Access's type (17 Nov): Access holds some
+    -- credit notes as INV with a negative amount (2 on the 4 Nov extract). As MINV with ABS() they
+    -- loaded as invoices and overstated the ledger. INV < 0 is a credit note; CRN > 0 is a debit.
+    CASE WHEN LTRIM(RTRIM(s.PT_TRANTYPE)) = 'INV' AND s.PT_UNALLOCATED < 0 THEN 'MCRN'
+         WHEN LTRIM(RTRIM(s.PT_TRANTYPE)) = 'CRN' AND s.PT_UNALLOCATED > 0 THEN 'MINV'
+         ELSE CASE LTRIM(RTRIM(s.PT_TRANTYPE))
          WHEN 'INV' THEN 'MINV'
          WHEN 'CRN' THEN 'MCRN'
          WHEN 'PAY' THEN 'MPAY'
          WHEN 'ADR' THEN 'MJDT'
          WHEN 'ACR' THEN 'MJCT'
-         ELSE 'MINV' END                                        AS InvoiceType,
+         ELSE 'MINV' END END                                    AS InvoiceType,
     -- Document = the Access transaction number (PT_PRIMARY): unique, in Access, nothing made up
     -- (agreed with Ethan / Jim, 12 Nov). The 5xxxxxx number is the PO number: it goes in Comments2.
     CAST(s.PT_PRIMARY AS varchar(20))                           AS Document,

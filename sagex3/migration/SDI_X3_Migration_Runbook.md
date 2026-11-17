@@ -3646,3 +3646,11 @@ It isn't a replacement for Production's sheet now.
   3. ACCCOD into YA004BPC column Q.
   4. Acuity's import log for the 81 debtor and 8 creditor items.
   5. **Run the Access aged reports at the same moment as the extract** (Claire's request), with summary reports.
+- **17 Nov – sign bug FIXED in `sql/views_v2.sql` (vw_BICX_V2 and vw_BISX_V2) and `sql/export_new_accounts_orders_invoices.sql`.** The type now follows the sign of the open amount: INV with UNALLOCATED < 0 → MCRN; CRN with UNALLOCATED > 0 → MINV.
+  - **Effect on the 4 Nov data:** the 2 MAR101 items become credit notes, and the loaded debtors fall from £7,975,104.50 to £7,826,353.48 (−£148,751.02). Nothing else changes: no other negative INV in debtors, none in creditors.
+  - **Takes effect when views_v2.sql is run on SDILive** before the re-extract (22.17 step A1). These are our own `migration.` objects, the only kind we may change.
+- **Why the 81 debtor items didn't load: their customers aren't in X3.** MAR101, TEC105 and UNI103 were rejected by the YA004BPC customer import (see Run 3 above):
+  - XPOSCOD (postcode format): TEC100, TEC105, UNI103, PER101;
+  - XSAT (missing State / Region): DRE100, MAR101, PER101, TEC105.
+  - MAR101 has 1,205 delivery addresses; one failing address rejects the whole customer.
+  - **Check before the re-extract** that the address fixes (Run3_master_data_fixes) are in the customer build and that all 6 load. Then their open items load too.
