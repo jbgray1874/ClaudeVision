@@ -1,6 +1,6 @@
 """Fill Finance's supplier list with the email addresses Access holds (Claire, 18 Nov).
 
-    python fill_supplier_emails.py "<Supplier List.xlsx>" <supplier_emails.txt> <out.xlsx>
+    python fill_supplier_emails.py "<Supplier List.xlsx>" <supplier_emails.txt> <out.xlsx> [--bank <bank grid .txt>]
 
 <supplier_emails.txt> is the output of sql/supplier_emails.sql (tab delimited; with or without
 headers; SUMMARY and EMAIL grids in one file is fine - only EMAIL rows are read).
@@ -12,6 +12,12 @@ What it does to the list (sheet "List Data", headings in row 1, a note row 2, da
   - New columns after the last one:
       "Other emails in Access"   every other address found, with where it came from
       "Email check"              why an address may be the bounce or the "don't know who" case
+  - Column A "New Sage code" from the SAGE grid (migration.XREF_SAGE_BPS), where blank.
+  - Column G "VAT code" from the TAX grid (the PL_ACCOUNTS column with VAT and CODE in its name,
+    else TAX and CODE), where blank.
+  - With --bank (the output of sql/supplier_bank_details.sql: Sage code, Access code, sort code,
+    account number, ...): columns L "Bank sort code" and M "Bank Account number". CONFIDENTIAL:
+    the output then holds bank details - Finance only, private folder, never in git or outside SDI.
   - Nothing else is changed. Rows Access has no address for are marked in the check column.
 
 Checks (Claire: some bounce, some are wrong, some don't say which company they are):
@@ -43,15 +49,38 @@ AMBER = PatternFill("solid", fgColor="FFF2CC")
 RED = PatternFill("solid", fgColor="F8CBAD")
 
 
-def read_emails(path):
-    """{supplier code: [(table, column, raw value)]} from the EMAIL grid."""
-    found = defaultdict(list)
+def read_grids(path):
+    """EMAIL: {code: [(table, column, value)]}; SAGE: {code: sage}; TAX: {code: {column: value}}."""
+    found, sage, tax = defaultdict(list), {}, defaultdict(dict)
     with open(path, encoding="utf-8-sig", errors="replace") as f:
         for row in csv.reader(f, delimiter="\t"):
             row = [c.strip() for c in row]
             if len(row) >= 5 and row[0] == "EMAIL":
                 found[row[1].upper()].append((row[2], row[3], row[4]))
-    return found
+            elif len(row) >= 3 and row[0] == "SAGE":
+                sage[row[1].upper()] = row[2]
+            elif len(row) >= 4 and row[0] == "TAX":
+                tax[row[1].upper()][row[2].upper()] = row[3]
+    return found, sage, tax
+
+
+def vat_code(cols):
+    for want in (("VAT", "CODE"), ("TAX", "CODE")):
+        for col in sorted(cols):
+            if all(w in col for w in want):
+                return cols[col]
+    return ""
+
+
+def read_bank(path):
+    """{access code: (sort code, account)} from supplier_bank_details.sql's grid."""
+    bank = {}
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
+        for row in csv.reader(f, delimiter="\t"):
+            row = [c.strip() for c in row]
+            if len(row) >= 4 and row[1] and (row[2] or row[3]):
+                bank.setdefault(row[1].upper(), (row[2], row[3]))
+    return bank
 
 
 def rank(src):
@@ -84,13 +113,16 @@ def checks(addr, raw, name):
     return out
 
 
-def main(list_path, emails_path, out_path):
-    found = read_emails(emails_path)
+def main(list_path, emails_path, out_path, bank_path=None):
+    found, sage, tax = read_grids(emails_path)
+    bank = read_bank(bank_path) if bank_path else {}
     wb = openpyxl.load_workbook(list_path)
     ws = wb["List Data"]
     hdr = [c.value for c in ws[1]]
     c_code, c_name = hdr.index("Account Code") + 1, hdr.index("Account Name") + 1
     c_rem = hdr.index("Remittance email address") + 1
+    c_sage, c_vat = hdr.index("New Sage code") + 1, hdr.index("VAT code") + 1
+    c_sort, c_acc = hdr.index("Bank sort code") + 1, hdr.index("Bank Account number") + 1
     c_other, c_check = ws.max_column + 1, ws.max_column + 2
     for col, title in ((c_other, "Other emails in Access"), (c_check, "Email check")):
         cell = ws.cell(1, col, title)
@@ -104,6 +136,17 @@ def main(list_path, emails_path, out_path):
         if not code:
             continue
         name = str(ws.cell(r, c_name).value or "")
+        if not ws.cell(r, c_sage).value and code in sage:
+            ws.cell(r, c_sage, sage[code])
+            n["sage"] += 1
+        v = vat_code(tax.get(code, {}))
+        if not ws.cell(r, c_vat).value and v:
+            ws.cell(r, c_vat, v)
+            n["vat"] += 1
+        if code in bank:
+            ws.cell(r, c_sort, bank[code][0])
+            ws.cell(r, c_acc, bank[code][1])
+            n["bank"] += 1
         srcs = sorted(found.get(code, []), key=rank)
         addrs = []  # (address, raw, source), first occurrence of each address only
         for tbl, col, raw in srcs:
@@ -130,10 +173,17 @@ def main(list_path, emails_path, out_path):
     ws.column_dimensions[openpyxl.utils.get_column_letter(c_other)].width = 50
     ws.column_dimensions[openpyxl.utils.get_column_letter(c_check)].width = 45
     wb.save(out_path)
+    print(f"Sage code filled: {n['sage']}; VAT code filled: {n['vat']}; bank details filled: {n['bank']}")
     print(f"suppliers with an email: {n['filled']} (of which flagged to check: {n['flagged']}); "
           f"no email in Access: {n['none']}")
     print("written", out_path)
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:4])
+    a = sys.argv[1:]
+    bank_arg = None
+    if "--bank" in a:
+        i = a.index("--bank")
+        bank_arg = a[i + 1]
+        del a[i:i + 2]
+    main(*a[:3], bank_path=bank_arg)

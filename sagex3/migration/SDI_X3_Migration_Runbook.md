@@ -3827,4 +3827,12 @@ The figures were unchanged.
     - adds "Other emails in Access" (each with its table.column) and an "Email check" column: not valid / several in one field / free mail / doesn't contain the supplier's name / no email in Access.
     - It changes nothing else. Tested on dummy data.
 - **Bank columns (L, M) are not filled here.** Bank details live only in `bank_private/` (rule), and go to Finance separately if asked.
+- **Did Claire supply bank details? No.** Her list's "New Sage code", "VAT code", both email columns, "Bank sort code" and "Bank Account number" are **empty on all 1,000 rows**. Her 29 Oct email asks **us** to fill them. The filled columns (name, balance, phone, address, currency, contact) came out of Access, which we already load from.
+- **James (18 Nov): what Finance send on, they intend to be reloaded.** So whatever we fill must also go into the X3 supplier files: emails and VAT checks into YA004BPS, bank details into YA004BPSC. They shouldn't stay only on her sheet.
+- **Extended the same day:**
+  - `supplier_emails.sql` adds a **SAGE** grid (Access → Sage code from XREF_SAGE_BPS) and a **TAX** grid (every VAT / TAX column on PL_ACCOUNTS).
+  - `fill_supplier_emails.py` fills A (Sage code), G (VAT code: the column with VAT + CODE in its name), J, and, with `--bank <supplier_bank_details.sql output>`, L and M.
+  - **With --bank, the workbook is confidential:** Finance only, private folder.
+  - Re-run `supplier_bank_details.sql` live; the copy in `bank_private/` dates from 28 Oct.
+- **Bank status in X3:** YA004BPSC was built 3 Nov (626 BACS suppliers; 37 on Check; 44 on transfer terms not in the file). Whether Ethan loaded it in Run 3 / 4 isn't recorded. **Ask Ethan.**
 

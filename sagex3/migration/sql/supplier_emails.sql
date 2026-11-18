@@ -13,6 +13,11 @@
 -- Grids:
 --   SUMMARY  how many suppliers have an email in each table / column (to see which is "Statements")
 --   EMAIL    one row per supplier, table, column, value
+--   SAGE     Access supplier code -> new Sage code (migration.XREF_SAGE_BPS): Claire's column A
+--   TAX      every VAT / tax column on PL_ACCOUNTS, per supplier: Claire's column G (VAT code)
+--
+-- Bank details are NOT read here: run sql/supplier_bank_details.sql as well (confidential output,
+-- kept in the private bank folder), and pass it to fill_supplier_emails.py --bank.
 
 SET NOCOUNT ON;
 
@@ -51,3 +56,26 @@ ORDER BY suppliers DESC;
 SELECT 'EMAIL' AS grid, access_code, tbl, col, value
 FROM #e
 ORDER BY access_code, tbl, col;
+
+SELECT 'SAGE' AS grid, LTRIM(RTRIM(x.ACCESS_CODE)) AS access_code, LTRIM(RTRIM(x.SAGE_CODE)) AS sage_code, '' AS c3, '' AS c4
+FROM migration.XREF_SAGE_BPS x
+ORDER BY access_code;
+
+-- VAT / tax columns on PL_ACCOUNTS, found by name (VAT or TAX), one row per supplier and column
+IF OBJECT_ID('tempdb..#t') IS NOT NULL DROP TABLE #t;
+CREATE TABLE #t (access_code nvarchar(50), col sysname, value nvarchar(400));
+DECLARE @tsql nvarchar(max) = N'';
+SELECT @tsql = @tsql + CASE WHEN @tsql = N'' THEN N'' ELSE N' UNION ALL ' END
+    + N'SELECT LTRIM(RTRIM(CAST(x.SUCODE AS nvarchar(50)))), ''' + c.name + N''', '
+    + N'LTRIM(RTRIM(CAST(x.' + QUOTENAME(c.name) + N' AS nvarchar(400)))) FROM dbo.PL_ACCOUNTS x'
+    + N' WHERE LTRIM(RTRIM(ISNULL(CAST(x.' + QUOTENAME(c.name) + N' AS nvarchar(400)), ''''))) <> '''''
+FROM sys.columns c JOIN sys.types ty ON ty.user_type_id = c.user_type_id
+WHERE c.object_id = OBJECT_ID('dbo.PL_ACCOUNTS')
+  AND (c.name LIKE '%VAT%' OR c.name LIKE '%TAX%')
+  AND ty.name NOT IN ('image', 'varbinary', 'binary', 'timestamp', 'xml');
+IF @tsql <> N'' INSERT INTO #t (access_code, col, value) EXEC sp_executesql @tsql;
+
+SELECT 'TAX' AS grid, access_code, col, value, '' AS c4
+FROM #t
+ORDER BY access_code, col;
+
