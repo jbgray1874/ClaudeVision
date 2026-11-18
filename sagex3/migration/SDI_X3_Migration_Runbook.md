@@ -3861,3 +3861,15 @@ The figures were unchanged.
   - **To answer with data:** `sql/products_by_supplier_country.sql` (read-only) shows, for every product bought in the last 24 months, how many supplier countries it came from (SUMMARY), and lists every product bought from more than one (SHARED).
 - **Still unanswered by Acuity:** drawing number / revision / commodity code on the product and the ZSDIITM template; statistical group vs categories.
 
+**18 Nov – RULE (James): no failed loads. Month-end-style reconciliations must line up 100%, apart from documented adjustments made after the extract.**
+- **Did we use fake VAT numbers or bank codes? Not ours; dummies were inherited and removed.**
+  - **VAT:** the UAT data before our rebuild had dummy VAT numbers: two real Polish numbers copied across 117 suppliers, TEMPJAF placeholders, GB numbers on overseas companies. They caused 180 supplier rejections. Run 2 blanked 185 of them.
+  - **Our rule since:** never a placeholder. A blank loads for UK accounts; FR / ES accounts need the real number, which is why the 11 suppliers still fail.
+  - **Bank:** BIDNUM = `XXXX` + real sort code + real account number. The `XXXX` stands in for a bank identifier Access doesn't hold, as Ethan's template note asks. The account details are real.
+  - **To confirm with Ethan:** that X3 accepts `XXXX`, and whether YA004BPSC was loaded.
+- **How we get to no failed loads:**
+  1. **Pre-load check on our side.** Before handing files over, check every customer and supplier against the rules X3 rejected on: postcode format (XPOSCOD), mandatory region (XSAT), FR / EU VAT format and key, SIRET, tax rule, and two emails in one field. Anything that would fail goes to a named owner before the run, not into the load.
+  2. **Load order:** customers and suppliers before open items and orders, so no transaction misses its account.
+  3. **Load report from Ethan for every file:** rows sent, rows loaded, rows rejected, with the log. A file isn't done until rejected = 0, or each rejection has a named reason and owner.
+  4. **Same-moment reports:** Access aged debtors / creditors run at the extract moment (Claire), then a three-way reconciliation (Access = loaded = X3). The only differences allowed are documented adjustments made after the extract.
+
