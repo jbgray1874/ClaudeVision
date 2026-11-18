@@ -4026,3 +4026,28 @@ The figures were unchanged.
 - **Follow-up SENT to Ethan (James confirmed):** read it through before loading; load together Fri 20 Nov, or Ethan test-loads and feeds back. Placeholders and provisional values are listed in section 4 of the email. Asked for per-file results and the six answers, above all whether a reload updates existing records.
 - **Consequence:** the transaction extract (and Claire's same-moment aged reports) follows the master-data load, so it's Fri 20 Nov or later, not Thu 19 Nov.
 
+**18 Nov – two emails DRAFTED, to send Fri 20 Nov (James).** The full text is in `scratchpad/drafts/DRAFTS_to_send_Fri_20Nov.md` (private: it names customers and staff, so not in git).
+1. **To Claire (cc Charlotte): Finance decisions.**
+   - ACCCOD: the 4 merged-account conflicts (provisional ID) and 21 customers not on her list (EU for euro accounts, else STD), listed by name and code.
+   - Do staff expense accounts with open claims (18, ~£4,400) load as suppliers?
+   - Confirm the accounts left out (2 intercompany, 5 ledger).
+   - FR / ES suppliers: we look up the SIRETs unless Finance holds them; BAL500's tax rule; PLS500's GB VAT number.
+   - Confirm Jim's category accounts (230100 / 600100 / 700100; 230500 / 600500 / 700500; 230000 / 600400 / 700400).
+   - Timing of the same-moment aged reports (after the master-data load).
+   - Her supplier email list (after `supplier_emails.sql`); her 29 Oct requests still open.
+2. **To Jim (cc Marc, Ethan, Charlotte).**
+   - The CAP500 £22,500 journal direction.
+   - For the next load: X3 aged debtors / creditors as a summary by account plus the trial balance, at the same moment.
+   - Confirm the X3 treatment of expense accounts (as suppliers) and of intercompany / ledger accounts (left out).
+   - The sub-contract-routes answer by Friday. If `products_by_supplier_country.sql` has run by then, put the answer in.
+- **Other emails still to deal with:**
+  - MSP / Jack: the server restart (drafted 17 Nov; sent?);
+  - Jim's sub-contract answer (needs the SQL);
+  - Claire's supplier emails (needs `supplier_emails.sql`);
+  - the 2023 orders chaser (needs `check_old_open_orders.sql`);
+  - Live Orders: Neil's position and Q6–9 were due 18 Nov; chase 19 Nov;
+  - Marc's validation of the guide screens (to draft);
+  - Claire's year-end guide email (to draft);
+  - the rebate due-date correction (waits on Nick Garrish);
+  - training-site logins (wait on Acuity).
+
