@@ -4023,4 +4023,6 @@ The figures were unchanged.
   1. SIRET lookups (public register);
   2. one email to Claire with her questions;
   3. run `check_old_open_orders.sql` and chase Purchasing / Customer Service.
+- **Follow-up SENT to Ethan (James confirmed):** read it through before loading; load together Fri 20 Nov, or Ethan test-loads and feeds back. Placeholders and provisional values are listed in section 4 of the email. Asked for per-file results and the six answers, above all whether a reload updates existing records.
+- **Consequence:** the transaction extract (and Claire's same-moment aged reports) follows the master-data load, so it's Fri 20 Nov or later, not Thu 19 Nov.
 
