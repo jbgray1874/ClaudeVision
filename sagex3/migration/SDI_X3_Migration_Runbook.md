@@ -4089,4 +4089,5 @@ The figures were unchanged.
   - **Bank details are never placeholdered:** a wrong account could receive a payment.
   - Files: `bank_private/YA004BPSC_bank_details_MAPPED_2026-11-18.xlsx / .txt` (chmod 600). The raw query output was deleted from the uploads folder.
   - **NOT in the zip.** It goes to Ethan separately: James protects it with his own password (7-Zip, AES-256) and gives the password by phone.
+- **James (18 Nov): no password on the bank file; it would only confuse.** It goes to Ethan as a plain attachment, addressed to Ethan only. It's still kept out of the hand-over zip and git, and the source stays in `bank_private/`.
 
