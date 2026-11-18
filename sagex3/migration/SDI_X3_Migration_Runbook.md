@@ -4004,3 +4004,23 @@ The figures were unchanged.
   - The estimate files prove the converter reproduces Access.
   - To test the estimating import in X3, use the IMPORT test part (`estimating_IMPORT/` in the hand-over zip), which is new and in nothing else.
 
+**18 Nov – master-data email SENT to Ethan (cc Marc), with `Run5_master_data_2026-11-18.zip` (James confirmed).**
+- **The zip holds:**
+  - customers 6,195 rows / 335; delivery addresses 6,195; suppliers 741;
+  - products 20,124; costs 20,124; BOM lines 33,122; route operations 33,864;
+  - Held_addresses_for_later.xlsx; WHAT_CHANGED;
+  - `estimating_IMPORT/` (the test part to load);
+  - `estimating_TIM_MS-0359869/` (Tim's original estimate + converted files: for comparison, **not to load**).
+- **Not in it:** ZSDIITMSUP (offered); YA004BPSC bank (separate, confidential route).
+- **The email laid out:**
+  - the changes (address-fix bug, 26 held addresses, ACCCOD, placeholder supplier IDs, 32 + 35 new accounts);
+  - a table of **everything provisional and who at SDI is confirming it**: SIRETs, 24 ACCCOD, expense accounts, intercompany / ledger accounts, BAL500 / PLS500, Jim's category accounts, product categories, zero costs, 2023 orders, TTI review;
+  - the load order and a per-file sent / loaded / rejected report;
+  - Ethan's 6 questions (region field code, country set-up, ACCCOD codes exist, **does a reimport update existing records** (the key one), bank file / XXXX, CAP500).
+- **No individuals named:** expense accounts appear as a count.
+- **James's follow-up to Ethan (18 Nov):** read it through before loading. Load Friday 20 Nov together, or Ethan runs test loads and feeds back. We're knowingly using placeholders to make imports work, as long as everyone knows and the users' answers keep coming.
+- **SDI actions this week:**
+  1. SIRET lookups (public register);
+  2. one email to Claire with her questions;
+  3. run `check_old_open_orders.sql` and chase Purchasing / Customer Service.
+
