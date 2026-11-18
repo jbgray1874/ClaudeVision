@@ -3873,3 +3873,38 @@ The figures were unchanged.
   3. **Load report from Ethan for every file:** rows sent, rows loaded, rows rejected, with the log. A file isn't done until rejected = 0, or each rejection has a named reason and owner.
   4. **Same-moment reports:** Access aged debtors / creditors run at the extract moment (Claire), then a three-way reconciliation (Access = loaded = X3). The only differences allowed are documented adjustments made after the extract.
 
+**18 Nov – master-data fix-up for Ethan's reload (James: "we can't wait; do what we can, eliminate rejections"). Output: `scratchpad/run5_master/`.**
+- **BUG FOUND AND FIXED: the 4 Nov address fixes never blanked anything.** `ws.cell(r, c, None)` in openpyxl **leaves the old value**: it only writes when the value isn't None.
+  - So every fix that should *empty* a field was logged on "Address fixes" but not applied:
+    - DRE100's "239600" stayed in the postcode;
+    - "IRELAND", "TURKEY", "ROMANIA", "INDIA", "MALAYSIA", "MEXICO" stayed in M&S / PER101 postcodes;
+    - postcodes moved out of an address line stayed in the line too.
+  - 26 values in all (customers 11 postcodes + 15 address lines; suppliers 1). **This is part of why the six customers failed again in Run 4.**
+  - Fixed in `fix_customer_addresses.py` and `fix_suppliers.py` (`ws.cell(r, c).value = new or None`). No other script writes a blank this way: checked by grep.
+  - **Lesson:** to blank a cell in openpyxl, assign `.value = None`; never `ws.cell(r, c, None)`. Check the data, not just the change log.
+- **Supplier VAT checked:** no dummy or repeated VAT number left in YA004BPS (431 with VAT, none repeated, no TEMPJAF).
+- **Rebuilt, same inputs as Run 4 plus the fixed scripts:**
+  - `fix_customer_addresses.py` (507 fixes, now applied) → `fill_customer_vat.py` (4 Nov grid) → `fix_suppliers.py`.
+  - Then two new steps:
+    - **`hold_risky_addresses.py` (new): one failing address rejected a whole customer.** For the six rejected customers it holds back each non-default address that is:
+      - in a country needing a State/Region X3 doesn't receive yet (AE, CA, AU, US; the template's region column has no field code);
+      - in a country found only on the rejected customers (BM, BR, CA, CY, IN, MC, MT, MY, PT, PY, RO, SG, TH, TR);
+      - or has a postcode failing our format check.
+
+      26 held (MAR101 11, PER101 10, TEC105 4, TEC100 1), in `Held_addresses_for_later.xlsx` (BPC + BPCDL rows) to load once X3's country set-up is fixed. Nothing invented.
+      - **Not rescuable this way:** DRE100 (AE) and UNI103 (CA), whose only address is the problem. They need Ethan's region field / country set-up. DRE100 holds no items; UNI103 holds 1.
+    - **`fill_customer_acccod.py` (new): ACCCOD in column Q** from Claire's column T. ID 208, EU 21, STD 74.
+      - **24 provisional**, on the "ACCCOD" tab for Claire:
+        - 4 merged-account conflicts → majority, tie → ID (MAR101, BOO102, DEL101, WHI102 → ID);
+        - 20 not on her list → EU for euro accounts (TEC106 / 109 / 111 / 116), else STD.
+- **Result:** YA004BPC 6,143 rows / 303 customers (MAR101 1,194 addresses); YA004BPCDL 6,143; YA004BPS 706.
+- **The 11 French / Spanish suppliers: NOT mocked.**
+  - **Why:**
+    - A mock VAT number that passes X3's check could be another real company's number.
+    - We don't know yet whether a reload can overwrite an existing supplier (open with Marc), so a mock could stick.
+    - The Run 2 dummies cost 180 rejections.
+  - **Instead:** the real numbers are on the French public register (annuaire-entreprises.data.gouv.fr; blocked from this session's network).
+    - **Only the SIRET is needed per French supplier:** the VAT number = FR + key + SIREN is calculated. The formula reproduces the 3 VAT numbers we hold.
+    - `apply_supplier_ids.py <YA004BPS> Suppliers_SIRET_to_fill.xlsx` checks SIRET / SIREN (Luhn) and VAT key, and loads only valid numbers, logged on "Supplier ID fixes".
+  - **Still open with Finance:** BAL500's tax rule (DOM, kept as Access has it); PLS500 (ES supplier with a GB number that fails the check).
+

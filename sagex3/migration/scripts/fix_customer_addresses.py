@@ -184,7 +184,7 @@ def main():
     def change(r, col, new, why):
         old = ws.cell(r, col + 1).value
         if (old or "") != (new or ""):
-            ws.cell(r, col + 1, new or None)
+            ws.cell(r, col + 1).value = new or None   # ws.cell(r, c, None) would leave the old value (openpyxl)
             fixes.append([ws.cell(r, 2).value, ws.cell(r, 18).value, ws.cell(1, col + 1).value or
                           ws.cell(2, col + 1).value, old, new, why])
             rule[why.split(":")[0]] += 1

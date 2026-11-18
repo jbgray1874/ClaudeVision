@@ -122,7 +122,7 @@ def main():
                 for col, new in ((LINES[i], rest), (POSCOD, p)):
                     fixes.append([sup, ws.cell(r, 3).value, ws.cell(1, col + 1).value, get(col), new,
                                   "postcode moved out of the address line (customer address rule 1)"])
-                    ws.cell(r, col + 1, new or None)
+                    ws.cell(r, col + 1).value = new or None   # ws.cell(r, c, None) would leave the old value
         for c in PHONES:
             ph = get(c)
             if "(" in ph or ")" in ph:
