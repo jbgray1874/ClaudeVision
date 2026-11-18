@@ -3534,7 +3534,7 @@ It isn't a replacement for Production's sheet now.
   - hard customer-invoicing cut-off at the end of December: everything delivered is invoiced in Access;
   - Finance work through the holidays. Anything not processed in Access before the final extract is processed twice (Access for the year-end audit, then X3).
 - **What this means for the go-live run:** the final extract (31 Dec) loads whatever is open in Access. **1,557 open SO lines are due more than 60 days ago** (13 Nov run); they need invoicing or closing, or they migrate as open orders.
-- **Reply drafted to Claire (cc Charlotte, not reply-all).** It offers weekly read-only Access lists (old open SO lines, delivered not invoiced, receipts with no PO / open POs, subcon not booked in) and asks for the last invoicing time on 31 Dec. Only the old-SO-lines list exists today.
+- **Reply to Claire SENT (cc Charlotte, not reply-all; James confirmed 18 Nov).** It offers weekly read-only Access lists (old open SO lines, delivered not invoiced, receipts with no PO / open POs, subcon not booked in) and asks for the last invoicing time on 31 Dec. Only the old-SO-lines list exists today.
 - **Debbie** gave the three Access menu paths and offered a call. Reply drafted: a 20-minute call Tue 17 / Wed 18 Nov, with screenshots taken on the call.
 
 **16 Nov – Sage X3 standard screens for these reports (Sage online help, v11 / v12):**
@@ -3666,7 +3666,16 @@ It isn't a replacement for Production's sheet now.
   - MAR101 has 1,205 delivery addresses; one failing address rejects the whole customer.
   - **Check before the re-extract** that the address fixes (Run3_master_data_fixes) are in the customer build and that all 6 load. Then their open items load too.
 
-**17 Nov – SL / PL sign-off email SENT (James confirmed) to Claire Newall and Ethan Davies, cc Charlotte Blackwell and Marc Davies.**
+**17 Nov 15:50 – SL / PL sign-off email SENT to Claire Newall, Ethan Davies, Marc Davies and Jim Hildreth, cc Charlotte Blackwell.**
+- **CORRECTION (18 Nov, checked against the sent copy): the EARLIER DRAFT went, not the corrected final.** It contains five errors:
+  1. "all 20 payments on account loaded": it's 18 of 20 (WAT01 £4,469.40 and WRB01 £600 were entered after the extract).
+  2. "the £859,654 is timing": it's *almost all* timing, to be proved by the same-moment reports.
+  3. "Fixed: these now load as credit notes": only **from the next extract**. In X3 today the two MAR101 items are still invoices.
+  4. "11; three also need a SIRET": it's 8 needing VAT + SIRET and 3 needing SIRET only; BAL500 also needs its tax rule, and PLS500 has a GB VAT number.
+  5. **The "Before you send" note was sent at the bottom.**
+  - **A short correction email was drafted on 18 Nov.**
+  - **Lesson:** when a draft is revised, check the pasted sent copy against the final before marking it sent. Keep notes to James outside the email block.
+- Below is the corrected final, as intended.
 - **Subject:** "Aged debtors and creditors – reconciled Access → load → Sage, and what's needed before Thursday's reload".
 - **Attachment:** SL_PL_signoff_reconciliation_4Nov_FINANCE.xlsx (private: names customers and balances; within SDI and Acuity only; never in git). Tabs: Read me, Summary, Debtors by account, Debtor items, Creditors by account, Customer codes.
 - **What it said:** both walks as above, to the penny; all 5 credit notes and **18 of 20** payments loaded (the other 2, WAT01 £4,469.40 and WRB01 £600, were entered after the extract); creditor gap **almost all** timing; SOG500 / ECO500 / BAL500 are among the 11 FR / ES suppliers missing VAT / SIRET; the sign fix applies **from the next extract**.
