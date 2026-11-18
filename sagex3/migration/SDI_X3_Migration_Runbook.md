@@ -4091,3 +4091,7 @@ The figures were unchanged.
   - **NOT in the zip.** It goes to Ethan separately: James protects it with his own password (7-Zip, AES-256) and gives the password by phone.
 - **James (18 Nov): no password on the bank file; it would only confuse.** It goes to Ethan as a plain attachment, addressed to Ethan only. It's still kept out of the hand-over zip and git, and the source stays in `bank_private/`.
 
+**18 Nov – follow-up SENT to Ethan (James confirmed):** the updated zip (with ZSDIITMSUP, 14,987 pairs) replaces the earlier one. The supplier bank details went as a separate attachment, no password, Ethan only: 658 BACS suppliers; 44 not BACS; 39 BACS with no bank details, which Finance are following up.
+- **Ethan now holds the full set:** customers, delivery addresses, suppliers, products, costs, BOMs, routes, product-supplier links, held addresses, WHAT_CHANGED, estimating IMPORT + Tim, and bank details.
+- **Next:** the pre-load check (`scripts/preload_check.py`) on the hand-over set, before Friday's load.
+
