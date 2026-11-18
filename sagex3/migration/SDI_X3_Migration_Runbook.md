@@ -4095,3 +4095,28 @@ The figures were unchanged.
 - **Ethan now holds the full set:** customers, delivery addresses, suppliers, products, costs, BOMs, routes, product-supplier links, held addresses, WHAT_CHANGED, estimating IMPORT + Tim, and bank details.
 - **Next:** the pre-load check (`scripts/preload_check.py`) on the hand-over set, before Friday's load.
 
+**18 Nov – PRE-LOAD CHECK built and run on the hand-over set: 23 checks, 16 PASS, 0 FIX, 7 NOTE.** `scripts/preload_check.py <hand-over folder> <out.xlsx> [--bank <BPSC .txt>]`; result in `runs/2026-11-18/Preload_check_2026-11-18.xlsx`.
+- **PASS (structural: these would be rejected or load wrong):**
+  - one default address per customer;
+  - ACCCOD is ID / EU / STD; tax rules set;
+  - delivery addresses match customers address for address;
+  - supplier codes unique; every FR supplier has a VAT with the right key and a SIRET that passes Luhn and matches the SIREN; ES VAT format;
+  - bank: every row's supplier is in the supplier file, and BIDNUM = XXXX + 14 digits;
+  - product codes unique; categories valid;
+  - every cost, BOM parent / component, route product and product-supplier link points at a product (and supplier) in the files;
+  - every route work centre is one we map to.
+- **CALIBRATED against Run 4 (lesson: check against what X3 actually rejected, not a stricter idea of it).** The first run flagged 561 records, but the same patterns are on customers and suppliers X3 **loaded** in Run 4. They're now **NOTE\*** (data quality, worth tidying in Access, not a reason to stop):
+  - 349 postcodes not in the country's usual format (306 GB, e.g. "FAO-", "LE5"; 33 DE holding GB postcodes: wrong country?);
+  - 171 GB addresses with no postcode;
+  - 26 default addresses with several emails in one field;
+  - 3 GB supplier postcodes ("LANCS BB5");
+  - 12 US / AU / AE / CA addresses with a region that X3 accepted (EGO100, AE, default address).
+  - **So the six customers' Run 4 failures came from our unapplied fixes**, not regions in general. DRE100 and UNI103 are in the file and may load now.
+- **NOTE (placeholders, 1,172):** 8 mocked FR / ES suppliers + 1,164 products at cost 0. The 3 mocked SIRET site numbers (GAL500, ICE500, BUR500) are on the supplier file's "Supplier ID fixes" tab. Plus the held-addresses file.
+- **Run it on every hand-over from now on.** FIX must be 0 before a set goes to Ethan.
+
+**End of 18 Nov. Next:**
+- **Fri 20 Nov:** load with Ethan (or his test-load feedback); send the Claire and Jim drafts; then the transaction extract after `views_v2.sql` (`add_new_accounts_2026-11-18.sql` already run), with Claire's same-moment aged reports; three-way reconciliation.
+- **Queries for James when convenient:** `supplier_emails.sql` (Claire's list), `check_old_open_orders.sql` (2023 orders), `products_by_supplier_country.sql` (Jim, Friday).
+- **Waiting:** Ethan's 6 answers; Finance decisions; TTI (25 Nov); Neil / Q6–9 (chase 19 Nov).
+
