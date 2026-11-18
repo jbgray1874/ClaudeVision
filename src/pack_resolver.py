@@ -636,6 +636,39 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     for c in live[1:]:
         if better(c, best):
             best = c
+    # THE GA'S PDF FROM ITS OWN ARCHIVE WHEN THE CURRENT FOLDER HOLDS NONE (18 Nov 2026). 12132-01-GA:
+    # 12132-Technical holds the SolidWorks drawing and models, and every PDF of the GA (REV A, REV
+    # B) sits in 12132-Technical\12132-Archive. The archive was never looked at because a current
+    # copy existed, the pack went out with no PDF, and the engine stopped at once: "No drawing files
+    # found". The engine prices from the GA's PDF, so the newest revision in the job's own archive
+    # is used, and said, with the warning that the SolidWorks drawing may be later.
+    extra_ga: List[FileRow] = []
+    if not best["archive"] and not any(f[0].suffix.lower() == ".pdf" for f in best["files"]):
+        _arch = [c for c in cands if c is not best and any(f[0].suffix.lower() == ".pdf" for f in c["files"])
+                 and rank(Path(c["folder"])) == first
+                 and (not _jobm or _in_job(c["folder"], _jobm.group(1)))]
+        if _arch:
+            for c in _arch:
+                if not c["pdf_read"]:
+                    _pdfs = [f for f in c["files"] if f[0].suffix.lower() == ".pdf"]
+                    seen = read_drawing(_newest_revision_pdf(_pdfs)[0], drawing, read_text)
+                    c.update(carries_number=seen["carries_number"], pdf_read=seen["read"],
+                             references=seen["references"],
+                             revision=seen["revision"] or c["revision"],
+                             revision_from="drawing" if seen["revision"] else c["revision_from"])
+            arch = _arch[0]
+            for c in _arch[1:]:
+                if better(c, arch):
+                    arch = c
+            extra_ga = [f for f in arch["files"] if f[0].suffix.lower() == ".pdf"]
+            best = dict(best, carries_number=arch["carries_number"], pdf_read=arch["pdf_read"],
+                        references=arch["references"], revision=arch["revision"],
+                        revision_from=arch["revision_from"])
+            manifest["assumptions"].append(
+                f"{best['folder']} holds no PDF of {drawing}; its PDF is taken from the "
+                f"{'archive ' if arch['archive'] else ''}folder "
+                f"{arch['folder']} (revision {arch['revision'] or '?'}). The SolidWorks drawing in the "
+                f"current folder may be a later revision: check it before this estimate is used")
     for c in live:
         if c is best:
             continue
@@ -663,6 +696,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     area = rank(root)
     near = [f for folder, files, archive in folders if not archive and (folder == root or root in folder.parents)
             for f in files]
+    near += [f for f in extra_ga if f not in near]
     job = re.match(r"\s*(\d{3,})", drawing)
     wider_rows = [f for folder, files, archive in folders
                   if not archive and job and job.group(1) in str(folder) and rank(folder) == area for f in files]
@@ -819,6 +853,28 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             "text and are NOT in the pack: " + ", ".join(Path(u["path"]).name for u in unassigned[:6])
             + ". Say which part each is, or that it is not needed")
 
+    # EVERY DRAWING'S PDF FROM WHEREVER THE JOB KEEPS IT (JG, 18 Nov 2026: "find the latest drawing
+    # sets in all cases. if none exist in the main folder but in any one of the others it extracts
+    # them"). A member, or a drawing the GA calls for, with no PDF in the pack's folders takes its
+    # files from any other folder of the same job in the same area, archives included; its newest
+    # revision is chosen below like any other, and each one taken this way is said.
+    _elsewhere = [f for folder, files, archive in folders
+                  if rank(folder) == area and job and _in_job(str(folder), job.group(1)) for f in files]
+    _taken: List[str] = []
+    for did in sorted(set(groups) | set(refs)):
+        have = groups.get(did, [])
+        if any(f[0].suffix.lower() == ".pdf" for f in have):
+            continue
+        extra = [f for f in _elsewhere if f[0].suffix.lower() in DRAWING_EXT and f not in have
+                 and _same(drawing_id(f[0].name), did)]
+        if any(f[0].suffix.lower() == ".pdf" for f in extra):
+            groups[did] = list(have) + extra
+            _taken.append(did)
+    if _taken:
+        manifest["assumptions"].append(
+            f"{len(_taken)} drawing(s) had no PDF in the pack's folders and were taken from other folders "
+            f"of the job (archives included), newest revision: " + ", ".join(_taken[:10])
+            + ". A later SolidWorks drawing may exist: check before this estimate is used")
     ids = set(groups)
     for did in sorted(ids):
         chosen, rev, superseded, notes = _pick_revision(groups[did])

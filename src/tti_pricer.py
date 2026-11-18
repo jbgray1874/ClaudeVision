@@ -1685,6 +1685,14 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 if _gone:
                     _short = (f"{len(_gone)} file(s) of the pack are not in {kept.get('folder')}: "
                               + ", ".join(_gone[:6]))
+                elif not any(str(x).lower().endswith(".pdf") for x in inputs):
+                    # NO PDF, NO ESTIMATE (18 Nov 2026): the engine builds a job from its PDF
+                    # drawings. 7758B-01 and 12132-01-GA went out with SolidWorks files and flat
+                    # DXFs only and stopped in seconds with "No drawing files found", every time.
+                    _short = (f"the pack in {kept.get('folder')} holds no PDF drawing (only "
+                              + ", ".join(sorted({Path(str(x)).suffix.upper().lstrip('.') or '?' for x in inputs}))
+                              + "); the engine prices from the GA's PDF: Design to save the GA and part "
+                                "drawings as PDF")
                 elif _top:
                     _short = (f"the top-level drawing {_top} is not among the files in "
                               f"{kept.get('folder')} ({kept.get('state')})")
