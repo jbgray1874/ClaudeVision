@@ -3924,3 +3924,25 @@ The figures were unchanged.
   5. load order (customers → delivery addresses → open items / orders) and a sent / loaded / rejected report per file;
   6. was YA004BPSC loaded, and is the `XXXX` prefix accepted.
 
+**18 Nov 11:30 – products, BOMs, routes and costs rebuilt from today's live extracts** (`extract_products.sql`, `extract_routes.sql` as at 11:27; `rebuild/run.py runs/2026-11-18 --previous runs/run4_loaded --loaded <Run 4 ZSDIITM> --previous-costs <Run 4 YITC> --suppliers run5_master BPS --today 20261118`; 59 seconds, every builder's checks passed).
+- `runs/run4_loaded/` holds what Ethan loaded in Run 4: ZSDIITM, ZSDIITMSUP and ZSDIROU2 from `Ethan_fixes_2026-11-05`; YITC and BOM from `Current_mapped_set_2026-11-04-pm`.
+
+| File | Run 4 | 18 Nov | Added | Removed | Changed |
+|---|---|---|---|---|---|
+| ZSDIITM products | 19,883 | 20,124 | 250 | 9 | 85 (descriptions 84, weight 1; **no category changes**) |
+| YITC costs | 19,883 | 20,124 | 250 | 9 | 33 (zero → real cost) |
+| YA00408BOM lines | 32,941 | 33,122 | 317 | 136 | 33 |
+| ZSDIROU2 operations | 33,499 | 33,864 | 482 | 117 | 23 |
+
+- **The 9 removed products** are one-off service codes no longer live in Access (COSHHREPORT, EN101122-FIRE, EN101133-ANNUAL...). They stay in X3; leaving them out doesn't delete them.
+- **Held back, by rule:**
+  - 129 products;
+  - 439 BOM lines (268 on bought-in products, 157 with no quantity in Access, 9 with a component not in the product file, 5 exact repeats);
+  - 318 route operations on bought-in products.
+- 3 routes are still over 150 operations.
+- 1,164 products are costed at zero (158 stocked).
+- **Estimating import re-run** (`est_to_x3.py dave_in/IMPORT.xls ... --products <18 Nov ZSDIITM> --parent IMPORT`): 0 stops, 1 warning (FIXING49 "DONT USE"), BOM 14 lines, route 30 operations. Same as 13 Nov.
+- **Not rebuilt today:** ZSDIITMSUP product-suppliers. It needs `product_suppliers_v4.sql`; it wasn't on Ethan's list.
+- **extract_accounts.sql failed** (Msg 207: an ORDER BY used column aliases inside an expression). Fixed and re-sent; James is re-running it. It will show any customer or supplier opened since 27 Oct.
+- **Hand-over folder:** `scratchpad/Run5_master_data_2026-11-18/`: customers, delivery addresses, suppliers (trial mocks), held addresses, products, costs, BOMs, routes, WHAT_CHANGED, and `estimating_IMPORT/`.
+
