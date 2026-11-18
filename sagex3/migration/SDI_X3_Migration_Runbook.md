@@ -3780,3 +3780,18 @@ It isn't a replacement for Production's sheet now.
    - **Timeline:** the workbook goes out after their answers; changes back by **Fri 4 Dec**, in time for the trial run.
    - **On standby (James, 17 Nov):** build the workbook from the latest rebuilt product / BOM / route / cost files as soon as TTI answer. If they choose (b), add an override step to `rebuild/run.py` that logs every change it applies.
 
+**18 Nov – Ethan: master data (customers, suppliers, products, BOMs, routes) and the estimating sheet to be imported again. Plan: what's rebuilt and what's reused.**
+- **Rule 1 stands: live data, extracted on the day.** Nothing time-sensitive is reused.
+- **Products, BOMs, routes: re-extract and rebuild with the kit** (`rebuild/run.py`). Not reused, even though Run 4 loaded them with 0 errors: parts have been created since 4 Nov (51 works orders had no BOM / route in the 4 Nov set), and the kit makes it automatic.
+- **Customers and suppliers:** there's still no builder over every account (SCRUM-166). **Reuse the Run 4 files** (27 Oct build + 4 Nov fixes), then add:
+  - new accounts since 27 Oct (`extract_accounts.sql` NEWC / NEWS, then `build_new_customers.py` / `build_new_suppliers.py`);
+  - Run 4 / Claire fixes:
+    - the 6 address-rejected customers, once Ethan confirms the country set-up;
+    - ACCCOD in column Q, once Claire settles 4 conflicts + 20 unmatched;
+    - FR / ES VAT / SIRET for the 11 suppliers, once Finance supply them (`fix_suppliers.py`).
+- **Estimating sheet:** re-run `estimating/est_to_x3.py` against **this run's** product file.
+- **Open items, orders, stock, works orders:** a fresh extract after `views_v2.sql` (sign fix, BISY numbers). Never reused.
+- **The 2023 orders test:** `sql/check_old_open_orders.sql` (read-only). It lists every open SO / PO line dated before 2024 from the same views the extract reads, plus a summary by year.
+  - At Run 4: 17 PO lines / 8 POs; 385 SO lines / 115 orders.
+  - Compare with the two review lists: anything gone has been closed.
+
