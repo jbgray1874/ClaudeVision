@@ -4057,3 +4057,26 @@ The figures were unchanged.
   - It goes to Ethan **separately, never in the general zip or in git**: a password-protected file with the password given by phone, or Acuity's secure share.
 - Both go to Ethan as a follow-up to the 18 Nov master-data email.
 
+**18 Nov – GOAL (James): "the BEST, MOST COMPREHENSIVE set of data, even if we fill gaps pending."** How we apply it:
+1. **Every record that trades goes in.** No account, product, BOM, route, link or bank detail is left out for want of data.
+2. **A gap the users must answer is filled with a placeholder that loads**, never left blank to fail. Each placeholder is:
+   - **obvious** (it can't be mistaken for real data, e.g. SIREN `0000000nn`);
+   - **flagged** (a tab in the file and a line in the hand-over email);
+   - **owned** (who at SDI replaces it, by when);
+   - **guarded** (the build refuses it for the dress rehearsal / go-live unless told otherwise).
+3. **A gap only X3's set-up can close** (a region field code, a country's postcode rules) isn't faked. The record is held in its own file, ready to load the moment Ethan fixes it.
+4. **Nothing is dropped silently:** every exclusion has a reason and an owner (the accounts left out on purpose, the held addresses).
+
+**State of the 18 Nov set against this goal:**
+- **Filled with flagged placeholders:**
+  - the 11 FR / ES supplier VAT / SIRET numbers;
+  - 24 + 1 provisional ACCCOD;
+  - 18 expense accounts loaded as suppliers (Finance to confirm);
+  - 1,164 products at cost 0 (158 stocked). 0 is the placeholder; SDI to price.
+- **Held for X3's set-up:** 26 delivery addresses; DRE100 and UNI103 (their only address needs a region).
+- **Being added now:** ZSDIITMSUP (product_suppliers_v4.sql) and YA004BPSC (supplier_bank_details.sql, confidential route).
+- **Still to enrich:**
+  - supplier remittance emails (Claire's list; `supplier_emails.sql`);
+  - customer emails per purpose (statements / invoices / queries): her list's three email columns are empty on all 515 rows, so the source is Access plus Selina's invoice list, and the X3 fields are Ethan's;
+  - 26 of 335 customers have no email on their default address.
+
