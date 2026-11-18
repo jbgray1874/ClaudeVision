@@ -4120,3 +4120,21 @@ The figures were unchanged.
 - **Queries for James when convenient:** `supplier_emails.sql` (Claire's list), `check_old_open_orders.sql` (2023 orders), `products_by_supplier_country.sql` (Jim, Friday).
 - **Waiting:** Ethan's 6 answers; Finance decisions; TTI (25 Nov); Neil / Q6–9 (chase 19 Nov).
 
+**18 Nov (late) – Ethan's reply:** too much is still open with SDI users, so he will **push the imports through himself today, note the issues and relay them in one email**. Missing records go through on Fri 20 Nov.
+- **His goal for go-live: Products, Customers, Suppliers, BOMs, Routes and Supplier Products fully ready, with "no excluded records and no import errors".**
+- He asked for the **Supplier Banks import (YA004BPSC): it has never been tried.** That answers our question: it was not loaded in Run 3 or 4. It was attached to the follow-up; re-send it.
+- **"No excluded records" needs agreeing:** some exclusions are scope by design, some are pending SDI. Counts from the 18 Nov build:
+  - **Scope, out by design (not trading in 24 months, or not a trading account):**
+    - 22,256 dormant products, with their 7,743 BOMs and 7,323 routes;
+    - 4,139 product-supplier links on those products;
+    - intercompany (2) and ledger (5) accounts;
+    - 56 expense accounts with nothing open;
+    - 44 suppliers not paid by BACS (no bank row, as the template asks).
+  - **Pending, must be resolved for go-live:**
+    - **129 products held:** two Access codes become the same X3 code under the code rule (e.g. "BOP METAL0006" and "BOPMETAL0006"). SDI must decide which keeps the code, and give the other one a new code.
+    - 268 BOMs and 318 route operations on products held as bought-in (category decision);
+    - 157 BOM lines with no quantity in Access; 9 BOM components not in the product file; 5 exact repeat lines;
+    - 26 held delivery addresses (X3 country set-up, Ethan);
+    - ISO100 (no address);
+    - 39 BACS suppliers with no bank details (Finance).
+
