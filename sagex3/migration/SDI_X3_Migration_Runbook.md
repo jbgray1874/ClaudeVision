@@ -4080,3 +4080,13 @@ The figures were unchanged.
   - customer emails per purpose (statements / invoices / queries): her list's three email columns are empty on all 515 rows, so the source is Access plus Selina's invoice list, and the X3 fields are Ethan's;
   - 26 of 335 customers have no email on their default address.
 
+**18 Nov – product-supplier links and supplier bank details built.**
+- **ZSDIITMSUP** (`product_suppliers_v4.sql` → `run.py`): **14,987 pairs** (11,024 main, 3,963 alternatives); +260 / −19 against Run 4.
+  - 4,139 held: product not in the product file (products not migrated).
+  - The other files are identical to the morning's build (same extracts), so the rebuild is deterministic.
+  - Added to the hand-over zip with the updated WHAT_CHANGED.
+- **YA004BPSC** (`supplier_bank_details.sql`, 741 suppliers = the supplier file; `build_bpsc.py`, now with `SUPPLIERS` = the run's BPS .txt): **658 loaded** (626 on 3 Nov), 44 not paid by BACS (not loaded), **39 BACS suppliers with no bank details in Access** (on the Check tab, for Finance).
+  - **Bank details are never placeholdered:** a wrong account could receive a payment.
+  - Files: `bank_private/YA004BPSC_bank_details_MAPPED_2026-11-18.xlsx / .txt` (chmod 600). The raw query output was deleted from the uploads folder.
+  - **NOT in the zip.** It goes to Ethan separately: James protects it with his own password (7-Zip, AES-256) and gives the password by phone.
+

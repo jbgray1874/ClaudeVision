@@ -19,6 +19,7 @@ Usage:
     python build_bpsc.py <query output .txt> <output .xlsx>
 """
 import csv
+import os
 import re
 import sys
 from collections import Counter
@@ -27,7 +28,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 BASE = "/tmp/claude-0/-home-user-ClaudeVision/e9ffe9d9-c7dd-5e34-8a16-6cb3c65dadea/scratchpad"
-SUPPLIERS = f"{BASE}/out_sue/YA004BPS_load7_suppliers.txt"   # the final supplier file, 706
+SUPPLIERS = os.environ.get("SUPPLIERS", f"{BASE}/out_sue/YA004BPS_load7_suppliers.txt")   # the run's supplier load file (.txt); 18 Nov: 741
 TEMPLATE = f"{BASE}/tmpl_bpsc/YA004BPSC_guide.xlsx"
 
 
