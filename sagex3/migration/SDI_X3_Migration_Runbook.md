@@ -4051,3 +4051,9 @@ The figures were unchanged.
   - the rebate due-date correction (waits on Nick Garrish);
   - training-site logins (wait on Acuity).
 
+**18 Nov – James: add the product-supplier links (ZSDIITMSUP) and supplier bank details (YA004BPSC) to this set.** Both queries read `migration.XREF_SAGE_BPS`, which now holds 742 suppliers including the 35 new, so they need no change.
+- `sql/product_suppliers_v4.sql` (read-only; grid 2) → `extract/product_suppliers.txt` → `rebuild/run.py ... --suppliers <run5 BPS>` builds ZSDIITMSUP.
+- `sql/supplier_bank_details.sql` (read-only, CONFIDENTIAL) → `scripts/build_bpsc.py` → `bank_private/` only.
+  - It goes to Ethan **separately, never in the general zip or in git**: a password-protected file with the password given by phone, or Acuity's secure share.
+- Both go to Ethan as a follow-up to the 18 Nov master-data email.
+
