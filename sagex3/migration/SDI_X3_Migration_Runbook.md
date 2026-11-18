@@ -3907,4 +3907,20 @@ The figures were unchanged.
     - **Only the SIRET is needed per French supplier:** the VAT number = FR + key + SIREN is calculated. The formula reproduces the 3 VAT numbers we hold.
     - `apply_supplier_ids.py <YA004BPS> Suppliers_SIRET_to_fill.xlsx` checks SIRET / SIREN (Luhn) and VAT key, and loads only valid numbers, logged on "Supplier ID fixes".
   - **Still open with Finance:** BAL500's tax rule (DOM, kept as Access has it); PLS500 (ES supplier with a GB number that fails the check).
+- **DECISION (James, 18 Nov): for SDI source data that's missing, mock data we know will load, for this trial load. Questions about X3's set-up go to Ethan; source data comes from SDI.** Done with `apply_supplier_ids.py --mock`:
+  - **8 suppliers with obviously fake numbers that pass X3's checks:** AMG500, AGE500, GRO500, VUS500, SOG500, BAL500, ECO500 (FR) and PLS500 (ES).
+    - FR: SIREN `0000000nn`, which no real company has, never all zeros; SIRET = SIREN + `0001n`; VAT = FR + key + SIREN.
+    - ES: `ESB0000000n`, a CIF of zeros with its control digit; it replaces the invalid GB number.
+  - **3 with real SIREN / VAT but a mocked 5-digit site number:** GAL500, ICE500, BUR500.
+  - Every mock is marked MOCK on the "Supplier ID fixes" tab. BAL500 keeps tax rule DOM (as Access) until Finance decide.
+  - **GUARD:** without `--mock` the script refuses a file holding any mock, by the `0000000nn` / `ESB000000` patterns or the MOCK lines in the change log. So mocks can't reach the dress rehearsal or go-live.
+  - **Before the dress rehearsal:** the real SIRETs (public register, annuaire-entreprises.data.gouv.fr; only the SIRET is needed per French supplier), then re-run without `--mock`.
+  - **Risk to watch:** if a reload can't update an existing supplier (question to Ethan / Marc), the mocks stay in SDIMIG and the real numbers would need entering by hand.
+- **Questions for Ethan (all X3 set-up, none Access data):**
+  1. the field code for YA004BPC's "County / region" column, and whether region codes are ISO;
+  2. country set-up for the held addresses' countries;
+  3. do ID / EU / STD exist as accounting codes;
+  4. does a reload update existing customers / suppliers;
+  5. load order (customers → delivery addresses → open items / orders) and a sent / loaded / rejected report per file;
+  6. was YA004BPSC loaded, and is the `XXXX` prefix accepted.
 
