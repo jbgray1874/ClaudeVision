@@ -4137,4 +4137,5 @@ The figures were unchanged.
     - 26 held delivery addresses (X3 country set-up, Ethan);
     - ISO100 (no address);
     - 39 BACS suppliers with no bank details (Finance).
+- **Reply SENT to Ethan (James confirmed):** go ahead with today's test loads and one issues email; the supplier banks are on the earlier follow-up (no re-attachment); "no excluded records" agreed for everything that trades, with the scope / pending split above. **Next: Ethan's issues email.** Work it against the pending list. Anything failing outside that list is new.
 
