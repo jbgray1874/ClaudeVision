@@ -24,6 +24,7 @@ Usage:
     python build_new_suppliers.py <details .txt> <out folder>
 """
 import collections
+import os
 import csv
 import re
 import sys
@@ -163,7 +164,9 @@ def main(details, out):
     gap = [l.split("\t") for l in text if l.count("\t") == 10]
     det = {l.split("\t")[1]: l.split("\t") for l in text if l.count("\t") == 19}
     assert len(gap) == len(det), (len(gap), len(det))
-    existing = read(f"{V8}/YA004BPS_load6_suppliers.txt")
+    # the supplier file new codes must not clash with - today's file, not the October one (18 Nov: 5 codes
+    # picked against out_v8 already belonged to other suppliers). EXISTING_BPS = the run's YA004BPS .txt
+    existing = read(os.environ.get("EXISTING_BPS", f"{V8}/YA004BPS_load6_suppliers.txt"))
     used = {r[1] for r in existing}
     order = sorted(gap, key=lambda g: (base(g[1]), -(int(g[7]) + int(g[9])),
                                        -int(max((g[4], g[5], g[6]), key=lambda d: d if d != "NULL" else "").replace("-", "") or 0),

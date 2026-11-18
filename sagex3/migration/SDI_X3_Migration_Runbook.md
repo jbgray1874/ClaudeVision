@@ -3966,3 +3966,27 @@ The figures were unchanged.
   2. merge into the run5 files with today's fixes;
   3. a cross-reference insert for `migration.XREF_*` (our own objects), run before Thursday's transaction extract.
 
+**18 Nov (pm) – the trading accounts with no Sage code are added: 32 customers, 35 suppliers.**
+- **Inputs:** `new_customer_details_live.sql` (new, read-only, live rule; 37 customers, 84 addresses) and `new_supplier_details.sql` (96 suppliers).
+- **Customers:**
+  - `build_customers_to_add.py` gave new codes, checked against today's customer file: e.g. AFB01→ALF100, MUN01→MUN100, TDG03→TOP103, BWS01→BRI101, KOM01→KOM100, ISL04→INN102, LBU02→LMB100.
+  - `build_new_customers.py` built 33 customers / 53 address rows.
+  - **Left out:** ESD01 and FSC01 (ledger accounts), VIV01 and SDI02 (intercompany), and ISO100 / IBS01 (no address in Access, nothing open: it would only be rejected).
+  - ACCCOD from Claire's column T, where she has the account; otherwise provisional (EU for euro accounts, else STD).
+- **Suppliers:** `build_new_suppliers.py` added 35 (every supplier with open items or PO lines, **including 18 employee expense accounts with open claims**, plus trading suppliers). It left out 56 expense accounts with nothing open and 5 non-suppliers.
+  - **Claire to confirm** that expense claims load as suppliers; it's needed for creditors to reconcile 100%.
+- **TWO BUGS CAUGHT BEFORE ANYTHING RAN:**
+  1. **`build_new_suppliers.py` picked codes against the October file (`out_v8`)**, so 5 new codes (CLA501, CON504, STA501, STE502, WIL501) already belonged to other suppliers. `merge_new_accounts.py` refused to add them.
+     - **Fixed:** the builder now takes `EXISTING_BPS` = the run's supplier file. The codes became CLA502, CON505, STA502, STE503 and WIL502.
+     - All 67 new codes were checked against the full cross-reference (extract_accounts XREFC / XREFS): no clash.
+  2. **The builder's generated `sql/xref_new_supplier_accounts.sql` starts with `DELETE FROM migration.XREF_SAGE_BPS WHERE MATCHED_BY = 'new account'`.** Run as is, it would have removed the 83 suppliers added on 27 Oct, and their invoices and orders would drop out.
+     - The 27 Oct file was restored from git (the builder overwrites it on each run: restore it after every run).
+     - **Use `sql/add_new_accounts_2026-11-18.sql` instead:** insert-only (never deletes), skips any account or Sage code already there, explicit transaction and COMMIT, then checks: added 32 / 35; after commit 335 customers / 742 suppliers in the cross-reference.
+- **`merge_new_accounts.py` (new):** appends the rows to the run's customer, delivery-address and supplier files, rewrites the load files, and adds a "New accounts" tab. It refuses a code already in a file.
+- **Result:** YA004BPC 6,195 rows / 335 customers; YA004BPCDL 6,195 (keys match the customer file); YA004BPS 741.
+  - Hand-over folder and zip refreshed. The to-add decision lists stay in `runs/2026-11-18/new_accounts/`, not in Ethan's zip: they name employees.
+- **Order for Thursday:**
+  1. Ethan loads customers → delivery addresses → suppliers.
+  2. James runs `add_new_accounts_2026-11-18.sql` (it changes only our migration tables), then `views_v2.sql`.
+  3. Then the transaction extract: its CHECK "dropped" lines must now show only the accounts left out on purpose.
+
