@@ -126,7 +126,7 @@ LEFT JOIN ord o ON o.code = LTRIM(RTRIM(a.CUCODE)) COLLATE DATABASE_DEFAULT
 WHERE k.code IS NULL AND LTRIM(RTRIM(ISNULL(a.CUCODE, ''))) <> ''
   AND (ISNULL(l.open_items, 0) > 0 OR ISNULL(o.open_lines, 0) > 0
        OR l.last_entry >= DATEADD(month, -24, GETDATE()) OR o.last_order >= DATEADD(month, -24, GETDATE()))
-ORDER BY open_items + open_so_lines DESC, access;
+ORDER BY ISNULL(l.open_items, 0) + ISNULL(o.open_lines, 0) DESC, access;   -- an alias can't be used inside an ORDER BY expression
 
 WITH led AS (
     SELECT LTRIM(RTRIM(PT_COPYSUPP)) COLLATE DATABASE_DEFAULT AS code, MAX(PT_DATE) AS last_entry,
@@ -149,5 +149,5 @@ LEFT JOIN ord o ON o.code = LTRIM(RTRIM(a.SUCODE)) COLLATE DATABASE_DEFAULT
 WHERE k.code IS NULL AND LTRIM(RTRIM(ISNULL(a.SUCODE, ''))) <> ''
   AND (ISNULL(l.open_items, 0) > 0 OR ISNULL(o.open_lines, 0) > 0 OR a.SU_DATE_INV >= DATEADD(month, -24, GETDATE())
        OR l.last_entry >= DATEADD(month, -24, GETDATE()) OR o.last_order >= DATEADD(month, -24, GETDATE()))
-ORDER BY open_items + open_po_lines DESC, access;
+ORDER BY ISNULL(l.open_items, 0) + ISNULL(o.open_lines, 0) DESC, access;   -- an alias can't be used inside an ORDER BY expression
 GO
