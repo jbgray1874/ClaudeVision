@@ -3946,3 +3946,23 @@ The figures were unchanged.
 - **extract_accounts.sql failed** (Msg 207: an ORDER BY used column aliases inside an expression). Fixed and re-sent; James is re-running it. It will show any customer or supplier opened since 27 Oct.
 - **Hand-over folder:** `scratchpad/Run5_master_data_2026-11-18/`: customers, delivery addresses, suppliers (trial mocks), held addresses, products, costs, BOMs, routes, WHAT_CHANGED, and `estimating_IMPORT/`.
 
+**18 Nov 11:31 – `extract_accounts.sql` (fixed) run: 303 customers and 707 suppliers have Sage codes; 37 customers and 96 suppliers that trade in Access have NONE (NEWC / NEWS).**
+- **FOUND: why the 5 late-October invoices weren't in the 4 Nov extract.** AFB01, MUN01, TDG03, BWS01 and KOM01 have **no Sage code** in `migration.XREF_SAGE_BPC`. The views join on it, so their items and orders are dropped.
+  - The transaction extract's CHECK lines ("BICX items dropped - customer has no Sage account") count exactly this. They weren't 0 on 4 Nov and weren't acted on.
+  - **Rule from now:** the CHECK "dropped" lines must be 0, or only the accounts left out on purpose, before any build. `run_transactions.py` should stop otherwise.
+- **New trading accounts with open business (must be added, or their items / orders miss X3):**
+  - **Customers with open items, 7, £97,961.53:** AFB01 (2), BWS01, TDG03, ISL04 (£30,000), KOM01, LBU02, MUN01.
+  - **Customers with open SO lines only, 15:** FWP01, CPG01, GFL02, GUL02, MRO01, TIE16E, CRC01, JMS01, WJS01, CSL03, CTS01, ISG01, OTL01, UAB02, WPI01. Several have only 2023–24 lines: check against the old-orders clean-up.
+  - **Suppliers with open items / PO lines, 14:** GRD01, CIL01, TWW02, UAL01, WGS02, CLL01, DCD01, EMA01 (note "see AUL03": a duplicate?), FBS01, KRD01, PIF01, SCI01 (£16,586.40), SDS05, SJD01.
+- **Left out on purpose (27 Oct rule; still for Finance to confirm):**
+  - intercompany (VIV01, SDI02);
+  - ledger accounts (ESD01, FSC01, HMR01, PET03, LBC04);
+  - no address (IBS01);
+  - "do not use" (ERG01, ZZZ01);
+  - **employee expense accounts.** 18 of them hold open items (~£4.4k, mostly dated 31 Oct). If they stay out, those items are a reconciling difference. Finance to decide.
+- **Trading but nothing open:** BOT04 (part of BOO102) and MAR38 (M&S Ireland) aren't in the cross-reference, along with ~10 others. Add them for completeness when the new accounts go in.
+- **To add them (the 27 Oct route):**
+  1. `new_customer_details.sql` / `new_supplier_details.sql` (read-only) → `build_customers_to_add.py` (new codes) → `build_new_customers.py` / `build_new_suppliers.py`;
+  2. merge into the run5 files with today's fixes;
+  3. a cross-reference insert for `migration.XREF_*` (our own objects), run before Thursday's transaction extract.
+
