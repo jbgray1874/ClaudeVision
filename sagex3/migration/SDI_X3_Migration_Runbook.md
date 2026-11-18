@@ -3804,3 +3804,27 @@ It isn't a replacement for Production's sheet now.
   - At Run 4: 17 PO lines / 8 POs; 385 SO lines / 115 orders.
   - Compare with the two review lists: anything gone has been closed.
 
+**18 Nov – correction email SENT (James confirmed), reply-all on the SL / PL thread** (Claire, Ethan, Marc, Jim; cc Charlotte). It fixed the five errors of the 17 Nov send:
+- 18 of 20 payments loaded;
+- creditor gap "almost all" timing;
+- sign fix from the next extract;
+- 8 suppliers need VAT + SIRET and 3 need SIRET only (plus BAL500's tax rule and PLS500's GB VAT);
+- ignore the "Before you send" note.
+
+The figures were unchanged.
+
+**18 Nov – Claire (10:13): add the suppliers' email addresses from Access to Finance's supplier list. Remittances are bouncing; some addresses are wrong or don't say which company they are. "ASAP".**
+- **Her list:** `Supplier List.xlsx`, sheet "List Data", 1,000 suppliers, column J "Remittance email address" empty (row 2 note: "From address section"). Kept private in `scratchpad/claire_supplier_emails/`, never in git.
+  - The same email chain repeats her **29 Oct requests, still open:**
+    - customer emails into the right Sage fields (4 places; invoices list from Selina; notes for a query address);
+    - supplier bank details;
+    - do the invoice addresses on her lists match the Sage accounts;
+    - copies of all sales invoices / credits and all purchase invoices in ADM.
+- **Where it is in Access:** Supplier → Address/Contact → **"Email (Statements)"** (Claire's screenshot). The column name isn't known, so:
+  - **`sql/supplier_emails.sql` (read-only)** finds every text column with an '@' in every PL_ table keyed by supplier (SUCODE / AD_ACC_CODE). It returns a SUMMARY grid (suppliers per table.column) and an EMAIL grid (supplier, table, column, value).
+  - **`scripts/fill_supplier_emails.py "<Supplier List.xlsx>" supplier_emails.txt out.xlsx`:**
+    - fills J (PL_ACCOUNTS column with MAIL in its name first);
+    - adds "Other emails in Access" (each with its table.column) and an "Email check" column: not valid / several in one field / free mail / doesn't contain the supplier's name / no email in Access.
+    - It changes nothing else. Tested on dummy data.
+- **Bank columns (L, M) are not filled here.** Bank details live only in `bank_private/` (rule), and go to Finance separately if asked.
+
