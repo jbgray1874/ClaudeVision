@@ -1,6 +1,9 @@
 """Fill Finance's supplier list with the email addresses Access holds (Claire, 18 Nov).
 
-    python fill_supplier_emails.py "<Supplier List.xlsx>" <supplier_emails.txt> <out.xlsx> [--bank <bank grid .txt>]
+    python fill_supplier_emails.py "<Supplier List.xlsx>" <supplier_emails.txt> <out.xlsx> [--codes] [--bank <bank grid .txt>]
+
+By default it fills the EMAILS ONLY (what Claire asked for on 18 Nov). --codes also fills the Sage
+and VAT codes, and --bank the bank columns, only when Finance ask for them.
 
 <supplier_emails.txt> is the output of sql/supplier_emails.sql (tab delimited; with or without
 headers; SUMMARY and EMAIL grids in one file is fine - only EMAIL rows are read).
@@ -113,7 +116,7 @@ def checks(addr, raw, name):
     return out
 
 
-def main(list_path, emails_path, out_path, bank_path=None):
+def main(list_path, emails_path, out_path, bank_path=None, codes=False):
     found, sage, tax = read_grids(emails_path)
     bank = read_bank(bank_path) if bank_path else {}
     wb = openpyxl.load_workbook(list_path)
@@ -136,11 +139,11 @@ def main(list_path, emails_path, out_path, bank_path=None):
         if not code:
             continue
         name = str(ws.cell(r, c_name).value or "")
-        if not ws.cell(r, c_sage).value and code in sage:
+        if codes and not ws.cell(r, c_sage).value and code in sage:
             ws.cell(r, c_sage, sage[code])
             n["sage"] += 1
         v = vat_code(tax.get(code, {}))
-        if not ws.cell(r, c_vat).value and v:
+        if codes and not ws.cell(r, c_vat).value and v:
             ws.cell(r, c_vat, v)
             n["vat"] += 1
         if code in bank:
@@ -181,9 +184,12 @@ def main(list_path, emails_path, out_path, bank_path=None):
 
 if __name__ == "__main__":
     a = sys.argv[1:]
+    want_codes = "--codes" in a
+    if want_codes:
+        a.remove("--codes")
     bank_arg = None
     if "--bank" in a:
         i = a.index("--bank")
         bank_arg = a[i + 1]
         del a[i:i + 2]
-    main(*a[:3], bank_path=bank_arg)
+    main(*a[:3], bank_path=bank_arg, codes=want_codes)

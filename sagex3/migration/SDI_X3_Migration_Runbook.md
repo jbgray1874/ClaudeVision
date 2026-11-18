@@ -3835,4 +3835,29 @@ The figures were unchanged.
   - **With --bank, the workbook is confidential:** Finance only, private folder.
   - Re-run `supplier_bank_details.sql` live; the copy in `bank_private/` dates from 28 Oct.
 - **Bank status in X3:** YA004BPSC was built 3 Nov (626 BACS suppliers; 37 on Check; 44 on transfer terms not in the file). Whether Ethan loaded it in Run 3 / 4 isn't recorded. **Ask Ethan.**
+- **CORRECTION (James, 18 Nov): Claire asked only for the email addresses.** Apply only what's asked. `fill_supplier_emails.py` now fills **emails only** by default. `--codes` (Sage / VAT code) and `--bank` stay switched off unless Finance ask. The Sage code, VAT code and bank columns are left as she sent them. The 29 Oct items stay logged as open, not done unasked.
+
+**18 Nov 10:40 – Jim Hildreth (Acuity) answered the product-fields email (SCRUM-330).**
+- **Nominals: no product fields needed.** The stock / sales / COS accounts come from the **accounting code**, which the **product category** sets. The import inherits it; it isn't in the import file.
+
+  | Category | Accounting code | Stock | Sales | CoS |
+  |---|---|---|---|---|
+  | FGML (sold, manufactured) | FG_MANUF | 230100 | 600100 | 700100 |
+  | FGSL (sold, bought in / outsourced) | FG_OUTSRC | 230500 | 600500 | 700500 |
+  | PHANT (sub-assembly) | FG_MANUF | 230100 | 600100 | 700100 |
+  | RAWML (raw materials) | RAWMAT | 230000 | 600400 | 700400 |
+
+- **What this means for the migration: the category now decides where every product posts in the ledger.**
+  - **In-house vs outsourced is already split:** FGML → 600100 / 700100, FGSL → 600500 / 700500.
+  - **The open category questions are now finance questions:**
+    - the 451 FGSL stock-managed products (£1.72m stock) post to 230500;
+    - the 15 products X3 holds as bought-in that Access routes would post as outsourced;
+    - the PHANT group B decision.
+  - **And the import won't change an existing product's category,** so a wrong category means wrong postings until someone changes it by hand.
+  - **Finance (Claire) should confirm these accounts** against the chart of accounts and the year-end opening balances.
+- **Jim's question:** "would the same single product not potentially be shared across those 3 'routes'?" (UK / Poland / China sub-contract).
+  - If a product can come from more than one country, the split belongs on the **purchase** (supplier or order), not the product.
+  - If each product has one route, three FGSL-type categories, each with its own accounting code, would give separate ledger accounts.
+  - **To answer with data:** `sql/products_by_supplier_country.sql` (read-only) shows, for every product bought in the last 24 months, how many supplier countries it came from (SUMMARY), and lists every product bought from more than one (SHARED).
+- **Still unanswered by Acuity:** drawing number / revision / commodity code on the product and the ZSDIITM template; statistical group vs categories.
 
