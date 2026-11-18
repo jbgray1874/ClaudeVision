@@ -3990,3 +3990,17 @@ The figures were unchanged.
   2. James runs `add_new_accounts_2026-11-18.sql` (it changes only our migration tables), then `views_v2.sql`.
   3. Then the transaction extract: its CHECK "dropped" lines must now show only the accounts left out on purpose.
 
+**18 Nov – `add_new_accounts_2026-11-18.sql` RUN by James (earlier than planned; safe, insert-only): ADDED 32 / 35; AFTER COMMIT 335 customers / 742 suppliers in the cross-reference, exactly as expected.** A re-run on Thursday shows 0 / 0. From now on the extracts carry these accounts' items and orders; Ethan must load the new customers and suppliers before the open items.
+
+**18 Nov – Tim's estimate files (MS-0359869, Gift Card Header 12539-04-GA rev B), as sent on 16 Nov, checked against today's data.**
+- **Re-run on today's product file:** byte-for-byte the files James holds (route 9 operations, BOM 8 lines; 0 stops, 0 warnings).
+- **Against the migration's own route and BOM from Access (in today's ZSDIROU2 / YA00408BOM):**
+  - the route is **identical**;
+  - the BOM has the **same 8 components and quantities**, but:
+    - the line order differs (Access 10 = SHEETMETAL11; estimate 10 = UPCSTICKER001);
+    - the estimate's sheet quantities are unrounded (0.015848 vs 0.016);
+    - the estimate leaves the validity dates blank (Access 19900101–20791231).
+- **Rule: don't load both for the same part.** MS-0359869 is already in the migration files. Loading the estimate's BOM on top could pair line numbers with different components if X3 updates by line.
+  - The estimate files prove the converter reproduces Access.
+  - To test the estimating import in X3, use the IMPORT test part (`estimating_IMPORT/` in the hand-over zip), which is new and in nothing else.
+
