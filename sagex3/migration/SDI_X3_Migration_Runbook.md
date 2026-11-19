@@ -4160,4 +4160,6 @@ The figures were unchanged.
   - ISL03 → INN101 (new account, **Innovate Services** Ltd; Sue wrote "Impact Food Group". Cucina's Access name is "Cucina IFG", so check she means ISL03);
   - SSP02 → SSP101 (new account, SSP UK; note SSP100 is also SSP UK).
 - **On the test site:** all except CRC100 were in the customer files loaded in Runs 3 / 4 (only the six address-rejected customers failed). CRC100 arrives with today's load.
+- **Reply SENT to Sue (cc Selina; James confirmed, 19 Nov):** the 7 codes, all on the test site except CRC100 (in this week's load); SSP UK also has SSP100. The name differences weren't raised: Innovate Services is part of Impact Food Group (as "Cucina IFG"), and Hertfordshire Catering is her "Hertfordshire College". The codes come straight from the cross-reference.
+- **Lesson:** when the code lookup is exact, a different trading name isn't a doubt. Only query a user when the code itself doesn't resolve.
 
