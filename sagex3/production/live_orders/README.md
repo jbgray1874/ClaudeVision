@@ -5,6 +5,7 @@ How to re-create the two Live Orders workbooks sent to Acuity on 16 Nov, and how
 | Workbook | Script | What it is |
 |---|---|---|
 | `SDI_Live_Orders_<date>.xlsx` (+ `.html`) | `build_live_orders.py` | **The board:** Production's Live Orders report, built from the data with nothing typed. This is the "example of the target" (attachment 3). |
+| `SDI_Live_Orders_<date>.json` (19 Nov) | `build_live_orders.py` | **The data contract** (schema `sdi.live_orders/1`): the board's data as one file, for `live_orders_dashboard.html`, a portal endpoint and an AI agent. See `INTEGRATION_PLAN.md` |
 | `LiveOrders_reconciliation_and_SageX3_mapping.xlsx` | `reconcile_dave.py` | **The reconciliation:** Production's own sheet compared with Access, column by column, and every column mapped to its Sage X3 template / field (attachment 1). |
 
 Both are **read-only**: they read files and write workbooks. Nothing is written to Access or Sage X3.

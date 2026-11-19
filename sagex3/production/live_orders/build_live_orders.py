@@ -375,7 +375,7 @@ def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, le
     meta["carried"] = sum(1 for w in wos if w["carry"])
     write_xlsx(out / f"{name}.xlsx", meta, wos, wc_cols, wcnames, load, sug, checks, compare)
     write_html(out / f"{name}.html", meta, wos, wc_cols, wcnames, load, sug, compare)
-    return dict(meta=meta, files=[f"{name}.xlsx", f"{name}.html"], compare=compare and compare["summary"], wos=wos, wcnames=wcnames)
+    return dict(meta=meta, files=[f"{name}.xlsx", f"{name}.html", f"{name}.json"], compare=compare and compare["summary"], wos=wos, wcnames=wcnames)
 
 
 def compare_dave(path, wos):
@@ -545,6 +545,11 @@ def write_html(path, meta, wos, wc_cols, wcnames, load, sug, compare):
                 cmp=compare["summary"] if compare else None)
     page = TEMPLATE.replace("__DATA__", json.dumps(data, default=str).replace("</", "<\\/")).replace("__ASAT__", html.escape(meta["as_at"]))
     Path(path).write_text(page, encoding="utf-8")
+    # The same data as a file of its own - the Live Orders data contract (19 Nov): it feeds the dashboard
+    # (live_orders_dashboard.html), a portal endpoint, and later an AI agent, whether the source is the
+    # Access extract today or Sage X3 exports / API tomorrow. Holds customer names: never in git (runs/).
+    data["schema"] = "sdi.live_orders/1"
+    Path(path).with_suffix(".json").write_text(json.dumps(data, default=str), encoding="utf-8")
 
 
 TEMPLATE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

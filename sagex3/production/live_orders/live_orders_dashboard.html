@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live Orders Dashboard</title>
+<!--
+  SDI Live Orders - visual dashboard (19 Nov 2026).
+  Reads the Live Orders data contract (schema "sdi.live_orders/1"): the SDI_Live_Orders_<date>.json that
+  build_live_orders.py writes beside the board. The source can be the Access extract today, Sage X3 exports
+  or the X3 API tomorrow - the dashboard doesn't change.
+  Three ways to give it data:
+    1. open the page and choose / drop the .json file;
+    2. live_orders_dashboard.html?data=<url of the .json>   (e.g. a portal endpoint);
+    3. set window.LIVE_ORDERS_DATA before this script runs (embedding).
+  Self-contained: no external libraries, works offline and inside the SDI portal (one tile / iframe).
+  Read-only: it shows data, it never changes anything.
+-->
+<style>
+:root{--y:#F5D947;--ink:#282928;--t:#1f2321;--muted:#626763;--line:#e3e4e0;--bg:#f4f4f1;--card:#fff;
+  --g:#1e7a3a;--gb:#e3f4e8;--a:#a06400;--ab:#fff1c7;--r:#b42318;--rb:#fde2e1;
+  --m:#3b6ea8;--j:#9a6a2f;--ac:#7a4fa3;--o:#8a8f8b;--grid:#ecedea}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--t:#ececea;--muted:#a3a7a4;--line:#363837;--bg:#141514;--card:#1c1d1c;
+  --g:#7fd39a;--gb:#16301f;--a:#f2c661;--ab:#3a2f12;--r:#ff998d;--rb:#3a1d1b;--m:#7fa9dc;--j:#d4a46a;--ac:#b391d6;--o:#8d928e;--grid:#2a2c2b}}
+:root[data-theme="dark"]{--t:#ececea;--muted:#a3a7a4;--line:#363837;--bg:#141514;--card:#1c1d1c;
+  --g:#7fd39a;--gb:#16301f;--a:#f2c661;--ab:#3a2f12;--r:#ff998d;--rb:#3a1d1b;--m:#7fa9dc;--j:#d4a46a;--ac:#b391d6;--o:#8d928e;--grid:#2a2c2b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--t);font:14px/1.45 'Segoe UI','Helvetica Neue',Arial,sans-serif}
+header{background:var(--ink);color:#fff;border-bottom:6px solid var(--y)}
+.w{max-width:1500px;margin:0 auto;padding:0 16px}
+.hd{padding-top:16px;padding-bottom:12px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}
+.brand{color:var(--y);font-weight:700}h1{margin:2px 0 0;font-size:24px}.sub{color:#cfd1ce;font-size:13px}
+main{padding:16px 0 40px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+.tile b{display:block;font-size:24px;font-variant-numeric:tabular-nums}.tile span{color:var(--muted);font-size:12px}
+.tile.r b{color:var(--r)}.tile.a b{color:var(--a)}.tile.g b{color:var(--g)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr));gap:14px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0}
+.card h2{font-size:15px;margin:0 0 2px}.card p.note{margin:0 0 10px;color:var(--muted);font-size:12px}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-bottom:6px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+svg{display:block;width:100%;height:auto}svg text{fill:var(--muted);font-size:11px}
+.tbl{overflow:auto;max-height:520px}table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:5px 7px;border-top:1px solid var(--line);text-align:left;white-space:nowrap}
+th{position:sticky;top:0;background:var(--ink);color:#fff;font-weight:600;z-index:1}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}td.wrap{white-space:normal;min-width:220px}
+.st{font-weight:700;border-radius:4px;padding:1px 6px;font-size:12px}
+.GREEN{background:var(--gb);color:var(--g)}.AMBER{background:var(--ab);color:var(--a)}.RED{background:var(--rb);color:var(--r)}
+tr.main{cursor:pointer}tr.x td{background:var(--bg);white-space:normal}.muted{color:var(--muted)}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center}
+input,select,button{font:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--t);max-width:100%}
+button{cursor:pointer}
+#drop{border:2px dashed var(--line);border-radius:12px;padding:40px 16px;text-align:center;background:var(--card)}
+#drop.on{border-color:var(--y)}
+.hide{display:none}
+</style>
+</head>
+<body>
+<header><div class="w hd">
+  <div><div class="brand">we.are.sdi</div><h1>Live Orders Dashboard</h1><div class="sub" id="asat">No data loaded</div></div>
+  <div class="bar" style="margin:0"><label class="sub" for="file">Data file</label><input type="file" id="file" accept=".json,application/json"></div>
+</div></header>
+<main class="w">
+  <div id="drop"><b>Choose or drop a Live Orders data file</b><br><span class="muted">SDI_Live_Orders_&lt;date&gt;.json, written by build_live_orders.py beside the board</span></div>
+  <div id="app" class="hide">
+    <div class="tiles" id="tiles"></div>
+    <div class="grid2">
+      <div class="card"><h2>Works orders by due week</h2><p class="note">Material status of each works order still to make, by the week it's due. Overdue orders sit on the left.</p><div class="legend" id="lg1"></div><div id="c1"></div></div>
+      <div class="card"><h2>Hours still to do, by week and shop</h2><p class="note">Route hours on open works orders, by the week each is due (overdue counts in this week). Capacity per work centre comes from Sage X3 later.</p><div class="legend" id="lg2"></div><div id="c2"></div></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><h2>Hours by work centre</h2><p class="note">All open works orders, busiest work centres first.</p><div id="c3"></div></div>
+      <div class="card"><h2>Bought-in material: demand against supply</h2><p class="note">Every purchased component across the open works orders (all BOM levels): total needed against stock, on order and on works orders. Short = needed − stock − on PO − on WO.</p><div class="tbl" id="t2" style="max-height:330px"></div></div>
+    </div>
+    <div class="card">
+      <h2>Works orders</h2><p class="note">Click a row for its exploded BOM. Filter by status, shop or text.</p>
+      <div class="bar">
+        <select id="fst"><option value="">All statuses</option><option>RED</option><option>AMBER</option><option>GREEN</option></select>
+        <select id="ffam"><option value="">All shops</option><option value="M">Metal</option><option value="J">Joinery</option><option value="A">Acrylics</option></select>
+        <input id="fq" placeholder="Search part, WO, SO, description" size="32">
+        <span class="muted" id="count"></span>
+      </div>
+      <div class="tbl" id="t1"></div>
+    </div>
+  </div>
+</main>
+<script>
+const $=s=>document.querySelector(s);
+const esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtN=(v,d=0)=>Number(v||0).toLocaleString('en-GB',{maximumFractionDigits:d,minimumFractionDigits:d});
+const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const FAM={M:['Metal','--m'],J:['Joinery','--j'],A:['Acrylics','--ac'],'':['Other','--o']};
+const ST=[['RED','--r'],['AMBER','--a'],['GREEN','--g']];
+let D=null;
+
+function monday(d){const x=new Date(d+'T00:00:00');const k=(x.getDay()+6)%7;x.setDate(x.getDate()-k);return x.toISOString().slice(0,10)}
+function dd(s){if(!s)return '';const [y,m,d]=s.split('-');return `${d}/${m}/${y.slice(2)}`}
+
+function stackedBars(el,cats,series,opts={}){
+  // cats: labels; series: [{name,color,vals:[]}]
+  const W=640,H=opts.h||230,L=44,B=34,T=8,R=8,iw=W-L-R,ih=H-T-B;
+  const tot=cats.map((_,i)=>series.reduce((a,s)=>a+(s.vals[i]||0),0));const max=Math.max(1,...tot);
+  const step=niceStep(max/4);const top=Math.ceil(max/step)*step;const bw=iw/cats.length;
+  let g='';for(let v=0;v<=top+1e-9;v+=step){const y=T+ih-(v/top)*ih;g+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="${css('--grid')}"/><text x="${L-6}" y="${y+4}" text-anchor="end">${fmtN(v)}</text>`}
+  cats.forEach((c,i)=>{let y=T+ih;series.forEach(s=>{const v=s.vals[i]||0;if(!v)return;const h=v/top*ih;y-=h;
+    g+=`<rect x="${L+i*bw+bw*0.15}" y="${y}" width="${bw*0.7}" height="${h}" fill="${s.color}"><title>${esc(c)} · ${esc(s.name)}: ${fmtN(v,opts.dec||0)}</title></rect>`});
+    const tl=opts.labelEvery&&i%opts.labelEvery?'':esc(c);g+=`<text x="${L+i*bw+bw/2}" y="${H-B+14}" text-anchor="middle">${tl}</text>`;
+    if(tot[i])g+=`<text x="${L+i*bw+bw/2}" y="${T+ih-tot[i]/top*ih-3}" text-anchor="middle">${fmtN(tot[i],opts.dec||0)}</text>`});
+  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.label||'chart')}">${g}</svg>`}
+function niceStep(x){const p=Math.pow(10,Math.floor(Math.log10(Math.max(x,1e-9))));const n=x/p;return (n<=1?1:n<=2?2:n<=5?5:10)*p}
+function hbars(el,rows,color){
+  const W=640,rh=22,L=170,R=60,H=rows.length*rh+8,max=Math.max(1,...rows.map(r=>r[1]));let g='';
+  rows.forEach((r,i)=>{const y=4+i*rh,w=(W-L-R)*r[1]/max;g+=`<text x="${L-8}" y="${y+14}" text-anchor="end">${esc(r[0])}</text>
+    <rect x="${L}" y="${y+3}" width="${Math.max(w,1)}" height="${rh-8}" rx="3" fill="${color}"><title>${esc(r[0])}: ${fmtN(r[1],1)} h</title></rect>
+    <text x="${L+w+6}" y="${y+14}">${fmtN(r[1],0)}</text>`});
+  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="hours by work centre">${g}</svg>`}
+function legend(el,items){el.innerHTML=items.map(([n,c])=>`<span><i style="background:${c}"></i>${esc(n)}</span>`).join('')}
+
+function render(data){
+  if(!data||!Array.isArray(data.wos)){alert('This file is not a Live Orders data file.');return}
+  D=data;const m=D.meta||{};$('#drop').classList.add('hide');$('#app').classList.remove('hide');
+  $('#asat').textContent=`as at ${m.as_at||''} · ${D.wos.length} works orders still to make`;
+  const today=new Date().toISOString().slice(0,10);
+  const tiles=[[fmtN(m.wos??D.wos.length),'works orders to make',''],[fmtN(m.red),'red: short, nothing due in time','r'],
+    [fmtN(m.amber),'amber: covered by PO / WO','a'],[fmtN(m.green),'green: material in stock','g'],
+    [fmtN(m.overdue),'overdue','r'],[fmtN(m.hours),'hours still to do',''],[fmtN(m.suggestions),'WO suggestions',''],
+    [fmtN((m.no_bom||0)+(m.no_route||0)),'no BOM / no route','r']];
+  $('#tiles').innerHTML=tiles.map(t=>`<div class="tile ${t[2]}"><b>${t[0]}</b><span>${t[1]}</span></div>`).join('');
+
+  // chart 1: WOs by due week and status (overdue bucket + this week + 8 weeks + later)
+  const thisMon=monday(today);const weeks=[];for(let i=0;i<9;i++){const d=new Date(thisMon+'T00:00:00');d.setDate(d.getDate()+7*i);weeks.push(d.toISOString().slice(0,10))}
+  const cats=['Overdue',...weeks.map((w,i)=>i?dd(w).slice(0,5):'This wk'),'Later','No date'];
+  const bucket=w=>{if(!w.due)return cats.length-1;if(w.due<today)return 0;const k=monday(w.due);const i=weeks.indexOf(k);return i>=0?i+1:cats.length-2};
+  const s1=ST.map(([s,c])=>({name:s,color:css(c),vals:cats.map(()=>0)}));
+  D.wos.forEach(w=>{const k=ST.findIndex(x=>x[0]===w.st);if(k>=0)s1[k].vals[bucket(w)]++});
+  legend($('#lg1'),ST.map(([s,c])=>[s.charAt(0)+s.slice(1).toLowerCase(),css(c)]));stackedBars($('#c1'),cats,s1,{label:'works orders by due week'});
+
+  // chart 2: hours by week and shop, from the load grid
+  const famOf={};(D.wcs||[]).forEach(c=>famOf[c[0]]=c[2]||'');
+  const lw=(D.load||[]).slice(0,10);const fams=['M','J','A',''];
+  const s2=fams.map(f=>({name:FAM[f][0],color:css(FAM[f][1]),vals:lw.map(([k,v])=>Object.entries(v).reduce((a,[c,h])=>a+((famOf[c]||'')===f?h:0),0))}));
+  legend($('#lg2'),fams.map(f=>[FAM[f][0],css(FAM[f][1])]));stackedBars($('#c2'),lw.map(([k])=>dd(k).slice(0,5)),s2,{dec:0,label:'hours by week'});
+
+  // chart 3: hours by work centre
+  const byWc={};D.wos.forEach(w=>Object.entries(w.h||{}).forEach(([c,h])=>byWc[c]=(byWc[c]||0)+h));
+  const lab=Object.fromEntries((D.wcs||[]).map(c=>[c[0],c[1]||c[0]]));
+  hbars($('#c3'),Object.entries(byWc).sort((a,b)=>b[1]-a[1]).slice(0,14).map(([c,h])=>[lab[c]||c,h]),css('--m'));
+
+  // table 2: bought-in material, demand against supply (x = [level, comp, des, need, stock, on_po, po_due, on_wo, make])
+  const agg={};D.wos.forEach(w=>(w.x||[]).forEach(e=>{if(e[8]!=='Purchased')return;const a=agg[e[1]]||(agg[e[1]]={c:e[1],d:e[2],need:0,stock:e[4],po:e[5],due:e[6],wo:e[7],n:0});a.need+=e[3];a.n++}));
+  const mat=Object.values(agg).map(a=>({...a,short:a.need-a.stock-a.po-a.wo})).sort((a,b)=>b.short-a.short);
+  const shortN=mat.filter(a=>a.short>1e-6).length;
+  $('#t2').innerHTML=`<p class="note" style="margin:0 0 6px">${fmtN(shortN)} of ${fmtN(mat.length)} bought-in components are short across the open works orders.</p><table><tr><th>Component</th><th class="n">Short</th><th class="n">Needed</th><th class="n">Stock</th><th class="n">On PO</th><th>Next PO</th><th class="n">On WO</th><th>Description</th></tr>`+
+    mat.slice(0,150).map(a=>`<tr><td>${esc(a.c)}</td><td class="n">${a.short>1e-6?`<span class="st RED">${fmtN(a.short,2)}</span>`:''}</td><td class="n">${fmtN(a.need,2)}</td><td class="n">${fmtN(a.stock,2)}</td><td class="n">${fmtN(a.po,2)}</td><td>${esc(a.due)}</td><td class="n">${fmtN(a.wo,2)}</td><td class="wrap">${esc(a.d)}</td></tr>`).join('')+'</table>';
+  table()}
+
+function table(){
+  const st=$('#fst').value,fam=$('#ffam').value,q=$('#fq').value.trim().toLowerCase();
+  const rows=D.wos.filter(w=>(!st||w.st===st)&&(!fam||(w.f||[]).includes(fam))&&(!q||[w.p,w.wo,w.so,w.d,w.ac].some(v=>String(v||'').toLowerCase().includes(q))));
+  $('#count').textContent=`${fmtN(rows.length)} of ${fmtN(D.wos.length)}`;
+  $('#t1').innerHTML=`<table><tr><th>Due</th><th>Customer date</th><th>WO</th><th>Part</th><th>Description</th><th>SO</th><th>Status</th><th>Material</th><th class="n">Balance</th><th class="n">Hours</th><th>Shops</th></tr>`+
+    rows.slice(0,800).map(w=>{const hrs=Object.values(w.h||{}).reduce((a,b)=>a+b,0);
+      return `<tr class="main" data-wo="${esc(w.wo)}"><td>${dd(w.due)}</td><td>${/^\d{4}-/.test(w.cd||'')?dd(w.cd):esc(w.cd)}</td><td>${esc(w.wo)}</td><td>${esc(w.p)}</td><td class="wrap">${esc(w.d)}</td><td>${esc(w.so)}</td><td><span class="st ${esc(w.st)}">${esc(w.st)}</span></td><td class="wrap">${esc(w.mt)}</td><td class="n">${fmtN(w.bal,2)}</td><td class="n">${fmtN(hrs,1)}</td><td>${(w.f||[]).map(f=>FAM[f]?FAM[f][0]:f).join(', ')}</td></tr>`}).join('')+'</table>'+
+    (rows.length>800?`<p class="note">Showing the first 800 - filter to narrow it down.</p>`:'');
+  document.querySelectorAll('#t1 tr.main').forEach(t=>t.onclick=()=>{const n=t.nextElementSibling;if(n&&n.classList.contains('x')){n.remove();return}
+    const w=D.wos.find(x=>x.wo===t.dataset.wo);const x=document.createElement('tr');x.className='x';
+    x.innerHTML=`<td colspan="11">${(w.x||[]).length?`<table><tr><th>Level</th><th>Component</th><th>Description</th><th class="n">Required</th><th class="n">In stock</th><th class="n">On PO</th><th>Next PO</th><th class="n">On WO</th><th>Make / buy</th></tr>`+
+      w.x.map(e=>`<tr><td>${'· '.repeat(e[0])}${e[0]}</td><td>${esc(e[1])}</td><td class="wrap">${esc(e[2])}</td><td class="n">${fmtN(e[3],3)}</td><td class="n">${fmtN(e[4],2)}</td><td class="n">${fmtN(e[5],2)}</td><td>${esc(e[6])}</td><td class="n">${fmtN(e[7],2)}</td><td>${esc(e[8])}</td></tr>`).join('')+'</table>':'<span class="muted">No BOM in Sage X3 for this part.</span>'}</td>`;t.after(x)})}
+
+['#fst','#ffam'].forEach(s=>$(s).onchange=table);$('#fq').oninput=table;
+function readFile(f){const r=new FileReader();r.onload=()=>{try{render(JSON.parse(r.result))}catch(e){alert('Could not read that file: '+e.message)}};r.readAsText(f)}
+$('#file').onchange=e=>e.target.files[0]&&readFile(e.target.files[0]);
+const dz=$('#drop');['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('on')}));
+['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,()=>dz.classList.remove('on')));
+dz.addEventListener('drop',e=>{e.preventDefault();e.dataTransfer.files[0]&&readFile(e.dataTransfer.files[0])});
+document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',e=>{e.preventDefault();e.dataTransfer.files[0]&&readFile(e.dataTransfer.files[0])});
+const src=new URLSearchParams(location.search).get('data');
+if(window.LIVE_ORDERS_DATA)render(window.LIVE_ORDERS_DATA);
+else if(src)fetch(src).then(r=>r.json()).then(render).catch(e=>{$('#drop').innerHTML+=`<p class="muted">Couldn't load ${esc(src)}: ${esc(e.message)}</p>`});
+</script>
+</body>
+</html>

@@ -4163,3 +4163,27 @@ The figures were unchanged.
 - **Reply SENT to Sue (cc Selina; James confirmed, 19 Nov):** the 7 codes, all on the test site except CRC100 (in this week's load); SSP UK also has SSP100. The name differences weren't raised: Innovate Services is part of Impact Food Group (as "Cucina IFG"), and Hertfordshire Catering is her "Hertfordshire College". The codes come straight from the cross-reference.
 - **Lesson:** when the code lookup is exact, a different trading name isn't a doubt. Only query a user when the code itself doesn't resolve.
 
+**19 Nov – Live Orders: visual dashboard, data contract and integration plan (James: build the visualisation; automate imports / exports; what X3's UI offers; the SDI portal; an AI layer).** Jira SCRUM-329.
+- **Data contract:** `build_live_orders.py` now also writes `SDI_Live_Orders_<date>.json` (schema `sdi.live_orders/1`), the board's data as one file. No calculation changed. It holds customer names: `runs/` only, never git.
+- **`live_orders_dashboard.html` (new, self-contained, read-only):**
+  - KPIs; works orders by due week × RAG; hours by week × shop (Metal / Joinery / Acrylics); hours by work centre;
+  - bought-in material demand against supply (short = needed − stock − on PO − on WO);
+  - filterable works orders with exploded BOMs.
+  - **Data:** choose / drop the .json, or `?data=<url>`, or `window.LIVE_ORDERS_DATA`.
+  - **Tested** in Chromium on synthetic data: light and dark mode, no errors, phone width fits.
+- **`INTEGRATION_PLAN.md`:**
+  - what the X3 UI allows without development (enquiry exports, Requester, export / import templates as **recurring batch-server tasks**, data dictionary, landing pages; REST / GraphQL / SOAP via a connected app, which needs Acuity);
+  - stages 1–5: Access → X3 manual exports → scheduled exports → API → AI;
+  - the portal (`GET /api/live-orders` + one tile; **built beside the portal, not in its files**, after the 14 Nov estimating break);
+  - the AI layer: daily exceptions briefing, plain-English questions, draft POs / reschedules only via approved imports.
+- **Self-serve list while Marc is silent (James's Super administrator login on the training site):**
+  - read-only enquiries + exports, Requester, data dictionary, templates;
+  - training site only, agreed first: the estimating IMPORT test load after Ethan's load, and checking whether Connected applications is visible (look, don't create);
+  - Acuity only: production / TEST credentials, user fields, webhooks, Safe X3, licence / rate limits.
+- **Email to Matt and Charlotte drafted (19 Nov)** on why SDI needs its own development access:
+  - the Access SupplyChain dependency; the AI strategy; business knowledge over platform knowledge; speed and skill;
+  - Acuity's non-response and the evidence of what we've built (estimating converter, Live Orders);
+  - a proposed split (Acuity own the platform; SDI develop on its own data; TEST first, sign-off, audit);
+  - asks: agreement, pressure on Neil (owner and date this week, TEST by 27 Nov), the contract position.
+  - **James to send. Not yet confirmed.**
+
