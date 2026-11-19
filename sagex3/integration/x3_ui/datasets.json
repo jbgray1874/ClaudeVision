@@ -1,0 +1,35 @@
+{
+  "_about": "Settings for x3_ui.py. 'steps' are captured once per screen with: python x3_ui.py record <FUNCTION> (Playwright's 'Pick locator'). A data set with no steps is skipped. Function codes marked TO CONFIRM: open the screen in X3 and read the code from the page title / address bar. Read-only screens only.",
+  "site": "https://sdi-displays-trn.uk.sagex3.com",
+  "folder": "SDIMIG",
+  "function_url": "/syracuse-main/html/main.html?url=%2Ftrans%2Fx3%2Ferp%2F{folder}%2F%24sessions%3Ff%3D{code}%252F2%252F%252FM%252F%252F",
+  "_function_url_note": "TO CONFIRM on first login: open any function (e.g. Order lines), copy the address bar, and check it matches this pattern with the folder and code in place.",
+  "date_format": "%d/%m/%y",
+  "timeout_ms": 30000,
+  "download_timeout_ms": 300000,
+  "pause_between_s": 3,
+  "datasets": {
+    "so_lines":      {"function": "CONSCSP", "enabled": true,  "what": "Sales order lines (Live Orders: customer dates, WO suggestions)", "steps": []},
+    "po_lines":      {"function": "CONSCPO", "enabled": true,  "what": "Purchase order lines (Live Orders: material on order, due dates)", "steps": []},
+    "works_orders":  {"function": "TO CONFIRM", "enabled": true, "what": "Works orders: header, quantities, dates, status (Manufacturing > Enquiries)", "steps": []},
+    "wo_materials":  {"function": "TO CONFIRM", "enabled": true, "what": "Works-order material lines and allocations", "steps": []},
+    "wo_operations": {"function": "TO CONFIRM", "enabled": true, "what": "Works-order operations: work centre, times, done", "steps": []},
+    "stock":         {"function": "TO CONFIRM", "enabled": true, "what": "Stock on hand, all products (Stock by site needs one product - use Requester or an Exports template)", "steps": []},
+    "stock_moves":   {"function": "CONSSMJ", "enabled": false, "what": "Stock transactions by date (reports REP-10 / 13)", "steps": []},
+    "deliveries":    {"function": "CONSCSF", "enabled": false, "what": "Delivery lines (Delivered not invoiced)", "steps": []},
+    "receipts":      {"function": "CONSCPS", "enabled": false, "what": "Receipt lines (Received not invoiced)", "steps": []},
+    "products":      {"function": "TO CONFIRM (Exports)", "enabled": true, "what": "Products, via Usage > Imports/exports > Exports with the product template, exported to the client", "steps": []},
+    "boms":          {"function": "TO CONFIRM (Exports)", "enabled": true, "what": "BOMs, via Exports with the BOM template", "steps": []},
+    "routes":        {"function": "TO CONFIRM (Exports)", "enabled": true, "what": "Routes, via Exports with the routing template", "steps": []},
+    "customers":     {"function": "TO CONFIRM (Exports)", "enabled": false, "what": "Customers, via Exports (migration checks: compare with what we loaded)", "steps": []},
+    "suppliers":     {"function": "TO CONFIRM (Exports)", "enabled": false, "what": "Suppliers, via Exports (migration checks)", "steps": []}
+  },
+  "_example_steps": [
+    {"fill": "label=Start date", "value": "{today-180}"},
+    {"fill": "label=End date", "value": "{today+180}"},
+    {"uncheck": "label=Closed"},
+    {"click": "text=Search"},
+    {"wait": 3000},
+    {"download": "text=CSV export"}
+  ]
+}

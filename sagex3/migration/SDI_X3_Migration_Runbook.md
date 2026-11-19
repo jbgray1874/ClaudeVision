@@ -4187,3 +4187,23 @@ The figures were unchanged.
   - asks: agreement, pressure on Neil (owner and date this week, TEST by 27 Nov), the contract position.
   - **James to send. Not yet confirmed.**
 
+**19 Nov – X3 UI automation built: `sagex3/integration/x3_ui/` (James: automate filtering and exporting data sets through the X3 web UI, for Live Orders, BOMs, routes etc.).**
+- **Why UI automation:** no API / batch-server access yet (SCRUM-329). Playwright drives the X3 web screens as a user would: open the function, fill the criteria, Search, Export, save the file to a dated folder.
+- **`x3_ui.py`:**
+  - `login`: James signs in once, incl. Sage ID / MFA; the session is saved in his profile, **never git**;
+  - `record <FUNCTION>`: Playwright's inspector, to capture each screen's selectors once;
+  - `export [names]`: runs the data sets, logs to `run_log.json`, takes a screenshot of any failed step and carries on;
+  - `list`.
+- **Read-only:** any step aimed at Save / Create / Delete / Post / Validate is refused; imports are not automated.
+- **`datasets.json`:**
+  - Live Orders: so_lines (CONSCSP), po_lines (CONSCPO), works_orders, wo_materials, wo_operations, stock (codes to confirm);
+  - master data: products, boms, routes, customers, suppliers, via Exports templates exported to the client;
+  - reports (off): CONSSMJ, CONSCSF, CONSCPS.
+  - The X3 address pattern is to confirm on first login.
+- **Tested 19 Nov against a mock screen in Chromium:** fill + relative dates, untick, search, wait, download saved, Save refused. **Not yet run against X3:** X3 isn't reachable from the cloud session, so it runs on James's PC.
+- **Next:**
+  1. James confirms the address pattern, captures so_lines and po_lines, runs them, and sends the files;
+  2. write the X3 source adapter (X3 export layouts → the SOH / POH / SMR / WOR grids `build_live_orders.py` reads), so the board and dashboard run on X3 data;
+  3. switch to the API when Acuity grant it.
+- Can be scheduled daily with Windows Task Scheduler.
+
