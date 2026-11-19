@@ -4151,4 +4151,13 @@ The figures were unchanged.
   - CRC01 → **CRC100** (new 18 Nov; in Ethan's test load today);
   - CRL02 → **CUC100**, ISL03 → **INN101**, SSP02 → **SSP101** (new accounts of 27 Oct, loaded in Run 3 / 4).
 - **HCL01, HCC01, GOO07:** original accounts matched by name, a list not kept in git. `sql/lookup_customer_codes.sql` (read-only) reads them from `migration.XREF_SAGE_BPC`.
+- **Answered from SDILive (`lookup_customer_codes.sql`, 19 Nov; the first run failed with Msg 208 because SSMS was on `master`, so `USE SDILive` was added):**
+  - CRC01 → CRC100 (new account, CRC Industries Europe BV; no ledger entries; in Ethan's load today);
+  - CRL02 → CUC100 (new account, Cucina IFG);
+  - GOO07 → GOO100 (matched by name, Goodfellow & Goodfellow);
+  - HCC01 → HUT100 (name, Hutchison Catering);
+  - HCL01 → HER100 (name, **Hertfordshire Catering** Ltd; Sue wrote "Hertfordshire College");
+  - ISL03 → INN101 (new account, **Innovate Services** Ltd; Sue wrote "Impact Food Group". Cucina's Access name is "Cucina IFG", so check she means ISL03);
+  - SSP02 → SSP101 (new account, SSP UK; note SSP100 is also SSP UK).
+- **On the test site:** all except CRC100 were in the customer files loaded in Runs 3 / 4 (only the six address-rejected customers failed). CRC100 arrives with today's load.
 
