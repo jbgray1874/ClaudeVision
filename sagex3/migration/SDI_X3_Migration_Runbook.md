@@ -4139,3 +4139,16 @@ The figures were unchanged.
     - 39 BACS suppliers with no bank details (Finance).
 - **Reply SENT to Ethan (James confirmed):** go ahead with today's test loads and one issues email; the supplier banks are on the earlier follow-up (no re-attachment); "no excluded records" agreed for everything that trades, with the scope / pending split above. **Next: Ethan's issues email.** Work it against the pending list. Anything failing outside that list is new.
 
+**19 Nov – the session moved to a fresh machine overnight: the scratchpad is EMPTY.**
+- **Lost:** every private working file: the hand-over set and zip, `run5_master/`, `runs/2026-11-18/` (extracts and outputs), `bank_private/`, `ar_ap_signoff/`, `finance_private/`, `drafts/` (the Friday emails to Claire and Jim), Claire's uploads, and the register builder (`register/`, `acuity_register/`).
+- **Safe:**
+  - everything in git (scripts, SQL, this runbook), which rebuilds every file from fresh extracts;
+  - Ethan already holds the hand-over zip and the bank file.
+- **Lesson:** the scratchpad is NOT durable. Private outputs James needs to keep (bank, Finance, drafts) must also be saved on SDI's side when produced. Anything rebuildable needs its inputs (the extract outputs) kept by James.
+
+**19 Nov – Sue Rogers (Customer Services, 18 Nov 16:09): the new Sage codes for 7 Access customers, and are they all on the Sage test site?**
+- **From git:**
+  - CRC01 → **CRC100** (new 18 Nov; in Ethan's test load today);
+  - CRL02 → **CUC100**, ISL03 → **INN101**, SSP02 → **SSP101** (new accounts of 27 Oct, loaded in Run 3 / 4).
+- **HCL01, HCC01, GOO07:** original accounts matched by name, a list not kept in git. `sql/lookup_customer_codes.sql` (read-only) reads them from `migration.XREF_SAGE_BPC`.
+
