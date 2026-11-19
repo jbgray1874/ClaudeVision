@@ -5,6 +5,8 @@
 -- how it was matched, the Access name, and whether the account traded in the last 24 months.
 -- First used 19 Nov for Sue Rogers' list.
 
+USE SDILive;
+GO
 SET NOCOUNT ON;
 
 SELECT k.code                                                AS access_code,
