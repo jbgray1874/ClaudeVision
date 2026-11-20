@@ -3025,8 +3025,16 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
             # neither exists, and then deduplicated rather than added.
             _parent = next(iter(_parents))
             _prow = bom_by_pn.get(_pn_key(_parent))
+            # AN ASSEMBLY THE MODEL'S BOM DOES NOT LIST IS TAKEN AS ONE ONLY WHERE IT IS THE
+            # TOP (20 Nov 2026). 12110-01-GA1, a booth of 7 wall sections: the model listed no
+            # total for the wall section 12110-02-GA, which was taken as 1, so the 7 wall
+            # frames the model counts in the whole booth became 7 PER wall section and were
+            # multiplied by 7 again: 49 frames, 343 frame tubes, 2,058 fixing tubes, 3,088
+            # welds, £112k a unit. An assembly the model shows under another parent is not
+            # the top; its total is unknown, so the model's own edge decides below.
+            _is_root = _pn_key(_parent) in asm_keys and not per_parent_edges.get(_pn_key(_parent))
             _ptotal = (float(_prow.quantity) if _prow is not None and _prow.quantity
-                       else (1.0 if _pn_key(_parent) in asm_keys else None))
+                       else (1.0 if _is_root else None))
             if _ptotal and _ptotal > 0 and abs(_total / _ptotal
                                                - round(_total / _ptotal)) < 1e-9:
                 _q = int(round(_total / _ptotal))

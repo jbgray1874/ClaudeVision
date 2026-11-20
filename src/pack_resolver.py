@@ -875,6 +875,34 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             f"{len(_taken)} drawing(s) had no PDF in the pack's folders and were taken from other folders "
             f"of the job (archives included), newest revision: " + ", ".join(_taken[:10])
             + ". A later SolidWorks drawing may exist: check before this estimate is used")
+    # ONE PRODUCT'S PACK, NOT THE FAMILY'S (20 Nov 2026). 11671-01-GA17 is one of seventeen
+    # products, GA1 to GA17, that share the family 11671-01-. Every drawing of the family went
+    # into GA17's pack, 565 drawings, and the service refused it. Where the family holds other
+    # products' GAs and this GA's own parts list was read, the pack is what this GA's tree
+    # calls for; the rest are listed as left out, never priced.
+    # What THIS GA's tree calls for: its own references, and those of each sub-assembly it
+    # reaches. A sibling product's GA is read too (it is an assembly of the family), so the
+    # family-wide reference set holds its parts; it is not what this GA calls for.
+    _reach: set = set()
+    _todo = [drawing]
+    while _todo:
+        _a = _todo.pop()
+        for _r in refs_of.get(_a, set()):
+            if _r not in _reach:
+                _reach.add(_r)
+                _todo.append(_r)
+    _other_gas = sorted(d for d in groups if not _same(d, drawing) and d not in _reach and _is_assembly(d)
+                        and family_prefix(d) == family_prefix(drawing))
+    if _other_gas and _reach and drawing in read_any:
+        _left_out = sorted(d for d in groups if not _same(d, drawing) and d not in _reach)
+        for d in _left_out:
+            groups.pop(d, None)
+        manifest["left_out_other_products"] = _left_out
+        manifest["assumptions"].append(
+            f"the family holds other products' GAs ({', '.join(_other_gas[:6])}"
+            f"{' ...' if len(_other_gas) > 6 else ''}); the pack is what {drawing} calls for, and "
+            f"{len(_left_out)} drawing(s) it does not call for are left out: "
+            + ", ".join(_left_out[:10]) + (" ..." if len(_left_out) > 10 else ""))
     ids = set(groups)
     for did in sorted(ids):
         chosen, rev, superseded, notes = _pick_revision(groups[did])
