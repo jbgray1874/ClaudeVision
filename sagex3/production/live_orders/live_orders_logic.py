@@ -16,10 +16,11 @@ LIVE = ("Live, not a history report: every Regenerate reads Sage X3 at that mome
 
 LOGIC = [
     ("Which works orders",
-     "Every open works order with something left to make; closed ones are left out even if short-closed. "
-     "Sub-assemblies (WO numbers with /) are their own rows, under their parent.",
+     "Every open, firm works order with something left to make - the same coverage as Access (open status, every "
+     "order type). Closed works orders are left out even if short-closed, and so are planned / suggested ones (Access "
+     "had none). Sub-assemblies (WO numbers with /) are their own rows, under their parent.",
      "Open works orders in Access; Production's sheet listed them by hand.",
-     "Work order product lines (x3Manufacturing.workOrderProductLine), without closed orders / lines.",
+     "Work order product lines (x3Manufacturing.workOrderProductLine): closed, planned and suggested left out.",
      "Part 102 / 102, quantity 102 / 102."),
     ("Balance",
      "Ordered (or amended) quantity minus the good quantity made.",
@@ -45,8 +46,8 @@ LOGIC = [
      "date, or a call-off material (sheet metal, powder, packing, pallets, wire, carriage). RED = short with nothing due "
      "in time, or no BOM.",
      "Typed by Production after checking stock and POs (Access holds no allocations).",
-     "BOM lines (manufacturingBomLine), stock (status A), open PO lines (remaining to receive, expected receipt "
-     "date), works orders.",
+     "BOM lines (manufacturingBomLine), stock (status A), PO lines with quantity still to receive (not closed - as "
+     "Access), expected receipt date, works orders.",
      "Listed beside Production's typed status for every works order (By works order tab); the rule and the call-off "
      "list are to agree with Production (LO-01)."),
     ("Metal / Joinery / Acrylics",
@@ -69,7 +70,8 @@ LOGIC = [
      "Open sales-order lines for made parts (has a BOM or route) not covered by stock or works orders. Suggested start = "
      "due date - 14 days. Red = no BOM or no route. Lines due more than 60 days ago go to Checks for Customer Services.",
      "MRP report for WO suggestions (red = no BOM or route) - tab 2 of Production's sheet.",
-     "Open sales order lines (salesOrderLine; closed lines left out), against works orders and stock.",
+     "Sales order lines with quantity still to deliver (salesOrderLine; closed lines left out - as Access), "
+     "against works orders and stock.",
      "Same layout as Production's tab 2."),
     ("Exploded BOM",
      "Every works order's BOM at every level (up to 8) x balance, against stock, on PO (and the next PO date), on WO, "

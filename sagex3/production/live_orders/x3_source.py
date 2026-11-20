@@ -32,6 +32,13 @@ def norm(s):
 
 
 # ---------------------------------------------------------------- reading the exports
+def _num(v):
+    try:
+        return float(str(v).replace(",", ""))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def read_rows(path):
     p = Path(path)
     if p.suffix.lower() == ".json":
@@ -164,6 +171,8 @@ def convert(rows, spec):
                 rec[field] = v
         if any(str(rec.get(f, "")) not in ok for f, ok in keep.items() if f in rec):
             continue
+        if any(_num(rec.get(f)) <= 0 for f in spec.get("drop_if_not_positive", []) if f in rec):
+            continue                                       # nothing left to deliver / receive (as Access's views)
         out.append(rec)
     return out, used, missing
 

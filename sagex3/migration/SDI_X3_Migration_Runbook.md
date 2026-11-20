@@ -4634,3 +4634,19 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **SDI Mig / test first**; live only after sign-off;
   - create-only, never change an existing product, BOM or route without an explicit "replace" (Acuity B6);
   - a log of every load.
+
+#### 20 Nov (evening) – Same coverage as Access's Live Orders (James: "TO limit to the same coverage as the live orders in Access SupplyChain")
+- **Access's coverage, from the extract SQL** (`extract_transactions.sql`, `views_v2.sql`):
+  - WOR: `WOR_STATUS` blank (open), every order type; the board keeps balance > 0;
+  - vw_SOH_V2: ordered − delivered > 0, status '' / B / H (C = completed left out), part and customer present;
+  - vw_POH_V2: ordered − delivered − rejected > 0;
+  - vw_SMR_V2: every lot with `LOT_PHYSICAL > 0`.
+- **X3 now matches it** (`x3_columns.json` + `x3_source.py`):
+  - works orders: closed **and planned / suggested** dropped (`drop_if` workOrderStatus planned / suggested / 2 / 3, exact match so a "firm…" value is never caught). Access had no planned works orders. This replaces the earlier "planned kept for now";
+  - SO lines: closed dropped, and **open quantity ≤ 0 dropped** (new `drop_if_not_positive`, on the worked-out QTY);
+  - PO lines: closed dropped, and **quantity still to receive ≤ 0 dropped**;
+  - stock: status A only. All migrated stock loads as A, so it's the same at go-live; Q / R stock isn't usable anyway.
+- Tested: 6 WOs (firm pending, firm closed-line, closed, planned, suggested, firm in progress) → 2 kept; 4 SO lines → 2 kept; 3 PO lines → 1 kept. The How it works text is updated to say so.
+- **To confirm on real data:** the X3 workOrderStatus / lineStatus values once WOs are loaded (the filters must catch them). `x3_source.py <folder> --check` shows rows read / kept per data set.
+- **Pull log history:** `x3_api.py` now also appends every pull to `api_log_history.jsonl` in the day's folder. A later pull had overwritten `api_log.json` and lost the routes' skipped-records note. **That count is still to get:** re-pull routes (`x3_api.py pull routes`) or wait for the overnight refresh.
+- **openpyxl was installed only in James's user site-packages** (`AppData\Roaming\Python\Python314`); the service (LocalSystem) can't see that. **Fix:** `C:\Python314\python.exe -s -m pip install openpyxl` as administrator. `-s` ignores the user site, so pip installs into `C:\Python314\Lib\site-packages`.

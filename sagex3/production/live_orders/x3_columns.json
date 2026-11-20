@@ -1,9 +1,10 @@
 {
-  "_note": "X3 data set -> the Live Orders grids (build_live_orders.py). Each grid field lists the column names it may arrive under: X3 field codes (MFGNUM), GraphQL names (workOrderNumber, or line.product.code after flattening) and screen labels (Work order). Matching ignores case, spaces and punctuation; the first match wins. 'minus' takes another column off (ordered - delivered = still open). 'const' fixes a value. PROVISIONAL until the first real exports from the training site: run  python x3_source.py <folder> --check  and correct any field it can't find. Written 20 Nov 2026. 20 Nov: so_lines / po_lines mapped to the real X3 GraphQL names (x3Sales.salesOrderLine, x3Purchasing.purchaseOrderLine) from a trial pull on training. 'net' = a column that is already the open quantity (used alone, no minus). 'drop_if' = raw X3 columns that exclude a row (closed lines). 'drop_if_contains' = the same, when the value contains the word (closed works orders and SO lines: X3 includes them, Access's extract never did - 20 Nov). 20 Nov: works orders read from x3Manufacturing.workOrderProductLine (wo_products: product, quantities, dates, sales order, customer in one row) - used instead of works_orders when both exist; stock from x3StockData.stock. Names from 'x3_api.py columns' (the training schema).",
+  "_note": "X3 data set -> the Live Orders grids (build_live_orders.py). Each grid field lists the column names it may arrive under: X3 field codes (MFGNUM), GraphQL names (workOrderNumber, or line.product.code after flattening) and screen labels (Work order). Matching ignores case, spaces and punctuation; the first match wins. 'minus' takes another column off (ordered - delivered = still open). 'const' fixes a value. PROVISIONAL until the first real exports from the training site: run  python x3_source.py <folder> --check  and correct any field it can't find. Written 20 Nov 2026. 20 Nov: so_lines / po_lines mapped to the real X3 GraphQL names (x3Sales.salesOrderLine, x3Purchasing.purchaseOrderLine) from a trial pull on training. 'net' = a column that is already the open quantity (used alone, no minus). 'drop_if' = raw X3 columns that exclude a row (closed lines). 'drop_if_contains' = the same, when the value contains the word (closed works orders and SO lines: X3 includes them, Access's extract never did - 20 Nov). 'drop_if_not_positive' = drop a row whose worked-out field is 0 or less (SO / PO lines with nothing left to deliver / receive). Planned / suggested works orders dropped too. Together: the same coverage as Access's extract (WOR_STATUS blank; vw_SOH_V2 / vw_POH_V2 open quantity > 0) - James, 20 Nov. 20 Nov: works orders read from x3Manufacturing.workOrderProductLine (wo_products: product, quantities, dates, sales order, customer in one row) - used instead of works_orders when both exist; stock from x3StockData.stock. Names from 'x3_api.py columns' (the training schema).",
   "wo_products": {
     "grid": "WOR",
     "instead_of": "works_orders",
     "drop_if_contains": {"lineStatus": ["closed"], "workOrderStatus": ["closed"]},
+    "drop_if": {"workOrderStatus": ["planned", "suggested", "2", "3"]},
     "fields": {
       "works_order": [
         "workOrder.number"
@@ -162,6 +163,7 @@
   "so_lines": {
     "grid": "SOH",
     "drop_if_contains": {"lineStatus": ["closed"]},
+    "drop_if_not_positive": ["QTY"],
     "fields": {
       "SALFCY": [
         "salesSite.code",
@@ -428,6 +430,7 @@
         "Currency"
       ]
     },
+    "drop_if_not_positive": ["QTYUOM"],
     "drop_if": {
       "isClosed": [
         "true",

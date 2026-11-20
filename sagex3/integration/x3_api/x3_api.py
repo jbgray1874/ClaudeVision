@@ -685,7 +685,10 @@ def pull(a):
             log.append(dict(name=n, ok=False, error=err[:400]))
             print(f"{n}: FAILED - {err[:400]}", flush=True)
     day.mkdir(parents=True, exist_ok=True)           # even when every data set failed (20 Nov)
-    (day / "api_log.json").write_text(json.dumps(dict(at=dt.datetime.now().isoformat(timespec="seconds"), runs=log), indent=1))
+    entry = dict(at=dt.datetime.now().isoformat(timespec="seconds"), runs=log)
+    (day / "api_log.json").write_text(json.dumps(entry, indent=1))   # this pull (run_x3 reads it)
+    with open(day / "api_log_history.jsonl", "a", encoding="utf-8") as f:   # every pull of the day, kept (20 Nov:
+        f.write(json.dumps(entry) + "\n")                                # a later pull overwrote the routes note)
     print(f"Files in {day}")
     return 0 if all(l["ok"] for l in log) else 1
 
