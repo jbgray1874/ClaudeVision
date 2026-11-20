@@ -451,7 +451,7 @@ def test_a_restart_names_another_service_on_this_machine_running_other_code():
     after = after[:after.index("\n} catch {")]
     assert "foreach ($other in @(8071, 8072, 8073))" in after
     assert 'Invoke-WebRequest "http://localhost:$other/api/health"' in after
-    assert "$otherCommit -ne $head" in after and "ALSO SERVING" in after
+    assert "-not (Test-SameCommit $otherCommit $head)" in after and "ALSO SERVING" in after
 
 
 # ── a brief that cannot be saved is not queued (D-607a) ──────────────────────────────────

@@ -83,6 +83,19 @@ if (-not $Root) {
 # push-to-server.ps1 runs on the laptop, WHICH HAS GIT, and leaves the sha in .sdi-commit
 # beside the code it copied. So the answer travels with the deploy instead of being
 # recomputed somewhere it cannot be.
+# ONE COMMIT, TWO SPELLINGS (20 Nov 2026). The service reports its commit in 7 characters;
+# git on the laptop gave 8 (c384dc8 / c384dc80), because git lengthens a short hash that 7 do
+# not make unique. Compared whole, the restarted 8071 read as "STILL STALE" and the release
+# stopped before the runners were updated. Same commit when one is the start of the other, as
+# check-services.ps1 already compares them.
+function Test-SameCommit([string]$a, [string]$b) {
+    $a = "$a".Trim().ToLower(); $b = "$b".Trim().ToLower()
+    if (-not $a -or -not $b -or $a -eq "unknown" -or $b -eq "unknown") { return $false }
+    $n = [Math]::Min($a.Length, $b.Length)
+    if ($n -lt 7) { return $false }
+    return $a.Substring(0, $n) -eq $b.Substring(0, $n)
+}
+
 function Get-HeadCommit([string]$RepoRoot) {
     $exe = (Get-Command git -ErrorAction SilentlyContinue).Source
     if (-not $exe) {
@@ -392,7 +405,7 @@ while ((Get-Date) -lt $deadline) {
 try {
     $health = Invoke-RestMethod "http://localhost:$Port/api/health" -TimeoutSec 20
     $serving = "$($health.commit)".Trim()
-    if ($head -and $serving -and $serving -ne "unknown" -and $serving -ne $head) {
+    if ($head -and $serving -and $serving -ne "unknown" -and -not (Test-SameCommit $serving $head)) {
         Write-Host ""
         Write-Host "  STILL STALE: serving $serving, this checkout is at $head." -ForegroundColor Red
         Write-Host "  What holds $Port now, and what started it:" -ForegroundColor Yellow
@@ -401,7 +414,7 @@ try {
         exit 1
     }
     Write-Host ""
-    Write-Host "  serving commit $serving$(if ($head -and $serving -eq $head) { ' - matches this checkout' })" -ForegroundColor Green
+    Write-Host "  serving commit $serving$(if ($head -and (Test-SameCommit $serving $head)) { ' - matches this checkout' })" -ForegroundColor Green
     Write-Host "  http://localhost:$Port/estimating" -ForegroundColor Green
     # -- ANOTHER SERVICE ON THIS MACHINE, ON OTHER CODE (D-607) -------------------------
     #
@@ -429,7 +442,7 @@ try {
         if (-not $otherCommit -or $otherCommit -eq "unknown") {
             Write-Host ("  note: {0} is also listening here; it {1} and did not say which commit it runs." -f $other, $otherState) -ForegroundColor Yellow
             Write-Host ("    find it:  " + ($whatIsOn -f $other)) -ForegroundColor Yellow
-        } elseif ($head -and $otherCommit -ne $head) {
+        } elseif ($head -and -not (Test-SameCommit $otherCommit $head)) {
             Write-Host ""
             Write-Host ("  ALSO SERVING: {0} is on {1}, not this checkout's {2}." -f $other, $otherCommit, $head) -ForegroundColor Red
             Write-Host ("  A page opened on {0}, or a runner reporting to it, still gets that code." -f $other) -ForegroundColor Red
@@ -450,10 +463,10 @@ try {
         } catch { }
         if ($aliveCommit -and $aliveCommit -ne "unknown") {
             Write-Host ""
-            Write-Host ("  RUNNING on {0}, serving commit {1}{2}, but /api/health gave no reply in 20 s." -f $Port, $aliveCommit, $(if ($head -and $aliveCommit -eq $head) { ' - matches this checkout' } else { '' })) -ForegroundColor Yellow
+            Write-Host ("  RUNNING on {0}, serving commit {1}{2}, but /api/health gave no reply in 20 s." -f $Port, $aliveCommit, $(if ($head -and (Test-SameCommit $aliveCommit $head)) { ' - matches this checkout' } else { '' })) -ForegroundColor Yellow
             Write-Host "  Health asks the database and the shares: one of them is not answering (VPN, SQL server or file share)." -ForegroundColor Yellow
             Write-Host "  Do not start a run until /api/health answers again." -ForegroundColor Yellow
-            if ($head -and $aliveCommit -eq $head) { exit 0 }
+            if ($head -and (Test-SameCommit $aliveCommit $head)) { exit 0 }
             exit 1
         }
         Write-Host ""
@@ -471,7 +484,7 @@ try {
                 $h2 = Invoke-RestMethod "http://localhost:$other/api/health" -TimeoutSec 15
                 $c2 = "$($h2.commit)".Trim()
                 $tag = ""
-                if ($head -and $c2 -eq $head) { $tag = " - the code on disk" }
+                if ($head -and (Test-SameCommit $c2 $head)) { $tag = " - the code on disk" }
                 Write-Host ("  The service IS answering on {0}, serving {1}{2}." -f $other, $c2, $tag) -ForegroundColor Green
                 Write-Host ("  Use http://localhost:{0}/estimating now." -f $other) -ForegroundColor Green
                 # WHO RUNS IT, NAMED: the listener, the starter that launched it, and whatever
