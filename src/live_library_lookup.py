@@ -16,13 +16,24 @@ class LiveLibraryLookup:
         self.evidence = []
         self._rows = {}
         self._selected = {}
+        self._walked = {}
 
-    def _scan(self, root, job):
+    # ONE BOUNDED WALK PER AREA, NOT ONE PER DRAWING (20 Nov 2026). GA17 calls for four drawings
+    # of four other jobs; each was a fresh walk of every non-job folder of the whole Design area,
+    # to 16 levels, over the VPN. Now each area's containers are walked once per batch, to
+    # CONTAINER_DEPTH levels of non-job folders, noting every numbered job folder and every loose
+    # drawing file on the way; a drawing then lists only its own job's folders.
+    CONTAINER_DEPTH = int(os.getenv('SDI_PACK_LIBRARY_DEPTH') or 3)
+
+    def _containers(self, root):
         import pack_resolver as pr
-        files = []
-        stack = [(root, False, 0)]
+        key = str(root)
+        if key in self._walked:
+            return self._walked[key]
+        jobs, loose = [], []
+        stack = [(Path(root), 0)]
         while stack:
-            folder, in_job, depth = stack.pop()
+            folder, depth = stack.pop()
             try:
                 with os.scandir(folder) as entries:
                     for entry in entries:
@@ -32,19 +43,31 @@ class LiveLibraryLookup:
                         if entry.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction()):
                             raise pr.PackCheckStalled(f'library search cannot verify linked path: {path}')
                         if entry.is_dir(follow_symlinks=False):
-                            numbered = re.match(r'\d{3,}', entry.name)
-                            own = bool(re.match(rf'{re.escape(job)}(?!\d)', entry.name))
-                            if in_job or own or not numbered:
-                                if depth >= 16:
-                                    raise pr.PackCheckStalled(f'library search depth exceeded: {path}')
-                                stack.append((path, in_job or own, depth + 1))
+                            if re.match(r'\d{3,}', entry.name):
+                                jobs.append(path)
+                            elif depth + 1 <= self.CONTAINER_DEPTH:
+                                stack.append((path, depth + 1))
                         elif entry.is_file(follow_symlinks=False) and path.suffix.lower() in pr.DRAWING_EXT:
-                            # Metadata only for this job's drawings, not every library file.
-                            if pr.job_number(pr.drawing_id(entry.name)) == job:
-                                stat = entry.stat(follow_symlinks=False)
-                                files.append((path, stat.st_size, stat.st_mtime))
+                            stat = entry.stat(follow_symlinks=False)
+                            loose.append((path, stat.st_size, stat.st_mtime))
             except OSError as exc:
                 raise pr.PackCheckStalled(f'library area could not be read ({folder}: {type(exc).__name__})') from exc
+        self._walked[key] = (jobs, loose)
+        return jobs, loose
+
+    def _scan(self, root, job):
+        import pack_resolver as pr
+        jobs, loose = pr._within(f'live library search: the folders of {root}',
+                                 lambda: self._containers(root), pr.folder_seconds() * 3)
+        files = [f for f in loose if pr.job_number(pr.drawing_id(f[0].name)) == job]
+        for folder in jobs:
+            if not re.match(rf'{re.escape(job)}(?!\d)', folder.name):
+                continue
+            for sub, rows, archive in pr._within(f'live library search: listing {folder}',
+                                                 lambda f=folder: pr.rows_now(f)):
+                if archive and not self.include_archives:
+                    continue
+                files.extend(rows)
         return files
 
     def __call__(self, drawing):
@@ -58,8 +81,7 @@ class LiveLibraryLookup:
         for label, root in self.areas:
             cache_key = (str(root), job)
             if cache_key not in self._rows:
-                self._rows[cache_key] = pr._within(
-                    f'live library search {label}: {drawing}', lambda: self._scan(root, job))
+                self._rows[cache_key] = self._scan(root, job)
             rows = self._rows[cache_key]
             hits = [f for f in rows if pr._same(pr.drawing_id(f[0].name), drawing)]
             sheet_ids = pr.sheets_of(drawing, [pr.drawing_id(f[0].name) for f in rows])

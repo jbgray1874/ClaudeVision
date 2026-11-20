@@ -117,3 +117,31 @@ def test_tti_direct_entrypoint_supplies_live_callback(tmp_path, monkeypatch):
     tp.pack_for('11671-01-GA17', [], 'TTI')
     assert isinstance(captured['lookup'], LiveLibraryLookup)
     assert [label for label, _ in captured['lookup'].areas] == ['Design', 'Prototype']
+
+
+def test_one_walk_of_each_area_serves_every_outside_drawing(tmp_path, monkeypatch):
+    """20 Nov 2026: GA17's four outside drawings were four full walks of the Design area over the
+    VPN. Each area is now walked once; each drawing then lists only its own job's folders."""
+    d, p = tmp_path / 'Design', tmp_path / 'Prototype'
+    p.mkdir()
+    put(d, 'Client A/1264 Tag/1264-GA.pdf')
+    put(d, 'Client B/1338 Hook/1338-GA.pdf')
+    put(d, 'Shared library/3512-GA-A.pdf')
+    lookup = LiveLibraryLookup([('Design', d), ('Prototype', p)])
+    walks = []
+    real = lookup._containers
+    monkeypatch.setattr(lookup, '_containers', lambda root: (walks.append(str(root)), real(root))[1])
+    for did in ('1264-GA', '1338-GA', '3512-GA-A'):
+        assert lookup(did), did
+    assert walks.count(str(d)) == 3 and len(lookup._walked) == 1, \
+        "the area's folders were walked again for each drawing"
+
+
+def test_the_walk_stops_at_the_container_depth(tmp_path):
+    """A loose file buried deeper than the container depth is not reached: the search is bounded,
+    and a miss there is said, not taken as proof of absence."""
+    d, p = tmp_path / 'Design', tmp_path / 'Prototype'
+    p.mkdir()
+    put(d, 'a/b/c/d/e/1264-GA.pdf')
+    lookup = LiveLibraryLookup([('Design', d), ('Prototype', p)])
+    assert lookup('1264-GA') == []

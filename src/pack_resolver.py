@@ -986,8 +986,14 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             f"{len(_left_out)} drawing(s) it does not call for are left out: "
             + ", ".join(_left_out[:10]) + (" ..." if len(_left_out) > 10 else ""))
     ids = set(groups)
+    # A DRAWING THAT IS A PAGE OF A PDF IN THE PACK IS IN THE PACK (20 Nov 2026). 12110-02-02M has
+    # no file of its own: its sheet is a page of the wall-panel PDF, which is in the pack and is
+    # read page by page. It was recognised, then still counted missing ("called for, minus files
+    # found") and left out of this list, so the pack's record and its e-mail said it was absent.
+    _ids_u = {str(d).upper() for d in ids}
     manifest["embedded_drawing_pages"] = {a: e["holder"] for a, e in embedded.items()
-                                          if a in ids and e["holder"] in ids}
+                                          if str(e["holder"]).upper() in _ids_u}
+    _in_pages = {a.upper() for a in manifest["embedded_drawing_pages"]}
     for did in sorted(ids):
         chosen, rev, superseded, notes = _pick_revision(groups[did])
         manifest["members"].append({
@@ -1005,7 +1011,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     # (JG, 10 Nov 2026): 12736-01-04X, "EU INTERNAL DOOR ... SDI TO SOURCE", is bought, by SDI's
     # X suffix, and needs a catalogue match, not a drawing. Only a missing MADE part leaves the
     # pack incomplete.
-    _gone = sorted(refs - ids)
+    _gone = sorted(x for x in refs - ids if str(x).upper() not in _in_pages)
     try:
         import part_code_conventions as _pcc
         _bought = [x for x in _gone if _pcc.purchased_suffix(x) or _pcc.is_supplier_article(x)]
