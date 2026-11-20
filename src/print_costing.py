@@ -279,6 +279,16 @@ def _own_catalogue_price(estimate: Any) -> str:
     # board the print goes on.
     if _f(mat.get("sheet_price_gbp")) or str(mat.get("cost_method") or "").startswith("sheet_rate"):
         return ""
+    # NOR IS A RATE BY WEIGHT OR AREA (12133-02-05G, 20 Nov 2026). SDI Live's MDF row is £1.35
+    # a KILO; it was taken for the printed graphic's own catalogue price, the calculator's
+    # £20.49 was declined, and the line then reached the sheet at £0. A rate per kg, m2, metre
+    # or sheet prices the board; only a price for the piece is the part's own.
+    _units = {str(src.get(k) or "").upper() for k in ("unit", "applied_basis")}
+    _units |= {str(((src.get("selected") or {}) if isinstance(src.get("selected"), dict)
+                    else {}).get("unit") or "").upper()}
+    if any(u and any(w in u for w in ("PER_KG", "PER_M2", "PER_SQM", "PER_M", "PER_SHEET",
+                                      "PER_METRE", "PER_TONNE")) for u in _units):
+        return ""
     if _f(mat.get("unit_material_cost_gbp")) and str(src.get("source_class") or "") == "catalogue":
         return str(src.get("source_note") or src.get("source_name") or "a catalogue row")
     return ""

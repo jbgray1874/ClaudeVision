@@ -294,3 +294,22 @@ def test_the_tube_block_lists_the_lines_priced_from_the_tube_sheet_and_only_thos
     assert "Tube calculator — 1 line priced" in t and "T-200-01" in t and "STOCK1" in t
     assert "2.500 m" in t and "£5.20" in t and "T-200-02" not in t
     assert ee.part_calculator_lines({"estimate_summary": {"part_estimates": [other]}}) == []
+
+
+def test_a_board_rate_by_the_kilo_is_not_the_printed_parts_own_price(tmp_path):
+    """20 Nov 2026, 12133-02-05G: a header graphic stated "PRINTED, FULL". SDI Live's board rate
+    (£1.35 a kilo) was taken for the part's own catalogue price, the calculator was declined, and
+    the line still reached the sheet at £0. A rate by weight or area prices the board, not the
+    printed piece. The contrast: a catalogue price for the piece is still the part's own."""
+    by_kg = {"unit_material_cost_gbp": 2.10,
+             "price_source": {"source_class": "catalogue", "source_name": "sqlserver",
+                              "unit": "GBP_per_kg", "applied_basis": "GBP_per_kg"}}
+    out = pc.settle(_part(), _estimate(material_estimate=dict(by_kg)), 10, _cost, _stub,
+                    read=_book(tmp_path))
+    assert out["print_calculator"]["applied"] is True, out["print_calculator"].get("why_not")
+    each = {"unit_material_cost_gbp": 7.74,
+            "price_source": {"source_class": "catalogue", "source_note": "its own row",
+                             "unit": "GBP_each"}}
+    est = _estimate(material_estimate=dict(each))
+    out = pc.settle(_part(), est, 10, _cost, _stub, read=_book(tmp_path))
+    assert out is est and out["print_calculator"]["applied"] is False

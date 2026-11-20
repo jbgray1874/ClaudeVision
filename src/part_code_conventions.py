@@ -474,5 +474,12 @@ def alias_targets(identity: str) -> List[str]:
     if not base or base.upper() == text.upper():
         return []
     if mirror:
-        return [f"{base} MIR", f"{base} MIRROR", f"{base}MIR", f"{base} MIRRORED", base]
+        # AND THE DRAWING'S HANDED LINE (12133, 20 Nov 2026). The model's "Mirror12133-02-01X"
+        # (x6 inside the LED assembly) is the strip 12133-00-GA lists as "12133-02-01X -
+        # HANDED". With no handed spelling offered it matched nothing, and the mirror became a
+        # third LED line at 18 beside the base and the handed one. A hand word names the other
+        # hand, as MIR does; the bare base stays the last resort.
+        return [f"{base} MIR", f"{base} MIRROR", f"{base}MIR", f"{base} MIRRORED",
+                f"{base}-HANDED", f"{base} HANDED", f"{base}-H", f"{base}-OPP",
+                f"{base}-OPPOSITE", base]
     return [base]

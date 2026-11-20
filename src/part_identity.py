@@ -1322,7 +1322,8 @@ def fold_one_cell_duplicates(parts: Any) -> List[Tuple[str, str]]:
 #   * the digit is not in the item number (the last run of digits), so M6 never answers for M7;
 #   * the two descriptions share a word of substance;
 #   * another code in the pack carries one of the two spellings at that digit — the
-#     difference sits in the drawing number the siblings share;
+#     difference sits in the drawing number the siblings share — and none carries the other:
+#     where both spellings have families of their own, they are two real parts (12133);
 #   * exactly one candidate answers.
 _PLAIN_WORDS = frozenset({"THE", "AND", "FOR", "WITH", "OFF", "QTY", "REV", "ITEM", "PART",
                           "ASSY", "ASSEMBLY", "SEE", "DRG", "DWG", "SHEET", "MILD", "STEEL"})
@@ -1368,8 +1369,15 @@ def corroborated_near_code(code: Any, description: Any, candidates: Dict[str, An
         if i is None or not describe_alike(description, cand_desc):
             continue
         have = normalize_part_code(cand)
-        if any(c and c not in (want, have) and c[:i + 1] in (want[:i + 1], have[:i + 1])
-               for c in ctx):
+        others = [c for c in ctx if c and c not in (want, have)]
+        carry_want = any(c[:i + 1] == want[:i + 1] for c in others)
+        carry_have = any(c[:i + 1] == have[:i + 1] for c in others)
+        # TWO FAMILIES ARE NOT A MISPRINT (12133, 20 Nov 2026). 12133-05-101 and 12133-06-101
+        # differ in the sub-assembly number, and the pack carries BOTH families (05-01M..,
+        # 06-01M..); the model lists them apart, at 6 and 3. Joined as one digit apart, one
+        # sub-assembly took the other's facts. The digit is a misprint only where the pack's
+        # other codes carry ONE of the two spellings, as 0358141's siblings did (D-749).
+        if carry_want != carry_have:
             hits.append(cand)
     return hits[0] if len(hits) == 1 else None
 
