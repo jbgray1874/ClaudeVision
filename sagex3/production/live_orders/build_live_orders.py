@@ -99,6 +99,17 @@ def read_extract(path):
 
 
 def read_products(path):
+    if Path(path).suffix.lower() in (".csv", ".json"):      # an X3 products export (x3_ui / x3_api), 20 Nov
+        from x3_source import column_for, read_rows
+        rows = read_rows(path)
+        cols = list(dict.fromkeys(k for r in rows[:200] for k in r))
+        c = {k: column_for(cols, n) for k, n in dict(
+            ITMREF=["ITMREF", "code", "product.code", "Product"], TCLCOD=["TCLCOD", "productCategory.code", "productCategory", "Category"],
+            ITMDES1=["ITMDES1", "description1", "description", "Description"], ITMDES2=["ITMDES2", "description2"],
+            ITMDES3=["ITMDES3", "description3"]).items()}
+        g = lambda r, k: str(r.get(c[k]) or "").strip() if c[k] else ""
+        return {g(r, "ITMREF"): dict(cat=g(r, "TCLCOD"), des=g(r, "ITMDES1"), des2=g(r, "ITMDES2"), des3=g(r, "ITMDES3"))
+                for r in rows if g(r, "ITMREF")}
     ws = load_workbook(path, read_only=True)["Data with Headings"]
     rows = ws.iter_rows(values_only=True)
     h = next(r for r in rows if r and "ITMREF" in r)

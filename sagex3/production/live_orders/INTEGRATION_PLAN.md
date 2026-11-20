@@ -71,6 +71,17 @@ All of these read from the data contract; none needs write access to X3:
 
 **Why it has to be in-house:** the agent's value is SDI's know-how (what Production look at on a Monday, how an estimate becomes a job), applied to SDI's data. That needs direct, governed data access, which is the access we've asked Acuity for.
 
+## 5a. Built 20 Nov (without waiting for Acuity)
+
+| Piece | File |
+|---|---|
+| Read-only API client: connected application, finds the URL / token form on the site, pulls data sets | `sagex3/integration/x3_api/x3_api.py` (README there) |
+| X3 data → the engine's extract | `x3_source.py` + `x3_columns.json` (column map provisional until the first real pull) |
+| One command, schedulable | `run_x3.py` → `SDI_X3_runs\latest.json` + `status.json` |
+| Portal | `sdi-intelligence-backend/live_orders_routes.py` (`/api/live-orders/latest`, `/status`, `/dashboard`) |
+
+Tested against a mock X3. Next: the connected application on the training site, then `probe`.
+
 ## 6. Next steps
 
 1. **On James's PC, today:** re-run the board on the latest extract. It now also writes the `.json`. Open it in `live_orders_dashboard.html` and check it against Production's view.

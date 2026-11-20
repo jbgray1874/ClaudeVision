@@ -1,0 +1,403 @@
+"""Read-only Sage X3 API client: GraphQL (Sage X3 Services) and REST (Syracuse $query). Written 20 Nov 2026.
+
+It reads the data sets Live Orders needs straight from X3, with no browser and no Sage ID check. It
+authenticates as a **connected application**: X3 Administration -> Authentication -> Connected
+applications gives a client ID and a secret, and each request carries a short-lived token (a JWT
+signed with that secret).
+
+    python x3_api.py setup             # asks for the site, client ID, secret, user, endpoint; saves them privately
+    python x3_api.py probe             # tries the URL / token forms and saves the one X3 accepts
+    python x3_api.py schema            # lists what the GraphQL API offers (works orders, stock, orders ...)
+    python x3_api.py draft             # writes api_datasets.draft.json from the schema
+    python x3_api.py pull [names]      # pulls the data sets in api_datasets.json to the exports folder
+    python x3_api.py rest ITMMASTER ITMMASTER --count 5          # one REST query
+    python x3_api.py query my.graphql                            # one GraphQL query
+
+**Read-only by design:** GraphQL mutations are refused, REST is GET only, and nothing here writes to X3.
+Give the connected application's user an X3 profile with enquiry rights only, so X3 enforces it too.
+
+**Private:** the settings file (%USERPROFILE%\\.sdi\\x3_api.json) holds the secret. Never in git or email.
+The secret is never printed or logged.
+
+Sage's documentation (developer.sage.com) could not be read from where this was written, so the exact
+URL and token form are found by `probe` on the site itself, not assumed. Confirmed in public sources:
+client ID + secret (shown once), a JWT signed with the secret (iss = client ID, iat / exp within the
+connected application's token validity), sent as a Bearer token with an x-xtrem-endpoint header.
+"""
+import argparse
+import base64
+import csv
+import datetime as dt
+import getpass
+import hashlib
+import hmac
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).parent
+CONF = Path(os.environ.get("X3_API_CONFIG", Path.home() / ".sdi" / "x3_api.json"))
+DATASETS = HERE / "api_datasets.json"
+EXPORTS = Path(os.environ.get("X3_EXPORT_DIR", Path.home() / "SDI_X3_exports"))
+GRAPHQL_PATHS = ["/xtrem/api", "/api", "/xtrem/graphql", "/graphql"]
+MUTATION = re.compile(r"(^|[}\s])mutation\b\s*\w*\s*[({]", re.I)
+PAUSE = 0.5                                       # seconds between pages: keep it gentle
+
+
+# ---------------------------------------------------------------- settings
+def load_conf():
+    if not CONF.exists():
+        sys.exit(f"No settings yet: run  python x3_api.py setup   (they go in {CONF})")
+    return json.loads(CONF.read_text())
+
+
+def save_conf(c):
+    CONF.parent.mkdir(parents=True, exist_ok=True)
+    CONF.write_text(json.dumps(c, indent=2))
+    try:
+        os.chmod(CONF, 0o600)
+    except OSError:
+        pass
+
+
+def setup(_):
+    c = json.loads(CONF.read_text()) if CONF.exists() else {}
+    ask = lambda k, q, d="": input(f"{q} [{c.get(k, d)}]: ").strip() or c.get(k, d)
+    c["site"] = ask("site", "Site address", "https://sdi-displays-trn.uk.sagex3.com").rstrip("/")
+    c["folder"] = ask("folder", "X3 folder", "SDIMIG")
+    c["endpoint"] = ask("endpoint", "Endpoint name (Administration -> Endpoints, the one for that folder)", c["folder"])
+    c["client_id"] = ask("client_id", "Connected application client ID")
+    c["user"] = ask("user", "X3 user the connected application runs as (its login)")
+    s = getpass.getpass("Connected application secret (typing is hidden; Enter keeps the saved one): ").strip()
+    if s:
+        c["secret"] = s
+    c["token_seconds"] = int(ask("token_seconds", "Token lifetime in seconds (<= the app's token validity)", 300))
+    save_conf(c)
+    print(f"Saved to {CONF} - private: never in git or email. Next: python x3_api.py probe")
+
+
+# ---------------------------------------------------------------- token
+def _b64(b):
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def make_jwt(c, aud=None):
+    """HS256 JWT signed with the connected application's secret (no third-party library needed)."""
+    now = int(time.time())
+    claims = {"iss": c["client_id"], "sub": c["user"], "iat": now - 30, "exp": now + int(c.get("token_seconds", 300))}
+    aud = c.get("aud", "endpoint") if aud is None else aud
+    if aud == "endpoint":
+        claims["aud"] = c["endpoint"]
+    elif aud == "url":
+        claims["aud"] = c["site"] + c.get("graphql_path", GRAPHQL_PATHS[0])
+    elif aud:
+        claims["aud"] = aud
+    head = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    body = _b64(json.dumps(claims, separators=(",", ":")).encode())
+    sig = hmac.new(c["secret"].encode(), f"{head}.{body}".encode(), hashlib.sha256).digest()
+    return f"{head}.{body}.{_b64(sig)}"
+
+
+def headers(c, aud=None, endpoint_header=True):
+    h = {"Authorization": "Bearer " + make_jwt(c, aud), "Accept": "application/json",
+         "Content-Type": "application/json", "User-Agent": "sdi-x3-readonly/1"}
+    if endpoint_header and c.get("endpoint"):
+        h["x-xtrem-endpoint"] = c["endpoint"]
+    return h
+
+
+def http(method, url, hdrs, body=None, timeout=60):
+    if method != "POST" and method != "GET":
+        raise ValueError("read-only client: GET / POST (GraphQL queries) only")
+    req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None,
+                                 headers=hdrs, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError) as e:
+        return 0, str(e)
+
+
+# ---------------------------------------------------------------- GraphQL
+def gql(c, query, variables=None):
+    if MUTATION.search(query):
+        raise SystemExit("Refused: this client is read-only (no GraphQL mutations).")
+    url = c["site"] + c.get("graphql_path", GRAPHQL_PATHS[0])
+    code, text = http("POST", url, headers(c, endpoint_header=c.get("endpoint_header", True)),
+                      {"query": query, "variables": variables or {}})
+    try:
+        out = json.loads(text)
+    except ValueError:
+        raise SystemExit(f"GraphQL {code}: not JSON - {text[:300]}")
+    if code != 200 or out.get("errors"):
+        raise SystemExit(f"GraphQL {code}: {json.dumps(out.get('errors') or out)[:600]}")
+    return out["data"]
+
+
+def probe(_):
+    """Try each URL / audience / header form with a harmless query; save the first one X3 accepts."""
+    c = load_conf()
+    tried, found = [], None
+    forms = [(p, a, e) for p in ([c["graphql_path"]] if c.get("graphql_path") else []) + GRAPHQL_PATHS
+             for a in ("endpoint", "url", "") for e in (True, False)]
+    for path, aud, eh in dict.fromkeys(forms):
+        cc = dict(c, graphql_path=path)
+        code, text = http("POST", c["site"] + path, headers(cc, aud, eh), {"query": "{ __typename }"})
+        tried.append((path, aud or "none", "x-xtrem-endpoint" if eh else "-", code, text[:160].replace("\n", " ")))
+        if code == 200 and '"data"' in text and '"errors"' not in text:
+            found = (path, aud, eh)
+            break
+    if found:
+        c.update(graphql_path=found[0], aud=found[1], endpoint_header=found[2])
+        save_conf(c)
+        print(f"GraphQL OK: {c['site']}{found[0]}  (aud={found[1] or 'none'}, "
+              f"endpoint header={'yes' if found[2] else 'no'}) - saved")
+    else:
+        print("GraphQL: no form accepted. What X3 said (send this to Claude; it holds no secret):")
+        for t in tried:
+            print("  ", *t)
+    # REST, with the same token
+    url = f"{c['site']}/api1/x3/erp/{c['folder']}/ITMMASTER?representation=ITMMASTER.$query&count=1"
+    code, text = http("GET", url, headers(c, endpoint_header=False))
+    print(f"REST {code}: {'OK' if code == 200 else text[:200]}")
+    if code == 200:
+        c["rest_ok"] = True
+        save_conf(c)
+
+
+INTROSPECT = """{ __schema { queryType { name } types { name kind fields { name
+  type { name kind ofType { name kind ofType { name kind ofType { name kind } } } } } } } }"""
+
+
+def _base(t):
+    while t.get("ofType"):
+        t = t["ofType"]
+    return t
+
+
+def load_schema(c, refresh=False):
+    f = CONF.parent / "x3_schema.json"
+    if refresh or not f.exists():
+        f.write_text(json.dumps(gql(c, INTROSPECT)))
+    s = json.loads(f.read_text())["__schema"]
+    return s["queryType"]["name"], {t["name"]: t for t in s["types"]}
+
+
+def schema(a):
+    c = load_conf()
+    root, types = load_schema(c, refresh=True)
+    words = [w.lower() for w in (a.words or ["work", "manuf", "mfg", "stock", "salesorder", "purchaseorder",
+                                             "product", "item", "billofmaterial", "bom", "routing", "operation"])]
+    print(f"Schema saved ({len(types)} types). Data reachable from the root:")
+    for top in types[root]["fields"] or []:
+        tt = types.get(_base(top["type"])["name"], {})
+        for f in tt.get("fields") or []:
+            hit = any(w in f["name"].lower() for w in words)
+            print(f"  {'*' if hit else ' '} {top['name']}.{f['name']}")
+    print("* = matches", ", ".join(words))
+
+
+# ---------------------------------------------------------------- draft data sets from the schema
+SCALAR = {"SCALAR", "ENUM"}
+
+
+def selection(types, tname, depth, seen=()):
+    """Scalars of a type; object references one level deeper (their scalars only); connections skipped."""
+    out = []
+    for f in types.get(tname, {}).get("fields") or []:
+        b = _base(f["type"])
+        if b["kind"] in SCALAR:
+            out.append(f["name"])
+        elif b["kind"] == "OBJECT" and depth > 0 and b["name"] not in seen and not _is_conn(types, b["name"]):
+            sub = [x for x in selection(types, b["name"], 0, seen + (tname,)) if "{" not in x][:6]
+            if sub:
+                out.append(f"{f['name']} {{ {' '.join(sub)} }}")
+    return out
+
+
+def _is_conn(types, tname):
+    fs = {f["name"] for f in types.get(tname, {}).get("fields") or []}
+    return "query" in fs or "edges" in fs
+
+
+def draft(a):
+    c = load_conf()
+    root, types = load_schema(c)
+    want = {"works_orders": ["workorder"], "wo_materials": ["workordermaterial", "materialrequirement"],
+            "wo_operations": ["workorderoperation", "operationtracking"], "stock": ["stock"],
+            "so_lines": ["salesorder"], "po_lines": ["purchaseorder"], "products": ["product", "item"],
+            "boms": ["billofmaterial", "bom"], "routes": ["routing"]}
+    found = {}
+    for top in types[root]["fields"] or []:
+        tt = types.get(_base(top["type"])["name"], {})
+        for f in tt.get("fields") or []:
+            for name, keys in want.items():
+                if name not in found and any(f["name"].lower() == k or f["name"].lower().startswith(k) for k in keys):
+                    node_t = _node_type(types, _base(f["type"])["name"])
+                    if node_t:
+                        lines = _first_lines(types, node_t)
+                        line_t = _node_type(types, _base(next(x["type"] for x in types[node_t]["fields"]
+                                                              if x["name"] == lines))["name"]) if lines else None
+                        found[name] = {"path": [top["name"], f["name"]], "fields": " ".join(selection(types, node_t, 1)),
+                                       "filter": "", "explode": lines,
+                                       "line_fields": " ".join(selection(types, line_t, 1)) if line_t else "",
+                                       "enabled": False}
+    out = HERE / "api_datasets.draft.json"
+    out.write_text(json.dumps(found, indent=2))
+    print(f"Wrote {out}: {', '.join(found) or 'nothing matched'}. Check each, set enabled, save as api_datasets.json.")
+
+
+def _node_type(types, conn_t):
+    """X3 node -> query(...) -> edges -> node: return the node's type name."""
+    t = types.get(conn_t, {})
+    for f in t.get("fields") or []:
+        if f["name"] == "query":
+            return _node_type(types, _base(f["type"])["name"])
+        if f["name"] == "edges":
+            edge = types.get(_base(f["type"])["name"], {})
+            return next((_base(x["type"])["name"] for x in edge.get("fields") or [] if x["name"] == "node"), None)
+    return conn_t if t.get("fields") else None
+
+
+def _first_lines(types, node_t):
+    for f in types.get(node_t, {}).get("fields") or []:
+        if f["name"].lower() in ("lines", "orderlines", "detail", "details") and _is_conn(types, _base(f["type"])["name"]):
+            return f["name"]
+    return ""
+
+
+# ---------------------------------------------------------------- pull
+def flatten(d, pre=""):
+    out = {}
+    for k, v in (d or {}).items():
+        key = f"{pre}{k}"
+        if isinstance(v, dict) and "edges" not in v and "query" not in v:
+            out.update(flatten(v, key + "."))
+        elif not isinstance(v, (dict, list)):
+            out[key] = v
+    return out
+
+
+def _edges(v):
+    if isinstance(v, dict) and "query" in v:
+        v = v["query"]
+    return [e["node"] for e in (v or {}).get("edges", [])]
+
+
+def pull_graphql(c, ds, page=200):
+    path, fields, flt, explode = ds["path"], ds["fields"], ds.get("filter", ""), ds.get("explode", "")
+    sel = fields + (f" {explode} {{ query(first: 500) {{ edges {{ node {{ {ds.get('line_fields', '')} }} }} }} }}"
+                    if explode and ds.get("line_fields") else "")
+    args = f"first: {page}, after: $after" + (f", filter: {json.dumps(flt)}" if flt else "")
+    q = ("query($after: String) { " + " { ".join(path) + f" {{ query({args}) {{ edges {{ node {{ {sel} }} }} "
+         "pageInfo { endCursor hasNextPage } } " + "}" * len(path) + " }")
+    rows, after = [], None
+    while True:
+        data = gql(c, q, {"after": after})
+        for p in path:
+            data = data[p]
+        conn = data["query"]
+        for node in (e["node"] for e in conn["edges"]):
+            head = flatten(node)
+            lines = _edges(node.get(explode)) if explode else []
+            rows += [dict(head, **{f"{explode}.{k}": v for k, v in flatten(l).items()}) for l in lines] or [head]
+        if not conn["pageInfo"]["hasNextPage"]:
+            return rows
+        after = conn["pageInfo"]["endCursor"]
+        time.sleep(PAUSE)
+
+
+def pull_rest(c, ds):
+    url = (f"{c['site']}/api1/x3/erp/{c['folder']}/{ds['class']}?representation={ds['representation']}.$query"
+           f"&count={ds.get('count', 200)}" + (f"&where={urllib.parse.quote(ds['where'])}" if ds.get("where") else ""))
+    rows = []
+    while url:
+        code, text = http("GET", url, headers(c, endpoint_header=False))
+        if code != 200:
+            raise SystemExit(f"REST {code}: {text[:300]}")
+        out = json.loads(text)
+        rows += [flatten(r) for r in out.get("$resources", [])]
+        url = ((out.get("$links") or {}).get("$next") or {}).get("$url")
+        time.sleep(PAUSE)
+    return rows
+
+
+def write_rows(rows, path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.with_suffix(".json").write_text(json.dumps(rows, indent=1, default=str))
+    keys = list(dict.fromkeys(k for r in rows for k in r))
+    with open(path.with_suffix(".csv"), "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, keys)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def pull(a):
+    c = load_conf()
+    if not DATASETS.exists():
+        sys.exit("No api_datasets.json yet: run  python x3_api.py draft , check it, save it as api_datasets.json")
+    sets = json.loads(DATASETS.read_text())
+    names = a.names or [n for n, d in sets.items() if not n.startswith("_") and d.get("enabled")]
+    day = EXPORTS / dt.date.today().isoformat()
+    log = []
+    for n in names:
+        ds = sets[n]
+        t0 = time.time()
+        try:
+            rows = pull_rest(c, ds) if ds.get("class") else pull_graphql(c, ds)
+            write_rows(rows, day / n)
+            log.append(dict(name=n, ok=True, rows=len(rows), seconds=round(time.time() - t0, 1)))
+            print(f"{n}: {len(rows)} rows")
+        except SystemExit as e:
+            log.append(dict(name=n, ok=False, error=str(e)[:400]))
+            print(f"{n}: FAILED - {e}")
+    (day / "api_log.json").write_text(json.dumps(dict(at=dt.datetime.now().isoformat(timespec="seconds"), runs=log), indent=1))
+    print(f"Files in {day}")
+    return 0 if all(l["ok"] for l in log) else 1
+
+
+def rest_cmd(a):
+    c = load_conf()
+    rows = pull_rest(c, {"class": a.cls, "representation": a.rep, "count": a.count, "where": a.where})
+    print(json.dumps(rows[: a.count], indent=1, default=str))
+
+
+def query_cmd(a):
+    print(json.dumps(gql(load_conf(), Path(a.file).read_text()), indent=1, default=str))
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Read-only Sage X3 API client")
+    sp = ap.add_subparsers(dest="cmd", required=True)
+    sp.add_parser("setup").set_defaults(fn=setup)
+    sp.add_parser("probe").set_defaults(fn=probe)
+    s = sp.add_parser("schema")
+    s.add_argument("words", nargs="*")
+    s.set_defaults(fn=schema)
+    sp.add_parser("draft").set_defaults(fn=draft)
+    p = sp.add_parser("pull")
+    p.add_argument("names", nargs="*")
+    p.set_defaults(fn=pull)
+    r = sp.add_parser("rest")
+    r.add_argument("cls")
+    r.add_argument("rep")
+    r.add_argument("--count", type=int, default=20)
+    r.add_argument("--where", default="")
+    r.set_defaults(fn=rest_cmd)
+    q = sp.add_parser("query")
+    q.add_argument("file")
+    q.set_defaults(fn=query_cmd)
+    a = ap.parse_args(argv)
+    return a.fn(a) or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

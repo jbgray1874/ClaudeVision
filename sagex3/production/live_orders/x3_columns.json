@@ -1,0 +1,77 @@
+{
+  "_note": "X3 data set -> the Live Orders grids (build_live_orders.py). Each grid field lists the column names it may arrive under: X3 field codes (MFGNUM), GraphQL names (workOrderNumber, or line.product.code after flattening) and screen labels (Work order). Matching ignores case, spaces and punctuation; the first match wins. 'minus' takes another column off (ordered - delivered = still open). 'const' fixes a value. PROVISIONAL until the first real exports from the training site: run  python x3_source.py <folder> --check  and correct any field it can't find. Written 20 Nov 2026.",
+  "works_orders": {
+    "grid": "WOR",
+    "fields": {
+      "works_order": ["MFGNUM", "workOrderNumber", "workOrder", "number", "Work order", "WO number", "Order no."],
+      "parent_order": ["MFGNUMORI", "parentWorkOrder", "Parent order"],
+      "product": ["ITMREF", "product.code", "product", "releasedProduct.code", "Product", "Item"],
+      "rev": ["ECCVALMAJ", "majorVersion", "Major version", "Version"],
+      "sales_order": ["VCRNUMORI", "originDocument", "sourceDocument", "Original document", "Origin document", "Sales order"],
+      "customer": ["BPCNUM", "BPCORD", "customer.code", "customer", "Customer"],
+      "order_type": ["MFGTRKFLG", "MFGSTA", "status", "Status", "Order status"],
+      "orig_qty": ["EXTQTY", "plannedQuantity", "releasedQuantity", "Planned quantity", "Planned qty", "Quantity"],
+      "amd_qty": ["EXTQTY", "plannedQuantity", "releasedQuantity", "Planned quantity", "Planned qty", "Quantity"],
+      "good_qty": ["CPLQTY", "completedQuantity", "Completed quantity", "Completed qty", "Actual quantity"],
+      "rejected_qty": ["REJCPLQTY", "rejectedQuantity", "Rejected quantity"],
+      "created": ["CREDAT", "creationDate", "Creation date", "Created"],
+      "first_date": ["STRDAT", "startDate", "Start date"],
+      "scheduled": ["ENDDAT", "endDate", "Due date", "End date"],
+      "mat_stat": ["MFGALLSTA", "allocationStatus", "Allocation status"]
+    }
+  },
+  "so_lines": {
+    "grid": "SOH",
+    "fields": {
+      "SALFCY": ["SALFCY", "salesSite.code", "salesSite", "Sales site"],
+      "SOHNUM": ["SOHNUM", "salesOrder.id", "salesOrder", "orderNumber", "id", "Order", "Order no.", "Sales order"],
+      "order_no": ["SOHNUM", "salesOrder.id", "salesOrder", "orderNumber", "id", "Order", "Order no.", "Sales order"],
+      "BPCORD": ["BPCORD", "soldToCustomer.code", "soldToCustomer", "customer.code", "Customer", "Sold-to customer", "Sold-to"],
+      "ORDDAT": ["ORDDAT", "orderDate", "Order date"],
+      "DEMDLVDAT": ["DEMDLVDAT", "lines.requestedDeliveryDate", "requestedDeliveryDate", "Requested delivery date", "Requested date", "Delivery date"],
+      "CUSORDREF": ["CUSORDREF", "customerOrderReference", "Customer order ref", "Customer reference"],
+      "STOFCY": ["STOFCY", "lines.shippingSite.code", "shippingSite.code", "Shipping site"],
+      "SOPLIN": ["SOPLIN", "lines.lineNumber", "lineNumber", "Line", "Line no."],
+      "ITMREF": ["ITMREF", "lines.product.code", "product.code", "Product", "Item"],
+      "ITMDES": ["ITMDES", "lines.productDescription", "productDescription", "Description", "Product description"],
+      "SAU": ["SAU", "lines.salesUnit.code", "salesUnit.code", "Sales unit", "Unit"],
+      "QTY": {"from": ["QTY", "lines.quantityInSalesUnitOrdered", "lines.quantity", "quantity", "Ordered quantity", "Quantity ordered", "Quantity"],
+              "minus": ["DLVQTY", "lines.quantityInSalesUnitDelivered", "deliveredQuantity", "Delivered quantity", "Quantity delivered"]},
+      "GROPRI": ["GROPRI", "lines.grossPrice", "grossPrice", "Gross price"],
+      "CUR": ["CUR", "currency.code", "currency", "Currency"]
+    }
+  },
+  "po_lines": {
+    "grid": "POH",
+    "fields": {
+      "POHFCY": ["POHFCY", "purchaseSite.code", "purchaseSite", "Order site", "Purchase site"],
+      "POHNUM": ["POHNUM", "purchaseOrder.id", "orderNumber", "id", "Order", "Order no.", "Purchase order"],
+      "order_no": ["POHNUM", "purchaseOrder.id", "orderNumber", "id", "Order", "Order no.", "Purchase order"],
+      "ORDDAT": ["ORDDAT", "orderDate", "Order date"],
+      "BPSNUM": ["BPSNUM", "supplier.code", "supplier", "Supplier"],
+      "POPLIN": ["POPLIN", "lines.lineNumber", "lineNumber", "Line", "Line no."],
+      "ITMREF": ["ITMREF", "lines.product.code", "product.code", "Product", "Item"],
+      "ITMDES": ["ITMDES", "lines.productDescription", "productDescription", "Description"],
+      "PRHFCY": ["PRHFCY", "lines.receivingSite.code", "receivingSite.code", "Receiving site"],
+      "UOM": ["UOM", "lines.purchaseUnit.code", "purchaseUnit.code", "Purchase unit", "Unit"],
+      "QTYUOM": {"from": ["QTYUOM", "lines.quantityInPurchaseUnitOrdered", "lines.quantity", "quantity", "Ordered quantity", "Quantity ordered", "Quantity"],
+                 "minus": ["RCPQTYUOM", "lines.quantityInPurchaseUnitReceived", "receivedQuantity", "Received quantity", "Quantity received"]},
+      "EXTRCPDAT": ["EXTRCPDAT", "lines.expectedReceiptDate", "expectedReceiptDate", "Expected receipt date", "Expected date", "Receipt date"],
+      "GROPRI": ["GROPRI", "lines.grossPrice", "grossPrice", "Gross price"],
+      "CUR": ["CUR", "currency.code", "currency", "Currency"]
+    }
+  },
+  "stock": {
+    "grid": "SMR",
+    "fields": {
+      "STOFCY": ["STOFCY", "stockSite.code", "site.code", "Site", "Stock site"],
+      "ITMREF": ["ITMREF", "product.code", "Product", "Item"],
+      "STU": ["STU", "stockUnit.code", "Stock unit", "STK unit"],
+      "QTYSTU": ["QTYSTU", "quantityInStockUnit", "quantity", "Quantity", "Stock quantity", "Qty STK"],
+      "LOT": ["LOT", "lot", "Lot"],
+      "LOC": ["LOC", "location.code", "location", "Location"],
+      "STA": ["STA", "status.code", "status", "Status"]
+    },
+    "keep": {"STA": ["A", ""]}
+  }
+}

@@ -175,9 +175,12 @@ const dz=$('#drop');['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,
 ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,()=>dz.classList.remove('on')));
 dz.addEventListener('drop',e=>{e.preventDefault();e.dataTransfer.files[0]&&readFile(e.dataTransfer.files[0])});
 document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',e=>{e.preventDefault();e.dataTransfer.files[0]&&readFile(e.dataTransfer.files[0])});
-const src=new URLSearchParams(location.search).get('data');
+// Portal: opened as /api/live-orders/dashboard#key=<key>. The key (after #) never reaches the server; kept for this tab only.
+let sdiKey='';try{const m=location.hash.match(/key=([^&]+)/);if(m){sessionStorage.setItem('sdiKey',decodeURIComponent(m[1]));history.replaceState(null,'',location.pathname+location.search)}sdiKey=sessionStorage.getItem('sdiKey')||''}catch(e){}
+const onPortal=/\/api\/live-orders\/dashboard$/.test(location.pathname);
+const src=new URLSearchParams(location.search).get('data')||(onPortal?'/api/live-orders/latest':null);
 if(window.LIVE_ORDERS_DATA)render(window.LIVE_ORDERS_DATA);
-else if(src)fetch(src).then(r=>r.json()).then(render).catch(e=>{$('#drop').innerHTML+=`<p class="muted">Couldn't load ${esc(src)}: ${esc(e.message)}</p>`});
+else if(src)fetch(src,{headers:sdiKey?{'X-SDI-Key':sdiKey}:{}}).then(r=>{if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}).then(render).catch(e=>{$('#drop').innerHTML+=`<p class="muted">Couldn't load ${esc(src)}: ${esc(e.message)}</p>`});
 </script>
 </body>
 </html>
