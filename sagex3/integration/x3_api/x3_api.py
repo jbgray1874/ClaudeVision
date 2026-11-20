@@ -7,6 +7,7 @@ signed with that secret).
 
     python x3_api.py setup             # asks for the site, client ID, secret, user, endpoint; saves them privately
     python x3_api.py probe             # tries the URL / token forms and saves the one X3 accepts
+    python x3_api.py diagnose          # if probe fails: how X3 answers each sign-in, and finds the token exchange
     python x3_api.py schema            # lists what the GraphQL API offers (works orders, stock, orders ...)
     python x3_api.py draft             # writes api_datasets.draft.json from the schema
     python x3_api.py pull [names]      # pulls the data sets in api_datasets.json to the exports folder
@@ -109,8 +110,120 @@ def make_jwt(c, aud=None):
     return f"{head}.{body}.{_b64(sig)}"
 
 
+_TOKEN = {}
+
+
+def bearer(c, aud=None):
+    """The token to send. If diagnose found an exchange (token_url), swap our signed JWT for X3's access token
+    (cached until shortly before it expires); otherwise send the signed JWT itself."""
+    if not c.get("token_url"):
+        return make_jwt(c, aud)
+    if _TOKEN.get("exp", 0) > time.time() + 20:
+        return _TOKEN["tok"]
+    code, _, text = exchange(c, c["token_url"], c["token_mode"])
+    try:
+        out = json.loads(text)
+        tok = out["access_token"]
+    except (ValueError, KeyError, TypeError):
+        raise SystemExit(f"Token exchange {code}: {redact(text)[:300]}")
+    _TOKEN.update(tok=tok, exp=time.time() + int(out.get("expires_in") or c.get("token_seconds", 300)))
+    return tok
+
+
+TOKEN_PATHS = ["/auth/oauth2/token", "/oauth2/token", "/auth/token", "/xtrem/auth/token", "/api/auth/token",
+               "/auth/oauth/token", "/oauth/token", "/token", "/xtrem/token", "/syracuse-main/token"]
+TOKEN_MODES = ["jwt-bearer", "client-credentials", "client-credentials-basic", "json-credentials"]
+
+
+def exchange(c, path, mode):
+    url = c["site"] + path
+    h = {"Accept": "application/json", "User-Agent": "sdi-x3-readonly/1"}
+    if mode == "jwt-bearer":
+        data = urllib.parse.urlencode({"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                                       "assertion": make_jwt(c)}).encode()
+        h["Content-Type"] = "application/x-www-form-urlencoded"
+    elif mode == "client-credentials":
+        data = urllib.parse.urlencode({"grant_type": "client_credentials", "client_id": c["client_id"],
+                                       "client_secret": c["secret"]}).encode()
+        h["Content-Type"] = "application/x-www-form-urlencoded"
+    elif mode == "client-credentials-basic":
+        data = urllib.parse.urlencode({"grant_type": "client_credentials"}).encode()
+        h["Content-Type"] = "application/x-www-form-urlencoded"
+        h["Authorization"] = "Basic " + base64.b64encode(f"{c['client_id']}:{c['secret']}".encode()).decode()
+    else:
+        data = json.dumps({"grant_type": "client_credentials", "client_id": c["client_id"],
+                           "client_secret": c["secret"], "user": c["user"]}).encode()
+        h["Content-Type"] = "application/json"
+    return raw("POST", url, h, data)
+
+
+def redact(text):
+    """Hide anything token-like before printing (access tokens, JWTs, secrets)."""
+    return re.sub(r"[A-Za-z0-9_\-+/=.]{24,}", lambda m: f"<{len(m.group(0))} chars hidden>", text or "")
+
+
+def raw(method, url, hdrs, data=None, timeout=60):
+    if method not in ("GET", "POST"):
+        raise ValueError("read-only client")
+    req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, dict(r.headers), r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError) as e:
+        return 0, {}, str(e)
+
+
+def diagnose(_):
+    """Work out how X3 wants to be signed in to. Prints status codes and X3's messages, never a secret or token."""
+    c = load_conf()
+    gq = c["site"] + "/xtrem/api"
+    body = json.dumps({"query": "{ __typename }"}).encode()
+    base = {"Accept": "application/json", "Content-Type": "application/json", "User-Agent": "sdi-x3-readonly/1",
+            "x-xtrem-endpoint": c.get("endpoint", "")}
+
+    def show(label, code, hd, text):
+        www = hd.get("WWW-Authenticate") or hd.get("www-authenticate") or ""
+        loc = hd.get("Location") or hd.get("location") or ""
+        print(f"  {label:<44} {code}  {redact(text)[:140].strip()}" + (f"  [WWW-Authenticate: {redact(www)}]" if www else "")
+              + (f"  [-> {loc[:80]}]" if loc else ""))
+
+    print("A. How X3 answers different sign-ins on /xtrem/api:")
+    show("no sign-in", *raw("POST", gq, base, body))
+    show("Bearer not-a-token", *raw("POST", gq, dict(base, Authorization="Bearer abc"), body))
+    show("JWT signed with a WRONG secret", *raw("POST", gq, dict(base, Authorization="Bearer " + make_jwt(dict(c, secret="wrong"))), body))
+    show("JWT with an unknown client ID", *raw("POST", gq, dict(base, Authorization="Bearer " + make_jwt(dict(c, client_id="unknown"))), body))
+    show("JWT, our client ID and secret", *raw("POST", gq, dict(base, Authorization="Bearer " + make_jwt(c)), body))
+    print("B. Looking for the token exchange (where X3 issues its own access token):")
+    for path in TOKEN_PATHS:
+        for mode in TOKEN_MODES:
+            code, hd, text = exchange(c, path, mode)
+            if code == 404 and mode != TOKEN_MODES[0]:
+                continue
+            show(f"{path} {mode}", code, hd, text)
+            try:
+                tok = json.loads(text).get("access_token")
+            except (ValueError, AttributeError):
+                tok = None
+            if code == 200 and tok:
+                for eh in (True, False):
+                    h = dict(base, Authorization="Bearer " + tok)
+                    if not eh:
+                        h.pop("x-xtrem-endpoint")
+                    for gpath in ("/xtrem/api", "/xtrem/graphql"):
+                        code2, hd2, text2 = raw("POST", c["site"] + gpath, h, body)
+                        show(f"   access token -> {gpath} {'with' if eh else 'no'} endpoint", code2, hd2, text2)
+                        if code2 == 200 and '"data"' in text2:
+                            c.update(token_url=path, token_mode=mode, graphql_path=gpath, endpoint_header=eh)
+                            save_conf(c)
+                            print(f"\nSIGNED IN: token from {path} ({mode}), GraphQL {gpath}. Saved. Next: python x3_api.py schema")
+                            return
+    print("\nNot signed in yet. Send Claude everything above (no secret or token is shown).")
+
+
 def headers(c, aud=None, endpoint_header=True):
-    h = {"Authorization": "Bearer " + make_jwt(c, aud), "Accept": "application/json",
+    h = {"Authorization": "Bearer " + bearer(c, aud), "Accept": "application/json",
          "Content-Type": "application/json", "User-Agent": "sdi-x3-readonly/1"}
     if endpoint_header and c.get("endpoint"):
         h["x-xtrem-endpoint"] = c["endpoint"]
@@ -384,6 +497,7 @@ def main(argv=None):
     sp = ap.add_subparsers(dest="cmd", required=True)
     sp.add_parser("setup").set_defaults(fn=setup)
     sp.add_parser("probe").set_defaults(fn=probe)
+    sp.add_parser("diagnose").set_defaults(fn=diagnose)
     s = sp.add_parser("schema")
     s.add_argument("words", nargs="*")
     s.set_defaults(fn=schema)

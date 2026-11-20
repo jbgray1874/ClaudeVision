@@ -4308,3 +4308,17 @@ Keep this up to date with every setting we choose. **Never write the secret here
   3. `probe`.
 
   Nothing else changes.
+- **20 Nov – first real run on the training site.**
+  - The connected application was saved and the secret regenerated (no tokens existed). **Client ID recorded in James's private settings, not here** (it changes on re-creation).
+  - `setup` answers: site / folder / endpoint / connector all defaults (`SDIMIG`, `x3-services_X3ERPV12`); user **SDIJG**; token 300.
+  - **`probe` result:**
+    - `/xtrem/api` and `/xtrem/graphql` **exist** (401); `/api` and `/graphql` don't (404); REST `/api1/x3/erp/SDIMIG/...` also 401.
+    - Every 401 says *"Cannot read properties of null (reading 'info')"*, whatever the audience or header.
+    - **Reading:** X3 looks the bearer token up in its own list of issued tokens (the connected application's "Tokens currently valid" grid, last column "Information") and finds nothing. Our self-signed JWT must first be **exchanged for an X3-issued access token**.
+  - **Added `x3_api.py diagnose`.** It shows how X3 answers no sign-in / junk / wrong secret / unknown client / our JWT. It then tries the token-exchange addresses (`/auth/oauth2/token`, `/oauth2/token`, `/auth/token`, …) in four forms (JWT bearer assertion, client credentials as form / Basic / JSON). On success it saves `token_url` + `token_mode`, and every command then exchanges and caches the access token automatically.
+  - Tokens and secrets are hidden in all output. Tested against a mock with an exchange.
+- **Lessons for James's PowerShell steps:**
+  - give **one command per box**: pasting whole instructions ran `edit` / `help`;
+  - **"Enter" = accept the [bracketed] answer**;
+  - a prompt can show a wrong answer from an earlier try: the typed answer replaces it;
+  - right-click pastes in PowerShell, and nothing shows for the secret.
