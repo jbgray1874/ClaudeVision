@@ -4324,6 +4324,14 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **Also there:** stockJournal, allocation, workOrderSuggestion, purchaseOrderQuantityLine, salesDelivery, invoices, finance, etc.
   - **REST:** `/api1/x3/erp/SDIMIG/...` gives *"Endpoint not found: … dataset SDIMIG"*, so REST wants the endpoint name in the path. Not needed: GraphQL works.
   - **Next:** `draft` (writes `api_datasets.json` from the pinned nodes, Live Orders sets enabled), then `pull --limit 3` (a trial into `SDI_X3_samples`, prints **column names only**), then the column map.
+- **20 Nov – first trial pull on training (`pull --limit 3`).**
+  - **Field counts:** workOrder 67, workOrderProductLine 62, workOrderMaterialLine 67, workOrderOperationLine 109, stock 50, salesOrderLine 159, purchaseOrderLine 182, product 152, manufacturingBomLine 40, routingOperation 60, workCenter 34.
+  - **Data:** **SO and PO lines came back (3 each); works orders, materials and stock gave 0 rows.** SDIMIG holds the migration's master data; open WOs and stock arrive at the go-live run.
+  - **`x3_columns.json` mapped to the real names:**
+    - **SO:** salesSite.code, salesOrder.id, soldToCustomer._id, orderDate, requestedDeliveryDate, shippingSite.code, lineNumber, product.code, productDescriptionInUserLanguage, salesUnit.code, quantityInSalesUnitOrdered − quantityInSalesUnitDelivered, grossPrice.
+    - **PO:** purchaseSite.code, purchaseOrder.id, orderFromSupplier._id, orderDate, lineNumber, product.code, receiptSite.code, purchaseUnit.code, **remainingQuantityToReceiveInPurchaseUnit** (net, used alone), expectedReceiptDate, grossPrice, currency.code; **`isClosed` lines dropped**.
+  - **Tested** on X3-shaped mock rows.
+  - **WO / stock column names:** a trial against Sage's demo folder **SEED** (`pull --limit 3 --endpoint X3ERPV12_SEED`). `--endpoint` is refused without `--limit`, and the output goes to `SDI_X3_samples\<date>_<endpoint>`, never the exports. Read-only.
 - **Results to fill in as we find them:**
   - the endpoint name;
   - the GraphQL path / audience / header `probe` accepted;

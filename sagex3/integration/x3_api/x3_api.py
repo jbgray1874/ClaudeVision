@@ -542,9 +542,15 @@ def pull(a):
     if not DATASETS.exists():
         sys.exit("No api_datasets.json yet: run  python x3_api.py draft , check it, save it as api_datasets.json")
     sets = json.loads(DATASETS.read_text())
+    if a.endpoint:                                   # another X3 folder (e.g. Sage's demo SEED): trials only
+        if not a.limit:
+            sys.exit("--endpoint is only for trials (with --limit): another folder's data never goes to the exports")
+        c = dict(c, endpoint=a.endpoint)               # this run only; the saved settings are not changed
     names = a.names or [n for n, d in sets.items() if not n.startswith("_") and d.get("enabled")]
     # a trial (--limit) goes to SDI_X3_samples, never the exports folder run_x3.py reads
     day = (EXPORTS.parent / "SDI_X3_samples" if a.limit else EXPORTS) / dt.date.today().isoformat()
+    if a.endpoint:
+        day = day.with_name(day.name + "_" + a.endpoint)
     log = []
     for n in names:
         ds = sets[n]
@@ -591,6 +597,7 @@ def main(argv=None):
     p = sp.add_parser("pull")
     p.add_argument("names", nargs="*")
     p.add_argument("--limit", type=int, default=0, help="trial: only this many rows per data set, to SDI_X3_samples")
+    p.add_argument("--endpoint", help="trial only: read another X3 folder's endpoint (e.g. X3ERPV12_SEED) for column names")
     p.set_defaults(fn=pull)
     r = sp.add_parser("rest")
     r.add_argument("cls")

@@ -134,14 +134,19 @@ def convert(rows, spec):
         if "const" in rule:
             used[field] = ("const", rule["const"], None)
             continue
-        src = column_for(cols, rule["from"])
-        minus = column_for(cols, rule.get("minus", []))
+        net = column_for(cols, rule.get("net", []))      # already the open quantity: used alone
+        src = net or column_for(cols, rule["from"])
+        minus = None if net else column_for(cols, rule.get("minus", []))
         used[field] = ("col", src, minus)
         if not src:
             missing.append(field)
     out = []
     keep = spec.get("keep", {})
+    drop = {column_for(cols, [k]): {str(v).lower() for v in vals} for k, vals in spec.get("drop_if", {}).items()}
+    drop = {k: v for k, v in drop.items() if k}
     for r in rows:
+        if any(str(r.get(k, "")).strip().lower() in v for k, v in drop.items()):
+            continue                                       # e.g. a closed PO line
         rec = {}
         for field, (kind, src, minus) in used.items():
             if kind == "const":
