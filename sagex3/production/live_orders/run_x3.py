@@ -88,6 +88,7 @@ def pull_failures(day, out):
         log = json.loads((Path(day) / "api_log.json").read_text())
         if dt.datetime.fromisoformat(log["at"]) > dt.datetime.now() - dt.timedelta(hours=4):
             msgs = [f"{r['name']}: {r.get('error', '')[:200]}" for r in log["runs"] if not r.get("ok")]
+            msgs += [f"{r['name']}: {n}" for r in log["runs"] if r.get("ok") for n in r.get("notes") or []]
     except (OSError, ValueError, KeyError):
         pass
     if "Traceback" in out:                                     # the pull itself crashed
@@ -176,7 +177,7 @@ def main(argv=None):
             status["published"] = publish([out / f for f in res["files"] if f.endswith((".xlsx", ".json"))], a.share)
         status.update(ok=True, run=str(out), json=str(j), meta=res["meta"])
         if status.get("pull_failed"):                     # built, but on some of yesterday's data - say so
-            status["warning"] = "built, but these failed in the pull: " + "; ".join(status["pull_failed"])
+            status["warning"] = "note from the pull: " + "; ".join(status["pull_failed"])
         old = sorted(p for p in runs.iterdir() if p.is_dir())[:-a.keep] if a.keep else []
         for p in old:
             shutil.rmtree(p, ignore_errors=True)

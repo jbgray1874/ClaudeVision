@@ -309,6 +309,13 @@ def http(method, url, hdrs, body=None, timeout=60):
 
 
 # ---------------------------------------------------------------- GraphQL
+class GqlError(SystemExit):
+    """X3 answered with GraphQL errors. Keeps X3's error list (with each error's path) and any partial data."""
+    def __init__(self, msg, errors=None, data=None):
+        super().__init__(msg)
+        self.errors, self.data = errors or [], data
+
+
 def gql(c, query, variables=None):
     if MUTATION.search(query):
         raise SystemExit("Refused: this client is read-only (no GraphQL mutations).")
@@ -325,8 +332,10 @@ def gql(c, query, variables=None):
         out = json.loads(text)
     except ValueError:
         raise SystemExit(f"GraphQL {code}: not JSON - {text[:300]}")
+    if not isinstance(out, dict):
+        raise SystemExit(f"GraphQL {code}: {text[:300]}")
     if code != 200 or out.get("errors"):
-        raise SystemExit(f"GraphQL {code}: {json.dumps(out.get('errors') or out)[:600]}")
+        raise GqlError(f"GraphQL {code}: {json.dumps(out.get('errors') or out)[:600]}", out.get("errors"), out.get("data"))
     return out["data"]
 
 
@@ -525,27 +534,84 @@ def _edges(v):
     return [e["node"] for e in (v or {}).get("edges", [])]
 
 
-def pull_graphql(c, ds, page=PAGE, limit=0):
+def _bad_edge(errors):
+    """The first record X3 couldn't return, from its errors' paths [..., "edges", 21, "node", ...] -> (21, message)."""
+    hits = []
+    for e in errors or []:
+        p = e.get("path") or []
+        if "edges" in p:
+            i = p.index("edges")
+            if i + 1 < len(p) and isinstance(p[i + 1], int):
+                hits.append((p[i + 1], e.get("message", "")))
+    return min(hits) if hits else (None, "")
+
+
+def pull_graphql(c, ds, page=PAGE, limit=0, notes=None):
+    """Page through one X3 node. A record X3 can't return (20 Nov: routing operations with no main work centre -
+    "RoutingOperation.mainWorkCenter: Mandatory property") fails its whole page, so: take the records before it,
+    step over it by its cursor, carry on - and count what was skipped in  notes  (never silently)."""
     if limit:
         page = limit
     path, fields, flt, explode = ds["path"], ds["fields"], ds.get("filter", ""), ds.get("explode", "")
     sel = fields + (f" {explode} {{ query(first: 500) {{ edges {{ node {{ {ds.get('line_fields', '')} }} }} }} }}"
                     if explode and ds.get("line_fields") else "")
-    args = f"first: {page}, after: $after" + (f", filter: {json.dumps(flt)}" if flt else "")
-    q = ("query($after: String) { " + " { ".join(path) + f" {{ query({args}) {{ edges {{ node {{ {sel} }} }} "
-         "pageInfo { endCursor hasNextPage } } " + "}" * len(path) + " }")
-    rows, after = [], None
-    while True:
-        data = gql(c, q, {"after": after})
-        for p in path:
-            data = data[p]
-        conn = data["query"]
-        for node in (e["node"] for e in conn["edges"]):
+
+    def q(first, edge):
+        args = f"first: {first}, after: $after" + (f", filter: {json.dumps(flt)}" if flt else "")
+        return ("query($after: String) { " + " { ".join(path) + f" {{ query({args}) {{ edges {{ {edge} }} "
+                "pageInfo { endCursor hasNextPage } } " + "}" * len(path) + " }")
+
+    def conn_of(data):
+        for p in path + ["query"]:
+            data = (data or {}).get(p)
+        return data
+
+    rows, after, skipped, why = [], None, 0, ""
+
+    def take(conn):
+        nonlocal skipped
+        for e in conn.get("edges") or []:
+            node = (e or {}).get("node")
+            if node is None:                                   # partial answer: X3 nulled this record
+                skipped += 1
+                continue
             head = flatten(node)
             lines = _edges(node.get(explode)) if explode else []
-            rows += [dict(head, **{f"{explode}.{k}": v for k, v in flatten(l).items()}) for l in lines] or [head]
+            rows.extend([dict(head, **{f"{explode}.{k}": v for k, v in flatten(l).items()}) for l in lines] or [head])
+
+    def done():
+        if skipped and notes is not None:
+            notes.append(f"skipped {skipped} record(s) X3 couldn't return: {why[:200]}")
+        return rows
+
+    while True:
+        try:
+            conn = conn_of(gql(c, q(page, f"node {{ {sel} }}"), {"after": after}))
+        except GqlError as e:
+            idx, msg = _bad_edge(e.errors)
+            part = conn_of(e.data)
+            if part and part.get("edges") is not None and part.get("pageInfo"):
+                why = why or msg                               # X3 sent the rest of the page: use it
+                conn = part
+            elif idx is None or limit:
+                raise
+            else:                                              # the whole page refused: step over record idx
+                why = why or msg
+                if idx:
+                    take(conn_of(gql(c, q(idx, f"node {{ {sel} }}"), {"after": after})))
+                cc = conn_of(gql(c, q(idx + 1, "cursor"), {"after": after}))
+                edges = cc.get("edges") or []
+                skipped += 1
+                if len(edges) <= idx:                          # nothing after it
+                    return done()
+                after = edges[idx]["cursor"]
+                if not cc["pageInfo"]["hasNextPage"] and len(edges) == idx + 1:
+                    return done()
+                time.sleep(PAUSE)
+                continue
+        take(conn)
         if limit or not conn["pageInfo"]["hasNextPage"]:
-            return rows
+            return done()
         after = conn["pageInfo"]["endCursor"]
         if not limit and len(rows) % (page * 10) < page:      # a progress line every 10 pages
             print(f"   ... {len(rows)} rows so far", flush=True)
@@ -606,10 +672,11 @@ def pull(a):
         ds = sets[n]
         t0 = time.time()
         try:
-            rows = pull_rest(c, ds) if ds.get("class") else pull_graphql(c, ds, limit=a.limit)
+            notes = []
+            rows = pull_rest(c, ds) if ds.get("class") else pull_graphql(c, ds, limit=a.limit, notes=notes)
             write_rows(rows, day / n)
-            log.append(dict(name=n, ok=True, rows=len(rows), seconds=round(time.time() - t0, 1)))
-            print(f"{n}: {len(rows)} rows")
+            log.append(dict(name=n, ok=True, rows=len(rows), seconds=round(time.time() - t0, 1), notes=notes))
+            print(f"{n}: {len(rows)} rows" + (f" ({'; '.join(notes)})" if notes else ""), flush=True)
             if a.limit and rows:                       # column names only - no values printed
                 cols = list(dict.fromkeys(k for r in rows for k in r))
                 print("   columns:", ", ".join(cols))

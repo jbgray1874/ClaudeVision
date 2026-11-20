@@ -4579,3 +4579,11 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - if the service runs as LocalSystem: a one-off SYSTEM scheduled task writes and deletes a test file in the LiveOrders share. **This proves SDI-APP01$ can save the workbooks**; if not, grant it Modify (share and folder) or use a domain service account.
 - **Then:** point the Intune hosts script (`SDI-Intelligence-HostsEntry.ps1`, `$CorrectIP`) at 10.0.0.5, so `sdi-intelligence.sdi.local` reaches the server, and stop the copy on James's PC (one Regenerate, one history).
 - Not testable here (no PowerShell in the build container): read through line by line, PowerShell 5.1 syntax only.
+- **Third Regenerate: the real reason, shown on the page by the new reporting:** `routes: GraphQL 200: [{"message": "RoutingOperation.mainWorkCenter: Mandatory property", … "path": ["x3Manufacturing","routingOperation","query","edges",21,"node", …]`.
+  - **Some routing operations in SDI Mig have no main work centre**, although X3 calls it mandatory (loaded past X3's validation).
+  - X3 then refuses the **whole page** of 50 that holds such a record, so the routes data set failed.
+  - **Migration data finding:** routing operations with a blank main work centre in X3ERPV12_SDIMIG. The count comes from the next pull (the note on the page). Check those lines in the ZSDIROU2 load file before the next load.
+- **Fixed (`x3_api.pull_graphql`):** X3's error names the bad record's position (`edges`, 21). The pull takes the records before it, steps over it by its cursor (a query for `edges { cursor }` only), and carries on. If X3 sends the rest of the page with the record nulled, that's used directly.
+  - Skipped records are **counted and reported**, never silent: "routes: N rows (skipped K record(s) X3 couldn't return: …)" in the pull, `notes` in `api_log.json`, and a **warning on the portal page** after a successful build.
+  - `GqlError` (a SystemExit) keeps X3's error list and any partial data.
+  - **Tested** against a simulated X3 (130 records, 4 bad: two next to each other and the very last), both ways X3 might answer (whole page refused / page with the record nulled): all 126 good records, 4 skipped and reported.
