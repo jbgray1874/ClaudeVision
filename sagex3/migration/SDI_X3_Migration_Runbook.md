@@ -4295,6 +4295,17 @@ Keep this up to date with every setting we choose. **Never write the secret here
      - client ID from the form; X3 user = the Allowed user's login; secret pasted, hidden.
   2. Then `probe` → `schema` → `draft` → `api_datasets.json` → `pull`. Saved privately in `%USERPROFILE%\.sdi\x3_api.json`.
 - **Endpoints (Administration → Administration → Endpoints, 20 Nov):** `syracuse`; **`X3ERPV12_SDIMIG`** (folder SDIMIG); `X3ERPV12_SEED`; `X3ERPV12_X3`; `X3ERPV12_ACUX3` ("We are SDI", folder ACUX3, the only one with Use Sage AI ticked: **leave alone**). The X3 Service and X3 Connector columns are blank on every row. **In `setup`, the endpoint is `X3ERPV12_SDIMIG`.**
+- **SIGN-IN THAT WORKS (20 Nov, `claims` test on training): GraphQL `POST /xtrem/api` → `200 {"data":{"__typename":"RootQueryType"}}`.**
+  - Header `Authorization: Bearer <JWT>` plus `x-xtrem-endpoint: X3ERPV12_SDIMIG`.
+  - JWT HS256 signed with the secret. Claims:
+    - `iss` = client ID;
+    - `sub` = the allowed user (SDIJG): unknown or missing gives **Error 42**;
+    - **`aud` present but EMPTY (`""`)**: the endpoint name or no aud gives **Error 45**;
+    - `iat` / `exp` in **seconds**: milliseconds gives **Error 21**.
+  - With the wrong endpoint name (`SDIMIG`), every JWT got *"Cannot read properties of null (reading 'info')"*.
+  - **Seen:** once one token had worked, later tokens in the same run were let through even when expired or without `iss`. X3 seems to keep the sign-in open briefly. Not relied on.
+  - REST `/api1/x3/erp/SDIMIG/...` with an endpoint-named aud gave Error 45; to re-test with the empty aud.
+  - `x3_api.py` now defaults to the empty aud, and `probe` tries it first.
 - **Results to fill in as we find them:**
   - the endpoint name;
   - the GraphQL path / audience / header `probe` accepted;

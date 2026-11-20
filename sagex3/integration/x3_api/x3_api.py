@@ -25,6 +25,8 @@ Sage's documentation (developer.sage.com) could not be read from where this was 
 URL and token form are found by `probe` on the site itself, not assumed. Confirmed in public sources:
 client ID + secret (shown once), a JWT signed with the secret (iss = client ID, iat / exp within the
 connected application's token validity), sent as a Bearer token with an x-xtrem-endpoint header.
+Found on our training site (20 Nov, `claims` test): endpoint X3ERPV12_SDIMIG, aud present but EMPTY, sub = the
+allowed user's login; GraphQL at /xtrem/api.
 """
 import argparse
 import base64
@@ -96,8 +98,10 @@ def make_jwt(c, aud=None):
     now = int(time.time())
     claims = {"iss": c["client_id"], "sub": c["user"], "jti": uuid.uuid4().hex,     # jti: X3 lists tokens by Token ID
               "iat": now - 30, "exp": now + int(c.get("token_seconds", 300))}
-    aud = c.get("aud", "endpoint") if aud is None else aud
-    if aud == "endpoint":
+    aud = c.get("aud", "empty") if aud is None else aud
+    if aud == "empty":                       # what X3 accepts (20 Nov, training): aud present but empty
+        claims["aud"] = ""
+    elif aud == "endpoint":
         claims["aud"] = c["endpoint"]
     elif aud == "connector":
         claims["aud"] = c.get("connector", "")
@@ -317,7 +321,7 @@ def probe(_):
     c = load_conf()
     tried, found = [], None
     forms = [(p, a, e) for p in ([c["graphql_path"]] if c.get("graphql_path") else []) + GRAPHQL_PATHS
-             for a in ("endpoint", "connector", "url", "") for e in (True, False)]
+             for a in ("empty", "endpoint", "connector", "url", "") for e in (True, False)]
     for path, aud, eh in dict.fromkeys(forms):
         cc = dict(c, graphql_path=path)
         code, text = http("POST", c["site"] + path, headers(cc, aud, eh), {"query": "{ __typename }"})
