@@ -1,11 +1,12 @@
-"""Adds Live Orders to a running SDI Intelligence portal. Written 20 Nov 2026.
+"""Adds Live Orders and Estimate → X3 to a running SDI Intelligence portal. Written 20 Nov 2026 (Estimate → X3 added the
+same evening).
 
     python add_live_orders_to_portal.py                        # PREVIEW: shows what it would change, changes nothing
     python add_live_orders_to_portal.py --apply                # makes the changes (backs up first)
     python add_live_orders_to_portal.py --target <backend folder> --runs <SDI_X3_runs folder>
 
 Default target: C:\\ClaudeVision\\sdi-intelligence-backend (the folder the SDIIntelligence service runs). It only ADDS:
-  1. live_orders_routes.py and live_orders_dashboard.html, copied next to app.py
+  1. live_orders_routes.py + live_orders_dashboard.html and estimating_routes.py + est_x3_page.html, next to app.py
   2. two lines in app.py that mount the Live Orders endpoints (beside the HR ones)
   3. a "Live Orders" menu item, its page (the dashboard in a frame) and its label in sdi-intelligence-portal.html
   4. the Live Orders settings in .env (only those missing; a LIVE_ORDERS_ROUTES whose file isn't there is commented
@@ -25,6 +26,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 DASH = REPO / "sagex3" / "production" / "live_orders" / "live_orders_dashboard.html"
+EST_PAGE = REPO / "sagex3" / "estimating" / "est_x3_page.html"
 
 MOUNT = ('# -- Live Orders (Sage X3 -> board -> dashboard), read-only --\n'
          'from live_orders_routes import router as live_orders_router\n'
@@ -36,6 +38,19 @@ SECTION = ('    <section class="view" id="liveorders">\n'
            '      <iframe id="lo-frame" title="Live Orders" style="width:100%;height:calc(100vh - 150px);border:0;'
            'border-radius:10px;background:#fff"></iframe>\n'
            '    </section>\n')
+EST_MOUNT = ('# -- Estimate -> Sage X3 (estimate -> product / BOM / route import files + write-up), read-only to X3 --\n'
+             'from estimating_routes import router as estimating_router\n'
+             'app.include_router(estimating_router)\n')
+EST_NAV = ('      <a data-view="estx3"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+           'stroke-width="2"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>'
+           '<path d="M9 14h6"/><path d="M12 11v6"/></svg>Estimate → X3</a>\n')
+EST_SECTION = ('    <section class="view" id="estx3">\n'
+               '      <iframe id="est-frame" title="Estimate to Sage X3" style="width:100%;height:calc(100vh - 150px);border:0;'
+               'border-radius:10px;background:transparent"></iframe>\n'
+               '    </section>\n')
+EST_FRAME_JS = ('  // Estimate -> X3: the page calls /api/estimate-x3 with the portal key (after #, never sent to the server)\n'
+                '  (function(){const f=document.getElementById("est-frame");'
+                'if(f)f.src="/api/estimate-x3/page#key="+encodeURIComponent(API_KEY||"");})();\n')
 FRAME_JS = ('  // Live Orders: the dashboard reads /api/live-orders/latest with the portal key (after #, never sent to the server)\n'
             '  (function(){const f=document.getElementById("lo-frame");'
             'if(f)f.src="/api/live-orders/dashboard#key="+encodeURIComponent(API_KEY||"");})();\n')
@@ -47,7 +62,8 @@ def plan(target, runs, opts):
         if not f.exists():
             sys.exit(f"Not found: {f} - is --target the folder with app.py and the portal page?")
     changes = []                                    # (file, new text or None for a copy, source, description)
-    for src, name in ((HERE / "live_orders_routes.py", "live_orders_routes.py"), (DASH, "live_orders_dashboard.html")):
+    for src, name in ((HERE / "live_orders_routes.py", "live_orders_routes.py"), (DASH, "live_orders_dashboard.html"),
+                      (HERE / "estimating_routes.py", "estimating_routes.py"), (EST_PAGE, "est_x3_page.html")):
         dst = target / name
         if not dst.exists() or dst.read_bytes() != src.read_bytes():
             changes.append((dst, None, src, f"copy {name}" + (" (update)" if dst.exists() else "")))
@@ -63,6 +79,18 @@ def plan(target, runs, opts):
                 sys.exit("app.py: could not find where to add the two lines - add them by hand:\n" + MOUNT)
             a2 = a[:i] + MOUNT + "\n\n" + a[i:]
         changes.append((app, a2, None, "app.py: mount the Live Orders endpoints"))
+        a = a2
+    if "estimating_routes" not in a:
+        anchor = "app.include_router(live_orders_router)\n"
+        if anchor in a:
+            a2 = a.replace(anchor, anchor + "\n" + EST_MOUNT, 1)
+        else:
+            i = a.find('if __name__ == "__main__":')
+            if i < 0:
+                sys.exit("app.py: could not find where to add the Estimate -> X3 lines - add them by hand:\n" + EST_MOUNT)
+            a2 = a[:i] + EST_MOUNT + "\n\n" + a[i:]
+        changes = [c for c in changes if c[0] != app]          # one write of app.py with both
+        changes.append((app, a2, None, "app.py: mount the Live Orders and / or Estimate -> X3 endpoints"))
 
     p = page.read_text(encoding="utf-8")
     p2 = p
@@ -83,14 +111,23 @@ def plan(target, runs, opts):
         if anchor not in p2:
             sys.exit("portal page: could not find the API key script - not changed")
         p2 = p2.replace(anchor, FRAME_JS + anchor, 1)
+    if 'data-view="estx3"' not in p2:                       # Estimate -> X3, just under Live Orders
+        p2 = p2.replace('<div class="grp">AI Services</div>', EST_NAV.strip() + "\n      " + '<div class="grp">AI Services</div>', 1)
+    if 'id="estx3"' not in p2:
+        p2 = p2.replace('    <section class="view" id="aisvc">', EST_SECTION + '    <section class="view" id="aisvc">', 1)
+    if "estx3:" not in p2:
+        p2 = p2.replace("liveorders:'Live Orders',", "liveorders:'Live Orders',estx3:'Estimate → X3',", 1)
+    if 'getElementById("est-frame")' not in p2:
+        p2 = p2.replace("  function _hdr(){", EST_FRAME_JS + "  function _hdr(){", 1)
     if p2 != p:
-        changes.append((page, p2, None, "portal page: Live Orders menu item, page and label"))
+        changes.append((page, p2, None, "portal page: Live Orders / Estimate -> X3 menu items, pages and labels"))
 
     e = env.read_text(encoding="utf-8") if env.exists() else ""
     want = {"LIVE_ORDERS_RUNS": runs, "LIVE_ORDERS_SHARE": opts.share, "LIVE_ORDERS_SHARE_USER": opts.share_user,
             "LIVE_ORDERS_HOME": str(REPO / "sagex3" / "production" / "live_orders"), "LIVE_ORDERS_ROUTES": opts.routes_file,
             "X3_API_CONFIG": opts.x3_config, "X3_EXPORT_DIR": opts.exports,
-            "LIVE_ORDERS_PYTHON": sys.executable}          # the python you run this with (it has openpyxl)
+            "LIVE_ORDERS_PYTHON": sys.executable,          # the python you run this with (it has openpyxl)
+            "EST_RUNS": opts.est_runs, "EST_HOME": str(REPO / "sagex3" / "estimating"), "EST_PYTHON": sys.executable}
     bad = [m for m in re.finditer(r"(?m)^LIVE_ORDERS_ROUTES=(.*)$", e)   # a route file that isn't there (e.g. a
            if not Path(m.group(1).strip().strip('"')).is_file()]            # placeholder pasted): comment it out
     if bad:
@@ -120,18 +157,22 @@ def main():
     ap.add_argument("--x3-config", default=str(Path.home() / ".sdi" / "x3_api.json"),
                     help="the read-only X3 API settings (the service runs as another account, so give the full path)")
     ap.add_argument("--exports", default=str(Path.home() / "SDI_X3_exports"))
+    ap.add_argument("--est-runs", default=str(Path.home() / "SDI_X3_runs" / "estimating"),
+                    help="where Estimate -> X3 keeps its runs")
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args()
     target = Path(a.target)
-    try:                                                    # Live Orders runs with THIS Python (LIVE_ORDERS_PYTHON)
-        import openpyxl  # noqa: F401
-    except ImportError:
-        print(f"WARNING: {sys.executable} has no openpyxl - Regenerate will fail until you run:\n"
-              f'    "{sys.executable}" -s -m pip install openpyxl\n  (in PowerShell as administrator; -s skips your own user folder, '
-              f'so it installs where the service can see it)')
+    for mod, why in (("openpyxl", "Live Orders and Estimate -> X3 will fail"),   # both run with THIS Python
+                     ("xlrd", "Estimate -> X3 can't read old .xls estimates (.xlsx still works)")):
+        try:
+            __import__(mod)
+        except ImportError:
+            print(f"WARNING: {sys.executable} has no {mod} - {why} until you run:\n"
+                  f'    "{sys.executable}" -s -m pip install {mod}\n  (in PowerShell as administrator; -s skips your own '
+                  f'user folder, so it installs where the service can see it)')
     changes = plan(target, a.runs, a)
     if not changes:
-        print("Nothing to do - Live Orders is already in the portal.")
+        print("Nothing to do - Live Orders and Estimate -> X3 are already in the portal.")
         return
     print(("APPLYING" if a.apply else "PREVIEW (nothing changed - add --apply to make these changes)") + f" in {target}:")
     for f, _, _, desc in changes:

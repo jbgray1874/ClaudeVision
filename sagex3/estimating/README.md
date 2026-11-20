@@ -17,7 +17,22 @@ This is how the converter works and how to embed it in the estimating portal.
 - The `.xlsx` files are the same data, for people to read.
 - **Nothing is written into Sage X3.** Stage 2 sends the files through the X3 API once Acuity provide API access.
 
-**Proved (13 and 16 Nov):** on Tim's estimate 12539-04-GA (0359869) Gift Card Header rev B, the route is identical to Access's route for M&S-0359869, and the BOM has the same 8 components. Re-running on the original `.xls` gives byte-identical files.
+**Proved (13 and 16 Nov):** on Tim's Gift Card Header estimate (rev B), the route is identical to Access's route for the same part, and the BOM has the same 8 components. Re-running on the original `.xls` gives byte-identical files.
+
+## 1a. In the SDI Intelligence portal: Estimate → X3 (20 Nov 2026)
+
+The portal has an **Estimate → X3** page (menu, under Live Orders):
+1. Drop an estimate (.xls or .xlsx) and press **Generate the X3 files**.
+2. The page shows **READY TO LOAD / NOT READY**, the counts, and the same views as the workbook: Estimate → X3 (every cell, where it lands, how it's worked out), BOM file, Route file, Product file, Checks.
+3. Download the **write-up workbook** (`<part>_estimate_to_SageX3.xlsx`, modelled on the 16 Nov write-up of Tim's Gift Card Header) and, once READY, the three load files (or a zip), with the load order.
+4. Every run is kept (EST_RUNS): click an earlier run to see it again.
+
+How it hangs together:
+- `est_x3_page.html` (the page) → `sdi-intelligence-backend/estimating_routes.py` (`/api/estimate-x3`, portal key) → `est_run.py` (a subprocess, with the portal's `EST_PYTHON`) → `est_to_x3.build()` + `est_workbook.write()`.
+- **Product list = Sage X3's own:** the newest `products.json` from the X3 pull (`X3_EXPORT_DIR`, refreshed daily by Live Orders), or `EST_PRODUCTS`. The migration ZSDIITM file still works.
+- **Old .xls:** read with **xlrd** (`python -s -m pip install xlrd`), no LibreOffice needed; LibreOffice is the fallback. Tested byte-identical on Tim's estimate.
+- Installed by `add_live_orders_to_portal.py` (with Live Orders) and, on the server, `deploy_live_orders_server.ps1`.
+- Nothing is written to Sage X3. Loading is still by hand in Usage → Imports (TEST first); the automatic load needs a write-capable X3 connection (next stage).
 
 ## 2. Files and folder layout
 
@@ -55,8 +70,8 @@ sys.path.insert(0, r"C:\ClaudeVision_X3\sagex3\estimating")
 import est_to_x3
 
 res = est_to_x3.build(
-    est_path=r"C:\uploads\12539-04-GA-0359869- GIFT CARD HEADER REV B.xls",
-    out_dir=r"C:\portal\runs\20261116-0905_MS-0359869",
+    est_path=r"C:\uploads\<estimate>.xls",
+    out_dir=r"C:\portal\runs\20261116-0905_<part>",
     products_path=r"C:\portal\master\ZSDIITM_products_MAPPED.xlsx",
     parent=None,             # override the part code (e.g. "IMPORT"); None = take it from the estimate
     category="FGML",         # X3 category for a NEW part
@@ -69,13 +84,13 @@ res = est_to_x3.build(
 
 ```python
 {
-  "code":  "MS-0359869",        # X3 part code
+  "code":  "XX-0000001",        # X3 part code
   "new":   False,               # True = ZSDIITM written (part not in X3)
   "bom":   8,                   # BOM lines written
   "ops":   9,                   # route operations written
   "stop":  0,                   # STOP checks: if > 0 the result is NOT READY - do not load
   "warn":  0,                   # WARN checks: load allowed, but someone should look
-  "files": ["MS-0359869_YA00408BOM.xlsx", "MS-0359869_ZSDIROU2.xlsx"],
+  "files": ["XX-0000001_YA00408BOM.xlsx", "XX-0000001_ZSDIROU2.xlsx"],
   "checks": [["INFO", "H38", "Sheet 2500 x 1250 x 1.5mm CR4 -> SHEETMETAL11", "..."], ...]
 }
 ```
@@ -91,7 +106,7 @@ cd C:\ClaudeVision_X3\sagex3\estimating
 python est_to_x3.py "<estimate.xls>" <out_dir> --products "<ZSDIITM_products_MAPPED.xlsx>" [--parent CODE] [--category FGML] [--rev-in-code] [--sheet-material CR4]
 ```
 
-It prints, for example, `MS-0359869 (existing): BOM 8 lines, route 9 ops, 0 stop, 0 warn -> ...`, followed by any WARN / STOP lines.
+It prints, for example, `XX-0000001 (existing): BOM 8 lines, route 9 ops, 0 stop, 0 warn -> ...`, followed by any WARN / STOP lines.
 
 ### c) Web page (`est_app.py`)
 
@@ -130,7 +145,7 @@ The layout is detected automatically. The **estimators' template** has `H10 = "P
 
 | Estimate | Becomes |
 |---|---|
-| **A63** part code (first labour line) | X3 product code. Code rule: upper case; spaces, `&`, `( )`, CHAR(160) removed; `. / _` → `-`. So `M&S-0359869` → `MS-0359869`. |
+| **A63** part code (first labour line) | X3 product code. Code rule: upper case; spaces, `&`, `( )`, CHAR(160) removed; `. / _` → `-`. So `A&B-0000001` → `AB-0000001`. |
 | D4 description, D5 drawing, G5 rev | Product description / Description 2. These are only written if the part is new. |
 | D6 quantity, G6 unit cost, M59 material, M103 labour | Shown on Notes only; **not loaded** (costs: Acuity question B10) |
 | **Rows 11–25** standard materials: H code, K qty per unit, L scrap | BOM line: component H, link qty K. Scrap is **not loaded**, because the X3 template has no scrap column. |

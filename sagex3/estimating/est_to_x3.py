@@ -70,16 +70,66 @@ def clean(v, places=6):
 
 def open_estimate(path):
     path = Path(path)
-    if path.suffix.lower() == ".xls":                       # old Excel: convert with LibreOffice, values kept
-        tmp = Path(tempfile.mkdtemp())
-        subprocess.run(["soffice", "--headless", "--convert-to", "xlsx", "--outdir", str(tmp), str(path)],
-                       check=True, capture_output=True, timeout=180)
-        path = tmp / (path.stem + ".xlsx")
+    if path.suffix.lower() == ".xls":                       # old Excel: values only
+        return _xls_estimate(path)
     wb = load_workbook(path, data_only=True)
+    if "Estimate" not in wb.sheetnames:
+        raise SystemExit(f"{path.name} has no 'Estimate' sheet (it has: {', '.join(wb.sheetnames)}) - is it an estimate?")
     return wb["Estimate"]
 
 
+def _xls_estimate(path):
+    """An old .xls estimate. With xlrd (pip install xlrd) its saved values are copied into an in-memory sheet, cell
+    for cell - no LibreOffice needed on the portal server (20 Nov). Without xlrd, LibreOffice converts it, as before."""
+    try:
+        import xlrd
+    except ImportError:
+        xlrd = None
+    if xlrd:
+        book = xlrd.open_workbook(str(path))
+        names = book.sheet_names()
+        if "Estimate" not in names:
+            raise SystemExit(f"{path.name}: no 'Estimate' sheet (sheets: {', '.join(names)})")
+        src = book.sheet_by_name("Estimate")
+        ws = Workbook().active
+        ws.title = "Estimate"
+        for r in range(src.nrows):
+            for c in range(src.ncols):
+                cell = src.cell(r, c)
+                if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK):
+                    continue
+                val = cell.value
+                if cell.ctype == xlrd.XL_CELL_ERROR:
+                    val = xlrd.error_text_from_code.get(val, "#ERR")
+                elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
+                    val = bool(val)
+                ws.cell(r + 1, c + 1, val)
+        return ws
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        subprocess.run(["soffice", "--headless", "--convert-to", "xlsx", "--outdir", str(tmp), str(path)],
+                       check=True, capture_output=True, timeout=180)
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        raise SystemExit(f"Can't read the old .xls estimate: install xlrd (python -s -m pip install xlrd) "
+                         f"or LibreOffice, or save it as .xlsx ({e.__class__.__name__})")
+    return load_workbook(tmp / (path.stem + ".xlsx"), data_only=True)["Estimate"]
+
+
+def _x3_api_products(path):
+    """products.json from the X3 API pull (x3_api.py: code, productCategory.code, localizedDescription1-3) - the live
+    product list, so an estimate is checked against Sage X3 itself, not a migration file (20 Nov)."""
+    import json
+    rows = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    rows = rows if isinstance(rows, list) else rows.get("rows", [])
+    g = lambda r, *k: next((r[x] for x in k if r.get(x) not in (None, "")), "")
+    return [(str(g(r, "code", "ITMREF")).strip(), g(r, "productCategory.code", "TCLCOD"),
+             g(r, "localizedDescription1", "ITMDES1"), g(r, "localizedDescription2", "ITMDES2"),
+             g(r, "localizedDescription3", "ITMDES3")) for r in rows if g(r, "code", "ITMREF")]
+
+
 def x3_products(path):
+    if str(path).lower().endswith(".json"):
+        return {c: (cat, d1 or "") for c, cat, d1, d2, d3 in _x3_api_products(path)}
     ws = load_workbook(path, read_only=True)["Data with Headings"]
     return {str(r[1]).strip(): (r[0], r[2] or "") for r in ws.iter_rows(min_row=4, values_only=True) if r and r[1]}
 
@@ -99,10 +149,14 @@ def access_work_centres():
 
 def sheet_index(path):
     """(sheet length, width, gauge) -> [(X3 code, material)] from Description 2 / 3, e.g. '2500 x 1250 x 1.2mm CR4'."""
-    ws = load_workbook(path, read_only=True)["Data with Headings"]
-    idx, rows = {}, ws.iter_rows(values_only=True)
-    h2 = next(r for r in rows if r and "ITMREF" in r)                    # the X3 field-name row
-    ref, des = h2.index("ITMREF"), (h2.index("ITMDES2"), h2.index("ITMDES3"))
+    idx = {}
+    if str(path).lower().endswith(".json"):                              # the X3 API product list
+        rows, ref, des = [(c, d2, d3) for c, cat, d1, d2, d3 in _x3_api_products(path)], 0, (1, 2)
+    else:
+        ws = load_workbook(path, read_only=True)["Data with Headings"]
+        rows = ws.iter_rows(values_only=True)
+        h2 = next(r for r in rows if r and "ITMREF" in r)                # the X3 field-name row
+        ref, des = h2.index("ITMREF"), (h2.index("ITMDES2"), h2.index("ITMDES3"))
     for r in rows:
         if r and str(r[ref] or "").startswith("SHEETMETAL"):
             m = re.search(r"(\d+)\s*[xX]\s*(\d+)\s*(?:mm)?\s*[xX]\s*([\d.]+)\s*(?:mm)?\s*(.*)", " ".join(str(r[i] or "") for i in des))
@@ -122,13 +176,15 @@ def read_template(ws, sheets, wcmap, material="CR4"):
     for r in range(11, 26):                                  # standard materials: code H, qty per unit K, scrap L
         if v(f"H{r}"):
             bom.append(dict(block="Standard materials", cell=f"H{r}", code=str(v(f"H{r}")).strip(), qty=v(f"K{r}"),
-                            scrap=v(f"L{r}"), cost=v(f"M{r}"), note=str(v(f"C{r}") or "")))
+                            scrap=v(f"L{r}"), cost=v(f"M{r}"), note=str(v(f"C{r}") or ""), row=r,
+                            text=str(v(f"C{r}") or "").strip(), qty_cell=f"K{r}", scrap_cell=f"L{r}"))
         elif v(f"C{r}") and num(v(f"K{r}")) > 0:
             pre.append(["STOP", f"H{r}", f"'{v(f'C{r}')}': no part code", "Standard materials - type the code in H"])
     for r in range(28, 36):                                  # wire: code H (gauge table), kg per unit K
         if num(v(f"E{r}")) > 0:
             bom.append(dict(block="Wire", cell=f"H{r}", code=str(v(f"H{r}") or "").strip(), qty=v(f"K{r}"),
-                            scrap=v(f"L{r}"), cost=v(f"M{r}"), note=f"gauge {v(f'F{r}')} x {v(f'G{r}')}mm x {v(f'E{r}')}"))
+                            scrap=v(f"L{r}"), cost=v(f"M{r}"), note=f"gauge {v(f'F{r}')} x {v(f'G{r}')}mm x {v(f'E{r}')}",
+                            row=r, text=str(v(f"C{r}") or "").strip(), qty_cell=f"K{r}", scrap_cell=f"L{r}"))
     for r in range(38, 49):                                  # sheet steel: no code - gauge H, sheet I x J, per sheet K
         if num(v(f"E{r}")) > 0:
             per = num(v(f"K{r}"))
@@ -145,14 +201,18 @@ def read_template(ws, sheets, wcmap, material="CR4"):
                             + ("no X3 sheet" if not pick else f"{len(pick)} X3 sheets ({', '.join(pick)})"),
                             "X3 has: " + (", ".join(f"{c} {m}" for c, m in cands) or "nothing that size")])
             bom.append(dict(block="Sheet steel", cell=f"H{r}", code=pick[0] if len(pick) == 1 else "",
-                            qty=num(v(f"E{r}")) / per if per else 0, scrap=v(f"L{r}"), cost=v(f"M{r}"), note=note))
+                            qty=num(v(f"E{r}")) / per if per else 0, scrap=v(f"L{r}"), cost=v(f"M{r}"), note=note,
+                            row=r, text=str(v(f"C{r}") or "").strip(), parts=num(v(f"E{r}")), per=per,
+                            size=f"{clean(v(f'F{r}'))} x {clean(v(f'G{r}'))}mm", sheet=key, material=material,
+                            scrap_cell=f"L{r}"))
     for r in range(51, 59):                                  # other sheet material: no code column
         if num(v(f"D{r}")) > 0:
             txt = str(v(f"C{r}") or "").strip()
             per = num(v(f"J{r}"))
             first = re.split(r"[\s\-]+", txt)[0] if txt else ""
             bom.append(dict(block="Other sheet material", cell=f"C{r}", code=first, qty=num(v(f"D{r}")) / per if per else 0,
-                            scrap=v(f"K{r}"), cost=v(f"M{r}"), note=f"{txt}: {v(f'E{r}')} x {v(f'F{r}')}mm, {per:g} per sheet"))
+                            scrap=v(f"K{r}"), cost=v(f"M{r}"), note=f"{txt}: {v(f'E{r}')} x {v(f'F{r}')}mm, {per:g} per sheet",
+                            row=r, text=txt, parts=num(v(f"D{r}")), per=per, scrap_cell=f"K{r}"))
             pre.append(["WARN", f"C{r}", f"Other sheet material: code taken from the description ('{first}')",
                         "the template has no code column for this block - check it"])
     ops, parent = [], ""
@@ -162,7 +222,9 @@ def read_template(ws, sheets, wcmap, material="CR4"):
             dept = str(v(f"G{r}") or "").strip()
             ops.append(dict(cell=f"G{r}", parent="", labour=str(v(f"C{r}")).strip(), text=str(v(f"D{r}") or "").strip(),
                             wc=wcmap.get(dept, ""), dept=dept, run=60 / num(v(f"I{r}")) * num(v(f"H{r}")),
-                            setup=num(v(f"L{r}")), seq=None))
+                            setup=num(v(f"L{r}")), seq=None, row=r, rate=num(v(f"I{r}")), per_unit=num(v(f"H{r}")),
+                            how=f"60 ÷ {clean(v(f'I{r}'))} per hour (I{r}) × {clean(v(f'H{r}'))} per unit (H{r})",
+                            setup_cell=f"L{r}"))
     head["labour_parent"] = parent
     return head, bom, ops, pre
 
@@ -177,28 +239,33 @@ def read(ws):
     for r in range(11, 26):                                  # standard materials: code I, link qty L
         if v(f"I{r}"):
             bom.append(dict(block="Standard materials", cell=f"I{r}", code=str(v(f"I{r}")).strip(),
-                            qty=v(f"L{r}"), scrap=v(f"M{r}"), cost=v(f"N{r}")))
+                            qty=v(f"L{r}"), scrap=v(f"M{r}"), cost=v(f"N{r}"), row=r, text=str(v(f"D{r}") or "").strip(),
+                            qty_cell=f"L{r}", scrap_cell=f"M{r}"))
     for r in range(28, 36):                                  # wire: code B (from the gauge table), link qty C
         if num(v(f"F{r}")) > 0:
             bom.append(dict(block="Wire", cell=f"B{r}", code=str(v(f"B{r}") or "").strip(), qty=v(f"C{r}"),
-                            scrap=v(f"M{r}"), cost=v(f"N{r}"), note=f"gauge {v(f'G{r}')} x {v(f'H{r}')}mm x {v(f'F{r}')}"))
+                            scrap=v(f"M{r}"), cost=v(f"N{r}"), note=f"gauge {v(f'G{r}')} x {v(f'H{r}')}mm x {v(f'F{r}')}",
+                            row=r, text=str(v(f"D{r}") or "").strip(), qty_cell=f"C{r}", scrap_cell=f"M{r}"))
     for r in range(38, 49):                                  # sheet steel: code B, link qty C (sheets per unit)
         if v(f"B{r}") and num(v(f"F{r}")) > 0:
             bom.append(dict(block="Sheet steel", cell=f"B{r}", code=str(v(f"B{r}")).strip(), qty=v(f"C{r}"),
                             scrap=v(f"M{r}"), cost=v(f"N{r}"),
-                            note=f"{v(f'G{r}')} x {v(f'H{r}')}mm, gauge {v(f'I{r}')}, {v(f'L{r}')} per sheet"))
+                            note=f"{v(f'G{r}')} x {v(f'H{r}')}mm, gauge {v(f'I{r}')}, {v(f'L{r}')} per sheet",
+                            row=r, text=str(v(f"D{r}") or "").strip(), qty_cell=f"C{r}", scrap_cell=f"M{r}"))
     for r in range(51, 59):                                  # other sheet material: code B, link qty C
         if v(f"B{r}") and num(v(f"E{r}")) > 0:
             bom.append(dict(block="Other sheet material", cell=f"B{r}", code=str(v(f"B{r}")).strip(), qty=v(f"C{r}"),
                             scrap=v(f"L{r}"), cost=v(f"N{r}"),
-                            note=f"{v(f'F{r}')} x {v(f'G{r}')}mm, {v(f'K{r}')} per sheet"))
+                            note=f"{v(f'F{r}')} x {v(f'G{r}')}mm, {v(f'K{r}')} per sheet",
+                            row=r, text=str(v(f"D{r}") or "").strip(), qty_cell=f"C{r}", scrap_cell=f"L{r}"))
     ops = []
     for r in range(63, 101):                                 # labour: parent C, type D, text E, X3 WC R, run Q, set-up M
         if v(f"D{r}") and num(v(f"I{r}")) > 0 and num(v(f"J{r}")) > 0:
             text = str(v(f"E{r}") or "").strip()
             ops.append(dict(cell=f"R{r}", parent=str(v(f"C{r}") or "").strip(), labour=str(v(f"D{r}")).strip(),
                             text=text if text and not PLACEHOLDER.match(text) else "", wc=str(v(f"R{r}") or "").strip(),
-                            dept=str(v(f"H{r}") or "").strip(), run=v(f"Q{r}"), setup=v(f"M{r}"), seq=v(f"S{r}")))
+                            dept=str(v(f"H{r}") or "").strip(), run=v(f"Q{r}"), setup=v(f"M{r}"), seq=v(f"S{r}"),
+                            row=r, how=f"run minutes per unit from Q{r}", setup_cell=f"M{r}"))
     return head, bom, ops, []
 
 
@@ -239,6 +306,7 @@ def build(est_path, out_dir, products_path, parent=None, category="FGML", rev_in
     bom_rows, seq = [], 0
     for b in bom:
         raw, b["code"] = b["code"], product_code(b["code"])     # Access-style code -> X3 code (spaces, & ...)
+        b["raw"] = raw
         if raw != b["code"]:
             check("INFO", b["cell"], f"{raw} -> {b['code']}", "X3 code rule, as in the migration")
         if not b["code"]:
@@ -261,9 +329,11 @@ def build(est_path, out_dir, products_path, parent=None, category="FGML", rev_in
         same = next((r for r in bom_rows if r[8] == b["code"]), None)
         if same:                                               # one line per component, as Access holds it
             same[10] = clean(num(same[10]) + qty)
+            b["line"], b["merged"] = same[7], True
             check("INFO", b["cell"], f"{b['code']} appears again: quantities added", f"now {same[10]} per unit")
             continue
         seq += 10
+        b["line"] = seq
         bom_rows.append([code, 10, 2, None, None, 1, 1, seq, b["code"], 1, clean(qty)])
 
     rou_rows, n = [], 0
@@ -277,6 +347,7 @@ def build(est_path, out_dir, products_path, parent=None, category="FGML", rev_in
             check("INFO", o["cell"].replace("R", "E"), f"{o['labour']}: no operation description",
                   "the labour type is used instead")
         n += 5
+        o["opno"] = n
         rou_rows.append([code, 10, "S01A", 1, 2, 4, n, o["wc"], x3_text(o["text"] or o["labour"])[:30].rstrip(),
                          clean(o["setup"], 4), clean(o["run"], 4)])
     if len(rou_rows) > 150:
@@ -293,8 +364,9 @@ def build(est_path, out_dir, products_path, parent=None, category="FGML", rev_in
         for h in (ITM_H1, ITM_H2, ITM_H3):
             s.append(h)
         desc = x3_text(head["description"] or code)[:30].rstrip()
-        s.append([category, code, desc, f"Rev {head['rev']}" if head["rev"] and not rev_in_code else None, desc,
-                  "EA", "EA", 1, "EA", 1, "KG", 0, 0])
+        itm_row = [category, code, desc, f"Rev {head['rev']}" if head["rev"] and not rev_in_code else None, desc,
+                   "EA", "EA", 1, "EA", 1, "KG", 0, 0]
+        s.append(itm_row)
         notes(wb, [[f"ZSDIITM - parent product from estimate {Path(est_path).name}"], [],
                    ["Rule", ("Code = SDI drawing number (E5)" if head["layout"] == "IMPORT" else "Code = the part code in A63")
                     + "; revision in Description 2; category " + category]], index=0)
@@ -340,8 +412,13 @@ def build(est_path, out_dir, products_path, parent=None, category="FGML", rev_in
                               + (" (ZSDIITM: X3 rejects the line - the part already exists; expected)" if exists else "")]]
     notes(wb, summary, index=0)
     wb.save(out / f"{stem}_CHECKS.xlsx")
+    detail = dict(head=head, bom=bom, ops=ops, bom_rows=bom_rows, rou_rows=rou_rows, itm_row=itm_row,
+                  itm_head=ITM_H3, bom_head=BOM_TITLES, rou_head=ROU_H3, existing=prods.get(code),
+                  products=str(products_path), estimate=Path(est_path).name, category=category,
+                  sheet_material=sheet_material, x3=prods, load_files=[f[1][0].name for f in files if f[1]])
     return dict(code=code, new=not exists, bom=len(bom_rows), ops=len(rou_rows), stop=stop,
-                warn=sum(c[0] == "WARN" for c in checks), files=[f[0].name for f in files], checks=checks)
+                warn=sum(c[0] == "WARN" for c in checks), files=[f[0].name for f in files], checks=checks,
+                detail=detail)
 
 
 if __name__ == "__main__":

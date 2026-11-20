@@ -3391,7 +3391,7 @@ These are saved in the scratchpad `outbox_16Nov/` (not git).
 **Full technical write-up:** `sagex3/estimating/README.md`. It's the reference for James's estimating-portal build.
 
 - **Restart (16 Nov):** estimating is now worked from **Tim's original estimate only** (12539-04-GA (0359869) Gift Card Header rev B, 1 Sep 2026, quantity 40). The file is identical to the 13 Nov upload.
-  - **Fresh run:** `MS-0359869 (existing): BOM 8 lines, route 9 ops, 0 stop, 0 warn`.
+  - **Fresh run:** `the Gift Card Header part (existing): BOM 8 lines, route 9 ops, 0 stop, 0 warn`.
   - The BOM and route `.txt` are byte-identical to the 13 Nov run.
   - **No ZSDIITM:** the part already exists in X3. A product file is only written for a new part, as with Dave's IMPORT test part before.
 - **The email to Dave, Tim, James Ryan, Ethan and Marc (16 Nov, James's wording) has three attachments:**
@@ -3992,7 +3992,7 @@ The figures were unchanged.
 
 **18 Nov – `add_new_accounts_2026-11-18.sql` RUN by James (earlier than planned; safe, insert-only): ADDED 32 / 35; AFTER COMMIT 335 customers / 742 suppliers in the cross-reference, exactly as expected.** A re-run on Thursday shows 0 / 0. From now on the extracts carry these accounts' items and orders; Ethan must load the new customers and suppliers before the open items.
 
-**18 Nov – Tim's estimate files (MS-0359869, Gift Card Header 12539-04-GA rev B), as sent on 16 Nov, checked against today's data.**
+**18 Nov – Tim's estimate files (Gift Card Header 12539-04-GA rev B), as sent on 16 Nov, checked against today's data.**
 - **Re-run on today's product file:** byte-for-byte the files James holds (route 9 operations, BOM 8 lines; 0 stops, 0 warnings).
 - **Against the migration's own route and BOM from Access (in today's ZSDIROU2 / YA00408BOM):**
   - the route is **identical**;
@@ -4000,7 +4000,7 @@ The figures were unchanged.
     - the line order differs (Access 10 = SHEETMETAL11; estimate 10 = UPCSTICKER001);
     - the estimate's sheet quantities are unrounded (0.015848 vs 0.016);
     - the estimate leaves the validity dates blank (Access 19900101–20791231).
-- **Rule: don't load both for the same part.** MS-0359869 is already in the migration files. Loading the estimate's BOM on top could pair line numbers with different components if X3 updates by line.
+- **Rule: don't load both for the same part.** the Gift Card Header part is already in the migration files. Loading the estimate's BOM on top could pair line numbers with different components if X3 updates by line.
   - The estimate files prove the converter reproduces Access.
   - To test the estimating import in X3, use the IMPORT test part (`estimating_IMPORT/` in the hand-over zip), which is new and in nothing else.
 
@@ -4010,7 +4010,7 @@ The figures were unchanged.
   - products 20,124; costs 20,124; BOM lines 33,122; route operations 33,864;
   - Held_addresses_for_later.xlsx; WHAT_CHANGED;
   - `estimating_IMPORT/` (the test part to load);
-  - `estimating_TIM_MS-0359869/` (Tim's original estimate + converted files: for comparison, **not to load**).
+  - `estimating_TIM_<part>/` (Tim's original estimate + converted files: for comparison, **not to load**).
 - **Not in it:** ZSDIITMSUP (offered); YA004BPSC bank (separate, confidential route).
 - **The email laid out:**
   - the changes (address-fix bug, 26 held addresses, ACCCOD, placeholder supplier IDs, 32 + 35 new accounts);
@@ -4509,7 +4509,7 @@ Keep this up to date with every setting we choose. **Never write the secret here
 - **To get it on the portal:** `git pull` in `C:\SDI_X3\repo`, then run the installer with the real route file and `--apply` (it copies the new page and routes, backs up first), then restart SDIIntelligence.
 
 #### 20 Nov (late) – Routings now come straight from Sage X3; installer applied on the portal PC
-- **James applied the installer** (backups `*.bak-20261120-163620`). **Mistake:** the placeholder `C:\...\the file it found.txt` went in as `--routes-file`, so `.env` got `LIVE_ORDERS_ROUTES=C:\...\the file it found.txt`. The search had only found `MS-0359869_ZSDIROU2.txt` (an estimating import file, one GA) and estimating walkthroughs: **not** a route file for Live Orders.
+- **James applied the installer** (backups `*.bak-20261120-163620`). **Mistake:** the placeholder `C:\...\the file it found.txt` went in as `--routes-file`, so `.env` got `LIVE_ORDERS_ROUTES=C:\...\the file it found.txt`. The search had only found `<part>_ZSDIROU2.txt` (an estimating import file, one GA) and estimating walkthroughs: **not** a route file for Live Orders.
   - **Lesson: never paste a command with a placeholder in it.** Give the exact command or none. Before `--apply`, read the preview line by line.
 - **James's point: Live Orders comes from the database, not from estimating spreadsheets.** Agreed, and the route file is no longer needed: his `routes.csv` sample (x3Manufacturing.routingOperation) holds the same numbers the ZSDIROU2 load put into X3. Example: op 5, LABOUR, JLAB001, setup 0, run 60, proportional, base qty 1, timeFor1.
   - **`build_live_orders.read_x3_routes`:** minutes, as the load file. proportional → run ÷ baseQuantity per unit; managementUnit `rate` → 60 ÷ rate; fixed → counted once like a setup; alternateIndex 0 only; routing code 10 preferred.
@@ -4673,7 +4673,37 @@ Keep this up to date with every setting we choose. **Never write the secret here
 - **Fixed:** with no works orders, the due-week and hours charts drew an empty grid labelled "1, 1". They now say "No works orders yet – none are open in Sage X3"; the customers chart likewise. Tested with an empty data file, every tab.
 
 #### 20 Nov (evening) – Tim's original estimate re-run through the converter (now writing ZSDIITM always)
-- James uploaded `12539-04-GA-0359869- GIFT CARD HEADER REV B.xls` (names the customer: scratchpad only, never git).
-- **Result:** MS-0359869 (existing), BOM 8 lines, route 9 operations, 0 STOP, 0 WARN, plus `MS-0359869_ZSDIITM` (always written now; X3 will reject it as the part exists).
+- James uploaded Tim's original Gift Card Header estimate (.xls; names the customer: scratchpad only, never git).
+- **Result:** the part (existing), BOM 8 lines, route 9 operations, 0 STOP, 0 WARN, plus its `_ZSDIITM` product file (always written now; X3 will reject it as the part exists).
 - **All 8 BOM components with their link quantities and all 9 operations with their work centres match the 16 Nov write-up line by line** (set-up / run checked on the sample line).
-- **Caveat:** the X3 product list (`ZSDIITM_products_MAPPED.xlsx`) wasn't available, so a stand-in with the 15 products the write-up names (sheet sizes from its Checks tab) was used. That proves the conversion, not today's product list. **For the portal build: get the product list from X3 itself** (products.json from the daily pull: codes, categories, descriptions 1–3), so the estimate is checked against live X3, not a migration file.
+- **Caveat:** the X3 product list (`ZSDIITM_products_MAPPED.xlsx`) wasn't available, so a stand-in with the 13 products the write-up names (sheet sizes from its Checks tab) was used. (First written as 15: a miscount, corrected 20 Nov.) That proves the conversion, not today's product list. **For the portal build: get the product list from X3 itself** (products.json from the daily pull: codes, categories, descriptions 1–3), so the estimate is checked against live X3, not a migration file.
+
+#### 20 Nov (evening) – ESTIMATE → X3 PAGE IN THE PORTAL (James: "estimating page in the portal first … the excellent s/sheet and the BOMs, routes … and the product file")
+- **James's samples checked first:** his route and BOM load files (`_ZSDIROU2.txt`, `_YA00408BOM.txt`) are **byte-identical** to tonight's converter output from Tim's `.xls`; his `work_centres.csv` = the repo's; the write-up workbook = the one sent earlier.
+- **Built:**
+  - `est_to_x3.py`:
+    - keeps each line's cells (row, text, qty / scrap cells, sheet parts / per sheet / size, labour rate / per unit / "how") and where it lands (BOM line, merged, op no.);
+    - returns `detail`;
+    - reads the **X3 API products.json** (code, productCategory.code, localizedDescription1–3), so the sheet-steel lookup uses Description 2 / 3 as before;
+    - reads **.xls with xlrd** (LibreOffice fallback);
+    - a file without an "Estimate" sheet gets a plain message.
+  - `est_workbook.py` (new): **the write-up workbook on every run**, modelled on Tim's 16 Nov write-up. Tabs: Read me (result, checked against which product list as at when, files and load order), **Estimate → X3** (the part / the BOM row by row with the working, e.g. "1 ÷ 99 = 0.010101 sheets per unit", rows added together / the route with "60 ÷ 220 per hour (I63) × 1 per unit (H63)"), BOM file, Route file, **Product file**, Checks (STOP red, WARN amber). Same dark / yellow headings as the sample.
+  - `est_run.py` (new): one run for the portal. Finds the newest X3 products.json (or EST_PRODUCTS), runs the converter, writes the workbook and `run.json` (no product list in it).
+  - `sdi-intelligence-backend/estimating_routes.py` (new): `/api/estimate-x3`: page, POST run (the file is the raw request body, so no multipart library is needed; .xls / .xlsx only; 20 MB; runs off the event loop), runs (history), run, file, zip. Portal key on all but the page.
+  - `est_x3_page.html` (new): upload (drop or choose), options (category if new, sheet material, part-code override, IMPORT revision), READY / NOT READY banner, tiles, downloads (write-up always; load files + zip only when READY), load order, tabs mirroring the workbook, history.
+  - **Installer** adds the page too: menu item "Estimate → X3" under Live Orders, its section and frame, the router mount after Live Orders', `.env` EST_RUNS / EST_HOME / EST_PYTHON. It warns about missing openpyxl / xlrd (with the `-s` pip command).
+  - **Server script:** installs openpyxl + xlrd with `-s`; `C:\ProgramData\SDI\Estimating` for runs; tells you to run a Live Orders Regenerate first (it pulls the product list).
+- **Tested (scratchpad, never git: Tim's estimate names the customer):**
+  - xlrd vs LibreOffice: byte-identical load files, and both = James's samples;
+  - products.json format vs the ZSDIITM format: identical files;
+  - the write-up's Estimate → X3 tab matches Tim's 16 Nov write-up line for line;
+  - installer preview → apply → re-run ("Nothing to do") on a portal copy with Live Orders;
+  - the patched portal running: menu item → page → upload Tim's .xls → READY TO LOAD, 8 / 9 / 0 / 0, every tab, workbook downloaded (6 tabs), history;
+  - a not-ready estimate (unknown component H11, OVEN with no X3 work centre G63) → NOT READY, 2 STOP, load files withheld;
+  - a non-estimate .xlsx → a clear error;
+  - an .exe name → refused (400).
+- **Still to come:**
+  - the **automatic load into X3** (a separate write-capable connection, SDI Mig first, create-only, logged);
+  - new components (product + product-supplier) and the standard cost (YITC) in the load;
+  - who ran it is the PC's address (no portal login).
+- **Names-out-of-git sweep while committing:** the customer-prefixed part code of Tim's estimate, the customer's name, and the estimate's file name (it carries the customer's article number) were in the estimating README (since 16 Nov) and in runbook entries (18 Nov and tonight). They are replaced with neutral wording / placeholders (`XX-0000001`, `<part>`, "the Gift Card Header part"). Git history still holds the old text. **Lesson: check `git diff --cached` for customer names and codes before every commit that touches estimating.**

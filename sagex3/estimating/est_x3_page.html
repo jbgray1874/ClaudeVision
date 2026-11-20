@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Estimate to X3</title>
+<!--
+  SDI Intelligence - Estimate → Sage X3 (20 Nov 2026). Upload an estimate (.xls / .xlsx); the portal runs the converter
+  (sagex3/estimating/est_run.py) against the live X3 product list and returns the X3 import files - product (ZSDIITM,
+  always), BOM (YA00408BOM), route (ZSDIROU2) - and the write-up workbook. Every run is kept. Nothing is written to X3.
+  In the portal: /api/estimate-x3/page#key=<key> (the key after # never reaches the server).
+-->
+<style>
+:root{--y:#F5D947;--ink:#1d1e1d;--t:#1f2321;--muted:#626763;--line:#e3e4e0;--bg:#f2f2ee;--card:#fff;--soft:#f7f7f4;
+  --g:#1e7a3a;--gb:#e3f4e8;--a:#a06400;--ab:#fff1c7;--r:#b42318;--rb:#fde2e1;--m:#3b6ea8;--sh:0 1px 2px rgba(0,0,0,.04),0 6px 18px rgba(0,0,0,.05)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--t:#ececea;--muted:#a3a7a4;--line:#363837;--bg:#121312;--card:#1c1d1c;--soft:#222322;
+  --g:#7fd39a;--gb:#16301f;--a:#f2c661;--ab:#3a2f12;--r:#ff998d;--rb:#3a1d1b;--m:#7fa9dc;--sh:none}}
+:root[data-theme="dark"]{--t:#ececea;--muted:#a3a7a4;--line:#363837;--bg:#121312;--card:#1c1d1c;--soft:#222322;
+  --g:#7fd39a;--gb:#16301f;--a:#f2c661;--ab:#3a2f12;--r:#ff998d;--rb:#3a1d1b;--m:#7fa9dc;--sh:none}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--t);font:14px/1.45 'Segoe UI','Helvetica Neue',Arial,sans-serif}
+header{background:radial-gradient(1200px 300px at 85% -40%,rgba(245,217,71,.22),transparent 60%),linear-gradient(135deg,#1b1c1b,#2b2c2a);color:#fff;border-bottom:4px solid var(--y)}
+.w{max-width:1500px;margin:0 auto;padding:0 18px}
+.hd{padding-top:18px;padding-bottom:14px}
+.brand{color:var(--y);font-weight:800;font-size:13px}h1{margin:2px 0;font-size:28px;letter-spacing:-.3px}.sub{color:#cfd1ce;font-size:13px}
+main{padding:18px 0 48px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:var(--sh);margin-bottom:16px;min-width:0}
+.card h2{font-size:15px;margin:0 0 2px}.note{margin:0 0 10px;color:var(--muted);font-size:12px}
+.grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px}@media (max-width:980px){.grid{grid-template-columns:1fr}}
+#drop{border:2px dashed var(--line);border-radius:14px;padding:30px 16px;text-align:center;background:var(--soft);cursor:pointer}
+#drop.on{border-color:var(--y);background:var(--ab)}#drop b{font-size:16px}
+.opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:12px}
+label{font-size:12px;color:var(--muted);display:block;margin-bottom:3px}
+input,select,button{font:inherit;padding:7px 11px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--t);width:100%}
+button{cursor:pointer;width:auto}button:disabled{opacity:.55;cursor:wait}
+.y{background:var(--y);color:#1c1c1c;border-color:var(--y);font-weight:800;padding:9px 18px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.banner{border-radius:12px;padding:14px 16px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.banner.ok{background:var(--gb);color:var(--g)}.banner.no{background:var(--rb);color:var(--r)}.banner b{font-size:20px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:12px}
+.tile{border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-width:0}.tile b{display:block;font-size:20px;overflow-wrap:anywhere}.tile span{color:var(--muted);font-size:12px}
+nav.tabs{display:flex;gap:4px;overflow-x:auto;margin:6px 0 10px}
+nav.tabs button{border:0;background:transparent;padding:7px 13px;border-radius:99px;font-weight:600;color:var(--muted);white-space:nowrap}
+nav.tabs button.on{background:var(--ink);color:#fff}
+:root[data-theme="dark"] nav.tabs button.on{background:var(--y);color:#1c1c1c}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) nav.tabs button.on{background:var(--y);color:#1c1c1c}}
+.tbl{overflow:auto;max-height:560px;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:6px 8px;border-top:1px solid var(--line);text-align:left;vertical-align:top}
+th{position:sticky;top:0;background:#282928;color:var(--y);font-weight:600;font-size:12px;z-index:1;white-space:nowrap}
+td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.sec td{background:var(--y);color:#1c1c1c;font-weight:800}tr.sum td{font-weight:700;background:var(--soft)}
+.lv{font-weight:800;border-radius:99px;padding:1px 8px;font-size:11px}.STOP{background:var(--rb);color:var(--r)}.WARN{background:var(--ab);color:var(--a)}.INFO{background:var(--soft);color:var(--muted)}
+.dl a{display:inline-block;margin:4px 8px 4px 0;padding:6px 12px;border-radius:8px;border:1px solid var(--line);color:var(--t);text-decoration:none;font-weight:600;cursor:pointer}
+.dl a.main{background:var(--y);color:#1c1c1c;border-color:var(--y)}
+ol.steps{margin:6px 0 0 18px;padding:0}ol.steps li{margin:3px 0}
+.muted{color:var(--muted)}.hide{display:none!important}.err{color:var(--r);font-weight:600}
+#hist tr{cursor:pointer}#hist tr.cur td{background:var(--ab)}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--y);border-radius:50%;animation:s 1s linear infinite;vertical-align:-2px}@keyframes s{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<header><div class="w hd"><div class="brand">we.are.sdi · Estimating</div><h1>Estimate → Sage X3</h1>
+<div class="sub">Upload an estimate. Get the X3 product, BOM and route import files and the write-up, checked against Sage X3's own product list. Nothing is written to Sage X3.</div></div></header>
+<main class="w">
+  <div class="grid">
+    <div class="card">
+      <h2>1. The estimate</h2><p class="note">The estimators' template or Dave's IMPORT layout, .xls or .xlsx, as saved - no macro, no copy and paste.</p>
+      <div id="drop"><b>Drop the estimate here</b><br><span class="muted">or click to choose a file</span><input type="file" id="file" accept=".xls,.xlsx,.xlsm" class="hide"></div>
+      <div class="opts">
+        <div><label for="category">Category if the part is new</label><select id="category"><option>FGML</option><option>FGSL</option></select></div>
+        <div><label for="sheet">Sheet steel material</label><select id="sheet"><option>CR4</option><option>ZINTEC</option><option>Galvanised</option></select></div>
+        <div><label for="parent">Part code (optional override)</label><input id="parent" placeholder="from the estimate"></div>
+        <div><label for="rev">IMPORT layout only</label><select id="rev"><option value="">Revision in Description 2</option><option value="1">Revision in the part code</option></select></div>
+      </div>
+      <div class="row"><button class="y" id="go" disabled>Generate the X3 files</button><span id="stat" class="muted"></span></div>
+    </div>
+    <div class="card"><h2>Earlier runs</h2><p class="note" id="histnote">Every run is kept: click one to see it again.</p>
+      <div class="tbl" style="max-height:330px"><table id="hist"></table></div></div>
+  </div>
+
+  <div class="card hide" id="result">
+    <div class="banner" id="banner"></div>
+    <div class="tiles" id="tiles"></div>
+    <div class="dl" id="dl"></div>
+    <div id="order"></div>
+    <nav class="tabs" id="tabs">
+      <button data-t="ex" class="on">Estimate → X3</button><button data-t="bom">BOM file</button><button data-t="rou">Route file</button>
+      <button data-t="itm">Product file</button><button data-t="ck">Checks</button>
+    </nav>
+    <div class="tbl" id="view" style="max-height:none"></div>
+  </div>
+</main>
+<script>
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
+const esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const g=(v,p=6)=>{if(v===null||v===undefined||v==='')return '';const n=Number(v);return isNaN(n)?v:String(+n.toFixed(p))};
+let key='';try{const m=location.hash.match(/key=([^&]+)/);if(m){sessionStorage.setItem('sdiKey',decodeURIComponent(m[1]));history.replaceState(null,'',location.pathname+location.search)}key=sessionStorage.getItem('sdiKey')||''}catch(e){}
+const HD=()=>key?{'X-SDI-Key':key}:{};
+const API='/api/estimate-x3';let FILE=null,R=null,tab='ex';
+
+// ------------------------------------------------ upload
+const dz=$('#drop');dz.onclick=()=>$('#file').click();
+$('#file').onchange=e=>pick(e.target.files[0]);
+['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('on')}));
+['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,()=>dz.classList.remove('on')));
+dz.addEventListener('drop',e=>{e.preventDefault();pick(e.dataTransfer.files[0])});
+function pick(f){if(!f)return;if(!/\.(xls|xlsx|xlsm)$/i.test(f.name)){$('#stat').innerHTML='<span class="err">That isn\'t an .xls or .xlsx estimate.</span>';return}
+  FILE=f;dz.innerHTML=`<b>${esc(f.name)}</b><br><span class="muted">${(f.size/1024).toFixed(0)} KB · click to choose another</span>`;$('#go').disabled=false;$('#stat').textContent=''}
+$('#go').onclick=()=>{if(!FILE)return;$('#go').disabled=true;$('#stat').innerHTML='<span class="spin"></span> Reading the estimate and checking it against Sage X3…';
+  const q=new URLSearchParams({name:FILE.name,category:$('#category').value,sheet_material:$('#sheet').value,parent:$('#parent').value.trim(),rev_in_code:$('#rev').value?'true':'false'});
+  fetch(`${API}/run?${q}`,{method:'POST',headers:{...HD(),'Content-Type':'application/octet-stream'},body:FILE})
+   .then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j}))
+   .then(j=>{$('#stat').textContent='';show(j);loadHist()})
+   .catch(e=>{$('#stat').innerHTML=`<span class="err">Couldn't run: ${esc(e.message)}</span>`})
+   .finally(()=>{$('#go').disabled=false})};
+
+// ------------------------------------------------ result
+function show(j){R=j;$('#result').classList.remove('hide');markHist();
+  if(!j.ok){$('#banner').className='banner no';$('#banner').innerHTML=`<b>Couldn't convert</b><span>${esc(j.error)}</span>`;
+    ['#tiles','#dl','#order','#view'].forEach(s=>$(s).innerHTML='');$('#tabs').classList.add('hide');return}
+  $('#tabs').classList.remove('hide');
+  const ok=j.ready;$('#banner').className='banner '+(ok?'ok':'no');
+  $('#banner').innerHTML=`<b>${ok?'READY TO LOAD':'NOT READY'}</b><span>${esc(j.code)} · ${esc(j.estimate)} · ${ok?'every line checked against Sage X3':`${j.stop} STOP check${j.stop==1?'':'s'} to fix in the estimate, then run it again`}</span>`;
+  const ex=j.existing;
+  $('#tiles').innerHTML=[[j.code,ex?'already in Sage X3':'new part'],[j.bom,'BOM lines'],[j.ops,'route operations'],[j.stop,'STOP'],[j.warn,'WARN'],
+    [when(j.products&&j.products.as_at),'X3 product list as at']].map(t=>`<div class="tile"><b>${esc(t[0])}</b><span>${t[1]}</span></div>`).join('');
+  const f=n=>`${API}/run/${encodeURIComponent(j.id)}/file/${encodeURIComponent(n)}`;
+  const loads=(j.load_files||[]).slice().sort((a,b)=>rank(a)-rank(b));
+  $('#dl').innerHTML=`<a class="main" data-f="${esc(f(j.workbook))}" data-n="${esc(j.workbook)}">⬇ The write-up workbook</a>`+
+    (ok?loads.map(n=>`<a data-f="${esc(f(n))}" data-n="${esc(n)}">⬇ ${esc(n)}</a>`).join('')+`<a data-f="${API}/run/${encodeURIComponent(j.id)}/zip" data-n="${esc(j.id)}.zip">⬇ All files (zip)</a>`:
+     '<span class="muted">The load files are offered once the STOP checks are fixed.</span>');
+  $('#order').innerHTML=ok?`<p class="note" style="margin-top:8px"><b>Load in Sage X3</b> (Usage → Imports, TEST / SDI Mig first), in this order:</p><ol class="steps">${loads.map(n=>`<li>${esc(n)} ${n.includes('ZSDIITM')?(ex?'<span class="muted">- the part exists, so X3 rejects this line: expected</span>':'<span class="muted">- creates the part</span>'):n.includes('BOM')?'<span class="muted">- the bill of materials</span>':'<span class="muted">- the route</span>'}</li>`).join('')}</ol>`:'';
+  render()}
+function rank(n){return n.includes('ZSDIITM')?0:n.includes('BOM')?1:2}
+$('#dl').addEventListener('click',e=>{const a=e.target.closest('a[data-f]');if(!a)return;
+  fetch(a.dataset.f,{headers:HD()}).then(r=>{if(!r.ok)throw new Error(r.status);return r.blob()}).then(b=>{const u=URL.createObjectURL(b),l=document.createElement('a');l.href=u;l.download=a.dataset.n;l.click();setTimeout(()=>URL.revokeObjectURL(u),2000)}).catch(e=>alert('Download failed: '+e.message))});
+$('#tabs').addEventListener('click',e=>{const b=e.target.closest('button[data-t]');if(!b)return;tab=b.dataset.t;$$('#tabs button').forEach(x=>x.classList.toggle('on',x===b));render()});
+
+function tbl(head,rows,cls=[]){return `<table><thead><tr>${head.map((h,i)=>`<th class="${cls[i]||''}">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`}
+function tr(cells,cls=[],rcls=''){return `<tr class="${rcls}">${cells.map((c,i)=>`<td class="${cls[i]||''}">${c}</td>`).join('')}</tr>`}
+function render(){const j=R;if(!j||!j.ok)return;const v=$('#view');const h=j.head||{};const imp=h.layout==='IMPORT';
+  if(tab==='ex'){const rows=[];const ex=j.existing;
+    rows.push(tr(['1. The part','','','','','',''],[],'sec'));
+    rows.push(tr(['<b>Estimate cell</b>','<b>What it holds</b>','<b>Value in the estimate</b>','<b>X3 file</b>','<b>X3 field</b>','<b>Value in the X3 file</b>','<b>How</b>']));
+    const itm=j.itm_row||[];const raw=imp?h.drawing:(h.labour_parent||h.drawing);
+    [[imp?'E5':'A63','Part code',raw,'Product, BOM and route','Product (ITMREF)',j.code,raw!==j.code?'X3 code rule, as in the migration':'Used as it is'],
+     [imp?'E4':'D4','Description',h.description,'Product file','Description',itm[2],ex?`X3 keeps its own - the part exists: '${ex[1]}'`:'First 30 characters'],
+     [imp?'E5 / H5':'D5 / G5','Drawing / revision',`${h.drawing_full||h.drawing||''} rev ${h.rev||''}`,'Product file','Description 2',itm[3]||'','Revision in Description 2'],
+     ['–','Category',j.options&&j.options.category,'Product file','Category',itm[0],'Chosen on this page'],
+     [imp?'E3':'D3','Customer',h.customer,'–','–','–','Not part of the product: comes from the sales order'],
+     [imp?'E6 / H6':'D6 / G6','Quantity / unit cost',`${g(h.quantity)} / ${h.unit_cost!=null&&h.unit_cost!==''?'£'+Number(h.unit_cost).toFixed(2):''}`,'–','–','–','Not loaded (the standard cost load is still to add)']]
+     .forEach(r=>rows.push(tr(r.map(esc))));
+    rows.push(tr(['2. The bill of materials','','','','','',''],[],'sec'));
+    rows.push(tr(['<b>Estimate row</b>','<b>Block</b>','<b>What the estimate says</b>','<b>BOM line</b>','<b>Component in X3</b>','<b>Link qty per unit</b>','<b>How</b>']));
+    (j.bom_read||[]).forEach(b=>{const sh=b.block==='Sheet steel'&&b.per!=null;
+      let how=sh?`${g(b.parts)} ÷ ${g(b.per)} = ${g(b.qty)} sheets per unit (${b.size||''}, ${b.sheet?b.sheet[0]+' x '+b.sheet[1]+' x '+g(b.sheet[2])+'mm':''} sheet, ${esc(b.material||'CR4')})`:`Qty per unit from ${b.qty_cell||b.cell}`;
+      if(Number(b.scrap))how+=`; scrap ${Math.round(Number(b.scrap)*100)}% not loaded`;
+      if(b.raw&&b.code&&b.raw!==b.code)how+=`; ${b.raw} → ${b.code}`;if(b.merged)how+=`; added to line ${b.line}`;if(!b.line)how+=' - NOT LOADED (see Checks)';
+      rows.push(tr([esc('Row '+(b.row||'')),esc(b.block),esc(b.text||b.note||''),esc(b.line||'–'),esc(b.code||'(none)'),b.line?esc(g(b.qty)):'–',esc(how)],['','','','n','','n','']))});
+    const by={};(j.bom_read||[]).forEach(b=>{if(b.line)(by[b.line]=by[b.line]||[]).push(b)});
+    Object.entries(by).filter(([l,bs])=>bs.length>1).forEach(([l,bs])=>{const t=bs.reduce((a,b)=>a+Number(b.qty||0),0);
+      rows.push(tr(['→',esc(bs[0].block),esc(bs.map(b=>'row '+b.row).join(' + ')),esc(l),esc(bs[0].code),esc(g(t)),esc(bs.map(b=>g(b.qty)).join(' + ')+' = '+g(t)+' per unit')],['','','','n','','n',''],'sum'))});
+    rows.push(tr(['3. The route','','','','','',''],[],'sec'));
+    rows.push(tr(['<b>Estimate row</b>','<b>Operation</b>','<b>Description</b>','<b>Dept → X3 work centre</b>','<b>Op no.</b>','<b>Set-up / run (min)</b>','<b>How run time is worked out</b>']));
+    (j.ops_read||[]).forEach(o=>rows.push(tr([esc('Row '+(o.row||'')),esc(o.labour),esc(o.text||o.labour),esc(imp?(o.wc||'(none)'):`${o.dept} → ${o.wc||'(none)'}`),esc(o.opno||'NOT LOADED'),esc(`${g(o.setup,4)} / ${g(o.run,4)}`),esc((o.how||'')+(o.opno?'':' - not loaded (see Checks)'))],['','','','','n','n',''])));
+    v.innerHTML=`<table><tbody>${rows.join('')}</tbody></table>`}
+  if(tab==='bom')v.innerHTML=tbl(['BOM line','Parent','BOM code','Use status','Base qty','Component','Component type','Link qty per unit'],(j.bom_rows||[]).map(x=>tr([x[7],x[0],x[1],x[2],x[5],x[8],x[9],g(x[10])].map(esc),['n','','n','n','n','','n','n'])),['n','','n','n','n','','n','n']);
+  if(tab==='rou')v.innerHTML=tbl(['Operation no.','Product','Routing','Site','Work centre','Operation description','Set-up (min)','Run per unit (min)'],(j.rou_rows||[]).map(x=>tr([x[6],x[0],x[1],x[2],x[7],x[8],g(x[9],4),g(x[10],4)].map(esc),['n','','n','','','','n','n'])),['n','','n','','','','n','n']);
+  if(tab==='itm')v.innerHTML=tbl(['Category','Product','Description','Description 2','Description 3','Stock unit','Purchase unit','PUR-STK','Sales unit','SAL-STK','Weight unit','Weight','Base price'],[tr((j.itm_row||[]).map(esc))])+
+    `<p class="note" style="padding:8px">${j.existing?`Already in Sage X3 as '${esc(j.existing[1])}': X3 rejects this line on import - expected.`:'New part: this line creates it in Sage X3.'}</p>`;
+  if(tab==='ck')v.innerHTML=tbl(['Level','Cell','Check','Detail'],(j.checks||[]).slice().sort((a,b)=>'SWI'.indexOf(a[0][0])-'SWI'.indexOf(b[0][0])).map(c=>tr([`<span class="lv ${esc(c[0])}">${esc(c[0])}</span>`,esc(c[1]),esc(c[2]),esc(c[3])])))}
+
+// ------------------------------------------------ history
+function when(s){const m=String(s||'').match(/(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/);return m?`${m[3]}/${m[2]} ${m[4]}:${m[5]}`:(s||'')}
+function loadHist(){return fetch(`${API}/runs`,{headers:HD()}).then(r=>r.json()).then(h=>{const L=h.runs||[];
+  $('#histnote').textContent=L.length?`${L.length} run${L.length==1?'':'s'} kept. Click one to see it again.`:'No runs yet.';
+  $('#hist').innerHTML=L.length?'<tr><th>When</th><th>Part</th><th>Estimate</th><th>Result</th></tr>'+L.map(r=>`<tr data-id="${esc(r.id)}"><td>${esc(when(r.when))}</td><td><b>${esc(r.code||'')}</b></td><td>${esc(r.estimate||'')}</td><td>${!r.ok?'<span class="lv STOP">ERROR</span>':r.ready?'<span class="lv INFO" style="background:var(--gb);color:var(--g)">READY</span>':`<span class="lv STOP">${r.stop} STOP</span>`}</td></tr>`).join(''):'';markHist()}).catch(()=>{})}
+function markHist(){$$('#hist tr[data-id]').forEach(t=>t.classList.toggle('cur',!!R&&t.dataset.id===R.id))}
+$('#hist').addEventListener('click',e=>{const t=e.target.closest('tr[data-id]');if(!t)return;
+  fetch(`${API}/run/${encodeURIComponent(t.dataset.id)}`,{headers:HD()}).then(r=>r.json()).then(j=>{show(j);$('#result').scrollIntoView({behavior:'smooth'})})});
+loadHist();
+</script>
+</body>
+</html>

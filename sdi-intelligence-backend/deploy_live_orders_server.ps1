@@ -1,6 +1,6 @@
 <#
-  deploy_live_orders_server.ps1 - puts Live Orders on the SDI Intelligence portal running on THIS machine (the server,
-  SDI-APP01). Written 20 Nov 2026.
+  deploy_live_orders_server.ps1 - puts Live Orders and Estimate -> X3 on the SDI Intelligence portal running on THIS
+  machine (the server, SDI-APP01). Written 20 Nov 2026 (Estimate -> X3 added the same evening).
 
   Run ON the server, in PowerShell as administrator:
       powershell -ExecutionPolicy Bypass -File C:\SDI_X3\repo\sdi-intelligence-backend\deploy_live_orders_server.ps1
@@ -11,9 +11,9 @@
 
   What it does, stopping at the first problem:
     1. finds the running portal (whatever listens on port 8071): its folder, its Python, and its Windows service
-    2. checks that Python is 3.10+ and has openpyxl (installs openpyxl if missing)
+    2. checks that Python is 3.10+ and has openpyxl and xlrd (installs them for every account if missing)
     3. locks the X3 settings file down (Administrators, SYSTEM and the service's account only)
-    4. makes the working folder C:\ProgramData\SDI\LiveOrders (runs, X3 exports)
+    4. makes the working folders C:\ProgramData\SDI\LiveOrders (runs, X3 exports) and C:\ProgramData\SDI\Estimating
     5. previews add_live_orders_to_portal.py, ASKS, then applies it (it backs every file up first)
     6. restarts the portal's service and checks that Live Orders answers
     7. checks that the service's account can write to Production's LiveOrders folder (as SYSTEM, via a one-off task)
@@ -24,6 +24,7 @@ param(
     [string]$Target = "",                                   # the portal folder (app.py); found automatically if blank
     [string]$X3Config = "C:\ProgramData\SDI\x3_api.json",
     [string]$Data = "C:\ProgramData\SDI\LiveOrders",
+    [string]$EstRuns = "C:\ProgramData\SDI\Estimating",
     [string]$Share = "\\sdi-dc01\shareddata$\Shared\Operations\Reporting\LiveOrders"
 )
 $ErrorActionPreference = "Continue"
@@ -58,13 +59,15 @@ else      { Say "Service       : none - the portal was started by hand (it stops
 # 2. Python ------------------------------------------------------------------------------------------------------
 & $py -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
 if ($LASTEXITCODE -ne 0) { Fail "$py is older than Python 3.10" }
-& $py -c "import openpyxl" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Say "Installing openpyxl (the workbook library) into $py ..."
-    & $py -m pip install openpyxl
-    if ($LASTEXITCODE -ne 0) { Fail "couldn't install openpyxl - run:  `"$py`" -m pip install openpyxl" }
+foreach ($mod in @("openpyxl", "xlrd")) {          # workbooks; old .xls estimates
+    & $py -s -c "import $mod" 2>$null                 # -s: as the service sees it (not this user's own folder)
+    if ($LASTEXITCODE -ne 0) {
+        Say "Installing $mod into $py for every account ..."
+        & $py -s -m pip install $mod
+        if ($LASTEXITCODE -ne 0) { Fail "couldn't install $mod - run:  `"$py`" -s -m pip install $mod" }
+    }
 }
-Say "Python OK (3.10+, openpyxl)" Green
+Say "Python OK (3.10+, openpyxl, xlrd)" Green
 
 # 3. the X3 settings file ----------------------------------------------------------------------------------------
 if (-not (Test-Path $X3Config)) { Fail "the X3 settings file isn't at $X3Config - copy it from your PC first (see the runbook)" }
@@ -76,13 +79,16 @@ if ($LASTEXITCODE -ne 0) { Fail "couldn't restrict $X3Config" }
 Say "X3 settings file locked down: Administrators, SYSTEM$(if ($grants.Count -gt 2) { ", $acct" })" Green
 
 # 4. working folder ----------------------------------------------------------------------------------------------
-New-Item -ItemType Directory -Force -Path "$Data\runs", "$Data\X3_exports" | Out-Null
-if ($acct -and $acct -notmatch '^(LocalSystem|NT AUTHORITY\\SYSTEM)$') { & icacls $Data /grant "${acct}:(OI)(CI)M" | Out-Null }
-Say "Working folder: $Data" Green
+New-Item -ItemType Directory -Force -Path "$Data\runs", "$Data\X3_exports", $EstRuns | Out-Null
+if ($acct -and $acct -notmatch '^(LocalSystem|NT AUTHORITY\\SYSTEM)$') {
+    & icacls $Data /grant "${acct}:(OI)(CI)M" | Out-Null
+    & icacls $EstRuns /grant "${acct}:(OI)(CI)M" | Out-Null
+}
+Say "Working folders: $Data, $EstRuns" Green
 
 # 5. the installer: preview, ask, apply --------------------------------------------------------------------------
 $args5 = @($Installer, "--target", $Target, "--x3-config", $X3Config, "--runs", "$Data\runs",
-           "--exports", "$Data\X3_exports", "--share", $Share)
+           "--exports", "$Data\X3_exports", "--share", $Share, "--est-runs", $EstRuns)
 Say "`n-- preview --" Yellow
 & $py @args5
 if ($LASTEXITCODE -ne 0) { Fail "the installer stopped (above) - nothing was changed" }
@@ -135,4 +141,5 @@ if ($acct -match '^(LocalSystem|NT AUTHORITY\\SYSTEM)$') {
     Say "`nThe service runs as $acct - make sure that account can write to $Share. Regenerate will show 'access denied' if not." DarkYellow
 }
 
-Say "`nDone. Open http://$($env:COMPUTERNAME):$Port (or http://10.0.0.5:$Port), click Live Orders, press Regenerate." Yellow
+Say ("`nDone. Open http://$($env:COMPUTERNAME):$Port (or http://10.0.0.5:$Port): Live Orders -> Regenerate first (it also " +
+     "pulls the X3 product list that Estimate -> X3 checks against), then Estimate -> X3.") Yellow
