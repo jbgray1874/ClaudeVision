@@ -4600,3 +4600,15 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - the portal's **How it works** tab (data contract: `live`, `logic`).
   - One list, so the two can't disagree. The material-status row says honestly that the 16 Nov reconciliation listed Production's typed status beside the board's, but didn't score it (LO-01).
 - Tested: workbook rebuilt (tabs: Dashboard, Live Orders, Work-centre load, WO Suggestions, Exploded BOMs, How it works, Checks), rendered with LibreOffice; the portal tab shows all 12 rows, no errors.
+
+#### 20 Nov (evening) – Jira brought up to date with the Live Orders work (James: "we should be updating Sage X3 Jira tasks with all of this work")
+- **RULE (James): every piece of Sage X3 work goes on its own Jira task(s), not only SCRUM-329.** Find the tasks it touches (`project = SCRUM AND text ~ "Live Orders" …`) and update each: status, plus a comment saying what's built, what's left, and how it differs from the task as written.
+- **James: Production will test it fully; minor changes in behaviour are accommodated.**
+- **Moved to In Progress:** SCRUM-241 (INT-X3-06 Live Orders), SCRUM-246 (LO-02 board), SCRUM-247 (LO-03 load), SCRUM-248 (LO-04 suggestions), SCRUM-249 (LO-05 exploded BOM). None closes before Production's test (each task's "Done when").
+- **Comments:** SCRUM-241, 245 (LO-01: 5 points for the sit-down), 246, 247, 248, 249, 233 (Proto Live orders not built), 222, 165 (routing ops with no main work centre), 167 (what Live Orders needs from the WO and stock load), 195 (portal page), 329.
+- **New sub-tasks under SCRUM-241:** SCRUM-332 (LO-06 server, SDI-APP01), SCRUM-333 (LO-07 refresh schedule), SCRUM-334 (LO-08 Production test).
+- **Gap found while writing them:** **material cost** on the exploded BOM is blank in the X3 version. The X3 standard cost isn't pulled yet (`run_x3` passes no `--costs`). To add: a cost data set from X3 (SCRUM-249 / 222).
+- **Honest wording kept on Jira:**
+  - LO-04's suggestions are the board's own (Production's tab-2 logic), not X3 MRP output;
+  - LO-03 is a built view, not X3's capacity inquiries;
+  - the material status is the board's share-out (Access logic), not X3 allocations. Each is a decision for LO-01.
