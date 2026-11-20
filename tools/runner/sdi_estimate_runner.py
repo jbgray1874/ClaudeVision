@@ -53,7 +53,14 @@ import subprocess
 # whatever directory the window was in. Shell variables still WIN, because load_dotenv does
 # not override by default and a deliberately-set variable must keep working; what changes is
 # that the default now comes from a file rather than from nothing.
+# Which .env the runner read, said again once the log file is open (20 Nov 2026): this is
+# read before logging starts, and a windowless runner (slot 2) printed it to nowhere, so
+# nothing on record said where its engine's settings came from.
+_ENV_LOADED_FROM = ""
+
+
 def _load_engine_env() -> None:
+    global _ENV_LOADED_FROM
     try:
         from dotenv import load_dotenv
     except ImportError:
@@ -64,6 +71,7 @@ def _load_engine_env() -> None:
         try:
             if candidate.exists():
                 load_dotenv(candidate)
+                _ENV_LOADED_FROM = str(candidate)
                 print(f"[env] runner loaded {candidate}", flush=True)
                 return
         except OSError:
@@ -739,6 +747,8 @@ def start_logging(engine_root: Path) -> Optional[Path]:
     sys.stderr = _Tee(sys.stderr, path)
     print(f"\n{'=' * 70}\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] runner starting "
           f"(pid {os.getpid()})\n{'=' * 70}", flush=True)
+    print(f"[env] settings from {_ENV_LOADED_FROM or 'no .env file: this process environment only'}"
+          f"; the engine it starts inherits them", flush=True)
     return path
 
 
