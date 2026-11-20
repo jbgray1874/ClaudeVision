@@ -50,6 +50,11 @@ CONFIG = HERE / "datasets.json"
 HOME = Path(os.environ.get("USERPROFILE") or os.environ.get("HOME") or ".")
 SESSION = Path(os.environ.get("X3_SESSION", HOME / ".sdi" / "x3_session.json"))
 OUT_ROOT = Path(os.environ.get("X3_EXPORT_DIR", HOME / "SDI_X3_exports"))
+# "use-browser" mode (20 Nov): a COPY of James's everyday Edge / Chrome profile, so X3 sees the browser Sage
+# already remembers (no Sage ID verification). His real profile is never used directly or changed.
+PROFILE = Path(os.environ.get("X3_PROFILE", HERE.parents[1] / "browser_profile"))
+CACHE_DIRS = {"Cache", "Code Cache", "GPUCache", "DawnCache", "GrShaderCache", "ShaderCache", "CacheStorage",
+              "ScriptCache", "Service Worker", "optimization_guide_model_store", "Crashpad", "component_crx_cache"}
 FORBIDDEN = re.compile(r"\b(save|create|delete|post|validate|cancel order|close order)\b", re.I)
 
 
@@ -84,12 +89,66 @@ def locate(page, target):
     return page.locator(target).first
 
 
+def profile_channel():
+    f = PROFILE / "sdi_channel.txt"
+    return f.read_text().strip() if f.exists() else ""
+
+
 def browser(play, headless):
+    """(closer, context). With a copied profile (use-browser), the user's own Edge / Chrome on that copy;
+    otherwise Playwright's Chromium with the saved session (login)."""
+    view = {"width": 1500, "height": 950}
+    if profile_channel():
+        ctx = play.chromium.launch_persistent_context(str(PROFILE), channel=profile_channel(), headless=headless,
+                                                      accept_downloads=True, viewport=view)
+        return ctx, ctx
     exe = os.environ.get("X3_BROWSER_PATH")              # optional: a specific Chromium (testing)
     b = play.chromium.launch(headless=headless, **({"executable_path": exe} if exe else {}))
     ctx = b.new_context(storage_state=str(SESSION) if SESSION.exists() else None, accept_downloads=True,
-                        viewport={"width": 1500, "height": 950})
+                        viewport=view)
     return b, ctx
+
+
+def signed_in(page):
+    u = page.url.lower()
+    return "sagex3.com" in u and not any(k in u for k in ("/auth/", "login", "signin", "id.sage.com"))
+
+
+def cmd_use_browser(cfg, which, profile_name):
+    """Copy the everyday browser's profile (cookies incl. Sage's 'remembered device') into PROFILE and check
+    X3 opens without signing in. The browser must be fully closed while copying (its files are locked)."""
+    import shutil
+    local = Path(os.environ.get("LOCALAPPDATA", HOME / "AppData" / "Local"))
+    src_root = local / ("Microsoft/Edge/User Data" if which == "edge" else "Google/Chrome/User Data")
+    src = src_root / profile_name
+    if not (src_root / "Local State").exists() or not src.exists():
+        sys.exit(f"Can't find the {which} profile at {src}. Is {which} the browser you use for Sage? "
+                 f"(other profiles: {', '.join(p.name for p in src_root.glob('Profile *')) or 'none'})")
+    if PROFILE.exists():
+        shutil.rmtree(PROFILE)
+    PROFILE.mkdir(parents=True)
+    try:
+        shutil.copy2(src_root / "Local State", PROFILE / "Local State")
+        shutil.copytree(src, PROFILE / "Default", ignore=lambda d, names: [n for n in names if n in CACHE_DIRS])
+    except (PermissionError, OSError, shutil.Error) as e:
+        shutil.rmtree(PROFILE, ignore_errors=True)
+        sys.exit(f"Couldn't copy the {which} profile ({str(e)[:120]}). Close {which} completely - every window, "
+                 f"and in the system tray - then run this again.")
+    (PROFILE / "sdi_channel.txt").write_text("msedge" if which == "edge" else "chrome")
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        closer, ctx = browser(p, headless=False)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.goto(cfg["site"])
+        page.wait_for_timeout(8000)
+        if not signed_in(page):
+            input("X3 is asking to sign in. Sign in in that window (Sage ID check once, tick 'Remember me'), "
+                  "and when the X3 home page shows, press Enter here... ")
+        ok = signed_in(page)
+        closer.close()
+    print(("Ready: the automation uses a copy of your " + which + " profile in " + str(PROFILE)) if ok else
+          "Still not signed in - send Claude a screenshot of that window.")
+    print("Keep that folder private (it holds your browser sign-ins). Delete it to stop using it.")
 
 
 def cmd_login(cfg):
@@ -129,8 +188,8 @@ def run_dataset(ctx, cfg, name, ds, out):
     try:
         page.goto(function_url(cfg, ds["function"]))
         page.wait_for_load_state("networkidle")
-        if "login" in page.url.lower() or "signin" in page.url.lower():
-            raise RuntimeError("not signed in - run: python x3_ui.py login")
+        if not signed_in(page):
+            raise RuntimeError("not signed in - run: python x3_ui.py use-browser edge (or chrome)")
         saved = None
         for i, st in enumerate(ds["steps"], 1):
             kind, target = next(((k, v) for k, v in st.items() if k != "value"), (None, None))
@@ -176,8 +235,8 @@ def run_dataset(ctx, cfg, name, ds, out):
 
 def cmd_export(cfg, names, headless):
     from playwright.sync_api import sync_playwright
-    if not SESSION.exists():
-        sys.exit("No saved session - run: python x3_ui.py login")
+    if not SESSION.exists() and not profile_channel():
+        sys.exit("Not signed in - run: python x3_ui.py use-browser edge   (or chrome, or: login)")
     sets = cfg["datasets"]
     pick = names or [n for n, d in sets.items() if d.get("enabled")]
     bad = [n for n in pick if n not in sets]
@@ -196,7 +255,8 @@ def cmd_export(cfg, names, headless):
                 logs.append(run_dataset(ctx, cfg, n, sets[n], out))
                 print(("OK  " if logs[-1]["ok"] else "FAIL"), n, logs[-1].get("file") or logs[-1].get("error"))
                 time.sleep(cfg.get("pause_between_s", 3))     # be gentle with the server
-        ctx.storage_state(path=str(SESSION))                   # keep the session fresh
+        if not profile_channel():
+            ctx.storage_state(path=str(SESSION))               # keep the session fresh
         b.close()
     (out / "run_log.json").write_text(json.dumps(logs, indent=2), encoding="utf-8")
     ok = sum(l["ok"] for l in logs)
@@ -205,7 +265,8 @@ def cmd_export(cfg, names, headless):
 
 
 def cmd_list(cfg):
-    print(f"site {cfg['site']}  folder {cfg['folder']}  session {'saved' if SESSION.exists() else 'NOT saved'}")
+    how = f"copied {profile_channel()} profile" if profile_channel() else ("saved session" if SESSION.exists() else "NOT signed in")
+    print(f"site {cfg['site']}  folder {cfg['folder']}  sign-in: {how}")
     for n, d in cfg["datasets"].items():
         state = "ready" if d.get("steps") else "to capture"
         print(f"  {n:<16} {d.get('function', ''):<12} {'enabled' if d.get('enabled') else 'off':<8} {state:<11} {d.get('what', '')}")
@@ -215,6 +276,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("login")
+    u = sub.add_parser("use-browser", help="use a copy of your everyday Edge / Chrome profile (no Sage ID check)")
+    u.add_argument("which", choices=("edge", "chrome"))
+    u.add_argument("--profile", default="Default", help="browser profile folder, e.g. 'Profile 1'")
     r = sub.add_parser("record")
     r.add_argument("function")
     e = sub.add_parser("export")
@@ -225,6 +289,8 @@ def main():
     cfg = load_config()
     if a.cmd == "login":
         cmd_login(cfg)
+    elif a.cmd == "use-browser":
+        cmd_use_browser(cfg, a.which, a.profile)
     elif a.cmd == "record":
         cmd_record(cfg, a.function)
     elif a.cmd == "export":

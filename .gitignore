@@ -31,3 +31,6 @@ output/
 sagex3/reports/rebate/runs/
 sagex3/estimating/runs/
 sagex3/production/live_orders/runs/
+
+# X3 UI automation: copied browser profile (holds sign-ins) - never in git
+sagex3/integration/browser_profile/

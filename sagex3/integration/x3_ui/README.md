@@ -5,6 +5,18 @@ This exports data sets from the Sage X3 web screens automatically, as a user wou
 - **Read-only by design.** It opens enquiries and export screens and downloads files. Any step aimed at Save, Create, Delete, Post or Validate is refused, and imports aren't automated.
 - **It runs on James's PC,** signed in as him. The cloud session can't reach X3, so it can't be run or tested there against X3. It was tested on 19 Nov against a mock screen: fill, untick, search, wait, download, and the Save guard.
 
+## Signing in: use your everyday browser (recommended, 20 Nov)
+
+Sage remembers the browser you normally use, so it never asks you for the Sage ID check. The automation's own browser is new to Sage, so Sage asks it. Instead, give the automation a **copy** of your everyday browser's profile:
+
+```
+python x3_ui.py use-browser edge        # or: chrome   (add --profile "Profile 1" if you use a second profile)
+```
+
+**Close that browser completely first** (every window, and in the system tray), because its files are locked while it runs. It copies the profile into `C:\SDI_X3\...\integration\browser_profile`, without caches, then opens X3 in your browser on that copy to check you're straight in. Your real profile is never used directly or changed.
+
+**That folder holds your browser sign-ins:** keep it private, never in git or email. Delete it to stop using it. If X3 ever asks you to sign in again, run `use-browser` again.
+
 ## Set up once (PowerShell, in this folder)
 
 ```
