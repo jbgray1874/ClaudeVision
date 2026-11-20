@@ -4310,6 +4310,7 @@ Keep this up to date with every setting we choose. **Never write the secret here
     - With a `jti`, X3 looks the token up in its own issued-token list and finds nothing. **`jti` removed. Never send one.**
     - So the *"info"* error came from the `jti`, not (only) the endpoint name. The endpoint `X3ERPV12_SDIMIG` and the empty aud are what the next check needs.
   - **First run from the clone (`C:\SDI_X3\repo`):** clone OK (3,610 objects); old copies moved to `C:\SDI_X3\_old`.
+  - **Error 27 (`schema`, 20 Nov):** the token's whole life (`exp` − `iat`) was 330 s, more than the app's 300 s Tokens validity. The `claims` tokens that got in lived 270 s. **Fix: life = token validity − 30 s.** Error codes seen: 21 = timestamps in milliseconds; 27 = lifetime over the validity; 42 = unknown or missing `sub`; 45 = wrong or missing `aud`.
 - **Lesson (20 Nov):** a copy command run from `PS C:\ClaudeVision>` put a stray `x3_api.py` in James's estimating folder. **Always `cd C:\SDI_X3\SDI_X3\integration\x3_api` first, and check the prompt before any copy.** Never put files in `C:\ClaudeVision`. The stray file is removed only after checking it's today's.
 - **Results to fill in as we find them:**
   - the endpoint name;

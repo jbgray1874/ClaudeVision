@@ -98,8 +98,10 @@ def make_jwt(c, aud=None):
     now = int(time.time())
     # NO jti: with a token ID, X3 looks the token up in its own issued-token list, finds nothing and fails with
     # "Cannot read properties of null (reading 'info')" (20 Nov, training). The claims test without jti got in.
-    claims = {"iss": c["client_id"], "sub": c["user"],
-              "iat": now - 30, "exp": now + int(c.get("token_seconds", 300))}
+    # The whole life (exp - iat) must stay inside the connected application's "Tokens validity" (300 s here):
+    # iat now-30 / exp now+300 = 330 s got "Error 27: Invalid token"; the claims test's 270 s got in (20 Nov).
+    life = max(60, int(c.get("token_seconds", 300)) - 30)
+    claims = {"iss": c["client_id"], "sub": c["user"], "iat": now - 30, "exp": now - 30 + life}
     aud = c.get("aud", "empty") if aud is None else aud
     if aud == "empty":                       # what X3 accepts (20 Nov, training): aud present but empty
         claims["aud"] = ""
@@ -241,7 +243,7 @@ def claims_test(_):
     Prints status codes and X3's messages only - never the secret or a token."""
     c = load_conf()
     now = int(time.time())
-    base = {"iss": c["client_id"], "sub": c["user"], "aud": c["endpoint"], "iat": now - 30, "exp": now + 240}
+    base = {"iss": c["client_id"], "sub": c["user"], "aud": c["endpoint"], "iat": now - 30, "exp": now + 240}   # 270 s life
     gq = c["site"] + "/xtrem/api"
     rest = f"{c['site']}/api1/x3/erp/{c['folder']}/ITMMASTER?representation=ITMMASTER.$query&count=1"
     body = json.dumps({"query": "{ __typename }"}).encode()
