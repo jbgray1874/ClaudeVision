@@ -726,6 +726,15 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                   if not archive and job and job.group(1) in str(folder) and rank(folder) == area for f in files]
     wider: Optional[Dict[str, List[FileRow]]] = None
     groups = _members(near, drawing)
+    # THE LIVE LIBRARY SEARCH IS FOR ANOTHER JOB'S DRAWINGS ONLY (20 Nov 2026). Row 31,
+    # 12110-01-GA1: its own frame tube 12110-02-02M has no file of its own (its drawing is a
+    # sheet of the wall-panel PDF), so the live search was asked for it, walked every non-job
+    # folder of the Design area over the VPN, and held the row after 300 s. The job's own folders
+    # were already listed live; a search of the share for the job's own number finds nothing more.
+    _live = hasattr(lookup, "sheet_files")
+
+    def _may_look(x: str) -> bool:
+        return bool(lookup) and not (_live and job_number(x) and job_number(x) == job_number(drawing))
     refs_of: Dict[str, set] = {drawing: set(best["references"])}
     parent_of: Dict[str, str] = {}
     # EVERY PARENT IS KEPT (10 Nov 2026 review): a drawing two sub-assemblies reference is one file
@@ -824,8 +833,8 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                     wider = _members(wider_rows, drawing)
                 _held = next((g for alt in _alts[1:] for g in wider if _same(g, alt)), None)
                 if _held is None and lookup:
-                    _held = next((alt for alt in _alts[1:]
-                                  if any(not _archive_path(f[0]) for f in lookup(alt))), None)
+                    _held = next((alt for alt in _alts[1:] if _may_look(alt)
+                                  and any(not _archive_path(f[0]) for f in lookup(alt))), None)
             if _held is not None:
                 x = _held
             if any(_same(x, alt) for alt in spellings(a)) or any(_same(x, alt) for alt in spellings(drawing)):
@@ -841,7 +850,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                         wider = _members(wider_rows, drawing)
                     if x in wider:
                         groups[x] = wider[x]
-                    elif lookup:
+                    elif _may_look(x):
                         # A PART OF THE FAMILY NOT IN THE JOB'S FOLDERS OF THIS AREA (11 Nov 2026):
                         # it was never looked for anywhere else, so a part kept in the other
                         # search area, or in a folder not named for the job, left the pack as its
@@ -850,7 +859,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                         if hit:
                             groups[x] = hit
                 else:
-                    hit = lookup(x) if lookup else [f for folder, files, archive in folders if not archive
+                    hit = lookup(x) if _may_look(x) else [f for folder, files, archive in folders if not archive
                                                      for f in files if _same(drawing_id(f[0].name), x)]
                     if hit:
                         groups[x] = hit
