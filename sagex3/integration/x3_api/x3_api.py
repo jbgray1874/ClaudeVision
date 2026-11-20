@@ -547,6 +547,8 @@ def pull_graphql(c, ds, page=PAGE, limit=0):
         if limit or not conn["pageInfo"]["hasNextPage"]:
             return rows
         after = conn["pageInfo"]["endCursor"]
+        if not limit and len(rows) % (page * 10) < page:      # a progress line every 10 pages
+            print(f"   ... {len(rows)} rows so far", flush=True)
         time.sleep(PAUSE)
 
 
