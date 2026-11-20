@@ -4338,3 +4338,7 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - Many "stopped" parts were the same item re-coded and still ordered (prefix BOT- / SRS- / SRS02- added or dropped, ` OS` suffix).
   - **v2 summary:** a `core` code (customer prefix and OS / CO / CH suffix removed) gives the statuses RE-CODED (with `similar_code_still_ordered`), STOPPED, NEW, Still ordering, and Not a product (carriage, rework, installation, respray, etc.).
   - Checked on the run's codes: **102 truly stopped, 16 re-coded, 1 not a product.** v2 sent to James to re-run.
+- **v2 run (20 Nov):** matches the check exactly: STOPPED 102, RE-CODED 16, Still ordering / NEW 202, Not a product 10 (= 330).
+  - The largest "stopped" quantities are one-off June 2024 bulk orders (a fit-out), not lost repeat lines.
+  - One negative line (a correction, 18 Nov).
+  - The workbook (Summary + Detail tabs) is to be built by James from the SSMS grids. Email drafted; **not yet sent**.
