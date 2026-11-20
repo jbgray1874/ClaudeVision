@@ -58,12 +58,15 @@ ol.steps{margin:6px 0 0 18px;padding:0}ol.steps li{margin:3px 0}
 #hist tr{cursor:pointer}#hist tr.cur td{background:var(--ab)}
 details.guide{line-height:1.55}details.guide summary{cursor:pointer;font-weight:800;font-size:15px}details.guide h3{font-size:14px;margin:14px 0 4px}
 details.guide p,details.guide li{font-size:13.5px}details.guide ol,details.guide ul{margin:4px 0 8px 20px;padding:0}
+.ghost{background:transparent;border:1px solid rgba(255,255,255,.3);color:#fff;font-weight:700;padding:8px 14px;border-radius:8px}.ghost:hover{border-color:var(--y)}
+.saved{margin:4px 0 8px;padding:8px 12px;border-radius:10px;background:var(--soft);border:1px solid var(--line);font-size:13px}.saved a{color:var(--m);cursor:pointer;font-weight:600;margin-left:8px}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--y);border-radius:50%;animation:s 1s linear infinite;vertical-align:-2px}@keyframes s{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
-<header><div class="w hd"><div class="brand">we.are.sdi · Estimating</div><h1>Estimate → Sage X3</h1>
-<div class="sub">Upload an estimate. Get the X3 product, BOM and route import files and the write-up, checked against Sage X3's own product list. Nothing is written to Sage X3.</div></div></header>
+<header><div class="w hd" style="display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap"><div><div class="brand">we.are.sdi · Estimating</div><h1>Estimate → Sage X3</h1>
+<div class="sub">Upload an estimate. Get the X3 product, BOM and route import files and the write-up, checked against Sage X3's own product list, saved in <b id="savedto">K:\Operations\Reporting\SageEstimates</b>. Nothing is written to Sage X3.</div></div>
+<button class="ghost" id="ugbtn" title="How to use this page">📖 User guide</button></div></header>
 <main class="w">
   <details class="card guide" id="guide"><summary>User guide - how to use this page</summary>
     <h3>What it does</h3>
@@ -73,7 +76,7 @@ details.guide p,details.guide li{font-size:13.5px}details.guide ol,details.guide
       <li><b>Options</b> (leave them unless you know otherwise): <i>Category if the part is new</i> FGML (or FGSL); <i>Sheet steel material</i> CR4 unless the estimate says ZINTEC or Galvanised; <i>Part code</i> only to override the estimate's own code (e.g. a test part); <i>IMPORT layout only</i> where the revision goes.</li>
       <li>Press <b>Generate the X3 files</b>. It takes a few seconds.</li>
       <li><b>READY TO LOAD</b> (green): every line checked. <b>NOT READY</b> (red): the <b>Checks</b> tab lists each <b>STOP</b> with the estimate cell to fix - fix it in the estimate, save, and run it again. <b>WARN</b> = have a look; <b>INFO</b> = for information.</li>
-      <li><b>Download</b>: the write-up workbook (always), and once READY the three .txt load files, or all of it as a zip.</li>
+      <li><b>Where the files go</b>: a READY run is saved in <b>K:\Operations\Reporting\SageEstimates</b>, in its own folder named by part, date and time (e.g. <i>XX-0000001_2026-11-20_2015</i>): the three .txt load files and the write-up. The page shows the folder, with <b>Copy path</b>. You can also download them here. A NOT READY run isn't saved there.</li>
       <li><b>Load in Sage X3</b>: Usage → Imports, in <b>TEST (SDI Mig) first</b>, in the order shown - product, then BOM, then route. If the part already exists in X3, its product line is <b>rejected - that's expected</b>; the BOM and route load onto the existing part. Then open the part in X3 and compare its BOM and route with the write-up.</li></ol>
     <h3>Common STOPs and what to do</h3>
     <ul><li><b>"… not a product in X3"</b> - the component must exist in X3 before the BOM loads: use the right code, or have the product created first.</li>
@@ -85,7 +88,7 @@ details.guide p,details.guide li{font-size:13.5px}details.guide ol,details.guide
   <div class="grid">
     <div class="card">
       <h2>1. The estimate</h2><p class="note">The estimators' template or Dave's IMPORT layout, .xls or .xlsx, as saved - no macro, no copy and paste.</p>
-      <div id="drop"><b>Drop the estimate here</b><br><span class="muted">or click to choose a file</span><input type="file" id="file" accept=".xls,.xlsx,.xlsm" class="hide"></div>
+      <div id="drop"><b>Drop the estimate here</b><br><span class="muted">or click to choose a file</span></div><input type="file" id="file" accept=".xls,.xlsx,.xlsm" class="hide">
       <div class="opts">
         <div><label for="category">Category if the part is new</label><select id="category"><option>FGML</option><option>FGSL</option></select></div>
         <div><label for="sheet">Sheet steel material</label><select id="sheet"><option>CR4</option><option>ZINTEC</option><option>Galvanised</option></select></div>
@@ -149,11 +152,16 @@ function show(j){R=j;$('#result').classList.remove('hide');markHist();
   $('#dl').innerHTML=`<a class="main" data-f="${esc(f(j.workbook))}" data-n="${esc(j.workbook)}">⬇ The write-up workbook</a>`+
     (ok?loads.map(n=>`<a data-f="${esc(f(n))}" data-n="${esc(n)}">⬇ ${esc(n)}</a>`).join('')+`<a data-f="${API}/run/${encodeURIComponent(j.id)}/zip" data-n="${esc(j.id)}.zip">⬇ All files (zip)</a>`:
      '<span class="muted">The load files are offered once the STOP checks are fixed.</span>');
-  $('#order').innerHTML=ok?`<p class="note" style="margin-top:8px"><b>Load in Sage X3</b> (Usage → Imports, TEST / SDI Mig first), in this order:</p><ol class="steps">${loads.map(n=>`<li>${esc(n)} ${n.includes('ZSDIITM')?(ex?'<span class="muted">- the part exists, so X3 rejects this line: expected</span>':'<span class="muted">- creates the part</span>'):n.includes('BOM')?'<span class="muted">- the bill of materials</span>':'<span class="muted">- the route</span>'}</li>`).join('')}</ol>`:'';
+  const pub=j.published;
+  $('#order').innerHTML=(ok&&pub?`<div class="saved">📁 Saved for loading in <b>${esc(pub.folder)}</b><a data-cp="${esc(pub.folder)}">Copy path</a></div>`:
+    ok&&j.publish_error?`<div class="saved err">${esc(j.publish_error)} - download the files below instead.</div>`:
+    !ok?'<div class="saved">Not saved to the SageEstimates folder: a NOT READY run\'s files mustn\'t be loaded. Fix the STOP checks and run it again.</div>':'')+(ok?`<p class="note" style="margin-top:8px"><b>Load in Sage X3</b> (Usage → Imports, TEST / SDI Mig first), in this order:</p><ol class="steps">${loads.map(n=>`<li>${esc(n)} ${n.includes('ZSDIITM')?(ex?'<span class="muted">- the part exists, so X3 rejects this line: expected</span>':'<span class="muted">- creates the part</span>'):n.includes('BOM')?'<span class="muted">- the bill of materials</span>':'<span class="muted">- the route</span>'}</li>`).join('')}</ol>`:'');
   render()}
 function rank(n){return n.includes('ZSDIITM')?0:n.includes('BOM')?1:2}
 $('#dl').addEventListener('click',e=>{const a=e.target.closest('a[data-f]');if(!a)return;
   fetch(a.dataset.f,{headers:HD()}).then(r=>{if(!r.ok)throw new Error(r.status);return r.blob()}).then(b=>{const u=URL.createObjectURL(b),l=document.createElement('a');l.href=u;l.download=a.dataset.n;l.click();setTimeout(()=>URL.revokeObjectURL(u),2000)}).catch(e=>alert('Download failed: '+e.message))});
+$('#order').addEventListener('click',e=>{const a=e.target.closest('a[data-cp]');if(!a)return;navigator.clipboard&&navigator.clipboard.writeText(a.dataset.cp);a.textContent='Copied ✓';setTimeout(()=>a.textContent='Copy path',1500)});
+$('#ugbtn').onclick=()=>{const g=$('#guide');g.open=true;g.scrollIntoView({behavior:'smooth',block:'start'})};
 $('#tabs').addEventListener('click',e=>{const b=e.target.closest('button[data-t]');if(!b)return;tab=b.dataset.t;$$('#tabs button').forEach(x=>x.classList.toggle('on',x===b));render()});
 
 function tbl(head,rows,cls=[]){return `<table><thead><tr>${head.map((h,i)=>`<th class="${cls[i]||''}">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`}
@@ -194,6 +202,7 @@ function render(){const j=R;if(!j||!j.ok)return;const v=$('#view');const h=j.hea
 function when(s){const m=String(s||'').match(/(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/);return m?`${m[3]}/${m[2]} ${m[4]}:${m[5]}`:(s||'')}
 function loadHist(){return fetch(`${API}/runs`,{headers:HD()}).then(r=>r.json()).then(h=>{const L=h.runs||[];
   if(!L.length)$('#guide').open=true;                     // first use: the guide opens by itself
+  if(h.saved_to!==undefined)$('#savedto').textContent=h.saved_to||'(not saved to a folder)';
   $('#histnote').textContent=L.length?`${L.length} run${L.length==1?'':'s'} kept. Click one to see it again.`:'No runs yet.';
   $('#hist').innerHTML=L.length?'<tr><th>When</th><th>Part</th><th>Estimate</th><th>Result</th></tr>'+L.map(r=>`<tr data-id="${esc(r.id)}"><td>${esc(when(r.when))}</td><td><b>${esc(r.code||'')}</b></td><td>${esc(r.estimate||'')}</td><td>${!r.ok?'<span class="lv STOP">ERROR</span>':r.ready?'<span class="lv INFO" style="background:var(--gb);color:var(--g)">READY</span>':`<span class="lv STOP">${r.stop} STOP</span>`}</td></tr>`).join(''):'';markHist()}).catch(()=>{})}
 function markHist(){$$('#hist tr[data-id]').forEach(t=>t.classList.toggle('cur',!!R&&t.dataset.id===R.id))}

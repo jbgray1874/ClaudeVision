@@ -16,7 +16,7 @@
     4. makes the working folders C:\ProgramData\SDI\LiveOrders (runs, X3 exports) and C:\ProgramData\SDI\Estimating
     5. previews add_live_orders_to_portal.py, ASKS, then applies it (it backs every file up first)
     6. restarts the portal's service and checks that Live Orders answers
-    7. checks that the service's account can write to Production's LiveOrders folder (as SYSTEM, via a one-off task)
+    7. checks that the service's account can write to the LiveOrders and SageEstimates folders (as SYSTEM, one-off task)
   Read-only towards Sage X3. Changes only the portal folder (with backups) and C:\ProgramData\SDI.
 #>
 param(
@@ -25,7 +25,8 @@ param(
     [string]$X3Config = "C:\ProgramData\SDI\x3_api.json",
     [string]$Data = "C:\ProgramData\SDI\LiveOrders",
     [string]$EstRuns = "C:\ProgramData\SDI\Estimating",
-    [string]$Share = "\\sdi-dc01\shareddata$\Shared\Operations\Reporting\LiveOrders"
+    [string]$Share = "\\sdi-dc01\shareddata$\Shared\Operations\Reporting\LiveOrders",
+    [string]$EstShare = "\\sdi-dc01\shareddata$\Shared\Operations\Reporting\SageEstimates"
 )
 $ErrorActionPreference = "Continue"
 $Installer = Join-Path $PSScriptRoot "add_live_orders_to_portal.py"
@@ -88,7 +89,7 @@ Say "Working folders: $Data, $EstRuns" Green
 
 # 5. the installer: preview, ask, apply --------------------------------------------------------------------------
 $args5 = @($Installer, "--target", $Target, "--x3-config", $X3Config, "--runs", "$Data\runs",
-           "--exports", "$Data\X3_exports", "--share", $Share, "--est-runs", $EstRuns)
+           "--exports", "$Data\X3_exports", "--share", $Share, "--est-runs", $EstRuns, "--est-share", $EstShare)
 Say "`n-- preview --" Yellow
 & $py @args5
 if ($LASTEXITCODE -ne 0) { Fail "the installer stopped (above) - nothing was changed" }
@@ -119,26 +120,28 @@ if ($svc) {
 
 # 7. can the service's account write to Production's folder? -----------------------------------------------------
 if ($acct -match '^(LocalSystem|NT AUTHORITY\\SYSTEM)$') {
-    Say "`nChecking SYSTEM (the computer account $env:COMPUTERNAME`$) can write to $Share ..."
-    $inner = "try { New-Item -ItemType Directory -Force -Path '$Share' | Out-Null; " +
-             "Set-Content -Path '$Share\_sdi_write_test.tmp' -Value ok; Remove-Item -Path '$Share\_sdi_write_test.tmp'; exit 0 } " +
-             "catch { exit 1 }"
-    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
-    $task = "SDI_LiveOrders_write_test"
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -NonInteractive -EncodedCommand $enc"
-    Register-ScheduledTask -TaskName $task -Action $action -User "SYSTEM" -RunLevel Highest -Force | Out-Null
-    Start-ScheduledTask -TaskName $task
-    for ($i = 0; $i -lt 30; $i++) {
-        Start-Sleep -Seconds 1
-        if ((Get-ScheduledTask -TaskName $task).State -ne "Running") { break }
+    foreach ($dir in @($Share, $EstShare)) {
+        Say "`nChecking SYSTEM (the computer account $env:COMPUTERNAME`$) can write to $dir ..."
+        $inner = "try { New-Item -ItemType Directory -Force -Path '$dir' | Out-Null; " +
+                 "Set-Content -Path '$dir\_sdi_write_test.tmp' -Value ok; Remove-Item -Path '$dir\_sdi_write_test.tmp'; exit 0 } " +
+                 "catch { exit 1 }"
+        $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
+        $task = "SDI_LiveOrders_write_test"
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -NonInteractive -EncodedCommand $enc"
+        Register-ScheduledTask -TaskName $task -Action $action -User "SYSTEM" -RunLevel Highest -Force | Out-Null
+        Start-ScheduledTask -TaskName $task
+        for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            if ((Get-ScheduledTask -TaskName $task).State -ne "Running") { break }
+        }
+        $res = (Get-ScheduledTaskInfo -TaskName $task).LastTaskResult
+        Unregister-ScheduledTask -TaskName $task -Confirm:$false
+        if ($res -eq 0) { Say "Write test OK: $dir" Green }
+        else { Say ("Write test FAILED (code $res) on $dir : give the computer account $env:COMPUTERNAME`$ Modify on it " +
+                    "(share and folder), or run the service as a domain account that has it.") Red }
     }
-    $res = (Get-ScheduledTaskInfo -TaskName $task).LastTaskResult
-    Unregister-ScheduledTask -TaskName $task -Confirm:$false
-    if ($res -eq 0) { Say "Write test OK: Regenerate can save workbooks to the LiveOrders folder." Green }
-    else { Say ("Write test FAILED (code $res): give the computer account $env:COMPUTERNAME`$ Modify on $Share " +
-                "(share and folder), or run the service as a domain account that has it.") Red }
 } elseif ($acct) {
-    Say "`nThe service runs as $acct - make sure that account can write to $Share. Regenerate will show 'access denied' if not." DarkYellow
+    Say "`nThe service runs as $acct - make sure that account can write to $Share and $EstShare." DarkYellow
 }
 
 Say ("`nDone. Open http://$($env:COMPUTERNAME):$Port (or http://10.0.0.5:$Port): Live Orders -> Regenerate first (it also " +

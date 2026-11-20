@@ -4731,3 +4731,19 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - Fixed: Word's "List Number" style ran on across lists (the Estimate steps started at 8); lists are now numbered explicitly.
 - **Robocopy note:** the repo is ~120 MB / 2,378 files (a 62 MB search corpus), so the first copy over the VPN takes several minutes; later runs copy only changed files. Next time copy only what the server needs: `sagex3` and `sdi-intelligence-backend`.
 - **Summary email** to Dave Wright, Rachael Smith, Liz Tart, Simon Foister and Charlotte Blackwell: drafted in chat (one at a time). Send it after the server step works, so the link opens for everyone.
+
+#### 20 Nov (late) – Estimate → X3 saves to K:\Operations\Reporting\SageEstimates; User guide buttons; robocopy "hanging"
+- **James: "we need to write them down to a location: K:\Operations\Reporting\SageEstimates".**
+  - A **READY** run's three load files and its write-up are saved in `SageEstimates\<part>_<YYYY-MM-DD_HHMM>\` (seconds added if that minute is taken, so never overwritten). `est_run.py --publish/--publish-user`; the portal passes `EST_SHARE` (default `\\sdi-dc01\shareddata$\Shared\Operations\Reporting\SageEstimates`; services don't see K:) and `EST_SHARE_USER` (K:…).
+  - **A NOT READY run is not saved there:** its files mustn't be loaded. If the save fails (e.g. no write access), the run still stands and the page says so.
+  - The page header names the folder; after a READY run, "📁 Saved for loading in K:\…\<folder>" with Copy path; Earlier runs carry the folder.
+  - The installer writes EST_SHARE / EST_SHARE_USER (`--est-share`, `--est-share-user`). The server script passes `--est-share` and now **write-tests both shares** (LiveOrders and SageEstimates) as SYSTEM.
+  - Tested: READY → saved (4 files); same minute again → `…_2029` and `…_202944`; NOT READY → not saved.
+- **James: "the user guides need to be a link … behind a button at the top of their pages".** A **📖 User guide** button in the header of both pages. Live Orders → the User guide tab; Estimate → X3 → opens the guide panel and scrolls to it. Tested.
+- **Bugs found while testing:**
+  - a bracket left open in my "saved to" line stopped the Estimate page's script (no upload, no guide). Caught by the browser test before anyone saw it;
+  - **older bug:** choosing a file rewrote the upload box, which also held the hidden file picker, so a second estimate couldn't be chosen without reloading the page. The picker now sits outside the box.
+- **Robocopy "hanging" (James):**
+  - With `/NFL /NDL` robocopy prints nothing per file, so it looks frozen while it copies 2,378 files over the VPN.
+  - Its default retry is `/R:1000000 /W:30`: one locked or refused file makes it wait 30 s a million times, which looks exactly like a hang.
+  - **Use instead:** only the two folders the server needs (`sagex3`, `sdi-intelligence-backend`), `/R:2 /W:5 /MT:16`, file names shown, and the local `runs` folders left out (they can hold estimates).

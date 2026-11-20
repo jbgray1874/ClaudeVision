@@ -22,6 +22,9 @@ Endpoints (X-SDI-Key on all but the page, which holds no data):
     EST_HOME      folder holding est_run.py (C:\\SDI_X3\\repo\\sagex3\\estimating)
     EST_PYTHON    python to run it with (default LIVE_ORDERS_PYTHON, else the portal's own)
     EST_PRODUCTS  a product list file instead of the newest X3 products.json (X3_EXPORT_DIR)
+    EST_SHARE     where READY runs are saved for loading (network path; services don't see K:) - default
+                  \\\\sdi-dc01\\shareddata$\\Shared\\Operations\\Reporting\\SageEstimates; '' = don't save
+    EST_SHARE_USER the same folder as people see it (K:\\Operations\\Reporting\\SageEstimates)
 """
 import asyncio
 import datetime as dt
@@ -44,6 +47,8 @@ router = APIRouter(prefix="/api/estimate-x3", tags=["estimate-x3"])
 RUNS = Path(os.getenv("EST_RUNS", str(Path.home() / "SDI_X3_runs" / "estimating")))
 HOME = Path(os.getenv("EST_HOME", r"C:\SDI_X3\repo\sagex3\estimating"))
 PYTHON = os.getenv("EST_PYTHON") or os.getenv("LIVE_ORDERS_PYTHON") or sys.executable
+SHARE = os.getenv("EST_SHARE", r"\\sdi-dc01\shareddata$\Shared\Operations\Reporting\SageEstimates")
+SHARE_USER = os.getenv("EST_SHARE_USER", r"K:\Operations\Reporting\SageEstimates")
 PAGE = Path(os.getenv("EST_PAGE", str(Path(__file__).with_name("est_x3_page.html"))))
 RUN_ID = re.compile(r"^\d{8}-\d{6}(-\d+)?_[\w.\- ]{1,80}$")
 FILE = re.compile(r"^[\w.\- ]{1,120}\.(txt|xlsx)$")
@@ -100,6 +105,8 @@ async def run(request: Request, name: str, parent: str = "", category: str = "FG
     est.write_bytes(body)
     cmd = [PYTHON, str(script), str(est), str(d), "--category", category, "--sheet-material", sheet_material,
            "--by", request.client.host if request.client else ""]
+    if SHARE:                                       # READY runs are saved there for loading (James, 20 Nov)
+        cmd += ["--publish", SHARE, "--publish-user", SHARE_USER]
     if parent:
         cmd += ["--parent", parent]
     if rev_in_code:
@@ -129,8 +136,9 @@ def runs(x_sdi_key: str | None = Header(default=None)):
             out.append({"id": d.name, "when": j.get("started"), "estimate": j.get("estimate"), "code": j.get("code"),
                         "ok": j.get("ok"), "ready": j.get("ready"), "new": j.get("new"), "bom": j.get("bom"),
                         "ops": j.get("ops"), "stop": j.get("stop"), "warn": j.get("warn"), "error": j.get("error"),
+                        "saved": (j.get("published") or {}).get("folder"),
                         "by": j.get("by")})
-    return {"folder": str(RUNS), "runs": out}
+    return {"folder": str(RUNS), "saved_to": SHARE_USER if SHARE else "", "runs": out}
 
 
 @router.get("/run/{run_id}")

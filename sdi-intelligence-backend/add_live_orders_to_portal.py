@@ -127,7 +127,8 @@ def plan(target, runs, opts):
             "LIVE_ORDERS_HOME": str(REPO / "sagex3" / "production" / "live_orders"), "LIVE_ORDERS_ROUTES": opts.routes_file,
             "X3_API_CONFIG": opts.x3_config, "X3_EXPORT_DIR": opts.exports,
             "LIVE_ORDERS_PYTHON": sys.executable,          # the python you run this with (it has openpyxl)
-            "EST_RUNS": opts.est_runs, "EST_HOME": str(REPO / "sagex3" / "estimating"), "EST_PYTHON": sys.executable}
+            "EST_RUNS": opts.est_runs, "EST_HOME": str(REPO / "sagex3" / "estimating"), "EST_PYTHON": sys.executable,
+            "EST_SHARE": opts.est_share, "EST_SHARE_USER": opts.est_share_user}
     bad = [m for m in re.finditer(r"(?m)^LIVE_ORDERS_ROUTES=(.*)$", e)   # a route file that isn't there (e.g. a
            if not Path(m.group(1).strip().strip('"')).is_file()]            # placeholder pasted): comment it out
     if bad:
@@ -159,6 +160,9 @@ def main():
     ap.add_argument("--exports", default=str(Path.home() / "SDI_X3_exports"))
     ap.add_argument("--est-runs", default=str(Path.home() / "SDI_X3_runs" / "estimating"),
                     help="where Estimate -> X3 keeps its runs")
+    ap.add_argument("--est-share", default=r"\\sdi-dc01\shareddata$\Shared\Operations\Reporting\SageEstimates",
+                    help="where READY estimates are saved for loading, as a network path")
+    ap.add_argument("--est-share-user", default=r"K:\Operations\Reporting\SageEstimates", help="the same folder as people see it")
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args()
     target = Path(a.target)

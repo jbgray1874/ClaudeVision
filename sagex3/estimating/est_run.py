@@ -8,6 +8,9 @@ Writes into <run_folder>/out:
     <part>_estimate_to_SageX3.xlsx                          the write-up workbook (est_workbook.py)
     <part>_CHECKS.xlsx                                      the converter's own check workbook
 and <run_folder>/run.json - everything the page shows (no X3 product list in it).
+With --publish (the portal passes EST_SHARE): a READY run's three load files and the write-up are also saved in
+<publish>\<part>_<YYYY-MM-DD_HHMM>\ - K:\Operations\Reporting\SageEstimates, where they are loaded from (James,
+20 Nov). A NOT READY run isn't saved there: its files mustn't be loaded. Nothing is ever overwritten.
 
 The X3 product list: --products, else EST_PRODUCTS, else the newest products.json from the X3 pull
 (X3_EXPORT_DIR, default %USERPROFILE%\\SDI_X3_exports) - the live list, refreshed daily with Live Orders.
@@ -17,6 +20,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import shutil
 import sys
 import traceback
 from pathlib import Path
@@ -37,6 +41,23 @@ def find_products(explicit=None):
     return cands[-1]
 
 
+def publish(out, names, folder, folder_user, code):
+    """Copy a READY run's files into <folder>\<part>_<date>_<time>\ (seconds added if that minute is taken)."""
+    import est_workbook
+    now = dt.datetime.now()
+    base = Path(folder)
+    base.mkdir(parents=True, exist_ok=True)
+    name = f"{est_workbook.stem_of(code)}_{now:%Y-%m-%d_%H%M}"
+    if (base / name).exists():
+        name = f"{est_workbook.stem_of(code)}_{now:%Y-%m-%d_%H%M%S}"
+    dest = base / name
+    dest.mkdir()
+    for n in names:
+        shutil.copyfile(out / n, dest / n)
+    shown = f"{folder_user.rstrip(chr(92))}\\{name}" if folder_user else str(dest)
+    return {"folder": shown, "name": name, "files": names}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("estimate")
@@ -47,6 +68,8 @@ def main(argv=None):
     ap.add_argument("--sheet-material", default="CR4")
     ap.add_argument("--rev-in-code", action="store_true")
     ap.add_argument("--by", default="")
+    ap.add_argument("--publish", default="", help="folder to save READY runs in (network path)")
+    ap.add_argument("--publish-user", default="", help="the same folder as people see it (K:\\...)")
     a = ap.parse_args(argv)
     run = Path(a.run_folder)
     out = run / "out"
@@ -72,6 +95,11 @@ def main(argv=None):
                     bom_read=[{k: v for k, v in b.items() if k != "sheet"} | ({"sheet": list(b["sheet"])} if b.get("sheet") else {})
                               for b in d["bom"]],
                     ops_read=d["ops"])
+        if a.publish and info["ready"]:
+            try:
+                info["published"] = publish(out, [*d["load_files"], book.name], a.publish, a.publish_user, res["code"])
+            except OSError as e:                               # the run stands; the page says it wasn't saved
+                info["publish_error"] = f"Not saved to {a.publish_user or a.publish}: {e}"
     except (Exception, SystemExit) as e:                       # noqa: BLE001 - recorded for the page
         info["error"] = str(e) or e.__class__.__name__
         if isinstance(e, ModuleNotFoundError):

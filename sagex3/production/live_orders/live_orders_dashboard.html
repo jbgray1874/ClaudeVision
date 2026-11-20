@@ -87,7 +87,7 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
 <header><div class="w hd">
   <div><div class="brand">we.are.sdi · Production</div><h1>Live Orders</h1><div class="sub"><span id="asat">No data loaded</span><span id="viewing"></span></div></div>
   <div class="bar" style="margin:0" id="filebar"><label class="sub" for="file">Data file</label><input type="file" id="file" accept=".json,application/json"></div>
-  <div class="bar hide" style="margin:0" id="portalbar"><span id="rstat"></span><button id="wbbtn" class="ghost" title="Every Live Orders spreadsheet in Production's folder">📂 Workbooks</button><button id="regen" class="y" title="Pull fresh data from Sage X3, build, and save a new workbook">↻ Regenerate</button></div>
+  <div class="bar hide" style="margin:0" id="portalbar"><span id="rstat"></span><button id="ugbtn" class="ghost" title="How to use Live Orders">📖 User guide</button><button id="wbbtn" class="ghost" title="Every Live Orders spreadsheet in Production's folder">📂 Workbooks</button><button id="regen" class="y" title="Pull fresh data from Sage X3, build, and save a new workbook">↻ Regenerate</button></div>
 </div></header>
 <nav class="tabs hide" id="tabs"><div class="w">
   <button data-v="ov" class="on">Overview</button><button data-v="lo">Live Orders</button><button data-v="ld">Work-centre load</button>
@@ -415,6 +415,7 @@ $('#files').addEventListener('click',e=>{const a=e.target.closest('a');if(!a)ret
   if(a.dataset.run){load('/api/live-orders/run/'+encodeURIComponent(a.dataset.run),a.dataset.run).then(()=>go('ov'))}
   if(a.dataset.dl)dlFile(a.dataset.dl);
   if(a.dataset.p){navigator.clipboard&&navigator.clipboard.writeText(a.dataset.p);a.textContent='Copied ✓';setTimeout(()=>a.textContent='Copy path',1500)}});
+$('#ugbtn').onclick=()=>{$('#tabs').classList.remove('hide');go('ug');window.scrollTo({top:0,behavior:'smooth'})};
 $('#wbbtn').onclick=()=>{$('#tabs').classList.remove('hide');$('#drop').classList.add('hide');go('wb');loadHistory().catch(()=>{})};
 function poll(){fetch('/api/live-orders/regenerate',{headers:HD()}).then(r=>r.json()).then(s=>{
   const last=(s.log||[]).filter(x=>x.trim()).slice(-1)[0]||'';
