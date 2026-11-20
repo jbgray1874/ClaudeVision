@@ -2,7 +2,7 @@
 
 Drop in an estimate (the estimators' template, or Dave's IMPORT layout), press Check. The page runs
 est_to_x3.py, shows READY / NOT READY with every check by cell, what it read (BOM and route), and gives the
-X3 load files to download (ZSDIITM if the part is new, YA00408BOM, ZSDIROU2). Every run is kept.
+X3 load files to download (ZSDIITM always - X3 rejects it if the part exists, YA00408BOM, ZSDIROU2). Every run is kept.
 Nothing is written to Sage X3: the files are loaded by hand in Usage > Imports (TEST first). Sending
 straight to X3 is stage 2 and needs the API client from Acuity (runbook 21.2 / 22.10).
 
@@ -183,7 +183,7 @@ def result_page(run_id):
     return page(f"""<p><a href="/">← Check another estimate</a></p>
 <div class="banner {'ready' if ready else 'notready'}">{'READY TO LOAD' if ready else f'NOT READY – {meta["stop"]} problem(s) to fix'}</div>
 <section class="card"><h2>{e(meta['estimate'])}</h2><div class="kv">
-<b>Part</b><span>{e(meta['code'])} – {'new product' if meta['new'] else 'already in Sage X3: its BOM and route are written'}</span>
+<b>Part</b><span>{e(meta['code'])} – {'new product' if meta['new'] else 'already in Sage X3: ZSDIITM is still written and X3 will reject that line (expected); its BOM and route are written'}</span>
 <b>Layout</b><span>{e(meta.get('layout', ''))}</span>
 <b>BOM</b><span>{meta['bom']} lines</span><b>Route</b><span>{meta['ops']} operations</span>
 <b>Checks</b><span>{meta['stop']} stop · {meta['warn']} warning(s)</span>

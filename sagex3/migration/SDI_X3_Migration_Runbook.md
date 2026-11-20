@@ -4650,3 +4650,12 @@ Keep this up to date with every setting we choose. **Never write the secret here
 - **To confirm on real data:** the X3 workOrderStatus / lineStatus values once WOs are loaded (the filters must catch them). `x3_source.py <folder> --check` shows rows read / kept per data set.
 - **Pull log history:** `x3_api.py` now also appends every pull to `api_log_history.jsonl` in the day's folder. A later pull had overwritten `api_log.json` and lost the routes' skipped-records note. **That count is still to get:** re-pull routes (`x3_api.py pull routes`) or wait for the overnight refresh.
 - **openpyxl was installed only in James's user site-packages** (`AppData\Roaming\Python\Python314`); the service (LocalSystem) can't see that. **Fix:** `C:\Python314\python.exe -s -m pip install openpyxl` as administrator. `-s` ignores the user site, so pip installs into `C:\Python314\Lib\site-packages`.
+
+#### 20 Nov (evening) – Estimating import: the product file (ZSDIITM) is now always generated (James)
+- **James:** "can we generate the products anyway. If they're already in Sage X3 they get rejected."
+- `est_to_x3.py` now **always** writes `<part>_ZSDIITM` (.txt + .xlsx), new part or not.
+  - For a part already in X3, the Checks tab says "already in X3 as … : ZSDIITM is still written and X3 will reject that line on import (expected); BOM / route are added to it".
+  - The load order note says the same. `est_app.py` and the README are updated.
+- **Why it's safe:** X3 rejects a product that already exists, so the file can always be loaded first without checking by hand. It also covers a part that arrives in X3 between the check and the load.
+- **One thing to confirm (James is admin):** the ZSDIITM import template must be **create-only**. If it were set to allow updates, an existing product's description / category would be overwritten from the estimate.
+- Tested on a made-up estimate in the estimators' layout (H10 "Part code"), once with the part in the product list and once without: ZSDIITM, YA00408BOM and ZSDIROU2 written both times, 0 STOP, the right message for each.

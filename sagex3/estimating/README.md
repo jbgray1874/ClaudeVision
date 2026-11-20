@@ -8,7 +8,7 @@ This is how the converter works and how to embed it in the estimating portal.
 
 | File | X3 template | When |
 |---|---|---|
-| `<part>_ZSDIITM.txt` / `.xlsx` | ZSDIITM: the product | **Only if the part is new** in X3 |
+| `<part>_ZSDIITM.txt` / `.xlsx` | ZSDIITM: the product | **Always** (20 Nov, James). If the part is already in X3, X3 rejects that line on import (expected) |
 | `<part>_YA00408BOM.txt` / `.xlsx` | YA00408BOM: the bill of materials | Always |
 | `<part>_ZSDIROU2.txt` / `.xlsx` | ZSDIROU2: the route | Always |
 | `<part>_CHECKS.xlsx` | – | Always: Notes (result), Checks, BOM read, Route read |
@@ -119,7 +119,7 @@ Every run is kept in `EST_RUNS/<timestamp>_<name>/` (the estimate, `out/`, `run.
    - `READY` if `stop == 0` (with a count of any WARN), else `NOT READY`;
    - the `checks` list as a table (level, estimate cell, check, detail);
    - the BOM and route read, from `<part>_CHECKS.xlsx` "BOM read" / "Route read", or from the `.xlsx` load files.
-3. **Offer the `.txt` files** (and a zip) only when `stop == 0`. Show the load order: ZSDIITM if new, then YA00408BOM, then ZSDIROU2. Show a warning when `new` is False: *"part already exists in X3 – load in TEST until Acuity confirm replace / add / reject"* (Acuity question B6).
+3. **Offer the `.txt` files** (and a zip) only when `stop == 0`. Show the load order: ZSDIITM, then YA00408BOM, then ZSDIROU2. When `new` is False, say *"part already in X3 – its ZSDIITM line will be rejected on import (expected); BOM and route load onto it"*.
 4. **Keep every run:** the estimate, outputs, `run.json` with `res`, who ran it and when. That gives the audit trail.
 5. **Stage 2 (later):** replace the download with a call to the X3 API (or submit to the X3 import folder). That needs Acuity's connected-app client ID / secret and an integration user (questions A1–A2, B14).
 6. **Keep the product list current:** point `products_path` at the newest ZSDIITM file or the scheduled X3 product export.

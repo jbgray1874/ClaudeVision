@@ -9,7 +9,8 @@ apart by row 10:
     sheet steel from gauge + sheet size against the X3 products' Description 2 / 3 (CR4 unless told);
   * Dave Wright's IMPORT layout (IMPORT.xls), the same sheet with X3 columns added (component code B / I,
     link quantity C, X3 work centre R, run minutes Q).
-  * ZSDIITM   the parent product (only if it is not already in X3)
+  * ZSDIITM   the parent product - always written (20 Nov, James): if it is already in X3, X3 rejects that line
+              on import, which is expected; the BOM and route still load onto it
   * YA00408BOM its bill of materials: standard materials, wire, sheet steel, other sheet material
   * ZSDIROU2  its route: one operation per labour line, X3 work centre, set-up and run time (minutes)
 Nothing is written to X3. Every line is checked first and the checks are in the workbook:
@@ -224,10 +225,11 @@ def build(est_path, out_dir, products_path, parent=None, category="FGML", rev_in
         check(*c)
     if head["layout"] != "IMPORT":
         check("INFO", "A63 / D5", f"Parent = the part code in the labour block ({head['labour_parent'] or '(blank)'})",
-              f"drawing {head['drawing_full']} rev {head['rev']} goes in Description 2 if the product is new")
+              f"drawing {head['drawing_full']} rev {head['rev']} goes in Description 2 of ZSDIITM (taken by X3 only if the product is new)")
     exists = code in prods
     check("INFO", "E5 / H5" if head["layout"] == "IMPORT" else "A63", f"Parent {code}" + (f" ({head['rev']})" if head["rev"] else ""),
-          f"already in X3 as {prods[code][0]} - '{prods[code][1]}': BOM / route will be added to it" if exists
+          f"already in X3 as {prods[code][0]} - '{prods[code][1]}': ZSDIITM is still written and X3 will reject that "
+          f"line on import (expected); BOM / route are added to it" if exists
           else f"new product, category {category}")
     labour_parents = {o["parent"] for o in ops if o["parent"]}
     if labour_parents - {code}:
@@ -284,7 +286,7 @@ def build(est_path, out_dir, products_path, parent=None, category="FGML", rev_in
     out.mkdir(parents=True, exist_ok=True)
     stem = re.sub(r"[^\w\-]+", "_", code)
     files = []
-    if not exists:
+    if True:                                           # always (James, 20 Nov): X3 rejects it if the part exists
         wb = Workbook()
         s = wb.active
         s.title = "Data with Headings"
@@ -334,7 +336,8 @@ def build(est_path, out_dir, products_path, parent=None, category="FGML", rev_in
                             f"(material {round(num(head['material']), 2)}, labour {round(num(head['labour']), 2)})"],
                ["BOM", f"{len(bom_rows)} lines from {len(bom)} read"], ["Route", f"{len(rou_rows)} operations from {len(ops)} read"],
                ["Result", "READY TO LOAD" if not stop else f"NOT READY - {stop} STOP check(s) on the Checks tab"],
-               ["Load order", "ZSDIITM (if new) -> YA00408BOM -> ZSDIROU2, in the TEST folder first"]]
+               ["Load order", "ZSDIITM -> YA00408BOM -> ZSDIROU2, in the TEST folder first"
+                              + (" (ZSDIITM: X3 rejects the line - the part already exists; expected)" if exists else "")]]
     notes(wb, summary, index=0)
     wb.save(out / f"{stem}_CHECKS.xlsx")
     return dict(code=code, new=not exists, bom=len(bom_rows), ops=len(rou_rows), stop=stop,
