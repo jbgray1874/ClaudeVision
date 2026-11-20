@@ -8,7 +8,8 @@ Default target: C:\\ClaudeVision\\sdi-intelligence-backend (the folder the SDIIn
   1. live_orders_routes.py and live_orders_dashboard.html, copied next to app.py
   2. two lines in app.py that mount the Live Orders endpoints (beside the HR ones)
   3. a "Live Orders" menu item, its page (the dashboard in a frame) and its label in sdi-intelligence-portal.html
-  4. the Live Orders settings in .env (only those missing): runs folder, Production's folder (network path), the
+  4. the Live Orders settings in .env (only those missing; a LIVE_ORDERS_ROUTES whose file isn't there is commented
+     out, so the routings come from Sage X3): runs folder, Production's folder (network path), the
      repo's live_orders folder, the route file, the X3 API settings file and exports folder - full paths, because
      the service runs as a system account (no mapped drives, no home folder of yours)
 Every changed file is backed up first as <name>.bak-<date time>. Safe to run twice: anything already there is skipped.
@@ -90,9 +91,19 @@ def plan(target, runs, opts):
             "LIVE_ORDERS_HOME": str(REPO / "sagex3" / "production" / "live_orders"), "LIVE_ORDERS_ROUTES": opts.routes_file,
             "X3_API_CONFIG": opts.x3_config, "X3_EXPORT_DIR": opts.exports,
             "LIVE_ORDERS_PYTHON": sys.executable}          # the python you run this with (it has openpyxl)
+    bad = [m for m in re.finditer(r"(?m)^LIVE_ORDERS_ROUTES=(.*)$", e)   # a route file that isn't there (e.g. a
+           if not Path(m.group(1).strip().strip('"')).is_file()]            # placeholder pasted): comment it out
+    if bad:
+        e2 = e
+        for m in bad:
+            e2 = e2.replace(m.group(0), "# " + m.group(0) + "   (file not found - X3 routings used)", 1)
+        changes.append((env, e2, None, f".env: LIVE_ORDERS_ROUTES points to a file that isn't there - commented out, "
+                                       f"Live Orders uses the routings in Sage X3"))
+        e = e2
     add = [f"{k}={v}" for k, v in want.items() if v and not re.search(rf"(?m)^{k}=", e)]
     if add:
         block = "\n# -- Live Orders (add_live_orders_to_portal.py) --\n" + "\n".join(add) + "\n"
+        changes = [c for c in changes if c[0] != env]       # one write of .env with both changes
         changes.append((env, e + ("" if e.endswith("\n") or not e else "\n") + block, None,
                         ".env: " + "; ".join(add)))
     return changes
@@ -105,7 +116,7 @@ def main():
     ap.add_argument("--share", default=r"\\sdi-dc01\shareddata$\Shared\Operations\Reporting\LiveOrders",
                     help="Production's workbook folder, as a network path (the service can't see K:)")
     ap.add_argument("--share-user", default=r"K:\Operations\Reporting\LiveOrders", help="the same folder as people see it")
-    ap.add_argument("--routes-file", default="", help="the route load file (.txt) until X3 routings are mapped")
+    ap.add_argument("--routes-file", default="", help="optional: a route load file; default is X3 routings")
     ap.add_argument("--x3-config", default=str(Path.home() / ".sdi" / "x3_api.json"),
                     help="the read-only X3 API settings (the service runs as another account, so give the full path)")
     ap.add_argument("--exports", default=str(Path.home() / "SDI_X3_exports"))

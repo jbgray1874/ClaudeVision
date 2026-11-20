@@ -1,7 +1,8 @@
 """Live Orders from Sage X3, end to end, in one command. Written 20 Nov 2026.
 
-    python run_x3.py --routes <ROU.txt> [--products <file>] [--boms <file>] [--pull api|ui]
-       (products / BOMs default to products.json / boms.json in the same X3 pull)
+    python run_x3.py [--pull api|ui] [--products <file>] [--boms <file>] [--routes <file>]
+       (products / BOMs / routings default to products.json / boms.json / routes.json from the X3 pull - all
+        straight from Sage X3; --routes <ROU.txt> still takes the old route load file)
 
   1. (optional) pull today's data from X3: --pull api (x3_api.py) or --pull ui (x3_ui.py, the screens)
   2. take the newest exports folder (%USERPROFILE%\\SDI_X3_exports\\<date>, or --exports)
@@ -33,7 +34,7 @@ SHARE = os.environ.get("LIVE_ORDERS_SHARE", r"\\sdi-dc01\shareddata$\Shared\Oper
 
 
 TRANSACTIONS = ["works_orders", "wo_products", "wo_materials", "stock", "so_lines", "po_lines"]   # every run
-MASTER = ["products", "boms"]                                                                         # once a day
+MASTER = ["products", "boms", "routes"]                                                               # once a day
 
 
 def newest_workbook(folder):
@@ -85,7 +86,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--products", help="default: products.json from the pull (X3 API)")
     ap.add_argument("--boms", help="default: boms.json from the pull (X3 API)")
-    ap.add_argument("--routes", required=True, help="the route load file (.txt) until X3 routings are mapped")
+    ap.add_argument("--routes", help="default: routes.json from the pull (X3 routings); or a route load file (.txt)")
     ap.add_argument("--costs")
     ap.add_argument("--carry")
     ap.add_argument("--pull", choices=["api", "ui"])
@@ -116,7 +117,7 @@ def main(argv=None):
         src = Path(a.exports) if a.exports else newest_exports(EXPORTS)
         out = runs / dt.datetime.now().strftime("%Y-%m-%d_%H%M")
         out.mkdir(parents=True, exist_ok=True)
-        for k in ("products", "boms"):                          # master data: this pull, else the newest earlier one
+        for k in ("products", "boms", "routes"):                # master data: this pull, else the newest earlier one
             if not getattr(a, k):
                 f, _ = master_file(k, src, a.master_hours)
                 if not f:

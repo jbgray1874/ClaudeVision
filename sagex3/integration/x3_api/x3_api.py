@@ -432,7 +432,7 @@ NODES = {
     "routes":        ["x3Manufacturing", "routingOperation"],
     "work_centres":  ["x3ManufacturingData", "workCenter"],
 }
-LIVE_ORDERS = {"works_orders", "wo_products", "wo_materials", "stock", "so_lines", "po_lines", "products", "boms"}
+LIVE_ORDERS = {"works_orders", "wo_products", "wo_materials", "stock", "so_lines", "po_lines", "products", "boms", "routes"}
 # Only the fields Live Orders uses (x3_columns.json) - asking for all 159-182 fields with their linked records
 # overloaded X3 Services on 20 Nov. `draft --all` writes every field instead (for exploring, with --limit).
 LEAN = {

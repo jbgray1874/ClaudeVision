@@ -25,7 +25,7 @@ Endpoints (X-SDI-Key on all but the dashboard page, which holds no data):
     LIVE_ORDERS_SHARE_USER K:\\Operations\\Reporting\\LiveOrders  (the path shown to people, for "Copy path")
     LIVE_ORDERS_RUNS       working folder for runs (latest.json, status.json, regenerate.log)
     LIVE_ORDERS_HOME       folder holding run_x3.py (C:\\SDI_X3\\repo\\sagex3\\production\\live_orders)
-    LIVE_ORDERS_ROUTES     the route load file, until X3 routings are mapped
+    LIVE_ORDERS_ROUTES     optional: a route load file instead of X3 routings (ignored if the file isn't there)
     LIVE_ORDERS_PYTHON     python to run it with (default: the portal's own)
     X3_API_CONFIG, X3_EXPORT_DIR  passed through to the X3 pull (the read-only connected-application settings)
 """
@@ -152,10 +152,10 @@ def regenerate(full: bool = False, x_sdi_key: str | None = Header(default=None))
         script = HOME / "run_x3.py"
         if not script.exists():
             raise HTTPException(status_code=500, detail=f"run_x3.py not found in {HOME} (LIVE_ORDERS_HOME)")
-        if not ROUTES:
-            raise HTTPException(status_code=500, detail="LIVE_ORDERS_ROUTES is not set (the route load file)")
         RUNS.mkdir(parents=True, exist_ok=True)
-        cmd = [PYTHON, str(script), "--pull", "api", "--routes", ROUTES, "--runs", str(RUNS), "--share", str(SHARE)]
+        cmd = [PYTHON, str(script), "--pull", "api", "--runs", str(RUNS), "--share", str(SHARE)]
+        if ROUTES and Path(ROUTES).is_file():     # optional: an old route load file. Default: routings from X3
+            cmd += ["--routes", ROUTES]
         if full:
             cmd.append("--full")
         log = open(RUNS / "regenerate.log", "w", encoding="utf-8")

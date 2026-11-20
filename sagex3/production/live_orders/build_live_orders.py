@@ -151,9 +151,43 @@ def read_boms(path):
 
 def read_routes(path):
     routes = defaultdict(list)                 # product -> [(op, wc, description, setup min, run min / unit)]
+    if Path(path).suffix.lower() in (".csv", ".json"):
+        return read_x3_routes(path)
     for r in read_load(path):
         if len(r) >= 11 and r[1] == "10":
             routes[r[0]].append((int(num(r[6])), r[7], r[8], num(r[9]), num(r[10])))
+    return routes
+
+
+def read_x3_routes(path):
+    """X3 API routes (x3Manufacturing.routingOperation), 20 Nov. The X3 routings were loaded from our ZSDIROU2 file, so
+    setupTime / runTime hold the same numbers as the load file: minutes (setup per batch, run per unit). Checked against
+    James's routes.csv sample (20 Nov): op 5, LABOUR, setup 0, run 60, proportional, base qty 1, timeFor1.
+      runTimeType proportional -> run / baseQuantity per unit; fixed -> counted once, like a setup
+      managementUnit rate      -> run per unit = 60 / rate (rate = units an hour)
+    Only the main operations (alternateIndex 0); routing code 10 is preferred when a part has more than one."""
+    from x3_source import read_rows
+    by = defaultdict(lambda: defaultdict(list))
+    for r in read_rows(path):
+        g = lambda *k: next((r[x] for x in k if r.get(x) not in (None, "")), "")
+        if str(g("alternateIndex") or "0") not in ("0", "0.0"):
+            continue
+        prod = g("product.code")
+        rid = str(g("routing._id")).split("|")
+        code = rid[1] if len(rid) > 1 else ""
+        setup, run, base = num(g("setupTime")), num(g("runTime")), num(g("baseQuantity")) or 1
+        if str(g("managementUnit")).lower() == "rate":
+            rate = num(g("rate"))
+            run = 60 / rate if rate else 0
+        else:
+            run = run / base
+        if str(g("runTimeType")).lower() == "fixed":
+            setup, run = setup + run * base, 0
+        if prod:
+            by[prod][code].append((int(num(g("operationNumber"))), g("mainWorkCenter.code"), g("operationDescription"), setup, run))
+    routes = defaultdict(list)
+    for prod, codes in by.items():
+        routes[prod] = sorted(codes.get("10") or codes[sorted(codes)[0]])
     return routes
 
 
