@@ -4346,3 +4346,11 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **Tabs:** Read me (counts and definitions), Summary (colour-coded status, filters), Detail (adds qty outstanding).
   - **Status split:** STOPPED 102, RE-CODED 16, Still ordering 57, NEW 145, Not a product 10.
   - Scratchpad only, never git: it names the customer. Final email drafted in chat. **SENT to Ian by James (20 Nov). Done.**
+- **20 Nov – `diagnose` on training (after copying the new `x3_api.py` from the zip view into the real folder).** The findings:
+  - **No sign-in:** 401 Basic realm=Syracuse.
+  - **Junk bearer:** *"Oauth2 Bearer authentication – No 'oauth2' or 'sageId2' in http query"*, so non-JWT bearers go to the OAuth2-server route.
+  - **Any JWT** (wrong secret, unknown client ID, or ours): the same *"Cannot read properties of null (reading 'info')"*. So JWTs are taken as connected-app tokens, but **a lookup fails before the client or secret is checked**.
+  - **Token-exchange URLs** (`/auth/oauth2/token`, `/oauth2/token`, `/auth/token`, `/xtrem/token`, …): none exist (404, "bad url", or a login redirect). There's no exchange: the self-signed JWT is sent directly.
+  - **Leading suspect:** the endpoint name. We sent `SDIMIG` as `x-xtrem-endpoint` and `aud` (a guess). **Next:** James screenshots Administration → Endpoints (name + folder); then set `endpoint` and re-run `probe`.
+  - Second suspect: the connected application's blank X3 Connector (the Sage X3 Connectors list was empty).
+  - **Lesson:** the browser download went into the zip view in Explorer, not the real folder. Copy files into `C:\SDI_X3\SDI_X3\...` and check with `python x3_api.py -h`.
