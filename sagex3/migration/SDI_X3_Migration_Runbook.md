@@ -4367,3 +4367,13 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **Leading suspect:** the endpoint name. We sent `SDIMIG` as `x-xtrem-endpoint` and `aud` (a guess). **Next:** James screenshots Administration → Endpoints (name + folder); then set `endpoint` and re-run `probe`.
   - Second suspect: the connected application's blank X3 Connector (the Sage X3 Connectors list was empty).
   - **Lesson:** the browser download went into the zip view in Explorer, not the real folder. Copy files into `C:\SDI_X3\SDI_X3\...` and check with `python x3_api.py -h`.
+
+**RULE (James, 20 Nov): NO MORE ZIPS.** "It's horrible tech."
+- **Why:** three zips, two "-old" folders, a download saved into a zip view, and `x3_api (1)` copies caused today's wrong-file and wrong-folder slips.
+- **From now on:** James's PC has one linked copy of the project at **`C:\SDI_X3\repo`** (`git clone --branch claude/eloquent-babbage-o9etz3 --single-branch https://github.com/jbgray1874/claudevision.git repo`).
+- **To update after Claude pushes:** `cd C:\SDI_X3\repo; git pull`.
+- **Work folders:** `C:\SDI_X3\repo\sagex3\integration\x3_api`, `...\sagex3\production\live_orders`, and `C:\SDI_X3\repo\sdi-intelligence-backend` (portal files there are for reference; James's live portal is unchanged).
+- **It never touches `C:\ClaudeVision`:** it's a separate folder and clone. The 14 Nov breakage was a checkout *inside* `C:\ClaudeVision`.
+- **Old copies are moved, not deleted:** `C:\SDI_X3\_old` (SDI_X3, SDI_X3-old, SDI_X3-old2, the zips).
+- **Unaffected:** settings (`%USERPROFILE%\.sdi\x3_api.json`, the X3 secret) and data (`SDI_X3_exports`, `SDI_X3_runs`) live outside the repo.
+- **Claude:** push before saying "updated"; no zips; no file-by-file downloads for code. Private outputs (customer workbooks etc.) are still sent as files, never committed.
