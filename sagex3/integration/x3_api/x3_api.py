@@ -96,7 +96,9 @@ def _b64(b):
 def make_jwt(c, aud=None):
     """HS256 JWT signed with the connected application's secret (no third-party library needed)."""
     now = int(time.time())
-    claims = {"iss": c["client_id"], "sub": c["user"], "jti": uuid.uuid4().hex,     # jti: X3 lists tokens by Token ID
+    # NO jti: with a token ID, X3 looks the token up in its own issued-token list, finds nothing and fails with
+    # "Cannot read properties of null (reading 'info')" (20 Nov, training). The claims test without jti got in.
+    claims = {"iss": c["client_id"], "sub": c["user"],
               "iat": now - 30, "exp": now + int(c.get("token_seconds", 300))}
     aud = c.get("aud", "empty") if aud is None else aud
     if aud == "empty":                       # what X3 accepts (20 Nov, training): aud present but empty

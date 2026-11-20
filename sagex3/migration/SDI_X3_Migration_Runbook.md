@@ -4306,6 +4306,10 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **Seen:** once one token had worked, later tokens in the same run were let through even when expired or without `iss`. X3 seems to keep the sign-in open briefly. Not relied on.
   - REST `/api1/x3/erp/SDIMIG/...` with an endpoint-named aud gave Error 45; to re-test with the empty aud.
   - `x3_api.py` now defaults to the empty aud, and `probe` tries it first.
+  - **CORRECTION (20 Nov, after the clone):** `probe` still got *"reading 'info'"* even with the empty aud. The only difference from the `claims` test that got in: **`probe` sent a `jti` (token ID)**, added after seeing the "Tokens currently valid" grid.
+    - With a `jti`, X3 looks the token up in its own issued-token list and finds nothing. **`jti` removed. Never send one.**
+    - So the *"info"* error came from the `jti`, not (only) the endpoint name. The endpoint `X3ERPV12_SDIMIG` and the empty aud are what the next check needs.
+  - **First run from the clone (`C:\SDI_X3\repo`):** clone OK (3,610 objects); old copies moved to `C:\SDI_X3\_old`.
 - **Lesson (20 Nov):** a copy command run from `PS C:\ClaudeVision>` put a stray `x3_api.py` in James's estimating folder. **Always `cd C:\SDI_X3\SDI_X3\integration\x3_api` first, and check the prompt before any copy.** Never put files in `C:\ClaudeVision`. The stray file is removed only after checking it's today's.
 - **Results to fill in as we find them:**
   - the endpoint name;
