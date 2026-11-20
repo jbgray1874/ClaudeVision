@@ -4345,6 +4345,19 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **SMR from `x3StockData.stock`:** stockSite.code, product._id, quantityInStockUnit, lot, location.code, status.code (A only).
   - **Tested end to end** (adapter → engine) on X3-shaped mock rows: 1 WO, AMBER, as worked by hand.
   - **For later:** `workOrderMaterialLine` carries X3's own requiredQuantity / allocatedQuantity / shortageQuantity. Once WOs exist in X3, the board's material status can come from X3's allocations instead of its own sharing-out.
+- **20 Nov – INCIDENT: the first full pull knocked over X3 Services on training.**
+  - The SO request got *"socket hang up"*, then the PO request got *"connect ECONNREFUSED 10.62.127.172:8240"* (the internal X3 Services / GraphQL service).
+  - **Cause (ours):** each request asked for **200 rows × 159–182 fields** with their linked records.
+  - **Checks given to James:** the X3 screens (separate service; should be fine); `probe` again in 5 min; if still refused after ~15 min, tell Acuity (Ethan shares the site).
+  - **Fix:**
+    - **`LEAN` field lists**: only what the board uses, 4–17 fields per data set (`draft --all` gives every field, for exploring with `--limit` only);
+    - **50 rows per page**, a 1 s pause between pages;
+    - **back-off** on 5xx or connection errors (15 / 45 / 120 s), then that data set is given up.
+  - **Rule:** never pull every field in bulk; trials only, with `--limit`.
+- **Master data from X3:**
+  - **products** (code, productCategory.code, localizedDescription1–3) and **BOMs** (parentProduct.code, componentProduct.code, linkQuantity; lines whose validity has ended are skipped) are now read from the API pull;
+  - `run_x3.py` takes them from the same pull by default; both are in the default pull.
+  - **Routings:** still the route load file, until real `routingOperation` rows show X3's time units (setupTime / runTime / rate / baseQuantity / managementUnit / runTimeType). A `pull routes --limit 3` trial will show them; routing data names no customers.
 - **Results to fill in as we find them:**
   - the endpoint name;
   - the GraphQL path / audience / header `probe` accepted;

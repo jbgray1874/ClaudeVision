@@ -105,8 +105,9 @@ def read_products(path):
         cols = list(dict.fromkeys(k for r in rows[:200] for k in r))
         c = {k: column_for(cols, n) for k, n in dict(
             ITMREF=["ITMREF", "code", "product.code", "Product"], TCLCOD=["TCLCOD", "productCategory.code", "productCategory", "Category"],
-            ITMDES1=["ITMDES1", "description1", "description", "Description"], ITMDES2=["ITMDES2", "description2"],
-            ITMDES3=["ITMDES3", "description3"]).items()}
+            ITMDES1=["ITMDES1", "localizedDescription1", "description1", "description", "Description"],
+            ITMDES2=["ITMDES2", "localizedDescription2", "description2"],
+            ITMDES3=["ITMDES3", "localizedDescription3", "description3"]).items()}
         g = lambda r, k: str(r.get(c[k]) or "").strip() if c[k] else ""
         return {g(r, "ITMREF"): dict(cat=g(r, "TCLCOD"), des=g(r, "ITMDES1"), des2=g(r, "ITMDES2"), des3=g(r, "ITMDES3"))
                 for r in rows if g(r, "ITMREF")}
@@ -126,6 +127,21 @@ def read_load(path):
 
 
 def read_boms(path):
+    if Path(path).suffix.lower() in (".csv", ".json"):      # X3 API boms (manufacturingBomLine), 20 Nov
+        from x3_source import column_for, read_rows
+        rows = read_rows(path)
+        cols = list(dict.fromkeys(k for r in rows[:200] for k in r))
+        par = column_for(cols, ["parentProduct.code", "ITMREF", "Parent"])
+        com = column_for(cols, ["componentProduct.code", "CPNITMREF", "Component"])
+        qty = column_for(cols, ["linkQuantity", "BOMQTY", "Link quantity"])
+        end = column_for(cols, ["validityEndDate", "BOMEDAT"])
+        today = dt.date.today().isoformat()
+        boms = defaultdict(list)
+        for r in rows:
+            e = str(r.get(end) or "")[:10] if end else ""
+            if r.get(par) and r.get(com) and not (e and e < today):    # skip lines whose validity has ended
+                boms[str(r[par]).strip()].append((str(r[com]).strip(), num(r.get(qty))))
+        return boms
     boms = defaultdict(list)                   # parent -> [(component, link qty)]
     for r in read_load(path):
         if len(r) >= 11 and r[1] == "10":

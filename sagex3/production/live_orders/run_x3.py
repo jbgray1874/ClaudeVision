@@ -1,6 +1,7 @@
 """Live Orders from Sage X3, end to end, in one command. Written 20 Nov 2026.
 
-    python run_x3.py --products <ZSDIITM.xlsx | products.csv> --boms <BOM.txt> --routes <ROU.txt> [--pull api|ui]
+    python run_x3.py --routes <ROU.txt> [--products <file>] [--boms <file>] [--pull api|ui]
+       (products / BOMs default to products.json / boms.json in the same X3 pull)
 
   1. (optional) pull today's data from X3: --pull api (x3_api.py) or --pull ui (x3_ui.py, the screens)
   2. take the newest exports folder (%USERPROFILE%\\SDI_X3_exports\\<date>, or --exports)
@@ -37,9 +38,9 @@ def newest_exports(root):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--products", required=True)
-    ap.add_argument("--boms", required=True)
-    ap.add_argument("--routes", required=True)
+    ap.add_argument("--products", help="default: products.json from the pull (X3 API)")
+    ap.add_argument("--boms", help="default: boms.json from the pull (X3 API)")
+    ap.add_argument("--routes", required=True, help="the route load file (.txt) until X3 routings are mapped")
     ap.add_argument("--costs")
     ap.add_argument("--carry")
     ap.add_argument("--pull", choices=["api", "ui"])
@@ -62,6 +63,13 @@ def main(argv=None):
         src = Path(a.exports) if a.exports else newest_exports(EXPORTS)
         out = runs / dt.datetime.now().strftime("%Y-%m-%d_%H%M")
         out.mkdir(parents=True, exist_ok=True)
+        for k in ("products", "boms"):                          # master data from the same X3 pull if not given
+            if not getattr(a, k):
+                f = next((src / f"{k}{e}" for e in (".json", ".csv") if (src / f"{k}{e}").exists()), None)
+                if not f:
+                    raise SystemExit(f"No --{k} given and no {k}.json in {src}: pull it (x3_api.py pull {k}) or name a file")
+                setattr(a, k, str(f))
+        status["master_data"] = dict(products=a.products, boms=a.boms, routes=a.routes)
         from x3_source import to_extract
         extract = out / "X3_extract.txt"
         status["exports"] = str(src)

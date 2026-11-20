@@ -54,7 +54,9 @@ DATASETS = HERE / "api_datasets.json"
 EXPORTS = Path(os.environ.get("X3_EXPORT_DIR", Path.home() / "SDI_X3_exports"))
 GRAPHQL_PATHS = ["/xtrem/api", "/api", "/xtrem/graphql", "/graphql"]
 MUTATION = re.compile(r"(^|[}\s])mutation\b\s*\w*\s*[({]", re.I)
-PAUSE = 0.5                                       # seconds between pages: keep it gentle
+PAUSE = 1.0                                       # seconds between pages: keep it gentle
+PAGE = 50                                         # rows per request (200 x 159 fields knocked X3 Services over, 20 Nov)
+RETRY_WAITS = (15, 45, 120)                       # back off on 5xx / connection errors, then give that data set up
 
 
 # ---------------------------------------------------------------- settings
@@ -311,8 +313,14 @@ def gql(c, query, variables=None):
     if MUTATION.search(query):
         raise SystemExit("Refused: this client is read-only (no GraphQL mutations).")
     url = c["site"] + c.get("graphql_path", GRAPHQL_PATHS[0])
-    code, text = http("POST", url, headers(c, endpoint_header=c.get("endpoint_header", True)),
-                      {"query": query, "variables": variables or {}})
+    for wait in RETRY_WAITS + (None,):
+        code, text = http("POST", url, headers(c, endpoint_header=c.get("endpoint_header", True)),
+                          {"query": query, "variables": variables or {}}, timeout=120)
+        if (code == 0 or code >= 500) and wait is not None:   # X3 struggling: back off, don't push on
+            print(f"   X3 answered {code} ({redact(text)[:80]}) - waiting {wait}s before one more try")
+            time.sleep(wait)
+            continue
+        break
     try:
         out = json.loads(text)
     except ValueError:
@@ -424,7 +432,36 @@ NODES = {
     "routes":        ["x3Manufacturing", "routingOperation"],
     "work_centres":  ["x3ManufacturingData", "workCenter"],
 }
-LIVE_ORDERS = {"works_orders", "wo_products", "wo_materials", "stock", "so_lines", "po_lines"}
+LIVE_ORDERS = {"works_orders", "wo_products", "wo_materials", "stock", "so_lines", "po_lines", "products", "boms"}
+# Only the fields Live Orders uses (x3_columns.json) - asking for all 159-182 fields with their linked records
+# overloaded X3 Services on 20 Nov. `draft --all` writes every field instead (for exploring, with --limit).
+LEAN = {
+    "works_orders":  "number orderStatus productionSite { code } startDate endDate plannedQuantity totalCompletedQuantity "
+                     "remainingQuantity allocationStatus _createStamp",
+    "wo_products":   "workOrder { number } lineNumber product { code } majorProductVersion { code } salesOrder customer { code } "
+                     "workOrderStatus lineStatus expectedQuantity releaseQuantity totalCompletedQuantity actualRejectedQuantity "
+                     "remainingQuantity _createStamp startDate endDate",
+    "wo_materials":  "number { number } lineNumber { _id } bomSequence product { code } requirementDate requiredQuantity "
+                     "consumedQuantity allocatedQuantity shortageQuantity materialStatus allocationStatus",
+    "wo_operations": "workOrder { number } operationNumber expectedWorkCenter { code } operationStatus startDate endDate "
+                     "setupTime runTime unitTime expectedQuantity completedQuantity",
+    "stock":         "stockSite { code } product { _id } lot location { code } status { code } quantityInStockUnit "
+                     "allocatedQuantity availableQuantity",
+    "so_lines":      "salesOrder { id } lineNumber salesSite { code } shippingSite { code } soldToCustomer { _id } orderDate "
+                     "requestedDeliveryDate product { code } productDescriptionInUserLanguage salesUnit { code } "
+                     "quantityInSalesUnitOrdered quantityInSalesUnitDelivered grossPrice lineStatus",
+    "po_lines":      "purchaseOrder { id } lineNumber purchaseSite { code } receiptSite { code } orderFromSupplier { _id } "
+                     "orderDate product { code } productDescriptionInUserLanguage purchaseUnit { code } "
+                     "quantityInPurchaseUnitOrdered quantityInPurchaseUnitReceived remainingQuantityToReceiveInPurchaseUnit "
+                     "expectedReceiptDate grossPrice currency { code } isClosed lineStatus",
+    "products":      "code productCategory { code } localizedDescription1 localizedDescription2 localizedDescription3 "
+                     "stockUnit { code } productStatus isManufactured isPurchased",
+    "boms":          "parentProduct { code } bomCode { _id } sequence componentProduct { code } linkQuantity "
+                     "linkQuantityInBomUnit unit { code } validityStartDate validityEndDate",
+    "routes":        "product { code } site { code } routing { _id } operationNumber alternateIndex mainWorkCenter { code } "
+                     "operationDescription setupTime runTime rate baseQuantity managementUnit runTimeType",
+    "work_centres":  "code description manufacturingSite { code } workCenterGroup { code }",
+}
 
 
 def draft(a):
@@ -441,9 +478,9 @@ def draft(a):
         if not node_t:
             missing.append(f"{top}.{node}")
             continue
-        sel = selection(types, node_t, 1)
-        found[name] = {"path": [top, node], "fields": " ".join(sel), "filter": "", "enabled": name in LIVE_ORDERS}
-        print(f"  {name:<14} {top}.{node}: {len(sel)} fields")
+        sel = " ".join(selection(types, node_t, 1)) if a.all or name not in LEAN else LEAN[name]
+        found[name] = {"path": [top, node], "fields": sel, "filter": "", "enabled": name in LIVE_ORDERS}
+        print(f"  {name:<14} {top}.{node}: {len(flat_names(sel))} fields")
     out = DATASETS if not DATASETS.exists() or a.force else HERE / "api_datasets.draft.json"
     out.write_text(json.dumps(found, indent=2))
     print(f"Wrote {out}" + (f"; not in this site's schema: {', '.join(missing)}" if missing else ""))
@@ -488,7 +525,7 @@ def _edges(v):
     return [e["node"] for e in (v or {}).get("edges", [])]
 
 
-def pull_graphql(c, ds, page=200, limit=0):
+def pull_graphql(c, ds, page=PAGE, limit=0):
     if limit:
         page = limit
     path, fields, flt, explode = ds["path"], ds["fields"], ds.get("filter", ""), ds.get("explode", "")
@@ -621,6 +658,7 @@ def main(argv=None):
     s.set_defaults(fn=schema)
     d = sp.add_parser("draft")
     d.add_argument("--force", action="store_true")
+    d.add_argument("--all", action="store_true", help="every field (exploring only, with pull --limit)")
     d.set_defaults(fn=draft)
     p = sp.add_parser("pull")
     p.add_argument("names", nargs="*")
