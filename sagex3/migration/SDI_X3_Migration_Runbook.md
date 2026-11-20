@@ -4294,6 +4294,7 @@ Keep this up to date with every setting we choose. **Never write the secret here
      - connector: Enter;
      - client ID from the form; X3 user = the Allowed user's login; secret pasted, hidden.
   2. Then `probe` → `schema` → `draft` → `api_datasets.json` → `pull`. Saved privately in `%USERPROFILE%\.sdi\x3_api.json`.
+- **Endpoints (Administration → Administration → Endpoints, 20 Nov):** `syracuse`; **`X3ERPV12_SDIMIG`** (folder SDIMIG); `X3ERPV12_SEED`; `X3ERPV12_X3`; `X3ERPV12_ACUX3` ("We are SDI", folder ACUX3, the only one with Use Sage AI ticked: **leave alone**). The X3 Service and X3 Connector columns are blank on every row. **In `setup`, the endpoint is `X3ERPV12_SDIMIG`.**
 - **Results to fill in as we find them:**
   - the endpoint name;
   - the GraphQL path / audience / header `probe` accepted;
