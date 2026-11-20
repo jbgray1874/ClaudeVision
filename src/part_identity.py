@@ -87,7 +87,12 @@ def normalize_part_code(raw: Any) -> str:
     #
     # The shape test is the one part_code_conventions already publishes, so this asks the
     # same question as everything else that asks it rather than adding a seventh spelling.
-    _trimmed = re.sub(r"-(?!GA$|CGA$)[A-Z]{3,}$", "", s)
+    # A HAND IS NOT BLEED (12133, 20 Nov 2026). 12133-00-GA lists 12133-02-01X x6 and
+    # "12133-02-01X - HANDED" x6, two purchases (the ADVALU-006 strip and its Y variant). The
+    # trim made the handed one the base: one record, the quantities added together, and the
+    # handed strip's own line taking the base's count. A hand word names the other part.
+    _trimmed = re.sub(r"-(?!GA$|CGA$|(?:HANDED|HAND|LEFT|RIGHT|MIRRORED|MIRROR|OPPOSITE|OPP)$)"
+                      r"[A-Z]{3,}$", "", s)
     if _trimmed != s:
         try:
             from part_code_conventions import looks_like_a_drawing_number

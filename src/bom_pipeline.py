@@ -234,6 +234,7 @@ def reconciled_bom_rows_for_job(
                         _row_out["length_mm"] = _lv
                         break
             flat.append(_row_out)
+    findings_extra.extend(reconcile_one_stray_letter(flat, pdf_paths))
     # A reader that did not run is the only failure this module cannot see in its output:
     # the rows simply are not there, and a job read by one path looks exactly like a job
     # both paths agreed was small. Promote every unread scope to a finding so the absence
@@ -270,6 +271,58 @@ def reconciled_bom_rows_for_job(
         "a_count": result.get("a_count", 0),
         "b_count": result.get("b_count", 0),
     }
+
+
+def _desc_key(text: Any) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(text or "").upper())
+
+
+def reconcile_one_stray_letter(rows: List[Dict[str, Any]],
+                               pdf_paths: Sequence[Any] = ()) -> List[Dict[str, Any]]:
+    """A BOM CODE THAT IS ANOTHER ROW'S CODE PLUS ONE STRAY LETTER IS THAT ROW'S PART (12133).
+
+    12133-00-GA's table, item 28, prints 12133-04-01M "1130x489 SHELF TOP" qty 2. The text
+    layer read it as 12133-04-01ME, and the shelf top went on to the estimate as a part with
+    no drawing, beside the 12133-04-01M its own GA lists. A row is renamed only when ALL hold:
+
+      * its code is another row's code with one letter more on the end;
+      * that other row has the same description, word for word;
+      * the longer code is nowhere else: no other row and no PDF in the pack is named it.
+
+    A genuine suffix letter (01A beside 01, a handed 01XH) is a part of its own, with its own
+    description or drawing, so it is left alone. The reading it replaced is kept on the row
+    and said in a finding. Changes rows in place; returns the findings."""
+    found: List[Dict[str, Any]] = []
+    by_code: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        by_code.setdefault(str(r.get("part_number") or "").upper(), []).append(r)
+    files = " ".join(os.path.basename(str(p)).upper() for p in (pdf_paths or ()))
+    for code, group in list(by_code.items()):
+        if len(code) < 4 or not code[-1].isalpha() or not code[-2].isalnum():
+            continue
+        short = code[:-1]
+        others = by_code.get(short)
+        if not others or code in files:
+            continue
+        if any(code in str(x).upper() for x in (r.get("bom_parent") for r in rows)):
+            continue
+        descs = {_desc_key(r.get("description")) for r in others}
+        if not all(_desc_key(r.get("description")) in descs and _desc_key(r.get("description"))
+                   for r in group):
+            continue
+        for r in group:
+            r.setdefault("bom_also_read_as", []).append(
+                {"part_number": r["part_number"], "why": "one letter more than the drawing "
+                 f"{short} with the same description; read as {short}"})
+            r["part_number"] = short
+            found.append({
+                "code": "bom_code_one_stray_letter",
+                "detail": (f"{r.get('bom_parent')} item {r.get('bom_item_no') or '?'}: "
+                           f"'{code}' read as {short} ('{r.get('description')}'). {short} is "
+                           f"listed with the same description elsewhere in the pack and no "
+                           f"drawing or other row is named {code}"),
+                "page": r.get("bom_parent"), "severity": "review"})
+    return found
 
 
 def _row_is_codeless(r: Dict[str, Any]) -> bool:

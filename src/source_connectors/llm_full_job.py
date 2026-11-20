@@ -143,6 +143,11 @@ def _norm_material(m: str) -> str:
                             "OAK", "BEECH", "BIRCH", "FSC")):
         return "TIMBER"
     if "BOARD" in u:                                      # generic board / soft-touch laminate board
+        # A print substrate (display board, foam board) is not MDF (12754-01-GA): kept as
+        # written so the AI Print calculator can find its row.
+        import print_costing as _pc_board
+        if _pc_board.names_a_print_substrate(u):
+            return str(m or "").strip()
         return "MDF"
     if "MILD" in u or u.strip() == "STEEL":
         return "MILD_STEEL"

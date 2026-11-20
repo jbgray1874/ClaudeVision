@@ -176,11 +176,12 @@ def test_a_handed_part_does_not_shadow_its_own_base_in_the_index():
 
     Two questions, one helper: "are these the same article" wants the hand stripped, and
     "index these parts under their own numbers" must not have it stripped.
+
+    Since 20 Nov 2026 (12133's "12133-02-01X - HANDED", two purchases at six each) the code
+    key keeps the hand, so the collapse cannot happen at all; the rule must still fire.
     """
     from part_identity import normalize_part_code
-    assert normalize_part_code("11650-04-01A-HANDED") == normalize_part_code("11650-04-01A"), (
-        "the premise has changed — normalize_part_code no longer strips the hand, so this "
-        "test is describing a collapse that can no longer happen")
+    assert normalize_part_code("11650-04-01A-HANDED") != normalize_part_code("11650-04-01A")
 
     base, twin = _pair(handed_material="PETG", handed_source="drawing_deterministic")
     filled = djm.apply_mirror_geometry([base, twin])

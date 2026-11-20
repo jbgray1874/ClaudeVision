@@ -40,6 +40,24 @@ _STATES_PRINT = re.compile(r"\bPRINT(?:ED|ING)?\b", re.IGNORECASE)
 _NAMES_A_GRAPHIC = re.compile(r"\bGRAPHICS?\b", re.IGNORECASE)
 _NOT_PRINTED = re.compile(r"\b(?:NOT|NO|UN)[\s-]*PRINT(?:ED|ING)?\b", re.IGNORECASE)
 _GAUGE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*MM\b", re.IGNORECASE)
+_GAUGE_IN_TEXT = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*MM\b", re.IGNORECASE)
+
+# A BOARD MADE TO BE PRINTED ON IS NOT MDF (12754-01-GA, 12757-00-GA, 20 Nov 2026). The drawing
+# said "2 mm printed display board"; the engine's board rule ("BOARD" -> MDF) costed it as 2 mm
+# MDF, which has no price, so the material was £0 and MDF CNC routing was charged instead.
+# These are the print trade's own names for its substrates. A material named one of them is
+# kept as stated, and is printed by its own name: nobody buys display board to leave it blank.
+PRINT_SUBSTRATE = re.compile(
+    r"\b(?:DISPLAY\s*BOARD|FOAM\s*BOARD|POSTER\s*BOARD|GRAPHIC\s*BOARD|KAPA(?:\s*BOARD)?"
+    r"|PRINTED\s+(?:\w+\s+){0,2}BOARD)\b", re.IGNORECASE)
+# Words that say what is done to a substrate, not what it is: not looked for in a row's name.
+_PRINT_WORDS = {"PRINT", "PRINTED", "PRINTING", "DIGITAL", "DIGITALLY", "FULL", "COLOUR",
+                "COLOR", "SIDE", "SIDED", "ONE", "TWO", "SINGLE", "DOUBLE", "THK", "THICK"}
+
+
+def names_a_print_substrate(text: Any) -> bool:
+    """True when a material text is a print substrate by name (display board, foam board ...)."""
+    return bool(PRINT_SUBSTRATE.search(str(text or "")))
 
 _READ_CACHE: Dict[str, Dict[str, Any]] = {}
 
@@ -68,8 +86,11 @@ def printed_basis(part: Any) -> Optional[Dict[str, str]]:
     if not isinstance(part, dict) or part.get("is_assembly_parent"):
         return None
     for field, text in _texts(part, ("normalized_finish", "surface_finishes", "process_notes",
-                                     "description")):
+                                     "description", "normalized_material", "materials")):
         if _STATES_PRINT.search(text) and not _NOT_PRINTED.search(text):
+            return {"how": "stated", "said": text, "field": field}
+    for field, text in _texts(part, ("normalized_material", "materials")):
+        if names_a_print_substrate(text) and not _NOT_PRINTED.search(text):
             return {"how": "stated", "said": text, "field": field}
     for field, text in _texts(part, ("description",)):
         if _NAMES_A_GRAPHIC.search(text):
@@ -103,7 +124,33 @@ def measured_size(part: Dict[str, Any]) -> Tuple[Optional[float], Optional[float
 
 
 def _words(text: Any) -> set:
-    return {w for w in re.findall(r"[A-Z]+", str(text or "").upper()) if w != "MM"}
+    return {w for w in re.findall(r"[A-Z]+", str(text or "").upper())
+            if w != "MM" and w not in _PRINT_WORDS}
+
+
+def gauge_in(text: Any) -> Optional[float]:
+    """The one gauge a material text states ("2MM PRINTED DISPLAY BOARD" -> 2.0), else None."""
+    found = {float(m.group(1)) for m in _GAUGE_IN_TEXT.finditer(str(text or ""))}
+    return found.pop() if len(found) == 1 else None
+
+
+def material_and_gauge(part: Dict[str, Any], read: Dict[str, Any]
+                       ) -> Tuple[Any, Optional[float], str]:
+    """(material, gauge, where the gauge came from) for the calculator. The part's resolved
+    material first; where that names no row of the sheet (it was collapsed to a family, or
+    to BOUGHT_IN), the material as the drawing wrote it. The gauge is the part's own; where
+    it has none, the one its material text states."""
+    texts = [part.get("normalized_material")] + list(part.get("materials") or [])
+    texts = [t for t in texts if isinstance(t, str) and t.strip()]
+    material = next((t for t in texts if rows_named(read, t)), texts[0] if texts else None)
+    gauge = _f(part.get("normalized_thickness_mm"))
+    if gauge is not None:
+        return material, gauge, "the part's gauge"
+    for t in [material] + texts:
+        g = gauge_in(t)
+        if g:
+            return material, g, f"stated in its material '{t}'"
+    return material, None, ""
 
 
 # A TRADE NAME IS THE MATERIAL IT IS SOLD AS. A drawing says FOAMEX; the print sheet's row says
@@ -164,9 +211,10 @@ def work(part: Dict[str, Any], order_qty: Any, read: Optional[Dict[str, Any]] = 
         rec["why_not"] = read.get("why") or "the print calculator was not read"
         return rec
     rec["points_to_confirm"] = sheet.points_to_confirm(read)
-    material = part.get("normalized_material") or (part.get("materials") or [None])[0]
-    gauge = part.get("normalized_thickness_mm")
+    material, gauge, gauge_from = material_and_gauge(part, read)
     rec["material"], rec["gauge_mm"] = material, gauge
+    if gauge_from and gauge_from != "the part's gauge":
+        rec["gauge_from"] = gauge_from
     row, why = substrate_for(read, material, gauge)
     if row is None:
         rec["why_not"] = why

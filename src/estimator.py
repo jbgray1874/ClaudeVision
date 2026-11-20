@@ -6432,6 +6432,11 @@ def _canonical_material_family(raw: Any) -> Any:
                             "OAK", "BEECH", "BIRCH", "FSC")):
         return "TIMBER"
     if "BOARD" in u:                                 # generic board / soft-touch laminate board
+        # ...but not a print substrate: "2 mm printed display board" is not 2 mm MDF
+        # (12754-01-GA). It keeps its own name for the AI Print calculator to price.
+        import print_costing as _pc_board
+        if _pc_board.names_a_print_substrate(u):
+            return raw
         return "MDF"
     return raw
 
