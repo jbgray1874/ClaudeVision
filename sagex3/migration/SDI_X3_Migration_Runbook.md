@@ -4539,3 +4539,9 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **Fix:** look at that process's command line, stop it, restart the service, confirm the listener is now the `.venv` Python.
   - **Lesson:** after any portal change, check *who* listens on 8071 and when it started (`Get-NetTCPConnection -LocalPort 8071 -State Listen` → `Get-Process`). `Restart-Service` alone proves nothing.
 - **SDI-APP01 (10.0.0.5:8071) runs the portal:** an older copy, Dashboard and AI Services menu, no Live Orders. Deploying = updating that copy (installer with `--target` its folder). Its folder and RDP access are still to confirm.
+- **Fixed on James's PC (17:24):** the hand-started copy (PID 30964, `Python310\python.exe C:\ClaudeVision\sdi-intelligence-backend\app.py`) was stopped and the service restarted. **The Live Orders page now loads in the portal** ("No Live Orders data yet – 404 – press Regenerate", which is correct before the first run).
+  - On this PC the service runs `Python310\python.exe` (James's per-user install), not `.venv`: the NSSM set-up differs from `SDI-Intelligence-WindowsService.ps1`.
+- **New: the header says "BACKEND DEGRADED".** `/api/health` reports degraded when a file root (UNC share) or the database can't be reached. The hand-started copy ran **as James**; the service runs as **LocalSystem**, which reaches the network as the PC's computer account. From home over the VPN that account can't reach the shares. **The same blocks Regenerate saving to `\\sdi-dc01\…\LiveOrders`.**
+  - **Fix for the PC today:** in `services.msc`, set the service's Log On to James's own account (the password goes in the Windows dialog, never on a command line or in chat), then restart.
+  - **On SDI-APP01:** a proper service account with read on the file roots and write on LiveOrders.
+- **The server check was run in Command Prompt, not PowerShell** ("'Get-NetTCPConnection' is not recognized"). Type `powershell` first.
