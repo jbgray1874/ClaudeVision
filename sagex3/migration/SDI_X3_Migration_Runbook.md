@@ -4612,3 +4612,25 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - LO-04's suggestions are the board's own (Production's tab-2 logic), not X3 MRP output;
   - LO-03 is a built view, not X3's capacity inquiries;
   - the material status is the board's share-out (Access logic), not X3 allocations. Each is a decision for LO-01.
+- **Fourth Regenerate: the pull got through (orders, stock, routings); the build failed with "No module named 'openpyxl'".** Live Orders runs with `LIVE_ORDERS_PYTHON`, which the installer set to the Python it was run with (`C:\Python314\python.exe`), and that Python had no openpyxl. **Fix:** `C:\Python314\python.exe -m pip install openpyxl`, in PowerShell as administrator, so it lands in the shared site-packages the service (LocalSystem) reads.
+  - Now `run_x3` adds the exact pip command to a missing-module error, and the installer warns when its own Python has no openpyxl. The server script already checks the portal's Python.
+  - **Before re-running:** today's `api_log.json` holds the routing records X3 couldn't return. The next run won't re-pull routings (they're fresh), and it overwrites `api_log.json`, so read it first (for SCRUM-165).
+
+#### 20 Nov (evening) – Next after Live Orders (James): the estimating import in the portal, then load into X3
+- **James:** a button on the portal to load an estimating spreadsheet, generate the input files for review in the portal, then **auto-load into Sage X3** ("we're putting together a new ERP platform essentially in the portal"). James has the details if needed.
+- **What exists (stage 1, built 12 Nov, proved 13 / 16 Nov):** `sagex3/estimating/est_to_x3.py` (Dave's IMPORT layout) writes the X3 load files plus `_CHECKS.xlsx` (STOP / WARN / INFO by cell), and `est_app.py` is a small web page around it. README §5 is the portal-embedding plan.
+- **"Is BOM + route all the load?" No:**
+  1. **ZSDIITM, the product itself:** written when the parent is new (estimated parts usually are);
+  2. **YA00408BOM**, the BOM;
+  3. **ZSDIROU2**, the route.
+  Then, still to add:
+  - **any new component** (e.g. a new bought-in part): a product record, and a product-supplier (ZSDIITMSUP) to buy it. Today the converter STOPs when a component isn't in X3;
+  - **the standard cost (YITC):** not loaded today (Acuity question B10), and wanted for Live Orders' material cost;
+  - **the product-site record:** to confirm whether ZSDIITM / the category creates it.
+  - Load order: product → (product-site) → BOM → route → cost.
+- **Loading into X3 is a WRITE.** The API connection we have is deliberately read-only ("SDI Live Orders read-only"; mutations refused in `x3_api.py`). Loading needs:
+  - a separate write-capable connected application / user (James is admin; no Acuity);
+  - a way in: GraphQL create mutations if X3 exposes them for product / BOM / routing (check the schema), or X3's import function run from the batch server;
+  - **SDI Mig / test first**; live only after sign-off;
+  - create-only, never change an existing product, BOM or route without an explicit "replace" (Acuity B6);
+  - a log of every load.

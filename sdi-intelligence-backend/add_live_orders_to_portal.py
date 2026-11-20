@@ -123,6 +123,11 @@ def main():
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args()
     target = Path(a.target)
+    try:                                                    # Live Orders runs with THIS Python (LIVE_ORDERS_PYTHON)
+        import openpyxl  # noqa: F401
+    except ImportError:
+        print(f"WARNING: {sys.executable} has no openpyxl - Regenerate will fail until you run:\n"
+              f'    "{sys.executable}" -m pip install openpyxl\n  (in PowerShell as administrator, so the service sees it)')
     changes = plan(target, a.runs, a)
     if not changes:
         print("Nothing to do - Live Orders is already in the portal.")
