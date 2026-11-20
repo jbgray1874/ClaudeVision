@@ -4532,3 +4532,10 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - the hosts entry `sdi-intelligence.sdi.local → 10.0.16.151` (Intune script `SDI-Intelligence-HostsEntry.ps1`) **times out**, so nobody reaches the portal by that name today;
   - **SDI-APP01 (10.0.0.5) answers on port 8071**: something (probably a copy of the portal, as the old portal page lists "SDI Intelligence portal (:8071)" on SDI-APP01) already runs there.
 - **Deploy plan (once confirmed):** on SDI-APP01: clone the repo to `C:\SDI_X3\repo`, run `add_live_orders_to_portal.py --target <the server's portal folder>` (preview, then `--apply`), copy the X3 settings file privately (never git / chat / email), give SDI-APP01's computer account write on the LiveOrders folder, restart the service there. Then change `$CorrectIP` in the Intune hosts script to 10.0.0.5, and stop the copy on James's PC so there's one Regenerate.
+- **Diagnosed (James's checks):**
+  - port 8071 on the PC is held by `C:\Users\james.gray\AppData\Local\Programs\Python\Python310\python.exe`, started **14:44**, before the installer (16:36) and `Restart-Service` (16:49). It is a hand-started portal, not the NSSM service (`.venv\Scripts\python.exe`), so the restart never replaced it, and the service can't bind 8071 while it runs;
+  - `app.py` on the PC is ~1,120 lines (git has 167) and **does** have the Live Orders mount (lines 1083–1084, above `__main__` at 1121);
+  - the NSSM log folder `C:\ClaudeVision\output\logs` doesn't exist, so the service has no log.
+  - **Fix:** look at that process's command line, stop it, restart the service, confirm the listener is now the `.venv` Python.
+  - **Lesson:** after any portal change, check *who* listens on 8071 and when it started (`Get-NetTCPConnection -LocalPort 8071 -State Listen` → `Get-Process`). `Restart-Service` alone proves nothing.
+- **SDI-APP01 (10.0.0.5:8071) runs the portal:** an older copy, Dashboard and AI Services menu, no Live Orders. Deploying = updating that copy (installer with `--target` its folder). Its folder and RDP access are still to confirm.
