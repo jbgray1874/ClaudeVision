@@ -96,6 +96,16 @@ function Test-SameCommit([string]$a, [string]$b) {
     return $a.Substring(0, $n) -eq $b.Substring(0, $n)
 }
 
+# The port a Windows (NSSM) service is set up to serve: "--port N" in its AppParameters.
+# $null when it cannot be read or names none, and then nothing changes from before.
+function Get-ServicePort([string]$Name) {
+    try {
+        $p = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\$Name\Parameters" -ErrorAction Stop).AppParameters
+        if ("$p" -match '--port[=\s]+(\d+)') { return [int]$Matches[1] }
+    } catch { }
+    return $null
+}
+
 function Get-HeadCommit([string]$RepoRoot) {
     $exe = (Get-Command git -ErrorAction SilentlyContinue).Source
     if (-not $exe) {
@@ -237,6 +247,18 @@ if ($taskPort -eq $Port -and $serving.Count -gt 0 -and ($serving -notcontains $P
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 $svc  = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 $svcWasRunning = $false
+
+# A SERVICE ON ANOTHER PORT IS NOT THIS PORT'S SUPERVISOR (20 Nov 2026). On the laptop the
+# one NSSM service SDIIntelligence runs uvicorn with --port 8071. Restarting 8072 found it by
+# name, stopped it (taking 8071 down), started it again because it had been running (which
+# brought back 8071, not 8072), and left 8072's own scheduled task stopped: 8072 never came
+# back and the release stopped there. The port the service is set up with is read from its
+# own NSSM parameters; a service set up for another port is left exactly as it is.
+$svcPort = Get-ServicePort $ServiceName
+if ($svc -and $svcPort -and $svcPort -ne $Port) {
+    Write-Host ("  the Windows service '{0}' serves port {1}, not {2}: left alone" -f $ServiceName, $svcPort, $Port)
+    $svc = $null
+}
 
 if ($task -and $svc) {
     Write-Host ("  note: this machine has the scheduled task '{0}' AND the Windows service '{1}'" -f $TaskName, $ServiceName) -ForegroundColor Yellow

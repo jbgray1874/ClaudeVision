@@ -19,3 +19,14 @@ def test_every_commit_comparison_goes_through_one_prefix_rule():
     assert "if ($n -lt 7) { return $false }" in s, "a stub of a hash proves nothing"
     # no whole-string comparison against the checkout's commit is left
     assert not re.search(r"-(?:eq|ne)\s+\$head\b", s), re.findall(r".{40}-(?:eq|ne)\s+\$head.{5}", s)
+
+
+def test_a_windows_service_set_up_for_another_port_is_left_alone():
+    """The same release: restarting 8072 stopped and restarted the SDIIntelligence service,
+    which serves 8071, and never restarted 8072's own task. The service's own --port decides."""
+    s = SCRIPT.read_text(encoding="utf-8")
+    assert "function Get-ServicePort" in s and "AppParameters" in s
+    a = s.index("$svcPort = Get-ServicePort $ServiceName")
+    assert "$svcPort -ne $Port" in s[a:a + 300] and "$svc = $null" in s[a:a + 400]
+    # decided before anything is stopped
+    assert a < s.index("Stop-Service -Name $ServiceName")
