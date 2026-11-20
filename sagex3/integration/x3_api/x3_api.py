@@ -39,6 +39,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -72,6 +73,7 @@ def setup(_):
     c["site"] = ask("site", "Site address", "https://sdi-displays-trn.uk.sagex3.com").rstrip("/")
     c["folder"] = ask("folder", "X3 folder", "SDIMIG")
     c["endpoint"] = ask("endpoint", "Endpoint name (Administration -> Endpoints, the one for that folder)", c["folder"])
+    c["connector"] = ask("connector", "X3 Connector chosen on the connected application", "x3-services_X3ERPV12")
     c["client_id"] = ask("client_id", "Connected application client ID")
     c["user"] = ask("user", "X3 user the connected application runs as (its login)")
     s = getpass.getpass("Connected application secret (typing is hidden; Enter keeps the saved one): ").strip()
@@ -90,10 +92,13 @@ def _b64(b):
 def make_jwt(c, aud=None):
     """HS256 JWT signed with the connected application's secret (no third-party library needed)."""
     now = int(time.time())
-    claims = {"iss": c["client_id"], "sub": c["user"], "iat": now - 30, "exp": now + int(c.get("token_seconds", 300))}
+    claims = {"iss": c["client_id"], "sub": c["user"], "jti": uuid.uuid4().hex,     # jti: X3 lists tokens by Token ID
+              "iat": now - 30, "exp": now + int(c.get("token_seconds", 300))}
     aud = c.get("aud", "endpoint") if aud is None else aud
     if aud == "endpoint":
         claims["aud"] = c["endpoint"]
+    elif aud == "connector":
+        claims["aud"] = c.get("connector", "")
     elif aud == "url":
         claims["aud"] = c["site"] + c.get("graphql_path", GRAPHQL_PATHS[0])
     elif aud:
@@ -147,7 +152,7 @@ def probe(_):
     c = load_conf()
     tried, found = [], None
     forms = [(p, a, e) for p in ([c["graphql_path"]] if c.get("graphql_path") else []) + GRAPHQL_PATHS
-             for a in ("endpoint", "url", "") for e in (True, False)]
+             for a in ("endpoint", "connector", "url", "") for e in (True, False)]
     for path, aud, eh in dict.fromkeys(forms):
         cc = dict(c, graphql_path=path)
         code, text = http("POST", c["site"] + path, headers(cc, aud, eh), {"query": "{ __typename }"})
