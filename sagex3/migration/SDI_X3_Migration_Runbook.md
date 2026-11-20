@@ -4342,3 +4342,7 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - The largest "stopped" quantities are one-off June 2024 bulk orders (a fit-out), not lost repeat lines.
   - One negative line (a correction, 18 Nov).
   - The workbook (Summary + Detail tabs) is to be built by James from the SSMS grids. Email drafted; **not yet sent**.
+- **Workbook built (20 Nov)** from the pasted v2 grids, taken from the session transcript so nothing was retyped. Checked: 330 / 1,445 rows.
+  - **Tabs:** Read me (counts and definitions), Summary (colour-coded status, filters), Detail (adds qty outstanding).
+  - **Status split:** STOPPED 102, RE-CODED 16, Still ordering 57, NEW 145, Not a product 10.
+  - Scratchpad only, never git: it names the customer. Final email drafted in chat.
