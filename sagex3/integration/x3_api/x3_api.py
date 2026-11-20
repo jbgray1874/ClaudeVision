@@ -8,6 +8,7 @@ signed with that secret).
     python x3_api.py setup             # asks for the site, client ID, secret, user, endpoint; saves them privately
     python x3_api.py probe             # tries the URL / token forms and saves the one X3 accepts
     python x3_api.py diagnose          # if probe fails: how X3 answers each sign-in, and finds the token exchange
+    python x3_api.py claims            # changes one thing in the token at a time, to see what X3 checks first
     python x3_api.py schema            # lists what the GraphQL API offers (works orders, stock, orders ...)
     python x3_api.py draft             # writes api_datasets.draft.json from the schema
     python x3_api.py pull [names]      # pulls the data sets in api_datasets.json to the exports folder
@@ -220,6 +221,57 @@ def diagnose(_):
                             print(f"\nSIGNED IN: token from {path} ({mode}), GraphQL {gpath}. Saved. Next: python x3_api.py schema")
                             return
     print("\nNot signed in yet. Send Claude everything above (no secret or token is shown).")
+
+
+def _jwt(claims, secret, head=None, alg="HS256"):
+    h = _b64(json.dumps(head or {"alg": alg, "typ": "JWT"}, separators=(",", ":")).encode())
+    b = _b64(json.dumps(claims, separators=(",", ":")).encode())
+    dig = {"HS256": hashlib.sha256, "HS512": hashlib.sha512}.get(alg, hashlib.sha256)
+    return f"{h}.{b}.{_b64(hmac.new(secret.encode(), f'{h}.{b}'.encode(), dig).digest())}"
+
+
+def claims_test(_):
+    """Change one thing in the token at a time; a different message from X3 shows what it checks first.
+    Prints status codes and X3's messages only - never the secret or a token."""
+    c = load_conf()
+    now = int(time.time())
+    base = {"iss": c["client_id"], "sub": c["user"], "aud": c["endpoint"], "iat": now - 30, "exp": now + 240}
+    gq = c["site"] + "/xtrem/api"
+    rest = f"{c['site']}/api1/x3/erp/{c['folder']}/ITMMASTER?representation=ITMMASTER.$query&count=1"
+    body = json.dumps({"query": "{ __typename }"}).encode()
+    hdr = {"Accept": "application/json", "Content-Type": "application/json", "User-Agent": "sdi-x3-readonly/1",
+           "x-xtrem-endpoint": c["endpoint"]}
+    drop = lambda k: {x: v for x, v in base.items() if x != k}
+    cases = [
+        ("baseline (iss, sub, aud=endpoint, iat, exp)", base, {}),
+        ("sub = a user that doesn't exist", dict(base, sub="NOSUCHUSER"), {}),
+        ("no sub", drop("sub"), {}),
+        ("no aud", drop("aud"), {}),
+        ("aud empty", dict(base, aud=""), {}),
+        ("no iss", drop("iss"), {}),
+        ("client_id claim instead of iss", dict(drop("iss"), client_id=c["client_id"]), {}),
+        ("iat / exp in milliseconds", dict(base, iat=(now - 30) * 1000, exp=(now + 240) * 1000), {}),
+        ("expired token", dict(base, iat=now - 900, exp=now - 600), {}),
+        ("header without typ", base, {"head": {"alg": "HS256"}}),
+        ("header with kid = client ID", base, {"head": {"alg": "HS256", "typ": "JWT", "kid": c["client_id"]}}),
+        ("signed HS512", base, {"alg": "HS512"}),
+    ]
+    print("Each line: what was changed -> X3's status and message (GraphQL /xtrem/api)")
+    for label, cl, kw in cases:
+        tok = _jwt(cl, c["secret"], **kw)
+        code, hd, text = raw("POST", gq, dict(hdr, Authorization="Bearer " + tok), body)
+        print(f"  {label:<46} {code}  {redact(text)[:130].strip()}")
+    tok = _jwt(base, c["secret"])
+    for label, url, h in [
+        ("token as ?access_token= (no header)", gq + "?access_token=" + tok, hdr),
+        ("REST GET with the baseline token", rest, {k: v for k, v in hdr.items() if k != "x-xtrem-endpoint"}),
+        ("lower-case 'bearer'", gq, dict(hdr, Authorization="bearer " + tok)),
+    ]:
+        if "Authorization" not in h and "access_token" not in url:
+            h = dict(h, Authorization="Bearer " + tok)
+        code, hd, text = raw("GET" if "api1" in url else "POST", url, h, None if "api1" in url else body)
+        print(f"  {label:<46} {code}  {redact(text)[:130].strip()}")
+    print("\nSend Claude everything above (no secret or token is shown).")
 
 
 def headers(c, aud=None, endpoint_header=True):
@@ -498,6 +550,7 @@ def main(argv=None):
     sp.add_parser("setup").set_defaults(fn=setup)
     sp.add_parser("probe").set_defaults(fn=probe)
     sp.add_parser("diagnose").set_defaults(fn=diagnose)
+    sp.add_parser("claims").set_defaults(fn=claims_test)
     s = sp.add_parser("schema")
     s.add_argument("words", nargs="*")
     s.set_defaults(fn=schema)
