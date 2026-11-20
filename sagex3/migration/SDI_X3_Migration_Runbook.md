@@ -4306,6 +4306,7 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **Seen:** once one token had worked, later tokens in the same run were let through even when expired or without `iss`. X3 seems to keep the sign-in open briefly. Not relied on.
   - REST `/api1/x3/erp/SDIMIG/...` with an endpoint-named aud gave Error 45; to re-test with the empty aud.
   - `x3_api.py` now defaults to the empty aud, and `probe` tries it first.
+- **Lesson (20 Nov):** a copy command run from `PS C:\ClaudeVision>` put a stray `x3_api.py` in James's estimating folder. **Always `cd C:\SDI_X3\SDI_X3\integration\x3_api` first, and check the prompt before any copy.** Never put files in `C:\ClaudeVision`. The stray file is removed only after checking it's today's.
 - **Results to fill in as we find them:**
   - the endpoint name;
   - the GraphQL path / audience / header `probe` accepted;
