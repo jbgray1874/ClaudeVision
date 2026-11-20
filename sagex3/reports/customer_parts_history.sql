@@ -41,7 +41,13 @@ SELECT 'CHECK' AS grid, @customer AS customer, COUNT(*) AS order_lines, COUNT(DI
        MIN(order_date) AS earliest, MAX(order_date) AS latest, @from AS asked_from, @recent AS last_12_months_from
 FROM #lines;
 
--- 1. SUMMARY: one row per part; STOPPED first, then by part / description
+-- 1. SUMMARY: one row per part.
+--    v2 (20 Nov, after the first run): many "stopped" parts were the same item re-coded and still ordered under
+--    the new code (11019-BO-01-OS -> SRS-11019-BO-01, SRS-11196-03-GA -> 11196-03-GA OS, SRS-EL0999 -> SRS02-EL0999).
+--    "core" = the code without a customer prefix (BOT-, SRS-, SRS02- ... up to the first hyphen when the code starts
+--    with a letter) and without an ' OS' / '-OS' / ' CO' / ' CH' ending. A STOPPED part whose core is still ordered
+--    under another code says so. Carriage, rework, installation etc. are marked "Not a product".
+IF OBJECT_ID('tempdb..#parts') IS NOT NULL DROP TABLE #parts;
 SELECT part, description,
        MIN(order_date)                                                        AS first_ordered,
        MAX(order_date)                                                        AS last_ordered,
@@ -49,12 +55,35 @@ SELECT part, description,
        SUM(CASE WHEN order_date <  @recent THEN qty_ordered ELSE 0 END)       AS qty_2_years_before,
        SUM(CASE WHEN order_date >= @recent THEN 1 ELSE 0 END)                 AS lines_last_12_months,
        SUM(CASE WHEN order_date >= @recent THEN qty_ordered ELSE 0 END)       AS qty_last_12_months,
-       CASE WHEN MAX(order_date) <  @recent THEN 'STOPPED - none in the last 12 months'
-            WHEN MIN(order_date) >= @recent THEN 'NEW in the last 12 months'
-            ELSE 'Still ordering' END                                         AS status
+       CAST('' AS varchar(60))                                                AS core
+INTO #parts
 FROM #lines
-GROUP BY part, description
-ORDER BY CASE WHEN MAX(order_date) < @recent THEN 0 ELSE 1 END, part, description;
+GROUP BY part, description;
+
+UPDATE #parts SET core = CASE WHEN part LIKE '[A-Z]%-%' AND CHARINDEX('-', part) BETWEEN 2 AND 7
+                              THEN SUBSTRING(part, CHARINDEX('-', part) + 1, 60) ELSE part END;
+UPDATE #parts SET core = LEFT(core, LEN(core) - 3)
+WHERE RIGHT(core, 3) IN (' OS', '-OS', '-0S', ' CO', ' CH') AND LEN(core) > 3;
+
+SELECT p.part, p.description, p.first_ordered, p.last_ordered,
+       p.lines_2_years_before, p.qty_2_years_before, p.lines_last_12_months, p.qty_last_12_months,
+       CASE WHEN p.part IN ('CARRIAGE', 'CARRIAGE IN', 'DELIVERY', 'REWORK', 'ADDITIONAL COST', 'SDI-PROTO', 'MISC PRINT')
+                 OR p.part LIKE '%INSTALLATION%' OR p.part LIKE '%RESPRAY%'      THEN 'Not a product (carriage, rework etc.)'
+            WHEN p.last_ordered < @recent AND s.codes IS NOT NULL               THEN 'RE-CODED - still ordered as another code'
+            WHEN p.last_ordered < @recent                                       THEN 'STOPPED - none in the last 12 months'
+            WHEN p.first_ordered >= @recent                                     THEN 'NEW in the last 12 months'
+            ELSE 'Still ordering' END                                           AS status,
+       ISNULL(STUFF(s.codes, 1, 2, ''), '')                                     AS similar_code_still_ordered
+FROM #parts p
+OUTER APPLY (SELECT (SELECT ', ' + q.part FROM #parts q
+                     WHERE q.core = p.core AND q.part <> p.part AND q.last_ordered >= @recent
+                     ORDER BY q.part FOR XML PATH(''), TYPE).value('.', 'varchar(max)') AS codes) s   -- keeps & as &
+ORDER BY CASE WHEN p.part IN ('CARRIAGE', 'CARRIAGE IN', 'DELIVERY', 'REWORK', 'ADDITIONAL COST', 'SDI-PROTO', 'MISC PRINT')
+                   OR p.part LIKE '%INSTALLATION%' OR p.part LIKE '%RESPRAY%' THEN 4
+              WHEN p.last_ordered < @recent AND s.codes IS NULL THEN 0          -- truly stopped first
+              WHEN p.last_ordered < @recent THEN 1                              -- re-coded
+              WHEN p.first_ordered >= @recent THEN 3 ELSE 2 END, p.part, p.description;
+DROP TABLE #parts;
 
 -- 2. DETAIL: every order line, by part, description, then date
 SELECT part, rev, description, order_date, order_no, line, qty_ordered, qty_delivered, price_per,

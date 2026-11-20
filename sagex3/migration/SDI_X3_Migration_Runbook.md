@@ -4334,3 +4334,7 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - Assumes `COR_CUSTOMER_CODE` / `COR_ORDER_STATUS` exist on `COR_TBL` as on `ASC_COR_TBL`. **If Msg 207, switch the FROM to `ASC_COR_TBL`.**
   - If CHECK's earliest date is well after 3 years ago, older lines may be elsewhere.
 - **Status:** query sent to James. Reply to Ian drafted in chat (James to send). Results go to Ian only; never in git.
+- **First run (20 Nov):** 1,445 order lines, 330 parts, earliest 24 Nov 2023 (the full 3 years); 119 STOPPED.
+  - Many "stopped" parts were the same item re-coded and still ordered (prefix BOT- / SRS- / SRS02- added or dropped, ` OS` suffix).
+  - **v2 summary:** a `core` code (customer prefix and OS / CO / CH suffix removed) gives the statuses RE-CODED (with `similar_code_still_ordered`), STOPPED, NEW, Still ordering, and Not a product (carriage, rework, installation, respray, etc.).
+  - Checked on the run's codes: **102 truly stopped, 16 re-coded, 1 not a product.** v2 sent to James to re-run.
