@@ -4345,4 +4345,4 @@ Keep this up to date with every setting we choose. **Never write the secret here
 - **Workbook built (20 Nov)** from the pasted v2 grids, taken from the session transcript so nothing was retyped. Checked: 330 / 1,445 rows.
   - **Tabs:** Read me (counts and definitions), Summary (colour-coded status, filters), Detail (adds qty outstanding).
   - **Status split:** STOPPED 102, RE-CODED 16, Still ordering 57, NEW 145, Not a product 10.
-  - Scratchpad only, never git: it names the customer. Final email drafted in chat.
+  - Scratchpad only, never git: it names the customer. Final email drafted in chat. **SENT to Ian by James (20 Nov). Done.**
