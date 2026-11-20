@@ -4428,3 +4428,27 @@ Keep this up to date with every setting we choose. **Never write the secret here
 - **Old copies are moved, not deleted:** `C:\SDI_X3\_old` (SDI_X3, SDI_X3-old, SDI_X3-old2, the zips).
 - **Unaffected:** settings (`%USERPROFILE%\.sdi\x3_api.json`, the X3 secret) and data (`SDI_X3_exports`, `SDI_X3_runs`) live outside the repo.
 - **Claude:** push before saying "updated"; no zips; no file-by-file downloads for code. Private outputs (customer workbooks etc.) are still sent as files, never committed.
+
+**20 Nov – Live Orders in the SDI Intelligence portal (James: "we will build in the SDI Intelligence portal").**
+- **RULE (James):** no approach to Acuity about the API or the portal ("they have their own developers"). We build it ourselves.
+  - **Production:** James will have admin on the live site too, so the connected application is set up there by us, with the same recipe (above).
+  - Before go-live: an enquiry-only API user instead of SDIJG.
+- **Installer:** `sdi-intelligence-backend/add_live_orders_to_portal.py`.
+  - **Default:** a preview that changes nothing. `--apply` backs up (`.bak-<stamp>`) and then only adds:
+    - the router and dashboard files next to `app.py`;
+    - 3 lines in `app.py` after the HR router;
+    - a "Live Orders" menu item (Overview group), its page (the dashboard in a frame, given the portal key after `#`) and its label;
+    - `LIVE_ORDERS_RUNS=<full path>` in `.env` (the service runs as a system account, so `~` would be wrong).
+  - Re-running does nothing.
+  - **Live service folder:** `C:\ClaudeVision\sdi-intelligence-backend` (NSSM service SDIIntelligence). Restart the service after `--apply`.
+- **Tested on a copy of the portal:**
+  - preview / apply / re-run; the real `app.py` serves the page with the menu item;
+  - `/api/live-orders/latest`: 401 without the key, 200 with it; dashboard 200; the HR endpoints still answer;
+  - in a browser, clicking "Live Orders" shows the dashboard inside the portal, with no errors.
+- **SECURITY (found while testing, not caused by this work):** `sdi-intelligence-backend/.env` **is committed to git** (on `main` and this branch; commit 7cad363 "Complete sync"). It holds the SDILive SQL login and the BrightHR client secret. The portal page also has the portal API key written into it.
+  - **Recommended to James:** (1) change the SQL password and the BrightHR client secret, putting the new values in the live `.env` only; (2) stop tracking `.env`, done with care, because untracking it carelessly could delete the live `.env` on a later pull in `C:\ClaudeVision`. **Awaiting James.** Values are never written here.
+- **Where the Live Orders requirements are recorded:**
+  - section 20 (LO-00..05 analysis); 22.11 (board built, SCRUM-241 / 245–249); 22.13 (first live run);
+  - 22.20 (Dave's sheet re-analysed: his "game changer" notes); 22.23 (Dave's 26 Oct request and the Monday copy-over); 22.26 (focus on X3);
+  - `sagex3/production/live_orders/README.md` and `INTEGRATION_PLAN.md`; the docstring in `build_live_orders.py`.
+  - The 12 questions to Rachael and Liz (13 Nov) were due today (Fri 20 Nov).
