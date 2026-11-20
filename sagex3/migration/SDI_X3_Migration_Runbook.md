@@ -4561,3 +4561,21 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - the portal shows the warning, and up to 400 characters of an error.
   - Tested: a forced ConnectionResetError on routes → so_lines and products still pulled, exit 1, the failure reported in X3's words.
 - **To find this run's actual reason:** `status.json` → `pull.out` (the pull's last 2,000 characters; no secrets).
+- **Second Regenerate (17:37 restart, new code): progress now shows live on the page** ("stock: 0 rows", "… 500 rows so far").
+
+#### 20 Nov (late) – Server: SDI-APP01 gets Live Orders (`sdi-intelligence-backend/deploy_live_orders_server.ps1`)
+- SDI-APP01 (10.0.0.5:8071) already runs the portal (older copy, backend online). The script updates that copy; it is run **on the server**, PowerShell as administrator.
+- **From James's PC first** (admin share; robocopy leaves out `.git` and every `.env`. The repo's committed `.env` holds secrets and must not travel):
+  1. `robocopy C:\SDI_X3\repo \\10.0.0.5\c$\SDI_X3\repo /E /XD .git /XF .env /NFL /NDL /NP`
+  2. `New-Item -ItemType Directory -Force \\10.0.0.5\c$\ProgramData\SDI`
+  3. `Copy-Item "$env:USERPROFILE\.sdi\x3_api.json" \\10.0.0.5\c$\ProgramData\SDI\x3_api.json`. **The X3 secret goes PC → server directly, never by email, chat, git or screenshot.**
+- **On the server:** `powershell -ExecutionPolicy Bypass -File C:\SDI_X3\repo\sdi-intelligence-backend\deploy_live_orders_server.ps1`
+  - finds the portal from the port 8071 listener (folder from the `app.py` argument, its Python, its service via the process or its NSSM parent); `-Target` if it can't;
+  - Python 3.10+ and openpyxl (installs openpyxl if missing);
+  - locks the X3 settings file (Administrators, SYSTEM, the service account) by SID;
+  - working folder `C:\ProgramData\SDI\LiveOrders` (runs, X3 exports);
+  - installer preview → **asks** → `--apply` (backups) with `--x3-config / --runs / --exports / --share`;
+  - restarts the service and waits until `/api/live-orders/dashboard` answers;
+  - if the service runs as LocalSystem: a one-off SYSTEM scheduled task writes and deletes a test file in the LiveOrders share. **This proves SDI-APP01$ can save the workbooks**; if not, grant it Modify (share and folder) or use a domain service account.
+- **Then:** point the Intune hosts script (`SDI-Intelligence-HostsEntry.ps1`, `$CorrectIP`) at 10.0.0.5, so `sdi-intelligence.sdi.local` reaches the server, and stop the copy on James's PC (one Regenerate, one history).
+- Not testable here (no PowerShell in the build container): read through line by line, PowerShell 5.1 syntax only.
