@@ -92,8 +92,8 @@ def build(shots, out):
                (" and ", False), ("Estimate → X3", True), (" (under Overview). Any SDI PC on the network.", False)])
     rich(doc, [("Sage X3: ", True), ("both screens ", False), ("read", True), (" Sage X3; neither changes anything in "
                "it. Estimate → X3 prepares the import files; they are loaded in X3 by hand for now.", False)])
-    rich(doc, [("On the pages: ", True), ("the same guide is on each screen - Live Orders → ", False), ("User guide", True),
-               (" tab; Estimate → X3 → ", False), ("User guide - how to use this page", True), (".", False)], after=12)
+    rich(doc, [("On the pages: ", True), ("the same guide is on each screen, behind the ", False), ("📖 User guide", True),
+               (" button at the top of the page.", False)], after=12)
 
     # ---------------------------------------------------------------- Live Orders
     h(doc, "1. Live Orders")
@@ -171,8 +171,10 @@ def build(shots, out):
                   [("READY TO LOAD", True), (" (green): every line checked. ", False), ("NOT READY", True),
                    (" (red): the Checks tab lists each STOP with the estimate cell to fix - fix it in the estimate, "
                     "save, run it again.", False)],
-                  [("Download", True), (" the write-up workbook (always) and, once READY, the three .txt load files, or "
-                   "all of it as a zip.", False)],
+                  [("Where the files go", True), (": a READY run is saved in ", False),
+                   (r"K:\Operations\Reporting\SageEstimates", True), (", in its own folder named by part, date and time "
+                   "(e.g. XX-0000001_2026-11-20_2015): the three .txt load files and the write-up. The page shows the "
+                   "folder with Copy path; you can also download them there. A NOT READY run isn't saved.", False)],
                   [("Load in Sage X3", True), (": Usage → Imports, TEST (SDI Mig) first, in the order shown - product, "
                    "BOM, route. If the part already exists, its product line is rejected - expected; the BOM and route "
                    "load onto it. Then compare the part's BOM and route in X3 with the write-up.", False)]))
