@@ -56,6 +56,8 @@ tr.sec td{background:var(--y);color:#1c1c1c;font-weight:800}tr.sum td{font-weigh
 ol.steps{margin:6px 0 0 18px;padding:0}ol.steps li{margin:3px 0}
 .muted{color:var(--muted)}.hide{display:none!important}.err{color:var(--r);font-weight:600}
 #hist tr{cursor:pointer}#hist tr.cur td{background:var(--ab)}
+details.guide{line-height:1.55}details.guide summary{cursor:pointer;font-weight:800;font-size:15px}details.guide h3{font-size:14px;margin:14px 0 4px}
+details.guide p,details.guide li{font-size:13.5px}details.guide ol,details.guide ul{margin:4px 0 8px 20px;padding:0}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--y);border-radius:50%;animation:s 1s linear infinite;vertical-align:-2px}@keyframes s{to{transform:rotate(360deg)}}
 </style>
 </head>
@@ -63,6 +65,23 @@ ol.steps{margin:6px 0 0 18px;padding:0}ol.steps li{margin:3px 0}
 <header><div class="w hd"><div class="brand">we.are.sdi · Estimating</div><h1>Estimate → Sage X3</h1>
 <div class="sub">Upload an estimate. Get the X3 product, BOM and route import files and the write-up, checked against Sage X3's own product list. Nothing is written to Sage X3.</div></div></header>
 <main class="w">
+  <details class="card guide" id="guide"><summary>User guide - how to use this page</summary>
+    <h3>What it does</h3>
+    <p>Turns a saved estimate into the three <b>Sage X3 import files</b> - the product (ZSDIITM), its bill of materials (YA00408BOM) and its route (ZSDIROU2) - and a <b>write-up workbook</b> that shows every line of the estimate, where it lands in X3 and how each quantity and run time is worked out. Every line is checked against <b>Sage X3's own product list</b> and work centres first. <b>Nothing is loaded into Sage X3 by this page</b> - the files are loaded in X3 (step 6).</p>
+    <h3>Steps</h3>
+    <ol><li><b>Drop the estimate</b> in the box (or click to choose it) - the .xls or .xlsx exactly as the estimator saved it. Both the estimators' template and Dave's IMPORT layout are read.</li>
+      <li><b>Options</b> (leave them unless you know otherwise): <i>Category if the part is new</i> FGML (or FGSL); <i>Sheet steel material</i> CR4 unless the estimate says ZINTEC or Galvanised; <i>Part code</i> only to override the estimate's own code (e.g. a test part); <i>IMPORT layout only</i> where the revision goes.</li>
+      <li>Press <b>Generate the X3 files</b>. It takes a few seconds.</li>
+      <li><b>READY TO LOAD</b> (green): every line checked. <b>NOT READY</b> (red): the <b>Checks</b> tab lists each <b>STOP</b> with the estimate cell to fix - fix it in the estimate, save, and run it again. <b>WARN</b> = have a look; <b>INFO</b> = for information.</li>
+      <li><b>Download</b>: the write-up workbook (always), and once READY the three .txt load files, or all of it as a zip.</li>
+      <li><b>Load in Sage X3</b>: Usage → Imports, in <b>TEST (SDI Mig) first</b>, in the order shown - product, then BOM, then route. If the part already exists in X3, its product line is <b>rejected - that's expected</b>; the BOM and route load onto the existing part. Then open the part in X3 and compare its BOM and route with the write-up.</li></ol>
+    <h3>Common STOPs and what to do</h3>
+    <ul><li><b>"… not a product in X3"</b> - the component must exist in X3 before the BOM loads: use the right code, or have the product created first.</li>
+      <li><b>"work centre … is not an X3 work centre"</b> - the estimate's department has no X3 work centre (e.g. OVEN): it needs mapping before that operation can load.</li>
+      <li><b>"no link quantity" / "no part code"</b> - a quantity or code is missing on that estimate line.</li>
+      <li><b>Sheet steel "no X3 sheet"</b> - no X3 sheet of that size, gauge and material: check the size, gauge or the material option.</li></ul>
+    <p class="note">Not carried into X3 (shown in the write-up): scrap %, and the estimate's costs - the standard-cost load is still to come. Every run is kept under <b>Earlier runs</b> - click one to see it again. Questions: James Gray.</p>
+  </details>
   <div class="grid">
     <div class="card">
       <h2>1. The estimate</h2><p class="note">The estimators' template or Dave's IMPORT layout, .xls or .xlsx, as saved - no macro, no copy and paste.</p>
@@ -174,6 +193,7 @@ function render(){const j=R;if(!j||!j.ok)return;const v=$('#view');const h=j.hea
 // ------------------------------------------------ history
 function when(s){const m=String(s||'').match(/(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/);return m?`${m[3]}/${m[2]} ${m[4]}:${m[5]}`:(s||'')}
 function loadHist(){return fetch(`${API}/runs`,{headers:HD()}).then(r=>r.json()).then(h=>{const L=h.runs||[];
+  if(!L.length)$('#guide').open=true;                     // first use: the guide opens by itself
   $('#histnote').textContent=L.length?`${L.length} run${L.length==1?'':'s'} kept. Click one to see it again.`:'No runs yet.';
   $('#hist').innerHTML=L.length?'<tr><th>When</th><th>Part</th><th>Estimate</th><th>Result</th></tr>'+L.map(r=>`<tr data-id="${esc(r.id)}"><td>${esc(when(r.when))}</td><td><b>${esc(r.code||'')}</b></td><td>${esc(r.estimate||'')}</td><td>${!r.ok?'<span class="lv STOP">ERROR</span>':r.ready?'<span class="lv INFO" style="background:var(--gb);color:var(--g)">READY</span>':`<span class="lv STOP">${r.stop} STOP</span>`}</td></tr>`).join(''):'';markHist()}).catch(()=>{})}
 function markHist(){$$('#hist tr[data-id]').forEach(t=>t.classList.toggle('cur',!!R&&t.dataset.id===R.id))}

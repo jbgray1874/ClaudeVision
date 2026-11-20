@@ -78,6 +78,8 @@ button{cursor:pointer}button:disabled{opacity:.55;cursor:wait}
 #pv td{white-space:nowrap;max-width:360px;overflow:hidden;text-overflow:ellipsis}
 .heat td.n{min-width:52px}.mini{display:flex;height:8px;border-radius:99px;overflow:hidden;min-width:120px;background:var(--grid)}
 .mini i{display:block;height:100%}.notes{font-size:12px;color:var(--t)}.notes b{color:var(--muted);font-weight:600}
+.guide{max-width:1100px;line-height:1.55}.guide h3{font-size:14px;margin:16px 0 4px}.guide p,.guide li{font-size:13.5px}.guide ol,.guide ul{margin:4px 0 8px 20px;padding:0}
+table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-align:top}table.gt td:first-child{font-weight:700;white-space:nowrap}
 .pill{display:inline-block;padding:1px 7px;border-radius:99px;background:var(--soft);border:1px solid var(--line);font-size:11px;margin:1px 2px 1px 0}
 </style>
 </head>
@@ -90,7 +92,7 @@ button{cursor:pointer}button:disabled{opacity:.55;cursor:wait}
 <nav class="tabs hide" id="tabs"><div class="w">
   <button data-v="ov" class="on">Overview</button><button data-v="lo">Live Orders</button><button data-v="ld">Work-centre load</button>
   <button data-v="sh">Shortages</button><button data-v="sg">WO Suggestions</button><button data-v="cu">Customers</button>
-  <button data-v="tr">Trends</button><button data-v="hw">How it works</button><button data-v="wb">Workbooks</button>
+  <button data-v="tr">Trends</button><button data-v="ug">User guide</button><button data-v="hw">How it works</button><button data-v="wb">Workbooks</button>
 </div></nav>
 <main class="w">
   <div id="drop"><b>Choose or drop a Live Orders data file</b><br><span class="muted">SDI_Live_Orders_&lt;date&gt;.json, written beside each workbook</span></div>
@@ -148,6 +150,38 @@ button{cursor:pointer}button:disabled{opacity:.55;cursor:wait}
       <div class="card"><h2>Material status over time</h2><p class="note" id="trnote">From every saved generation.</p><div class="legend" id="lg6"></div><div id="c6"></div></div>
       <div class="card"><h2>Hours still to do over time</h2><p class="note">Total route hours on open works orders at each generation.</p><div id="c7"></div></div>
     </div></section>
+
+  <section class="view" id="v-ug"><div class="card guide">
+    <h2>User guide</h2><p class="note">Live Orders in the SDI Intelligence portal - for Production, Purchasing and Customer Services. Written 20 Nov 2026.</p>
+    <h3>What it is</h3>
+    <p>Production's Live Orders sheet, built from <b>Sage X3</b>: every open works order with its material status, the hours still to do in each work centre, the works orders to raise (WO Suggestions) and the exploded BOM of each order. It follows the same rules as the Access SupplyChain sheet - see <a class="lk" data-go="hw">How it works</a>. It <b>reads</b> Sage X3; it never changes anything in it.</p>
+    <h3>1. Get today's Live Orders</h3>
+    <ol><li>Press <b>↻ Regenerate</b> (top right). It reads Sage X3 now; the progress shows next to the button. It takes a few minutes (the first run of a day can take longer, while products, BOMs and routes are refreshed).</li>
+      <li>When it's done, the line by the button names the new workbook, e.g. <b>SDI_Live_Orders_2026-11-20_0815.xlsx</b>, with <b>Preview</b> and <b>Download</b>. The views below refresh by themselves.</li>
+      <li>The workbook is saved in <b>K:\Operations\Reporting\LiveOrders</b>. Each run is a new file with the date and time in its name - nothing is ever overwritten, so anyone can run it at any time.</li></ol>
+    <h3>2. The views</h3>
+    <table class="gt"><tr><th>Tab</th><th>What it shows</th><th>For</th></tr>
+      <tr><td>Overview</td><td>The headline numbers, red / amber / green, works orders by due week, hours by week and shop, the busiest work centres, the biggest shortages, what's due in the next 14 days.</td><td>Everyone</td></tr>
+      <tr><td>Live Orders</td><td>One line per works order, as Production's sheet. Filter by status, shop, week or level; search by part, WO, SO or account. <b>Click a line</b> for its exploded BOM (stock, on order, next PO date). Export CSV.</td><td>Production</td></tr>
+      <tr><td>Work-centre load</td><td>Hours still to do per work centre, by the week each order is due. Darker = busier.</td><td>Production</td></tr>
+      <tr><td>Shortages</td><td>Every bought-in component the open works orders need, against stock, on order and on works orders - what's short and which orders it holds up.</td><td>Purchasing</td></tr>
+      <tr><td>WO Suggestions</td><td>Sales-order lines for made parts that no works order or stock covers. Red = no BOM or no route.</td><td>Production, Customer Services</td></tr>
+      <tr><td>Customers</td><td>Works orders, red count, overdue and hours by account. Click an account to see its orders.</td><td>Customer Services</td></tr>
+      <tr><td>Trends</td><td>Red / amber / green and hours across every saved run.</td><td>Managers</td></tr>
+      <tr><td>Workbooks</td><td>Every spreadsheet in the Live Orders folder (also the <b>📂 Workbooks</b> button).</td><td>Everyone</td></tr></table>
+    <p><b>Material status:</b> <span class="st GREEN">GREEN</span> all material in stock · <span class="st AMBER">AMBER</span> covered by a PO or works order due in time · <span class="st RED">RED</span> short with nothing due in time, or no BOM.</p>
+    <h3>3. Add Production's notes (Comments, Prog, Tube req)</h3>
+    <ol><li>Press <b>📂 Workbooks</b>, find the newest workbook (marked <b>latest</b>) and press <b>Copy path</b>.</li>
+      <li>In Excel: File → Open, paste the path, Open. (Or paste it into File Explorer.)</li>
+      <li>Type in the <b>yellow ✎ columns</b> on the Live Orders tab and save.</li>
+      <li>The next Regenerate carries the notes to the new workbook, by works-order number - nobody copies them over on Monday.</li></ol>
+    <p class="note"><b>Don't</b> type notes in a downloaded copy (it doesn't go back to the folder) and don't rename the generated files: the notes are taken from the newest generated workbook in the folder.</p>
+    <h3>4. Look back</h3>
+    <ul><li><b>📂 Workbooks</b> lists every spreadsheet in the folder: sort newest / oldest first or by name, search, and <b>Preview</b> any of them here, tab by tab, without opening Excel.</li>
+      <li><b>View in the dashboard</b> shows an older run in all the views; the header then says "viewing …" - press <b>back to latest</b> to return.</li></ul>
+    <h3>If something isn't right</h3>
+    <p>The line next to Regenerate says what went wrong, in plain words. A number that doesn't look right: check it in Sage X3, then tell James Gray (with the works-order number). The rules are on <a class="lk" data-go="hw">How it works</a>.</p>
+  </div></section>
 
   <section class="view" id="v-hw"><div class="card">
     <h2>How Live Orders works it out</h2><p class="note">The logic reverse-engineered from Access SupplyChain and Production's sheet, reconciled to Access on 16 Nov 2026, applied to live Sage X3 data. The workbook's "How it works" tab says the same.</p>
@@ -393,7 +427,7 @@ function poll(){fetch('/api/live-orders/regenerate',{headers:HD()}).then(r=>r.js
 $('#rstat').addEventListener('click',e=>{const a=e.target.closest('a');if(!a)return;if(a.dataset.rpv){$('#tabs').classList.remove('hide');go('wb');preview(a.dataset.rpv)}if(a.dataset.rdl)dlFile(a.dataset.rdl)});
 $('#regen').addEventListener('click',()=>{if(!confirm('Pull fresh data from Sage X3 and save a new Live Orders workbook?'))return;
   fetch('/api/live-orders/regenerate',{method:'POST',headers:HD()}).then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(()=>{$('#rstat').textContent='Starting…';setTimeout(poll,1500)}).catch(e=>{$('#rstat').textContent='Could not start: '+e.message})});
-if(onPortal){$('#filebar').classList.add('hide');$('#portalbar').classList.remove('hide');$('#drop').classList.add('hide');loadHistory().catch(()=>{});poll()}
+if(onPortal){$('#filebar').classList.add('hide');$('#portalbar').classList.remove('hide');$('#drop').classList.add('hide');$('#tabs').classList.remove('hide');loadHistory().catch(()=>{});poll()}
 else{$('nav.tabs [data-v="wb"]').classList.add('hide')}
 try{const t=sessionStorage.getItem('loTab');if(t&&(onPortal||t!=='wb'))go(t)}catch(e){}
 try{matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(D){const t=document.querySelector('nav.tabs button.on');render(D);if(t)go(t.dataset.v)}})}catch(e){}

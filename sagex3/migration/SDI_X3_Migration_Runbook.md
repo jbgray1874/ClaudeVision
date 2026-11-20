@@ -4721,3 +4721,13 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - Backend: `/api/live-orders/files`, `/file/{name}` (plain names in the folder only; path tricks refused), `/preview/{name}` (runs the new `xlsx_preview.py` with LIVE_ORDERS_PYTHON, which has openpyxl / xlrd; the portal's own Python needs neither).
   - The page says plainly: **to edit, open from the folder** (a downloaded copy doesn't go back to the folder, and notes carry forward from the newest workbook *in the folder*).
 - **Tested** (test server, 3 generated workbooks + 1 hand-saved + 1 lock file): list without the lock file; all three sorts and the filter; previews of a generated and a hand-saved workbook (6 tabs; Live Orders 300 of 306 rows); View in the dashboard → "viewing 20/11/2026 16:29"; after-run link → preview + download; `../` name → refused; no key → 401.
+
+#### 20 Nov (late) – User guides on both screens, the Word guide, and the summary email (James)
+- **James asked: "so we can read and write from Sage X3?"** **Answer: read only, today.** Live Orders reads through the API (read-only by design; the client refuses mutations). Estimate → X3 produces the load files, which are loaded by hand in Usage → Imports. Writing to X3 is the next stage: a separate write-capable connection, SDI Mig first, create-only, logged. The email says so.
+- **In-page guides:**
+  - Live Orders has a new **User guide** tab (what it is; Regenerate; the views table with who each is for; RAG; adding notes from the folder copy; look back; if something isn't right). In the portal the tabs now show from the start, so the guide and Workbooks are there before the first run.
+  - Estimate → X3 has a **User guide** panel (what it does; 6 steps; common STOPs and what to do; what isn't carried). It opens by itself until the first run.
+- **Word guide:** `sagex3/user_guides/live_orders_estimating/build_guide.py`, 7 pages with 9 screenshots (Live Orders on example data; Estimate → X3 on Tim's estimate). The guide and screenshots are kept out of git; see that folder's README.
+  - Fixed: Word's "List Number" style ran on across lists (the Estimate steps started at 8); lists are now numbered explicitly.
+- **Robocopy note:** the repo is ~120 MB / 2,378 files (a 62 MB search corpus), so the first copy over the VPN takes several minutes; later runs copy only changed files. Next time copy only what the server needs: `sagex3` and `sdi-intelligence-backend`.
+- **Summary email** to Dave Wright, Rachael Smith, Liz Tart, Simon Foister and Charlotte Blackwell: drafted in chat (one at a time). Send it after the server step works, so the link opens for everyone.
