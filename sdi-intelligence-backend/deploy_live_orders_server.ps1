@@ -2,8 +2,9 @@
   deploy_live_orders_server.ps1 - puts Live Orders and Estimate -> X3 on the SDI Intelligence portal running on THIS
   machine (the server, SDI-APP01). Written 20 Nov 2026 (Estimate -> X3 added the same evening).
 
-  Run ON the server, in PowerShell as administrator:
+  Run ON the server, in Windows PowerShell (the blue console, NOT PowerShell ISE) as administrator:
       powershell -ExecutionPolicy Bypass -File C:\SDI_X3\repo\sdi-intelligence-backend\deploy_live_orders_server.ps1
+  (-Yes answers the Y/N question for you - read the preview it prints first.)
 
   Before running it (from James's PC - see the runbook, 20 Nov "server"):
     - the repo copied to C:\SDI_X3\repo on the server
@@ -28,12 +29,20 @@ param(
     [string]$EstRuns = "C:\ProgramData\SDI\Estimating",
     [string]$Share = "\\sdi-dc01\shareddata$\Shared\Operations\Reporting\LiveOrders",
     [string]$EstShare = "\\sdi-dc01\shareddata$\Shared\Operations\Reporting\SageEstimates",
-    [string]$Server = "SDI-APP01"                           # the machine this is meant for
+    [string]$Server = "SDI-APP01",                          # the machine this is meant for
+    [switch]$Yes                                            # answer Y to "Apply these changes?" (after reading the preview)
 )
 $ErrorActionPreference = "Continue"
 $Installer = Join-Path $PSScriptRoot "add_live_orders_to_portal.py"
 function Say([string]$m, [string]$c = "Gray") { Write-Host $m -ForegroundColor $c }
 function Fail([string]$m) { Say "STOPPED: $m" Red; exit 1 }
+function Ask([string]$q) {                                 # 20 Nov night: run from PowerShell ISE, the Y/N question never
+    if ($Yes) { Say "$q Y (-Yes)"; return $true }          # showed and typing didn't reach it (ISE can't pass input to
+    if ([Console]::IsInputRedirected) {                    # 'powershell -File'). Say so instead of waiting for ever.
+        Fail "can't ask '$q' here (PowerShell ISE?). Nothing changed. Run it in Windows PowerShell (the blue console), or add -Yes after reading the preview."
+    }
+    return ((Read-Host $q) -match '^[Yy]')
+}
 
 Say "== Live Orders -> SDI Intelligence portal on $env:COMPUTERNAME ==" Yellow
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -41,7 +50,8 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 if (-not (Test-Path $Installer)) { Fail "can't find $Installer - is the repo copied to C:\SDI_X3\repo?" }
 if ($env:COMPUTERNAME -ne $Server) {                       # 20 Nov: first run was on James's PC by mistake
     Say "This is $env:COMPUTERNAME, not the server $Server." DarkYellow
-    if ((Read-Host "Carry on here anyway? (Y/N)") -notmatch '^[Yy]') { Say "Nothing changed. Run it on $Server (remote desktop)."; exit 0 }
+    if ($Yes) { Fail "-Yes works only on ${Server} - nothing changed" }   # -Yes never skips this check
+    if (-not (Ask "Carry on here anyway? (Y/N)")) { Say "Nothing changed. Run it on $Server (remote desktop)."; exit 0 }
 }
 
 # 1. the running portal ------------------------------------------------------------------------------------------
@@ -117,8 +127,8 @@ $args5 = @($Installer, "--target", $Target, "--x3-config", $X3Config, "--runs", 
 Say "`n-- preview --" Yellow
 & $py @args5
 if ($LASTEXITCODE -ne 0) { Fail "the installer stopped (above) - nothing was changed" }
-$ans = Read-Host "`nApply these changes? (Y/N)"
-if ($ans -notmatch '^[Yy]') { Say "Nothing changed."; exit 0 }
+Say ""
+if (-not (Ask "Apply these changes? (Y/N)")) { Say "Nothing changed."; exit 0 }
 & $py @args5 --apply
 if ($LASTEXITCODE -ne 0) { Fail "the installer failed (above)" }
 
