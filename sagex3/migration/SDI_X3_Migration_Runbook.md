@@ -4312,6 +4312,18 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **First run from the clone (`C:\SDI_X3\repo`):** clone OK (3,610 objects); old copies moved to `C:\SDI_X3\_old`.
   - **Error 27 (`schema`, 20 Nov):** the token's whole life (`exp` − `iat`) was 330 s, more than the app's 300 s Tokens validity. The `claims` tokens that got in lived 270 s. **Fix: life = token validity − 30 s.** Error codes seen: 21 = timestamps in milliseconds; 27 = lifetime over the validity; 42 = unknown or missing `sub`; 45 = wrong or missing `aud`.
 - **Lesson (20 Nov):** a copy command run from `PS C:\ClaudeVision>` put a stray `x3_api.py` in James's estimating folder. **Always `cd C:\SDI_X3\SDI_X3\integration\x3_api` first, and check the prompt before any copy.** Never put files in `C:\ClaudeVision`. The stray file is removed only after checking it's today's.
+- **20 Nov – SIGNED IN AND THE SCHEMA READ.** `probe`: `GraphQL OK … /xtrem/api (aud=empty, endpoint header=yes)`. `schema`: **13,095 types**.
+  - **Nodes for Live Orders (pinned in `x3_api.py` NODES):**
+    - `x3Manufacturing.workOrder` and `.workOrderProductLine`, `.workOrderMaterialLine`, `.workOrderOperationLine`;
+    - `x3StockData.stock`;
+    - `x3Sales.salesOrderLine`;
+    - `x3Purchasing.purchaseOrderLine`;
+    - `x3MasterData.product`;
+    - `x3ManufacturingData.manufacturingBomLine` and `.workCenter`;
+    - `x3Manufacturing.routingOperation`.
+  - **Also there:** stockJournal, allocation, workOrderSuggestion, purchaseOrderQuantityLine, salesDelivery, invoices, finance, etc.
+  - **REST:** `/api1/x3/erp/SDIMIG/...` gives *"Endpoint not found: … dataset SDIMIG"*, so REST wants the endpoint name in the path. Not needed: GraphQL works.
+  - **Next:** `draft` (writes `api_datasets.json` from the pinned nodes, Live Orders sets enabled), then `pull --limit 3` (a trial into `SDI_X3_samples`, prints **column names only**), then the column map.
 - **Results to fill in as we find them:**
   - the endpoint name;
   - the GraphQL path / audience / header `probe` accepted;

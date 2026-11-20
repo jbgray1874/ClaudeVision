@@ -10,7 +10,8 @@ signed with that secret).
     python x3_api.py diagnose          # if probe fails: how X3 answers each sign-in, and finds the token exchange
     python x3_api.py claims            # changes one thing in the token at a time, to see what X3 checks first
     python x3_api.py schema            # lists what the GraphQL API offers (works orders, stock, orders ...)
-    python x3_api.py draft             # writes api_datasets.draft.json from the schema
+    python x3_api.py draft             # writes api_datasets.json for the pinned nodes (NODES) from the schema
+    python x3_api.py pull --limit 3    # trial: 3 rows per data set to SDI_X3_samples, prints the column names
     python x3_api.py pull [names]      # pulls the data sets in api_datasets.json to the exports folder
     python x3_api.py rest ITMMASTER ITMMASTER --count 5          # one REST query
     python x3_api.py query my.graphql                            # one GraphQL query
@@ -395,7 +396,8 @@ def selection(types, tname, depth, seen=()):
         if b["kind"] in SCALAR:
             out.append(f["name"])
         elif b["kind"] == "OBJECT" and depth > 0 and b["name"] not in seen and not _is_conn(types, b["name"]):
-            sub = [x for x in selection(types, b["name"], 0, seen + (tname,)) if "{" not in x][:6]
+            plain = [x for x in selection(types, b["name"], 0, seen + (tname,)) if "{" not in x]
+            sub = [x for x in ("code", "id", "_id", "number", "name", "description", "localizedDescription") if x in plain][:3] or plain[:2]
             if sub:
                 out.append(f"{f['name']} {{ {' '.join(sub)} }}")
     return out
@@ -406,31 +408,46 @@ def _is_conn(types, tname):
     return "query" in fs or "edges" in fs
 
 
+# The X3 GraphQL nodes Live Orders reads, as listed by `schema` on our training site (20 Nov). Pinned, because
+# matching by name picks the wrong ones (workOrderMaterialLine before workOrder). Line nodes are read directly.
+NODES = {
+    "works_orders":  ["x3Manufacturing", "workOrder"],
+    "wo_products":   ["x3Manufacturing", "workOrderProductLine"],
+    "wo_materials":  ["x3Manufacturing", "workOrderMaterialLine"],
+    "wo_operations": ["x3Manufacturing", "workOrderOperationLine"],
+    "stock":         ["x3StockData", "stock"],
+    "so_lines":      ["x3Sales", "salesOrderLine"],
+    "po_lines":      ["x3Purchasing", "purchaseOrderLine"],
+    "products":      ["x3MasterData", "product"],
+    "boms":          ["x3ManufacturingData", "manufacturingBomLine"],
+    "routes":        ["x3Manufacturing", "routingOperation"],
+    "work_centres":  ["x3ManufacturingData", "workCenter"],
+}
+LIVE_ORDERS = {"works_orders", "wo_products", "wo_materials", "stock", "so_lines", "po_lines"}
+
+
 def draft(a):
+    """Write api_datasets.json from the schema: every pinned node with all its plain fields, and the code of each
+    linked record (product.code, site.code ...). Live Orders' own data sets are enabled. Read-only queries only."""
     c = load_conf()
     root, types = load_schema(c)
-    want = {"works_orders": ["workorder"], "wo_materials": ["workordermaterial", "materialrequirement"],
-            "wo_operations": ["workorderoperation", "operationtracking"], "stock": ["stock"],
-            "so_lines": ["salesorder"], "po_lines": ["purchaseorder"], "products": ["product", "item"],
-            "boms": ["billofmaterial", "bom"], "routes": ["routing"]}
-    found = {}
-    for top in types[root]["fields"] or []:
-        tt = types.get(_base(top["type"])["name"], {})
-        for f in tt.get("fields") or []:
-            for name, keys in want.items():
-                if name not in found and any(f["name"].lower() == k or f["name"].lower().startswith(k) for k in keys):
-                    node_t = _node_type(types, _base(f["type"])["name"])
-                    if node_t:
-                        lines = _first_lines(types, node_t)
-                        line_t = _node_type(types, _base(next(x["type"] for x in types[node_t]["fields"]
-                                                              if x["name"] == lines))["name"]) if lines else None
-                        found[name] = {"path": [top["name"], f["name"]], "fields": " ".join(selection(types, node_t, 1)),
-                                       "filter": "", "explode": lines,
-                                       "line_fields": " ".join(selection(types, line_t, 1)) if line_t else "",
-                                       "enabled": False}
-    out = HERE / "api_datasets.draft.json"
+    tops = {f["name"]: _base(f["type"])["name"] for f in types[root]["fields"] or []}
+    found, missing = {}, []
+    for name, (top, node) in NODES.items():
+        holder = types.get(tops.get(top, ""), {})
+        f = next((x for x in holder.get("fields") or [] if x["name"] == node), None)
+        node_t = _node_type(types, _base(f["type"])["name"]) if f else None
+        if not node_t:
+            missing.append(f"{top}.{node}")
+            continue
+        sel = selection(types, node_t, 1)
+        found[name] = {"path": [top, node], "fields": " ".join(sel), "filter": "", "enabled": name in LIVE_ORDERS}
+        print(f"  {name:<14} {top}.{node}: {len(sel)} fields")
+    out = DATASETS if not DATASETS.exists() or a.force else HERE / "api_datasets.draft.json"
     out.write_text(json.dumps(found, indent=2))
-    print(f"Wrote {out}: {', '.join(found) or 'nothing matched'}. Check each, set enabled, save as api_datasets.json.")
+    print(f"Wrote {out}" + (f"; not in this site's schema: {', '.join(missing)}" if missing else ""))
+    if out != DATASETS:
+        print("api_datasets.json already exists - kept. Use  draft --force  to replace it.")
 
 
 def _node_type(types, conn_t):
@@ -470,7 +487,9 @@ def _edges(v):
     return [e["node"] for e in (v or {}).get("edges", [])]
 
 
-def pull_graphql(c, ds, page=200):
+def pull_graphql(c, ds, page=200, limit=0):
+    if limit:
+        page = limit
     path, fields, flt, explode = ds["path"], ds["fields"], ds.get("filter", ""), ds.get("explode", "")
     sel = fields + (f" {explode} {{ query(first: 500) {{ edges {{ node {{ {ds.get('line_fields', '')} }} }} }} }}"
                     if explode and ds.get("line_fields") else "")
@@ -487,7 +506,7 @@ def pull_graphql(c, ds, page=200):
             head = flatten(node)
             lines = _edges(node.get(explode)) if explode else []
             rows += [dict(head, **{f"{explode}.{k}": v for k, v in flatten(l).items()}) for l in lines] or [head]
-        if not conn["pageInfo"]["hasNextPage"]:
+        if limit or not conn["pageInfo"]["hasNextPage"]:
             return rows
         after = conn["pageInfo"]["endCursor"]
         time.sleep(PAUSE)
@@ -524,16 +543,20 @@ def pull(a):
         sys.exit("No api_datasets.json yet: run  python x3_api.py draft , check it, save it as api_datasets.json")
     sets = json.loads(DATASETS.read_text())
     names = a.names or [n for n, d in sets.items() if not n.startswith("_") and d.get("enabled")]
-    day = EXPORTS / dt.date.today().isoformat()
+    # a trial (--limit) goes to SDI_X3_samples, never the exports folder run_x3.py reads
+    day = (EXPORTS.parent / "SDI_X3_samples" if a.limit else EXPORTS) / dt.date.today().isoformat()
     log = []
     for n in names:
         ds = sets[n]
         t0 = time.time()
         try:
-            rows = pull_rest(c, ds) if ds.get("class") else pull_graphql(c, ds)
+            rows = pull_rest(c, ds) if ds.get("class") else pull_graphql(c, ds, limit=a.limit)
             write_rows(rows, day / n)
             log.append(dict(name=n, ok=True, rows=len(rows), seconds=round(time.time() - t0, 1)))
             print(f"{n}: {len(rows)} rows")
+            if a.limit and rows:                       # column names only - no values printed
+                cols = list(dict.fromkeys(k for r in rows for k in r))
+                print("   columns:", ", ".join(cols))
         except SystemExit as e:
             log.append(dict(name=n, ok=False, error=str(e)[:400]))
             print(f"{n}: FAILED - {e}")
@@ -562,9 +585,12 @@ def main(argv=None):
     s = sp.add_parser("schema")
     s.add_argument("words", nargs="*")
     s.set_defaults(fn=schema)
-    sp.add_parser("draft").set_defaults(fn=draft)
+    d = sp.add_parser("draft")
+    d.add_argument("--force", action="store_true")
+    d.set_defaults(fn=draft)
     p = sp.add_parser("pull")
     p.add_argument("names", nargs="*")
+    p.add_argument("--limit", type=int, default=0, help="trial: only this many rows per data set, to SDI_X3_samples")
     p.set_defaults(fn=pull)
     r = sp.add_parser("rest")
     r.add_argument("cls")
