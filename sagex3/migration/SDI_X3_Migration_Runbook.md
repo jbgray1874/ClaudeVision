@@ -4752,3 +4752,8 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **Fixed:** the portal folder now comes from `app.py` on the command line, else the NSSM service's AppDirectory (registry), else the uvicorn path (`…\.venv\Scripts\uvicorn.exe` → the folder above `.venv`).
   - The script now asks before carrying on if it isn't on SDI-APP01 (`-Server`).
   - Checked against James's command line: gives `C:\ClaudeVision\sdi-intelligence-backend`.
+- **Server script on SDI-APP01 (20:39): applied.**
+  - Portal folder `C:\ClaudeVision\sdi-intelligence-backend`; Python `C:\Program Files\Python310` (openpyxl there; xlrd installed for every account); X3 settings locked to Administrators + SYSTEM; working folders `C:\ProgramData\SDI\LiveOrders`, `…\Estimating`.
+  - The preview was checked line by line before Y: 4 files copied, app.py mounts, menu / pages / labels, `.env` (runs / exports in ProgramData, code from `C:\SDI_X3\repo`, LiveOrders + SageEstimates shares, `x3_api.json` from ProgramData, no route file). Backups `*.bak-20261120-203949`.
+  - **Finding: the server's portal is NOT a Windows service. It was started by hand.** So: (1) it still runs the old code until it's stopped and started again; (2) it stops when that person signs out and doesn't come back after a reboot; (3) the share write test was skipped (it only tests a service's account).
+  - **Next:** find how it's started (process owner, parent, command line, any scheduled task), then make it an NSSM service like James's PC (`SDI-Intelligence-WindowsService.ps1`, adapted to the server's Python) and re-run the write test as that service's account.
