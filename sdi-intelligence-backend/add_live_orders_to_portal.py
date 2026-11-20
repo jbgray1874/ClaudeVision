@@ -127,7 +127,8 @@ def main():
         import openpyxl  # noqa: F401
     except ImportError:
         print(f"WARNING: {sys.executable} has no openpyxl - Regenerate will fail until you run:\n"
-              f'    "{sys.executable}" -m pip install openpyxl\n  (in PowerShell as administrator, so the service sees it)')
+              f'    "{sys.executable}" -s -m pip install openpyxl\n  (in PowerShell as administrator; -s skips your own user folder, '
+              f'so it installs where the service can see it)')
     changes = plan(target, a.runs, a)
     if not changes:
         print("Nothing to do - Live Orders is already in the portal.")

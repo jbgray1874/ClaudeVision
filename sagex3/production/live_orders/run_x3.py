@@ -184,7 +184,8 @@ def main(argv=None):
     except (Exception, SystemExit) as e:                          # noqa: BLE001 - recorded for the portal
         status["error"] = str(e) or e.__class__.__name__
         if isinstance(e, ModuleNotFoundError):                     # 20 Nov: the portal's Python had no openpyxl
-            status["error"] += f' - install it into the Python Live Orders runs with:  "{sys.executable}" -m pip install {e.name}' 
+            status["error"] += (f' - install it for every account (the portal service is not you), in PowerShell as '
+                                f'administrator:  "{sys.executable}" -s -m pip install {e.name}')
         status["trace"] = traceback.format_exc()[-1500:]
     status["finished"] = dt.datetime.now().isoformat(timespec="seconds")
     (runs / "status.json").write_text(json.dumps(status, indent=1, default=str))
