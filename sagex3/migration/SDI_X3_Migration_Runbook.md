@@ -4665,3 +4665,15 @@ Keep this up to date with every setting we choose. **Never write the secret here
 - **James sent the 16 Nov write-up of Tim's Gift Card estimate** (`Tim_GiftCard_estimate_to_SageX3.xlsx`; names the customer, so kept out of git). Tabs: Read me (result), **Estimate → X3** (every estimate cell → X3 file / field / value / how), BOM file, Route file, Checks.
   - **That is the model for the portal's estimating review screen.** The converter's own `_CHECKS.xlsx` has Notes / Checks / BOM read / Route read but not the cell-by-cell "Estimate → X3" view, so add that as a generated tab, not a one-off.
   - Its Read me says "already exists in X3, so no product file is needed". That is superseded: ZSDIITM is now always written.
+
+#### 20 Nov 19:41 – FIRST SUCCESSFUL LIVE ORDERS RUN FROM SAGE X3 (James's PC portal)
+- After `C:\Python314\python.exe -s -m pip install openpyxl` (as administrator; it landed in `C:\Python314\Lib\site-packages`), Regenerate finished: **"Done 2026-11-20 19:41:22 – new workbook saved"**. The whole chain works: X3 API pull → build → workbook + data file saved to `K:\Operations\Reporting\LiveOrders` → portal views refreshed.
+- **The service CAN write to the LiveOrders share** (despite "backend degraded", which is about the portal's other shares / DB).
+- **Figures (SDI Mig):** 0 works orders (none loaded yet), **892 WO suggestions, 110 with no BOM / route**. Every open SO line for a made part shows as uncovered while there are no works orders.
+- **Fixed:** with no works orders, the due-week and hours charts drew an empty grid labelled "1, 1". They now say "No works orders yet – none are open in Sage X3"; the customers chart likewise. Tested with an empty data file, every tab.
+
+#### 20 Nov (evening) – Tim's original estimate re-run through the converter (now writing ZSDIITM always)
+- James uploaded `12539-04-GA-0359869- GIFT CARD HEADER REV B.xls` (names the customer: scratchpad only, never git).
+- **Result:** MS-0359869 (existing), BOM 8 lines, route 9 operations, 0 STOP, 0 WARN, plus `MS-0359869_ZSDIITM` (always written now; X3 will reject it as the part exists).
+- **All 8 BOM components with their link quantities and all 9 operations with their work centres match the 16 Nov write-up line by line** (set-up / run checked on the sample line).
+- **Caveat:** the X3 product list (`ZSDIITM_products_MAPPED.xlsx`) wasn't available, so a stand-in with the 15 products the write-up names (sheet sizes from its Checks tab) was used. That proves the conversion, not today's product list. **For the portal build: get the product list from X3 itself** (products.json from the daily pull: codes, categories, descriptions 1–3), so the estimate is checked against live X3, not a migration file.

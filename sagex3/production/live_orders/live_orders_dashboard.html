@@ -171,7 +171,9 @@ function hrsOf(w){return Object.values(w.h||{}).reduce((a,b)=>a+b,0)}
 // ---------------------------------------------------------------- charts (plain SVG)
 function stackedBars(el,cats,series,opts={}){
   const W=640,H=opts.h||230,L=44,B=34,T=12,R=8,iw=W-L-R,ih=H-T-B;
-  const tot=cats.map((_,i)=>series.reduce((a,s)=>a+(s.vals[i]||0),0));const max=Math.max(1,...tot);
+  const tot=cats.map((_,i)=>series.reduce((a,s)=>a+(s.vals[i]||0),0));
+  if(!tot.some(v=>v>0)){el.innerHTML=`<p class="muted" style="padding:24px 0">${esc(opts.empty||'Nothing to show yet.')}</p>`;return}
+  const max=Math.max(1,...tot);
   const step=niceStep(max/4);const top=Math.ceil(max/step)*step;const bw=iw/Math.max(cats.length,1);
   let g='';for(let v=0;v<=top+1e-9;v+=step){const y=T+ih-(v/top)*ih;g+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="${css('--grid')}"/><text x="${L-6}" y="${y+4}" text-anchor="end">${fmtN(v)}</text>`}
   cats.forEach((c,i)=>{let y=T+ih;series.forEach(s=>{const v=s.vals[i]||0;if(!v)return;const h=v/top*ih;y-=h;
@@ -186,6 +188,7 @@ function hbars(el,rows,colorOf,unit='h'){
     <text x="${L+w+6}" y="${y+15}">${fmtN(r[1],0)}</text>`});
   el.innerHTML=rows.length?`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="bar chart">${g}</svg>`:'<p class="muted">No route hours.</p>'}
 function stackedH(el,rows){ // rows: [label,[red,amber,green]]
+  if(!rows.length){el.innerHTML='<p class="muted" style="padding:24px 0">No works orders yet.</p>';return}
   const W=640,rh=24,L=170,R=50,H=rows.length*rh+8,max=Math.max(1,...rows.map(r=>r[1].reduce((a,b)=>a+b,0)));let g='';
   rows.forEach((r,i)=>{const y=4+i*rh;let x=L;r[1].forEach((v,k)=>{const w=(W-L-R)*v/max;if(w>0)g+=`<rect x="${x}" y="${y+4}" width="${w}" height="${rh-9}" fill="${css(ST[k][1])}"><title>${esc(r[0])} · ${ST[k][0]}: ${v}</title></rect>`;x+=w});
     g+=`<text x="${L-8}" y="${y+15}" text-anchor="end">${esc(r[0])}</text><text x="${x+6}" y="${y+15}">${r[1].reduce((a,b)=>a+b,0)}</text>`});
@@ -229,12 +232,12 @@ function render(data){
   const bucket=w=>!w.due||w.due<today?0:(weeks.indexOf(w.wk)>=0?weeks.indexOf(w.wk)+1:cats.length-1);
   const s1=ST.map(([s,c])=>({name:s,color:css(c),vals:cats.map(()=>0)}));
   D.wos.forEach(w=>{const k=ST.findIndex(x=>x[0]===w.st);if(k>=0)s1[k].vals[bucket(w)]++});
-  legend($('#lg1'),ST.map(([s,c])=>[s.charAt(0)+s.slice(1).toLowerCase(),css(c)]));stackedBars($('#c1'),cats,s1,{label:'works orders by due week'});
+  legend($('#lg1'),ST.map(([s,c])=>[s.charAt(0)+s.slice(1).toLowerCase(),css(c)]));stackedBars($('#c1'),cats,s1,{label:'works orders by due week',empty:'No works orders yet - none are open in Sage X3.'});
   // chart 2: hours by week and shop
   const famOf={};(D.wcs||[]).forEach(c=>famOf[c[0]]=(c[2]||'').charAt(0));
   const lw=(D.load||[]).slice(0,10);const fams=['M','J','A',''];
   const s2=fams.map(f=>({name:FAM[f][0],color:css(FAM[f][1]),vals:lw.map(([k,v])=>Object.entries(v).reduce((a,[c,h])=>a+((famOf[c]||'')===f?h:0),0))}));
-  legend($('#lg2'),fams.map(f=>[FAM[f][0],css(FAM[f][1])]));stackedBars($('#c2'),lw.map(([k])=>dd(k).slice(0,5)),s2,{dec:0,label:'hours by week'});
+  legend($('#lg2'),fams.map(f=>[FAM[f][0],css(FAM[f][1])]));stackedBars($('#c2'),lw.map(([k])=>dd(k).slice(0,5)),s2,{dec:0,label:'hours by week',empty:'No hours to do yet - no open works orders.'});
   // chart 3: busiest work centres
   const byWc={};D.wos.forEach(w=>Object.entries(w.h||{}).forEach(([c,h])=>byWc[c]=(byWc[c]||0)+h));
   const lab=Object.fromEntries((D.wcs||[]).map(c=>[c[0],c[1]||c[0]]));
