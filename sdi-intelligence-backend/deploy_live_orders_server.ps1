@@ -48,8 +48,11 @@ $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Silentl
 if (-not $conn) { Fail "nothing is listening on port $Port - start the portal first" }
 $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($conn.OwningProcess)"
 $py = $proc.ExecutablePath
-$svc = Get-CimInstance Win32_Service | Where-Object { $_.ProcessId -eq $proc.ProcessId -or $_.ProcessId -eq $proc.ParentProcessId } |
-       Select-Object -First 1
+$svc, $walk = $null, $proc.ProcessId                      # the service may be a few launchers up (20 Nov, SDI-APP01:
+for ($i = 0; $i -lt 6 -and -not $svc -and $walk; $i++) {  # service -> uvicorn.exe -> python -> python on 8071)
+    $svc = Get-CimInstance Win32_Service -Filter "ProcessId=$walk" | Select-Object -First 1
+    if (-not $svc) { $walk = (Get-CimInstance Win32_Process -Filter "ProcessId=$walk").ParentProcessId }
+}
 if (-not $Target) {
     $tokens = [regex]::Matches([string]$proc.CommandLine, '"[^"]+"|\S+') | ForEach-Object { $_.Value.Trim('"') }
     $app = $tokens | Where-Object { $_ -match '\\app\.py$' } | Select-Object -First 1
