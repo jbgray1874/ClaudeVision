@@ -23,6 +23,7 @@ param(
     [int]$Port = 8071,
     [string]$Target = "",                                   # the portal folder (app.py); found automatically if blank
     [string]$X3Config = "C:\ProgramData\SDI\x3_api.json",
+    [string]$X3LoadConfig = "C:\ProgramData\SDI\x3_load.json",  # Estimate -> X3's load (test company); optional
     [string]$Data = "C:\ProgramData\SDI\LiveOrders",
     [string]$EstRuns = "C:\ProgramData\SDI\Estimating",
     [string]$Share = "\\sdi-dc01\shareddata$\Shared\Operations\Reporting\LiveOrders",
@@ -95,6 +96,11 @@ if ($acct -and $acct -notmatch '^(LocalSystem|NT AUTHORITY\\SYSTEM)$') { $grants
 & icacls $X3Config /inheritance:r /grant:r $grants | Out-Null
 if ($LASTEXITCODE -ne 0) { Fail "couldn't restrict $X3Config" }
 Say "X3 settings file locked down: Administrators, SYSTEM$(if ($grants.Count -gt 2) { ", $acct" })" Green
+if (Test-Path $X3LoadConfig) {                              # the X3 WRITE settings (20 Nov): same lock-down
+    & icacls $X3LoadConfig /inheritance:r /grant:r $grants | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "couldn't restrict $X3LoadConfig" }
+    Say "X3 load settings locked down too: $X3LoadConfig" Green
+} else { Say "No X3 load settings yet ($X3LoadConfig): 'Load into Sage X3' says it isn't switched on (runbook, 20 Nov night)" DarkYellow }
 
 # 4. working folder ----------------------------------------------------------------------------------------------
 New-Item -ItemType Directory -Force -Path "$Data\runs", "$Data\X3_exports", $EstRuns | Out-Null
@@ -106,7 +112,8 @@ Say "Working folders: $Data, $EstRuns" Green
 
 # 5. the installer: preview, ask, apply --------------------------------------------------------------------------
 $args5 = @($Installer, "--target", $Target, "--x3-config", $X3Config, "--runs", "$Data\runs",
-           "--exports", "$Data\X3_exports", "--share", $Share, "--est-runs", $EstRuns, "--est-share", $EstShare)
+           "--exports", "$Data\X3_exports", "--share", $Share, "--est-runs", $EstRuns, "--est-share", $EstShare,
+           "--x3-load-config", $X3LoadConfig)
 Say "`n-- preview --" Yellow
 & $py @args5
 if ($LASTEXITCODE -ne 0) { Fail "the installer stopped (above) - nothing was changed" }

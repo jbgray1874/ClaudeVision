@@ -10,7 +10,8 @@ Writes into <run_folder>/out:
 and <run_folder>/run.json - everything the page shows (no X3 product list in it).
 With --publish (the portal passes EST_SHARE): a READY run's three load files and the write-up are also saved in
 <publish>\<part>_<YYYY-MM-DD_HHMM>\ - K:\Operations\Reporting\SageEstimates, where they are loaded from (James,
-20 Nov). A NOT READY run isn't saved there: its files mustn't be loaded. Nothing is ever overwritten.
+20 Nov) - with run.json, so the page's Saved estimates list can reopen it. A NOT READY run isn't saved there: its
+files mustn't be loaded. Nothing is ever overwritten.
 
 The X3 product list: --products, else EST_PRODUCTS, else the newest products.json from the X3 pull
 (X3_EXPORT_DIR, default %USERPROFILE%\\SDI_X3_exports) - the live list, refreshed daily with Live Orders.
@@ -55,7 +56,7 @@ def publish(out, names, folder, folder_user, code):
     for n in names:
         shutil.copyfile(out / n, dest / n)
     shown = f"{folder_user.rstrip(chr(92))}\\{name}" if folder_user else str(dest)
-    return {"folder": shown, "name": name, "files": names}
+    return {"folder": shown, "name": name, "files": names, "path": str(dest)}
 
 
 def main(argv=None):
@@ -109,6 +110,14 @@ def main(argv=None):
     info["finished"] = dt.datetime.now().isoformat(timespec="seconds")
     run.mkdir(parents=True, exist_ok=True)
     (run / "run.json").write_text(json.dumps(info, indent=1, default=str), encoding="utf-8")
+    pub = info.get("published")
+    if pub:                                    # the saved folder carries its own summary, so the page can reopen it
+        try:                                   # from K: alone - "load up previously generated files" (James, 20 Nov)
+            keep = {k: v for k, v in info.items() if k != "trace"}
+            (Path(pub["path"]) / "run.json").write_text(json.dumps(keep, indent=1, default=str), encoding="utf-8")
+        except OSError as e:
+            info["publish_error"] = f"Files saved, but not the run summary: {e}"
+            (run / "run.json").write_text(json.dumps(info, indent=1, default=str), encoding="utf-8")
     print(json.dumps({k: info.get(k) for k in ("ok", "code", "ready", "bom", "ops", "stop", "warn", "workbook", "error")},
                      default=str))
     return 0 if info["ok"] else 1

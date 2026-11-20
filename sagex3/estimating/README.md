@@ -32,7 +32,12 @@ How it hangs together:
 - **Product list = Sage X3's own:** the newest `products.json` from the X3 pull (`X3_EXPORT_DIR`, refreshed daily by Live Orders), or `EST_PRODUCTS`. The migration ZSDIITM file still works.
 - **Old .xls:** read with **xlrd** (`python -s -m pip install xlrd`), no LibreOffice needed; LibreOffice is the fallback. Tested byte-identical on Tim's estimate.
 - Installed by `add_live_orders_to_portal.py` (with Live Orders) and, on the server, `deploy_live_orders_server.ps1`.
-- Nothing is written to Sage X3. Loading is still by hand in Usage → Imports (TEST first); the automatic load needs a write-capable X3 connection (next stage).
+- **Saved estimates (20 Nov):** a READY run is saved in `K:\Operations\Reporting\SageEstimates\<part>_<date>_<time>` (load files, write-up, and `run.json` so it can be reopened). The page reads the folder back after each run and shows "✓ checked: 4 files in the folder". The **📂 Saved estimates** button lists every folder (newest / oldest / by part, search, filter in X3 / not loaded): **Open** shows it on the page again, **Files** lists each file with **Preview** (load files and workbooks shown in the page, no Excel) and **Download**, and **Copy path**. Folders saved before 21 Nov have no `run.json`: Open shows their files only.
+- **Load into Sage X3 (20 Nov):** under a READY result, **1. Check against Sage X3** (a dry run: reads X3, writes nothing) then **2. Load into Sage X3** (type the part code to confirm). `estimating_routes.py` runs `sagex3/integration/x3_api/x3_load.py` - see its README section 4:
+  - **test company only** (the -trn site, endpoint X3ERPV12_SDIMIG), refused in code for anything else;
+  - **create-only:** product → BOM → route, each skipped if X3 already has it; never an update or delete;
+  - stops at the first refusal, with X3's message; logged in the run (`x3_load.json`, copied to the saved folder) and `x3_load_history.jsonl`; shown as **IN X3** in both lists.
+  - Until the write connection is set up, the box says it isn't switched on and the files are loaded by hand (Usage → Imports, TEST first).
 
 ## 2. Files and folder layout
 

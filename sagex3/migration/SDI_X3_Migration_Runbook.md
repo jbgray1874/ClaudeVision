@@ -4767,3 +4767,35 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **Security note (existing, not tonight's):** the server's `.env` has **SDI_API_KEY blank**, so the portal's access gate is OFF. Any PC on the network can call every endpoint directly, the existing ones and the two new pages'. It fits "any internal user" for now; set a key before wider use. Not changed (James's call).
   - The share write tests didn't run (the script stopped at the prompt). The first Regenerate on the server shows whether SDI-APP01$ can save to K: (LiveOrders), and its first READY estimate the same for SageEstimates.
   - The first Regenerate on the server pulls everything (the server's X3_EXPORT_DIR is empty): expect 30–60 min. It also gives the routes "skipped" count for SCRUM-165.
+
+#### 20 Nov (night) – Saved files you can see and reopen, and "Load into Sage X3" (James: "see the files generated from each and see that they are saved down … a button to load up old previously generated files … save estimates to Sage X3, not just load up files")
+- **James, 20 Nov night:** "EXCELLENT WORK TONIGHT … to be able to connect to Sage X3 is a HUGE milestone." Testing tomorrow. Server checks (Regenerate on SDI-APP01, a READY estimate there, the health check) left for tomorrow.
+- **Seeing that files are saved (both pages):** after each run the page now **reads the folder back** and says so.
+  - Estimate → X3: "📁 Saved for loading in K:\…\SageEstimates\<part>_<date>_<time> · ✓ checked hh:mm: 4 files in the folder (names)", or "⚠ not found in the folder".
+  - Live Orders: after "Done … saved SDI_Live_Orders_….xlsx" it adds "✓ in the folder (size, checked hh:mm)" from the Workbooks list.
+- **Loading earlier files (Estimate → X3): 📂 Saved estimates button** (top right). It lists every folder in K:\Operations\Reporting\SageEstimates:
+  - sort newest / oldest / by part; search; filter "in Sage X3" / "not loaded yet";
+  - **Open** shows it on the page again, with its X3 load; **Files** lists each file with **👁 Preview** (load files and workbooks shown in the page, no Excel) and **Download**; **Copy path**.
+  - A READY run's saved folder now also holds its `run.json` (no trace), so it reopens from K: alone, even from another PC's run. The four folders saved earlier today have no `run.json`: Open shows their files only.
+  - Every file on a result (write-up, three load files) also has **👁 Preview**.
+  - Live Orders already had this (📂 Workbooks: Preview, View in the dashboard, Download).
+- **Save estimates to Sage X3: `sagex3/integration/x3_api/x3_load.py`** (the write half; `x3_api.py` stays read-only). On a READY result there's a yellow box:
+  1. **Check against Sage X3**: a dry run. It reads X3 live and lists, for the product, the BOM and the route, CREATE or "ALREADY IN X3 - left as it is", the values to be sent ("What will be sent") and how each X3 menu number becomes X3's value ("USESTA 2 → availableToUse").
+  2. **Load into Sage X3**: type the part code to confirm. It creates product → BOM → route, stops at the first thing X3 refuses (with X3's message), logs it in the run's `x3_load.json` (copied to the saved folder) and `x3_load_history.jsonl`, and shows **IN X3** in both lists.
+- **Rules, in the code (not settings):**
+  - **TEST COMPANY ONLY:** the training site (-trn) and endpoint X3ERPV12_SDIMIG; anything else is refused. Production live data is never changed. Live needs a code change and sign-off.
+  - **CREATE-ONLY:** the only mutation it can build is `create`. It reads X3 first and skips anything that exists (a product with that code; any BOM or any route for that part). Nothing existing is changed or deleted. For the product this matches James's rule ("if they're already in Sage X3 they get rejected"): it's skipped instead of being sent to be refused.
+  - No retry on a write. A separate connected application and settings file (`x3_load.json`, never in git or chat), so the Live Orders connection stays read-only.
+  - The X3 field names aren't guessed: `x3_load.py mutations` reads X3's schema (read-only) and maps each load-file field (ITMREF, TCLCOD, CPNITMREF, WST …) onto X3's create input. Anything unmapped, or required by X3 and not in our files, is a STOP.
+- **Tested against a fake X3** (schema with create mutations): 27 checks (README section 4), plus the whole page in a browser (upload → READY → saved ✓ → check: 3 CREATE → load → LOADED → check again: all "already in X3", load button off → reopen from 📂 → previews of .txt and .xlsx; no errors; phone width OK).
+- **NOT YET RUN AGAINST THE REAL X3.** To switch it on (James, on SDI-APP01, PowerShell as administrator; README `sagex3/integration/x3_api` section 4):
+  1. In X3 training: a second connected application (e.g. "SDI Estimate loader (test)") for X3ERPV12_SDIMIG, whose user can create products, BOMs and routings.
+  2. `$env:X3_LOAD_CONFIG = "C:\ProgramData\SDI\x3_load.json"`, then `python x3_load.py setup` and `python x3_load.py mutations` (read-only). **Send Claude the `mutations` output.**
+  3. If it lists no create for product / BOM / routing: they're switched on as admin in X3 Builder (API operations, GESAPIOPE, "mutations based on X3 class"). No Acuity.
+  4. Re-run the server script: it adds `X3_LOAD_CONFIG` to `.env`, locks `x3_load.json` down like `x3_api.json`, and restarts the service.
+  5. First real load: Tim's Gift Card Header. Its part is already in X3, so expect product "already in X3", BOM and route CREATE (if X3 holds no BOM / route for it), then compare in X3 with the write-up.
+- **To check on the first plan:** the route file has use status **1** and the BOM **2** (as in the files loaded by hand). The plan shows what X3 calls each; if route 1 is "in development", say so before loading.
+- **Security note:** SDI_API_KEY is blank on SDI-APP01 (existing), so any PC on the network could press Load. It only reaches the test company, create-only, with the part code typed. Set a key before this goes near live.
+- **Register:** the builder (`register/`) was lost with the scratchpad on 19 Nov and hasn't been rebuilt. Tonight's items are in Jira and here: EST-10 (estimating import: page, saved list, load into X3 test) and LO-00 (Live Orders save check).
+- Jira: SCRUM-210 (In Progress; comment); new SCRUM task under SCRUM-210 for the load into X3; SCRUM-241 (comment); SCRUM-167 (the missing-data email).
+- **Missing-data email** (James: to Simon, Marc, Liz, James Ryan and Rachael) drafted in chat, for "full Live Orders sheets": WOs and stock in SDI Mig (empty), WO status values, routing operations with no main work centre, FGSL stock-managed, the 110 parts on WO Suggestions with no BOM / route, standard costs, PO receipt dates, call-off list, Comments / Prog / Tube req at cut-over, "MCS" and the REV folder. Kept to data: nothing about the API or the portal is asked of Acuity.

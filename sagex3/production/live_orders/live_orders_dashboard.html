@@ -422,7 +422,8 @@ function poll(){fetch('/api/live-orders/regenerate',{headers:HD()}).then(r=>r.js
   if(s.running){$('#regen').disabled=true;$('#rstat').textContent='Generating… '+last.slice(0,90);setTimeout(poll,4000);return}
   $('#regen').disabled=false;
   if(s.started){const ok=s.last&&s.last.ok,pub=ok&&s.last.published&&s.last.published.xlsx?String(s.last.published.xlsx).split(/[\\/]/).pop():'';
-    if(ok)$('#rstat').innerHTML='Done '+esc((s.last.finished||'').replace('T',' '))+' - saved '+(pub?`<b>${esc(pub)}</b><a data-rpv="${esc(pub)}">Preview</a><a data-rdl="${esc(pub)}">Download</a>`:'a new workbook')+(s.last.warning?' <span>('+esc(s.last.warning.slice(0,200))+')</span>':'');
+    if(ok)$('#rstat').innerHTML='Done '+esc((s.last.finished||'').replace('T',' '))+' - saved '+(pub?`<b>${esc(pub)}</b><a data-rpv="${esc(pub)}">Preview</a><a data-rdl="${esc(pub)}">Download</a> <span id="savechk"></span>`:'a new workbook')+(s.last.warning?' <span>('+esc(s.last.warning.slice(0,200))+')</span>':'');
+    if(ok&&pub)loadFiles().then(()=>{const f=files.find(x=>x.name===pub),el=$('#savechk');if(el)el.textContent=f?`✓ in the folder (${fsize(f.size)}, checked ${new Date().toTimeString().slice(0,5)})`:'⚠ not found in the folder - tell James'}).catch(()=>{});   // read the folder back (James, 20 Nov: "see that they are saved down")
     else $('#rstat').textContent='Last run failed: '+((s.last&&s.last.error)||last).slice(0,400);
     if(s.last&&s.last.ok)loadHistory().then(()=>load('/api/live-orders/latest',''))}}).catch(()=>{})}
 $('#rstat').addEventListener('click',e=>{const a=e.target.closest('a');if(!a)return;if(a.dataset.rpv){$('#tabs').classList.remove('hide');go('wb');preview(a.dataset.rpv)}if(a.dataset.rdl)dlFile(a.dataset.rdl)});

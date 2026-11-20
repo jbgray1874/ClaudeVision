@@ -7,7 +7,10 @@
 <!--
   SDI Intelligence - Estimate → Sage X3 (20 Nov 2026). Upload an estimate (.xls / .xlsx); the portal runs the converter
   (sagex3/estimating/est_run.py) against the live X3 product list and returns the X3 import files - product (ZSDIITM,
-  always), BOM (YA00408BOM), route (ZSDIROU2) - and the write-up workbook. Every run is kept. Nothing is written to X3.
+  always), BOM (YA00408BOM), route (ZSDIROU2) - and the write-up workbook. Every run is kept.
+  20 Nov night: 📂 Saved estimates lists every folder in K:\Operations\Reporting\SageEstimates (open, preview, download); every
+  file can be previewed here; READY runs can be loaded into Sage X3 - test company (SDI Mig) only, create-only,
+  check first (x3_load.py).
   In the portal: /api/estimate-x3/page#key=<key> (the key after # never reaches the server).
 -->
 <style>
@@ -60,30 +63,46 @@ details.guide{line-height:1.55}details.guide summary{cursor:pointer;font-weight:
 details.guide p,details.guide li{font-size:13.5px}details.guide ol,details.guide ul{margin:4px 0 8px 20px;padding:0}
 .ghost{background:transparent;border:1px solid rgba(255,255,255,.3);color:#fff;font-weight:700;padding:8px 14px;border-radius:8px}.ghost:hover{border-color:var(--y)}
 .saved{margin:4px 0 8px;padding:8px 12px;border-radius:10px;background:var(--soft);border:1px solid var(--line);font-size:13px}.saved a{color:var(--m);cursor:pointer;font-weight:600;margin-left:8px}
+.ghost+.ghost{margin-left:8px}
+.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}.bar input,.bar select{width:auto;min-width:150px}
+a.lk{color:var(--m);cursor:pointer;font-weight:600;margin-right:10px;white-space:nowrap}
+.fl{display:inline-flex;align-items:center;margin:4px 8px 4px 0}.dl .fl a{margin:0}.dl .fl a.pv{border-left:0;border-radius:0 8px 8px 0;padding:6px 9px}.dl .fl a:first-child{border-radius:8px 0 0 8px}
+.ok{color:var(--g);font-weight:700}.tag{border-radius:99px;padding:1px 8px;font-size:11px;font-weight:800;white-space:nowrap}.tag.g{background:var(--gb);color:var(--g)}.tag.r{background:var(--rb);color:var(--r)}.tag.a{background:var(--ab);color:var(--a)}.tag.m{background:var(--soft);color:var(--muted)}
+#x3box{margin-top:14px;border:2px solid var(--y);border-radius:12px;padding:12px 14px}#x3box h3{margin:0 0 4px;font-size:15px}
+#x3box pre{white-space:pre-wrap;font-size:11.5px;background:var(--soft);padding:8px;border-radius:8px;max-height:260px;overflow:auto}
+.pvt{display:flex;gap:4px;flex-wrap:wrap;margin:6px 0}.pvt button{padding:4px 10px;font-size:12px}.pvt button.on{background:var(--ink);color:#fff}
+tr.files td{background:var(--soft)}
+.banner span{min-width:0;overflow-wrap:anywhere}.banner .tag{white-space:normal}.saved,#x3box{overflow-wrap:anywhere}#x3box pre{overflow-wrap:anywhere}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--y);border-radius:50%;animation:s 1s linear infinite;vertical-align:-2px}@keyframes s{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
 <header><div class="w hd" style="display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap"><div><div class="brand">we.are.sdi · Estimating</div><h1>Estimate → Sage X3</h1>
-<div class="sub">Upload an estimate. Get the X3 product, BOM and route import files and the write-up, checked against Sage X3's own product list, saved in <b id="savedto">K:\Operations\Reporting\SageEstimates</b>. Nothing is written to Sage X3.</div></div>
-<button class="ghost" id="ugbtn" title="How to use this page">📖 User guide</button></div></header>
+<div class="sub">Upload an estimate. Get the X3 product, BOM and route import files and the write-up, checked against Sage X3's own product list, saved in <b id="savedto">K:\Operations\Reporting\SageEstimates</b>. A READY run can be loaded into Sage X3 (test company, after a check).</div></div>
+<div><button class="ghost" id="svbtn" title="Every estimate saved in the SageEstimates folder">📂 Saved estimates</button><button class="ghost" id="ugbtn" title="How to use this page">📖 User guide</button></div></div></header>
 <main class="w">
   <details class="card guide" id="guide"><summary>User guide - how to use this page</summary>
     <h3>What it does</h3>
-    <p>Turns a saved estimate into the three <b>Sage X3 import files</b> - the product (ZSDIITM), its bill of materials (YA00408BOM) and its route (ZSDIROU2) - and a <b>write-up workbook</b> that shows every line of the estimate, where it lands in X3 and how each quantity and run time is worked out. Every line is checked against <b>Sage X3's own product list</b> and work centres first. <b>Nothing is loaded into Sage X3 by this page</b> - the files are loaded in X3 (step 6).</p>
+    <p>Turns a saved estimate into the three <b>Sage X3 import files</b> - the product (ZSDIITM), its bill of materials (YA00408BOM) and its route (ZSDIROU2) - and a <b>write-up workbook</b> that shows every line of the estimate, where it lands in X3 and how each quantity and run time is worked out. Every line is checked against <b>Sage X3's own product list</b> and work centres first. A READY estimate can then be <b>loaded into Sage X3</b> from this page (step 6) - for now into the <b>test company (SDI Mig) only</b>.</p>
     <h3>Steps</h3>
     <ol><li><b>Drop the estimate</b> in the box (or click to choose it) - the .xls or .xlsx exactly as the estimator saved it. Both the estimators' template and Dave's IMPORT layout are read.</li>
       <li><b>Options</b> (leave them unless you know otherwise): <i>Category if the part is new</i> FGML (or FGSL); <i>Sheet steel material</i> CR4 unless the estimate says ZINTEC or Galvanised; <i>Part code</i> only to override the estimate's own code (e.g. a test part); <i>IMPORT layout only</i> where the revision goes.</li>
       <li>Press <b>Generate the X3 files</b>. It takes a few seconds.</li>
       <li><b>READY TO LOAD</b> (green): every line checked. <b>NOT READY</b> (red): the <b>Checks</b> tab lists each <b>STOP</b> with the estimate cell to fix - fix it in the estimate, save, and run it again. <b>WARN</b> = have a look; <b>INFO</b> = for information.</li>
       <li><b>Where the files go</b>: a READY run is saved in <b>K:\Operations\Reporting\SageEstimates</b>, in its own folder named by part, date and time (e.g. <i>XX-0000001_2026-11-20_2015</i>): the three .txt load files and the write-up. The page shows the folder, with <b>Copy path</b>. You can also download them here. A NOT READY run isn't saved there.</li>
-      <li><b>Load in Sage X3</b>: Usage → Imports, in <b>TEST (SDI Mig) first</b>, in the order shown - product, then BOM, then route. If the part already exists in X3, its product line is <b>rejected - that's expected</b>; the BOM and route load onto the existing part. Then open the part in X3 and compare its BOM and route with the write-up.</li></ol>
+      <li><b>Load into Sage X3</b>, in the yellow box under the result:
+        <ol type="a"><li><b>Check against Sage X3</b> reads X3 (nothing is written) and lists what would be created: the product, the BOM, the route. Anything X3 already has shows as <b>ALREADY IN X3 - left as it is</b>: this page only <b>creates</b>, it never changes or deletes an existing part, BOM or route.</li>
+          <li><b>Load into Sage X3</b>: type the part code to confirm. It creates them in order - product, BOM, route - and stops at the first thing X3 refuses, with X3's message. The result is kept with the run (and in the saved folder) and shows as <b>IN X3</b> in the lists.</li>
+          <li>Then open the part in X3 and compare its BOM and route with the write-up.</li></ol>
+        By hand instead: Usage → Imports, TEST (SDI Mig) first, product, then BOM, then route, from the saved folder (X3 rejects the product line if the part exists - expected).</li></ol>
+    <h3>📂 Saved estimates - earlier files</h3>
+    <p>The <b>📂 Saved estimates</b> button (top right) lists every folder in <b>K:\Operations\Reporting\SageEstimates</b>, newest first (or oldest, or by part), with a search. For each: <b>Open</b> shows it on this page again (with the X3 load), <b>Files</b> lists its files with <b>Preview</b> (look inside without Excel) and <b>Download</b>, and <b>Copy path</b>. After every READY run the page also checks the folder and confirms the files are there.</p>
     <h3>Common STOPs and what to do</h3>
     <ul><li><b>"… not a product in X3"</b> - the component must exist in X3 before the BOM loads: use the right code, or have the product created first.</li>
       <li><b>"work centre … is not an X3 work centre"</b> - the estimate's department has no X3 work centre (e.g. OVEN): it needs mapping before that operation can load.</li>
       <li><b>"no link quantity" / "no part code"</b> - a quantity or code is missing on that estimate line.</li>
       <li><b>Sheet steel "no X3 sheet"</b> - no X3 sheet of that size, gauge and material: check the size, gauge or the material option.</li></ul>
-    <p class="note">Not carried into X3 (shown in the write-up): scrap %, and the estimate's costs - the standard-cost load is still to come. Every run is kept under <b>Earlier runs</b> - click one to see it again. Questions: James Gray.</p>
+    <p class="note">Not carried into X3 (shown in the write-up): scrap %, and the estimate's costs - the standard-cost load is still to come. Every run is kept under <b>Earlier runs</b> - click one to see it again; READY ones are also in 📂 Saved estimates. Questions: James Gray.</p>
   </details>
   <div class="grid">
     <div class="card">
@@ -101,6 +120,16 @@ details.guide p,details.guide li{font-size:13.5px}details.guide ol,details.guide
       <div class="tbl" style="max-height:330px"><table id="hist"></table></div></div>
   </div>
 
+  <div class="card hide" id="savedcard">
+    <div class="bar" style="justify-content:space-between"><h2 style="margin:0">📂 Saved estimates</h2><a class="lk" id="svclose">Close</a></div>
+    <p class="note" id="svnote">Every estimate saved for loading, in its own folder.</p>
+    <div class="bar"><select id="svsort"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="part">By part</option></select>
+      <input id="svq" placeholder="Search part or estimate"><select id="svx3"><option value="">All</option><option value="in">In Sage X3</option><option value="out">Not loaded yet</option></select><button id="svre">↻ Refresh</button></div>
+    <div class="tbl" style="max-height:460px"><table id="svt"></table></div>
+  </div>
+  <div class="card hide" id="pvcard"><div class="bar" style="justify-content:space-between"><h2 id="pvtitle" style="margin:0">Preview</h2><span><a class="lk" id="pvdl">Download</a><a class="lk" id="pvclose">Close</a></span></div>
+    <p class="note" id="pvnote"></p><div class="pvt" id="pvtabs"></div><div class="tbl" id="pvview" style="max-height:520px"></div></div>
+
   <div class="card hide" id="result">
     <div class="banner" id="banner"></div>
     <div class="tiles" id="tiles"></div>
@@ -111,6 +140,7 @@ details.guide p,details.guide li{font-size:13.5px}details.guide ol,details.guide
       <button data-t="itm">Product file</button><button data-t="ck">Checks</button>
     </nav>
     <div class="tbl" id="view" style="max-height:none"></div>
+    <div id="x3box" class="hide"></div>
   </div>
 </main>
 <script>
@@ -138,28 +168,41 @@ $('#go').onclick=()=>{if(!FILE)return;$('#go').disabled=true;$('#stat').innerHTM
    .finally(()=>{$('#go').disabled=false})};
 
 // ------------------------------------------------ result
-function show(j){R=j;$('#result').classList.remove('hide');markHist();
+const enc=encodeURIComponent;
+function base(j){return j.saved_folder?`${API}/saved/${enc(j.saved_folder)}`:`${API}/run/${enc(j.id)}`}
+function show(j){R=j;$('#result').classList.remove('hide');markHist();$('#x3box').classList.add('hide');
+  if(j.saved_only){$('#banner').className='banner ok';$('#banner').innerHTML=`<b>SAVED FILES</b><span>${esc(j.saved_path)} · saved before the run summary was kept (20 Nov): the files only</span>`;
+    $('#tabs').classList.add('hide');['#tiles','#order','#view'].forEach(s=>$(s).innerHTML='');
+    $('#dl').innerHTML=(j.saved_files||[]).map(f=>chip(f.name,`${base(j)}/file/${enc(f.name)}`,f.name,`${base(j)}/preview/${enc(f.name)}`)).join('');return}
   if(!j.ok){$('#banner').className='banner no';$('#banner').innerHTML=`<b>Couldn't convert</b><span>${esc(j.error)}</span>`;
     ['#tiles','#dl','#order','#view'].forEach(s=>$(s).innerHTML='');$('#tabs').classList.add('hide');return}
   $('#tabs').classList.remove('hide');
   const ok=j.ready;$('#banner').className='banner '+(ok?'ok':'no');
-  $('#banner').innerHTML=`<b>${ok?'READY TO LOAD':'NOT READY'}</b><span>${esc(j.code)} · ${esc(j.estimate)} · ${ok?'every line checked against Sage X3':`${j.stop} STOP check${j.stop==1?'':'s'} to fix in the estimate, then run it again`}</span>`;
+  $('#banner').innerHTML=`<b>${ok?'READY TO LOAD':'NOT READY'}</b><span>${esc(j.code)} · ${esc(j.estimate)} · ${ok?'every line checked against Sage X3':`${j.stop} STOP check${j.stop==1?'':'s'} to fix in the estimate, then run it again`}</span>${j.saved_folder?`<span class="tag m">opened from ${esc(j.saved_path)}</span>`:''}`;
   const ex=j.existing;
   $('#tiles').innerHTML=[[j.code,ex?'already in Sage X3':'new part'],[j.bom,'BOM lines'],[j.ops,'route operations'],[j.stop,'STOP'],[j.warn,'WARN'],
     [when(j.products&&j.products.as_at),'X3 product list as at']].map(t=>`<div class="tile"><b>${esc(t[0])}</b><span>${t[1]}</span></div>`).join('');
-  const f=n=>`${API}/run/${encodeURIComponent(j.id)}/file/${encodeURIComponent(n)}`;
+  const B=base(j),f=n=>`${B}/file/${enc(n)}`,pv=n=>`${B}/preview/${enc(n)}`;
   const loads=(j.load_files||[]).slice().sort((a,b)=>rank(a)-rank(b));
-  $('#dl').innerHTML=`<a class="main" data-f="${esc(f(j.workbook))}" data-n="${esc(j.workbook)}">⬇ The write-up workbook</a>`+
-    (ok?loads.map(n=>`<a data-f="${esc(f(n))}" data-n="${esc(n)}">⬇ ${esc(n)}</a>`).join('')+`<a data-f="${API}/run/${encodeURIComponent(j.id)}/zip" data-n="${esc(j.id)}.zip">⬇ All files (zip)</a>`:
+  $('#dl').innerHTML=chip(j.workbook,f(j.workbook),j.workbook,pv(j.workbook),'⬇ The write-up workbook',true)+
+    (ok?loads.map(n=>chip(n,f(n),n,pv(n))).join('')+`<a data-f="${B}/zip" data-n="${esc(j.saved_folder||j.id)}.zip">⬇ All files (zip)</a>`:
      '<span class="muted">The load files are offered once the STOP checks are fixed.</span>');
-  const pub=j.published;
-  $('#order').innerHTML=(ok&&pub?`<div class="saved">📁 Saved for loading in <b>${esc(pub.folder)}</b><a data-cp="${esc(pub.folder)}">Copy path</a></div>`:
+  const pub=j.published,path=j.saved_path||(pub&&pub.folder);
+  $('#order').innerHTML=(ok&&path?`<div class="saved">📁 Saved for loading in <b>${esc(path)}</b><a data-cp="${esc(path)}">Copy path</a><span id="svchk" class="muted" style="margin-left:10px"></span></div>`:
     ok&&j.publish_error?`<div class="saved err">${esc(j.publish_error)} - download the files below instead.</div>`:
-    !ok?'<div class="saved">Not saved to the SageEstimates folder: a NOT READY run\'s files mustn\'t be loaded. Fix the STOP checks and run it again.</div>':'')+(ok?`<p class="note" style="margin-top:8px"><b>Load in Sage X3</b> (Usage → Imports, TEST / SDI Mig first), in this order:</p><ol class="steps">${loads.map(n=>`<li>${esc(n)} ${n.includes('ZSDIITM')?(ex?'<span class="muted">- the part exists, so X3 rejects this line: expected</span>':'<span class="muted">- creates the part</span>'):n.includes('BOM')?'<span class="muted">- the bill of materials</span>':'<span class="muted">- the route</span>'}</li>`).join('')}</ol>`:'');
+    !ok?'<div class="saved">Not saved to the SageEstimates folder: a NOT READY run\'s files mustn\'t be loaded. Fix the STOP checks and run it again.</div>':'');
+  if(ok&&path)checkSaved(j.saved_folder||(pub&&pub.name));
+  if(ok)x3Box(j);
   render()}
+function chip(n,url,dn,pvurl,label,main){return `<span class="fl"><a class="${main?'main':''}" data-f="${esc(url)}" data-n="${esc(dn)}" title="Download ${esc(n)}">${label?esc(label):'⬇ '+esc(n)}</a><a class="pv" data-pv="${esc(pvurl)}" data-pn="${esc(n)}" data-pd="${esc(url)}" title="Look inside ${esc(n)} without Excel">👁 Preview</a></span>`}
+// ------------------------------------------------ "see that they are saved down" (James, 20 Nov): read the folder back
+function checkSaved(folder){if(!folder)return;const el=$('#svchk');el.innerHTML='<span class="spin"></span> checking the folder…';
+  fetch(`${API}/saved`,{headers:HD()}).then(r=>r.json()).then(h=>{const s=(h.saved||[]).find(x=>x.folder===folder);const el=$('#svchk');if(!el)return;
+    el.innerHTML=s?`<span class="ok">✓ checked ${new Date().toTimeString().slice(0,5)}: ${s.files.length} files in the folder</span> (${s.files.map(f=>esc(f.name)).join(', ')})`:'<span class="err">⚠ not found in the folder - download the files below and tell James</span>'}).catch(()=>{const el=$('#svchk');if(el)el.textContent=''})}
 function rank(n){return n.includes('ZSDIITM')?0:n.includes('BOM')?1:2}
-$('#dl').addEventListener('click',e=>{const a=e.target.closest('a[data-f]');if(!a)return;
-  fetch(a.dataset.f,{headers:HD()}).then(r=>{if(!r.ok)throw new Error(r.status);return r.blob()}).then(b=>{const u=URL.createObjectURL(b),l=document.createElement('a');l.href=u;l.download=a.dataset.n;l.click();setTimeout(()=>URL.revokeObjectURL(u),2000)}).catch(e=>alert('Download failed: '+e.message))});
+function dlUrl(url,name){fetch(url,{headers:HD()}).then(r=>{if(!r.ok)throw new Error(r.status);return r.blob()}).then(b=>{const u=URL.createObjectURL(b),l=document.createElement('a');l.href=u;l.download=name;l.click();setTimeout(()=>URL.revokeObjectURL(u),2000)}).catch(e=>alert('Download failed: '+e.message))}
+$('#dl').addEventListener('click',e=>{const p=e.target.closest('a[data-pv]');if(p){preview(p.dataset.pv,p.dataset.pn,p.dataset.pd);return}
+  const a=e.target.closest('a[data-f]');if(a)dlUrl(a.dataset.f,a.dataset.n)});
 $('#order').addEventListener('click',e=>{const a=e.target.closest('a[data-cp]');if(!a)return;navigator.clipboard&&navigator.clipboard.writeText(a.dataset.cp);a.textContent='Copied ✓';setTimeout(()=>a.textContent='Copy path',1500)});
 $('#ugbtn').onclick=()=>{const g=$('#guide');g.open=true;g.scrollIntoView({behavior:'smooth',block:'start'})};
 $('#tabs').addEventListener('click',e=>{const b=e.target.closest('button[data-t]');if(!b)return;tab=b.dataset.t;$$('#tabs button').forEach(x=>x.classList.toggle('on',x===b));render()});
@@ -198,13 +241,85 @@ function render(){const j=R;if(!j||!j.ok)return;const v=$('#view');const h=j.hea
     `<p class="note" style="padding:8px">${j.existing?`Already in Sage X3 as '${esc(j.existing[1])}': X3 rejects this line on import - expected.`:'New part: this line creates it in Sage X3.'}</p>`;
   if(tab==='ck')v.innerHTML=tbl(['Level','Cell','Check','Detail'],(j.checks||[]).slice().sort((a,b)=>'SWI'.indexOf(a[0][0])-'SWI'.indexOf(b[0][0])).map(c=>tr([`<span class="lv ${esc(c[0])}">${esc(c[0])}</span>`,esc(c[1]),esc(c[2]),esc(c[3])])))}
 
+// ------------------------------------------------ preview: a look inside any file, no Excel
+let PV=null;
+function preview(url,name,dl,sheet){PV={url,name,dl};$('#pvcard').classList.remove('hide');$('#pvtitle').textContent='Preview - '+name;
+  $('#pvview').innerHTML='<p class="note" style="padding:10px"><span class="spin"></span> reading…</p>';$('#pvtabs').innerHTML='';$('#pvnote').textContent='';
+  if(!sheet)$('#pvcard').scrollIntoView({behavior:'smooth',block:'start'});
+  fetch(url+(sheet?'?sheet='+enc(sheet):''),{headers:HD()}).then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(j=>{
+    $('#pvtabs').innerHTML=(j.sheets||[]).length>1?j.sheets.map(n=>`<button data-sh="${esc(n)}" class="${n===j.sheet?'on':''}">${esc(n)}</button>`).join(''):'';
+    $('#pvnote').textContent=(j.note?j.note+' · ':'')+`${j.total_rows} row${j.total_rows==1?'':'s'}`+(j.truncated?' - the first ones shown':'');
+    const rows=j.rows||[];$('#pvview').innerHTML=rows.length?`<table>${rows.map((r,i)=>`<tr>${r.map(c=>i==0?`<th>${esc(c)}</th>`:`<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</table>`:'<p class="note" style="padding:10px">Empty.</p>'})
+   .catch(e=>{$('#pvview').innerHTML=`<p class="err" style="padding:10px">Couldn't read it: ${esc(e.message)}</p>`})}
+$('#pvtabs').addEventListener('click',e=>{const b=e.target.closest('button[data-sh]');if(b&&PV)preview(PV.url,PV.name,PV.dl,b.dataset.sh)});
+$('#pvclose').onclick=()=>$('#pvcard').classList.add('hide');
+$('#pvdl').onclick=()=>{if(PV)dlUrl(PV.dl,PV.name)};
+
+// ------------------------------------------------ 📂 saved estimates: every folder in K:\...\SageEstimates
+let SV=[],svOpen=null;
+function loadSaved(){$('#svnote').innerHTML='<span class="spin"></span> reading the folder…';
+  return fetch(`${API}/saved`,{headers:HD()}).then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(h=>{SV=h.saved||[];
+    $('#svnote').textContent=h.folder?`${SV.length} estimate${SV.length==1?'':'s'} saved in ${h.folder} - ${SV.filter(x=>x.x3&&x.x3.ok).length} loaded into Sage X3. Open one to see it again, or look inside its files.`:'Runs aren\'t saved to a folder on this portal.';renderSaved()})
+   .catch(e=>{$('#svnote').innerHTML=`<span class="err">Couldn't read the folder: ${esc(e.message)}</span>`})}
+function x3tag(x){return !x?'<span class="tag m">not loaded</span>':x.ok?`<span class="tag g" title="${esc((x.endpoint||'')+' '+when(x.when))}">IN X3 ${esc(when(x.when))}</span>`:`<span class="tag r" title="${esc(x.error||'')}">load failed</span>`}
+function renderSaved(){const q=$('#svq').value.trim().toLowerCase(),srt=$('#svsort').value,fx=$('#svx3').value;
+  let L=SV.filter(x=>!q||(x.code+' '+(x.estimate||'')+' '+x.folder).toLowerCase().includes(q));
+  if(fx==='in')L=L.filter(x=>x.x3&&x.x3.ok);if(fx==='out')L=L.filter(x=>!(x.x3&&x.x3.ok));
+  L.sort((a,b)=>srt==='part'?String(a.code).localeCompare(b.code)||String(b.when).localeCompare(a.when):srt==='old'?String(a.when).localeCompare(b.when):String(b.when).localeCompare(a.when));
+  $('#svt').innerHTML=L.length?'<tr><th>Saved</th><th>Part</th><th>Estimate</th><th>BOM / ops</th><th>Sage X3</th><th>Files</th><th></th></tr>'+L.map(x=>`<tr data-sf="${esc(x.folder)}"><td>${esc(when(x.when))}</td><td><b>${esc(x.code)}</b></td><td>${esc(x.estimate||'')}</td><td class="n">${x.has_run?`${x.bom??''} / ${x.ops??''}`:''}</td><td>${x3tag(x.x3)}</td><td class="n">${x.files.length}</td>
+    <td><a class="lk" data-open="${esc(x.folder)}">Open</a><a class="lk" data-files="${esc(x.folder)}">Files ${svOpen===x.folder?'▴':'▾'}</a><a class="lk" data-cp="${esc(x.path)}">Copy path</a></td></tr>`+
+    (svOpen===x.folder?`<tr class="files"><td colspan="7">${x.files.map(f=>`<div><b>${esc(f.name)}</b> <span class="muted">${(f.size/1024).toFixed(1)} KB</span> <a class="lk" data-spv="${esc(f.name)}" data-sf2="${esc(x.folder)}">👁 Preview</a><a class="lk" data-sdl="${esc(f.name)}" data-sf2="${esc(x.folder)}">⬇ Download</a><a class="lk" data-cp="${esc(x.path+'\\'+f.name)}">Copy path</a></div>`).join('')||'<span class="muted">No files.</span>'}</td></tr>`:'')).join('')
+    :`<tr><td class="muted" style="padding:12px">${SV.length?'Nothing matches.':'Nothing saved yet - a READY run is saved here.'}</td></tr>`}
+['#svsort','#svx3'].forEach(s=>$(s).onchange=renderSaved);$('#svq').oninput=renderSaved;$('#svre').onclick=loadSaved;
+$('#svbtn').onclick=()=>{const c=$('#savedcard');c.classList.remove('hide');loadSaved();c.scrollIntoView({behavior:'smooth',block:'start'})};
+$('#svclose').onclick=()=>$('#savedcard').classList.add('hide');
+$('#svt').addEventListener('click',e=>{const a=e.target.closest('a');if(!a)return;const d=a.dataset;
+  if(d.cp){navigator.clipboard&&navigator.clipboard.writeText(d.cp);const t=a.textContent;a.textContent='Copied ✓';setTimeout(()=>a.textContent=t,1500);return}
+  if(d.files){svOpen=svOpen===d.files?null:d.files;renderSaved();return}
+  const sb=`${API}/saved/${enc(d.sf2||'')}`;
+  if(d.spv){preview(`${sb}/preview/${enc(d.spv)}`,d.spv,`${sb}/file/${enc(d.spv)}`);return}
+  if(d.sdl){dlUrl(`${sb}/file/${enc(d.sdl)}`,d.sdl);return}
+  if(d.open)fetch(`${API}/saved/${enc(d.open)}`,{headers:HD()}).then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(j=>{show(j);$('#result').scrollIntoView({behavior:'smooth'})}).catch(e=>alert('Couldn\'t open it: '+e.message))});
+
+// ------------------------------------------------ load into Sage X3 (test company only, create-only)
+let X3S=null,PLAN=null;
+function x3Status(){return X3S?Promise.resolve(X3S):fetch(`${API}/x3/status`,{headers:HD()}).then(r=>r.json()).then(j=>X3S=j).catch(()=>({setup:false,problem:'the portal couldn\'t say'}))}
+function x3Box(j){const bx=$('#x3box');bx.classList.remove('hide');PLAN=null;
+  bx.innerHTML=`<h3>Load into Sage X3 - test company (SDI Mig)</h3><p class="note" id="x3st"><span class="spin"></span> checking the connection…</p>
+    <div class="row" style="margin-top:4px"><button id="x3plan">1. Check against Sage X3</button><button class="y" id="x3load" disabled>2. Load into Sage X3</button><span id="x3msg" class="muted"></span></div>
+    <div id="x3out"></div>`;
+  if(j.x3_load)$('#x3out').innerHTML=loadResult(j.x3_load,true);
+  x3Status().then(st=>{const el=$('#x3st');if(!el)return;
+    el.innerHTML=!st.setup?`<b>Not switched on yet on this portal</b> - it needs the X3 write connection set up (runbook, 20 Nov night). Until then, load the saved files by hand: Usage → Imports.`:
+      st.target_ok===false?`<span class="err">${esc(st.problem||'')}</span>`:
+      `Into <b>${esc(st.endpoint)}</b> (test company) as ${esc(st.user||'')} · <b>creates only</b> what X3 hasn't got · never changes or deletes anything already in X3 · logged.`+
+      (st.schema?'':' <span class="err">X3\'s API hasn\'t been read yet (x3_load.py mutations).</span>')});
+  $('#x3plan').onclick=()=>{$('#x3plan').disabled=true;$('#x3load').disabled=true;$('#x3msg').innerHTML='<span class="spin"></span> reading Sage X3 - nothing is written…';
+    fetch(`${base(j)}/x3-plan`,{method:'POST',headers:HD()}).then(r=>r.json().then(k=>{if(!r.ok)throw new Error(k.detail||r.status);return k})).then(p=>{PLAN=p;$('#x3msg').textContent='';$('#x3out').innerHTML=planTable(p);
+      $('#x3load').disabled=!(p.ok&&p.creates>0);if(p.ok&&!p.creates)$('#x3msg').textContent='Sage X3 already has all of it - nothing to load.'})
+     .catch(e=>{$('#x3msg').innerHTML=`<span class="err">${esc(e.message)}</span>`}).finally(()=>{$('#x3plan').disabled=false})};
+  $('#x3load').onclick=()=>{if(!PLAN||!PLAN.ok)return;
+    const c=prompt(`This creates ${PLAN.records.filter(r=>r.action==='create').map(r=>r.label).join(', ')} for ${j.code} in Sage X3 (${(PLAN.target||{}).endpoint||'test company'}).\n\nType the part code to confirm:`);
+    if(c===null)return;if(c.trim()!==j.code){$('#x3msg').innerHTML='<span class="err">Not loaded: the part code didn\'t match.</span>';return}
+    $('#x3load').disabled=true;$('#x3plan').disabled=true;$('#x3msg').innerHTML='<span class="spin"></span> loading into Sage X3…';
+    fetch(`${base(j)}/x3-load?confirm=${enc(c.trim())}`,{method:'POST',headers:HD()}).then(r=>r.json().then(k=>{if(!r.ok)throw new Error(k.detail||r.status);return k})).then(L=>{$('#x3msg').textContent='';$('#x3out').innerHTML=loadResult(L);loadHist();if(!$('#savedcard').classList.contains('hide'))loadSaved()})
+     .catch(e=>{$('#x3msg').innerHTML=`<span class="err">${esc(e.message)}</span>`}).finally(()=>{$('#x3plan').disabled=false})}}
+const ACT={create:['CREATE','g'],skip:['ALREADY IN X3 - left as it is','m'],stop:['STOP','r'],none:['nothing to load','m']};
+function planTable(p){const rows=(p.records||[]).map(r=>{const a=ACT[r.action]||[r.action,'m'];
+    return `<tr><td><b>${esc(r.label)}</b><br><span class="muted">${esc(r.node||'')}</span></td><td><span class="tag ${a[1]}">${esc(a[0])}</span></td><td>${esc(r.why)}${(r.notes||[]).length?'<ul style="margin:4px 0 0 16px;padding:0">'+r.notes.map(n=>`<li class="muted">${esc(n)}</li>`).join('')+'</ul>':''}${r.action==='create'?`<details><summary class="muted" style="cursor:pointer">What will be sent</summary><pre>${esc(JSON.stringify(r.send,null,1))}</pre></details>`:''}</td></tr>`}).join('');
+  return `<p class="note" style="margin-top:10px">${p.ok?`<span class="ok">Checked ${esc(when(p.when))}: ${p.creates} create${p.creates==1?'':'s'} to send.</span> Check the values below, then press 2.`:`<span class="err">Can't load yet:</span> ${(p.stops||[]).map(esc).join(' · ')}`}</p>`+
+    (rows?`<div class="tbl" style="max-height:none"><table><tr><th>Record</th><th>In Sage X3</th><th>Detail</th></tr>${rows}</table></div>`:'')}
+function loadResult(L,old){const ok=L.ok;const res=(L.results||L.done||[]).map(r=>Array.isArray(r)?{what:r[0],action:r[1],ok:r[2]}:r);
+  return `<div class="banner ${ok?'ok':'no'}" style="margin-top:10px"><b>${ok?'LOADED INTO SAGE X3':'NOT LOADED'}</b><span>${old?'Last load ':''}${esc(when(L.when))}${L.endpoint||L.target?' · '+esc(L.endpoint||(L.target||{}).endpoint):''}${L.by?' · from '+esc(L.by):''}${L.error?' · '+esc(L.error):''}</span></div>`+
+    (res.length?`<ul style="margin:0 0 0 18px;padding:0">${res.map(r=>`<li>${esc({product:'Product',bom:'BOM',route:'Route'}[r.what]||r.what)}: ${r.action==='create'?(r.ok?`<span class="ok">created</span>${r.of>1?` (${r.created} of ${r.of})`:''}`:'<span class="err">refused by X3</span>'):r.action==='skip'?'already in X3 - left as it is':esc(r.action)}</li>`).join('')}</ul>`:'')}
+
 // ------------------------------------------------ history
 function when(s){const m=String(s||'').match(/(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/);return m?`${m[3]}/${m[2]} ${m[4]}:${m[5]}`:(s||'')}
 function loadHist(){return fetch(`${API}/runs`,{headers:HD()}).then(r=>r.json()).then(h=>{const L=h.runs||[];
   if(!L.length)$('#guide').open=true;                     // first use: the guide opens by itself
   if(h.saved_to!==undefined)$('#savedto').textContent=h.saved_to||'(not saved to a folder)';
   $('#histnote').textContent=L.length?`${L.length} run${L.length==1?'':'s'} kept. Click one to see it again.`:'No runs yet.';
-  $('#hist').innerHTML=L.length?'<tr><th>When</th><th>Part</th><th>Estimate</th><th>Result</th></tr>'+L.map(r=>`<tr data-id="${esc(r.id)}"><td>${esc(when(r.when))}</td><td><b>${esc(r.code||'')}</b></td><td>${esc(r.estimate||'')}</td><td>${!r.ok?'<span class="lv STOP">ERROR</span>':r.ready?'<span class="lv INFO" style="background:var(--gb);color:var(--g)">READY</span>':`<span class="lv STOP">${r.stop} STOP</span>`}</td></tr>`).join(''):'';markHist()}).catch(()=>{})}
+  $('#hist').innerHTML=L.length?'<tr><th>When</th><th>Part</th><th>Estimate</th><th>Result</th></tr>'+L.map(r=>`<tr data-id="${esc(r.id)}"><td>${esc(when(r.when))}</td><td><b>${esc(r.code||'')}</b></td><td>${esc(r.estimate||'')}</td><td>${!r.ok?'<span class="lv STOP">ERROR</span>':r.ready?'<span class="lv INFO" style="background:var(--gb);color:var(--g)">READY</span>':`<span class="lv STOP">${r.stop} STOP</span>`}${r.x3&&r.x3.ok?' <span class="tag g">IN X3</span>':''}</td></tr>`).join(''):'';markHist()}).catch(()=>{})}
 function markHist(){$$('#hist tr[data-id]').forEach(t=>t.classList.toggle('cur',!!R&&t.dataset.id===R.id))}
 $('#hist').addEventListener('click',e=>{const t=e.target.closest('tr[data-id]');if(!t)return;
   fetch(`${API}/run/${encodeURIComponent(t.dataset.id)}`,{headers:HD()}).then(r=>r.json()).then(j=>{show(j);$('#result').scrollIntoView({behavior:'smooth'})})});

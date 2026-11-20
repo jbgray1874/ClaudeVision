@@ -128,7 +128,8 @@ def plan(target, runs, opts):
             "X3_API_CONFIG": opts.x3_config, "X3_EXPORT_DIR": opts.exports,
             "LIVE_ORDERS_PYTHON": sys.executable,          # the python you run this with (it has openpyxl)
             "EST_RUNS": opts.est_runs, "EST_HOME": str(REPO / "sagex3" / "estimating"), "EST_PYTHON": sys.executable,
-            "EST_SHARE": opts.est_share, "EST_SHARE_USER": opts.est_share_user}
+            "EST_SHARE": opts.est_share, "EST_SHARE_USER": opts.est_share_user,
+            "X3_LOAD_CONFIG": opts.x3_load_config}       # Estimate -> X3's load into X3 (test company; 20 Nov night)
     bad = [m for m in re.finditer(r"(?m)^LIVE_ORDERS_ROUTES=(.*)$", e)   # a route file that isn't there (e.g. a
            if not Path(m.group(1).strip().strip('"')).is_file()]            # placeholder pasted): comment it out
     if bad:
@@ -163,6 +164,8 @@ def main():
     ap.add_argument("--est-share", default=r"\\sdi-dc01\shareddata$\Shared\Operations\Reporting\SageEstimates",
                     help="where READY estimates are saved for loading, as a network path")
     ap.add_argument("--est-share-user", default=r"K:\Operations\Reporting\SageEstimates", help="the same folder as people see it")
+    ap.add_argument("--x3-load-config", default=str(Path.home() / ".sdi" / "x3_load.json"),
+                    help="the X3 WRITE settings for 'Load into Sage X3' (test company only; x3_load.py setup)")
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args()
     target = Path(a.target)
