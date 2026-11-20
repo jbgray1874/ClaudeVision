@@ -649,9 +649,10 @@ def normalize_native_extract(records: List[Dict[str, Any]],
     # THE SAME EDGE IS REPORTED TWICE AND IT IS STILL ONE EDGE. The GA's component list is
     # FULL-DEPTH, so it reports 102 -> 05M; 102's own record reports it too. Adding them
     # gives 05M a quantity of four where the job builds two, and a quantity nobody can trace
-    # is worse than one that is merely wrong. Counted within a record, then merged ACROSS
-    # records by taking the larger — a deeper record can see instances a shallower one
-    # cannot, and neither can see instances that are not there.
+    # is worse than one that is merely wrong. Count within a record; prefer a parent's
+    # OWN direct observation across records. Other full-depth observations are kept
+    # only as fallback hierarchy evidence: their counts can already include every
+    # instance in the product and must not replace product BOM totals.
     #
     # TWO READERS FOR ONE FACT, because one reader is one silent failure away from none.
     # assembly_bom writes the owner twice — as `assembly_edges` on the record, and as
@@ -663,6 +664,8 @@ def normalize_native_extract(records: List[Dict[str, Any]],
     # still yields a tree. Whichever supplied an edge is recorded, so "no hierarchy" can
     # never again mean "we looked in one place".
     _seen_edges: Dict[Tuple[str, str], float] = {}
+    _owner_edges: Dict[Tuple[str, str], float] = {}
+    _same_number_children: Set[str] = set()
     _sources: Dict[str, int] = {}
     for r in records:
         if int(r.get("doctype") or SW_PART) != SW_ASM:
@@ -676,6 +679,8 @@ def normalize_native_extract(records: List[Dict[str, Any]],
             if not _child:
                 continue
             _parent = _clean_pn(_e.get("parent") or "") or _own
+            if _parent == _child and _parent:
+                _same_number_children.add(_parent)
             if not _parent or _parent == _child:
                 continue
             _q = _num(_e.get("qty"))
@@ -710,6 +715,13 @@ def normalize_native_extract(records: List[Dict[str, Any]],
             _sources["bom_parent"] = _sources.get("bom_parent", 0) + 1
         for _k, _v in _this_record.items():
             _seen_edges[_k] = max(_seen_edges.get(_k, 0.0), _v)
+            if _k[0] == _own:
+                _owner_edges[_k] = max(_owner_edges.get(_k, 0.0), _v)
+    # Full-depth observations from the product are NOT quantities per parent.
+    # Where the parent's own document was read, its direct edges have that scope.
+    # Keep the fallback observations for identity/reachability, not as permission
+    # to replace a full-depth BOM total with another multiplication of it.
+    _seen_edges.update(_owner_edges)
     for (_parent, _child), _q in sorted(_seen_edges.items()):
         job.hierarchy.setdefault(_parent, []).append((_child, _q))
     job.meta["hierarchy_edges"] = sum(len(v) for v in job.hierarchy.values())
@@ -740,6 +752,15 @@ def normalize_native_extract(records: List[Dict[str, Any]],
     top = _pick_top_assembly(records, _amb, job_codes=job_codes)
     if top:
         job.meta["top_assembly"] = top.get("title")
+        configurations: Dict[str, Dict[str, float]] = {}
+        for line in top.get("bom") or []:
+            pn = _clean_pn(line.get("part_number") or "")
+            cfg = str(line.get("config") or "").strip()
+            q = _num(line.get("qty", line.get("quantity")))
+            if pn and cfg and q and q > 0:
+                bucket = configurations.setdefault(pn, {})
+                bucket[cfg] = bucket.get(cfg, 0.0) + float(q)
+        job.meta["bom_configuration_totals"] = configurations
         # THE PRODUCT'S OWN SIZE (D-551): the analyser records every document's bounding box;
         # the top assembly's is the assembled product's envelope, which packing is sized from.
         _tb = [v for v in (_num(x) for x in (top.get("bbox_mm") or [])) if v]
@@ -783,7 +804,8 @@ def normalize_native_extract(records: List[Dict[str, Any]],
             # drawing and the tree both say two. The tree counts each assembly under its
             # parent once, so for an assembly it is the count.
             _tree_q = _walked.get(pn)
-            if is_asm and _tree_q and abs(_tree_q - row.quantity) > 1e-6:
+            if (is_asm and pn in _same_number_children and _tree_q
+                    and abs(_tree_q - row.quantity) > 1e-6):
                 row.flags.append(f"the model's bill counted {row.quantity:g} of this number; the "
                                  f"assembly tree holds {_tree_q:g} of the assembly, which is "
                                  f"the count used (a part inside it carries the same number)")
@@ -797,6 +819,21 @@ def normalize_native_extract(records: List[Dict[str, Any]],
             sig = job.part_signals.get(pn)
             if sig is not None and desc and not sig.description:
                 sig.description = desc
+
+        # Different configurations of one document are separate BOM rows (e.g.
+        # three acoustic + four glazed walls), not competing observations. Sum
+        # them once before any child/parent division; never let dict lookup pick
+        # whichever configuration happens to be last.
+        combined: Dict[str, NativeBomRow] = {}
+        for row in job.bom:
+            if row.part_number not in combined:
+                combined[row.part_number] = row
+            else:
+                held = combined[row.part_number]
+                if row.part_number not in _same_number_children:
+                    held.quantity += row.quantity
+                held.flags = list(dict.fromkeys(held.flags + row.flags))
+        job.bom = list(combined.values())
 
     job.meta["counts"] = {
         "records": len(records),
@@ -3038,6 +3075,11 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
             if _ptotal and _ptotal > 0 and abs(_total / _ptotal
                                                - round(_total / _ptotal)) < 1e-9:
                 _q = int(round(_total / _ptotal))
+                _configs = (job.meta.get("bom_configuration_totals") or {}).get(_parent, {})
+                if len(_configs) > 1:
+                    return _q, (f"product roll-up factor for {_parent}: {_total}/{_ptotal:g} = {_q}; "
+                                f"parent configurations {_configs} are mixed, so this is not "
+                                "a statement that every configuration has the same children"), _parent, None
                 return _q, (f"per {_parent}: the SolidWorks model counts {_total} in the "
                             f"whole product and {_ptotal:g} of {_parent}, so one takes "
                             f"{_total}/{_ptotal:g} = {_q}"), _parent, None
@@ -3296,6 +3338,8 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                     _total, _edges = _tw_total, _tw_edges
             part["quantity_total_per_unit"] = _total
             part["quantity_total_per_unit_source"] = _src
+            part["quantity_total_per_unit_product"] = _clean_pn(
+                str(job.meta.get("top_assembly") or ""))
             _q, _basis, _parent, _note = _per_parent_count(_total, _edges)
             # A SHARED CHILD'S SPLIT, ARBITRATED BY THE MODEL'S OWN TOTAL (SCRUM-105).
             # Where no single per-parent count exists, the per-parent figures may still

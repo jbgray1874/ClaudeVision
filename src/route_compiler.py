@@ -3556,6 +3556,35 @@ def build_part_graph(
             if _src:
                 qty_own_source[identity] = _src
 
+    # A ROOT'S PRINTED TOTAL CORROBORATED BY THAT PRODUCT'S MODEL. A mixed
+    # configuration (four glazed + three acoustic walls) cannot be represented by
+    # multiplying every wall's children by seven. An ordinary per-parent table is
+    # NOT a product total: require the table's explicit owner AND the model's
+    # recorded top assembly to be the single selected root, and independent equal
+    # totals. Conflicting printed totals and estimator overrides are left alone.
+    if len(top_ids) == 1:
+        _root = top_ids[0]
+        _printed: Dict[str, Set[float]] = {}
+        _printed_sheets: Dict[str, Set[str]] = {}
+        for (_p, _sheet), _rows in _groups.items():
+            if _p != _root:
+                continue
+            for _c, _q in _rows:
+                _printed.setdefault(_c, set()).add(_q)
+                _printed_sheets.setdefault(_c, set()).add(_sheet)
+        for _c, _values in _printed.items():
+            _rec = records.get(_c) or {}
+            _model_root = clean_part_number(_rec.get("quantity_total_per_unit_product"))
+            _model_root = aliases.get(_model_root, _model_root)
+            _total = number(_rec.get("quantity_total_per_unit"), None)
+            if (_model_root != _root or len(_values) != 1 or _total not in _values
+                    or _rec.get("is_assembly_parent") or children.get(_c)
+                    or rank(source_of(_rec, "quantity")) > rank("solidworks_api")):
+                continue
+            _exploded_totals[_c] = (_total, _root,
+                                    ", ".join(sorted(_printed_sheets[_c]))
+                                    + " (corroborated by this product's SolidWorks BOM)")
+
     # THE PRINTED EXPLODED TOTAL, applied — see the block above the root. A leaf only (an
     # assembly's children were cascaded from its own count), and only where the table's
     # parent is a root, so the printed figure is per unit of what ships.

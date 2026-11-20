@@ -874,7 +874,9 @@ def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
             return {}, None
         # Design first is stated here, not left to a setting: a folder listed from the first
         # area ranks ahead of any other.
+        from live_library_lookup import LiveLibraryLookup, library_areas
         m = pr.resolve(drawing, rows, client=client, client_folders_only=True,
+                       lookup=LiveLibraryLookup(library_areas()),
                        area_rank=lambda folder: 0 if str(folder) in design_rows else 1)
         if m["status"] == "not found":
             return {}, None

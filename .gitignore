@@ -186,3 +186,7 @@ tests/pack_fixtures_local/
 # Drawing packs kept per client and job (pack_dropoff.py): customer data, never committed.
 # The files directly in chatgptdropoff/ that are already tracked stay tracked.
 chatgptdropoff/*/
+
+# Actual-record TTI replays (20 Nov 2026): customer records, never committed. Set
+# SDI_TTI_AUDIT_FIXTURES to their folder to run tests/test_actual_tti_quantity_and_pack_regressions.py.
+tests/fixtures/tti_quantity_pack_audit/

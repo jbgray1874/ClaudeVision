@@ -1,0 +1,92 @@
+"""Read-only, request-scoped library discovery. No saved index or service calls.
+
+Visit the containers above numbered jobs, loose library files in those containers,
+and the requested drawing's own numbered job. Never walk unrelated jobs. A miss
+there is NOT proof that no copy exists inside an unrelated numbered job.
+"""
+import os
+import re
+from pathlib import Path
+
+
+class LiveLibraryLookup:
+    def __init__(self, areas, include_archives=False):
+        self.areas = [(label, Path(root)) for label, root in areas if root is not None]
+        self.include_archives = include_archives
+        self.evidence = []
+        self._rows = {}
+        self._selected = {}
+
+    def _scan(self, root, job):
+        import pack_resolver as pr
+        files = []
+        stack = [(root, False, 0)]
+        while stack:
+            folder, in_job, depth = stack.pop()
+            try:
+                with os.scandir(folder) as entries:
+                    for entry in entries:
+                        path = Path(entry.path)
+                        if pr._archive_path(path) and not self.include_archives:
+                            continue
+                        if entry.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction()):
+                            raise pr.PackCheckStalled(f'library search cannot verify linked path: {path}')
+                        if entry.is_dir(follow_symlinks=False):
+                            numbered = re.match(r'\d{3,}', entry.name)
+                            own = bool(re.match(rf'{re.escape(job)}(?!\d)', entry.name))
+                            if in_job or own or not numbered:
+                                if depth >= 16:
+                                    raise pr.PackCheckStalled(f'library search depth exceeded: {path}')
+                                stack.append((path, in_job or own, depth + 1))
+                        elif entry.is_file(follow_symlinks=False) and path.suffix.lower() in pr.DRAWING_EXT:
+                            # Metadata only for this job's drawings, not every library file.
+                            if pr.job_number(pr.drawing_id(entry.name)) == job:
+                                stat = entry.stat(follow_symlinks=False)
+                                files.append((path, stat.st_size, stat.st_mtime))
+            except OSError as exc:
+                raise pr.PackCheckStalled(f'library area could not be read ({folder}: {type(exc).__name__})') from exc
+        return files
+
+    def __call__(self, drawing):
+        import pack_resolver as pr
+        key = drawing.upper()
+        if key in self._selected:
+            return self._selected[key][0]
+        job = pr.job_number(drawing)
+        if not job:
+            return []
+        for label, root in self.areas:
+            cache_key = (str(root), job)
+            if cache_key not in self._rows:
+                self._rows[cache_key] = pr._within(
+                    f'live library search {label}: {drawing}', lambda: self._scan(root, job))
+            rows = self._rows[cache_key]
+            hits = [f for f in rows if pr._same(pr.drawing_id(f[0].name), drawing)]
+            sheet_ids = pr.sheets_of(drawing, [pr.drawing_id(f[0].name) for f in rows])
+            sheets = [f for f in rows if pr.drawing_id(f[0].name) in sheet_ids]
+            self.evidence.append({'drawing': drawing, 'area': label, 'root': str(root),
+                                  'scope': 'own numbered job plus non-job library containers; unrelated jobs excluded',
+                                  'archives_included': self.include_archives,
+                                  'files': [str(f[0]) for f in hits],
+                                  'sheet_files': [str(f[0]) for f in sheets]})
+            # Design wins as a set; do not mix a Prototype PDF with Design CAD.
+            if hits or sheets:
+                self._selected[key] = (hits, sheets)
+                return hits
+        self._selected[key] = ([], [])
+        return []
+
+    def sheet_files(self, drawing):
+        # Only sheets from an already selected area, not a new search for every
+        # member of the main job. Called immediately after external lookup.
+        return self._selected.get(drawing.upper(), ([], []))[1]
+
+
+def library_areas(design_only=False):
+    """Separate live roots, not index configuration. Never includes Production."""
+    design = os.getenv('SDI_PACK_LIBRARY_DESIGN_ROOT') or r'\\sdi-dc01\CAD\Design'
+    prototype = os.getenv('SDI_PACK_LIBRARY_PROTOTYPE_ROOT') or r'\\sdi-dc01\CAD\Prototype'
+    areas = [('Design', Path(design))]
+    if not design_only:
+        areas.append(('Prototype', Path(prototype)))
+    return areas

@@ -214,7 +214,15 @@ def later(a: str, b: str) -> Optional[bool]:
 _NO_PDF_READER_SAID = []
 
 
-def read_pdf_text(path: Path, pages: int = 6) -> str:
+class DrawingText(str):
+    """PDF text with physically located page identities, never inferred from a BOM reference."""
+    def __new__(cls, text: str, page_drawings: Optional[Dict[str, List[str]]] = None):
+        obj = super().__new__(cls, text)
+        obj.page_drawings = page_drawings or {}
+        return obj
+
+
+def read_pdf_text(path: Path, pages: Optional[int] = None) -> str:
     # A PYTHON WITHOUT PDFPLUMBER READS NO DRAWING, AND SAYS SO (JG, 10 Nov 2026). Run with the
     # system Python instead of the engine's .venv, every GA came back "its own text was not
     # read" with nothing to say why, and its references (12736-00-01's parts table) went
@@ -231,7 +239,17 @@ def read_pdf_text(path: Path, pages: int = 6) -> str:
         return ""
     try:
         with pdfplumber.open(str(path)) as pdf:
-            return "\n".join((p.extract_text() or "") for p in pdf.pages[:pages])
+            from drawing_facts import _title_block_part
+            texts = []
+            owners: Dict[str, List[str]] = {}
+            for page in pdf.pages[:pages]:
+                text = page.extract_text() or ""
+                texts.append(text)
+                owner = _title_block_part(page, text, box_only=True)
+                if owner and text:
+                    refs = set(_REF.findall(_joined_assembly_words(text.upper()))) - {owner}
+                    owners.setdefault(owner, []).extend(sorted(refs))
+            return DrawingText("\n".join(texts), owners)
     except Exception:                                                    # noqa: BLE001
         return ""
 
@@ -263,6 +281,7 @@ def read_drawing(path: Path, drawing: str, read_text: Callable[[Path], str] = re
     refs = sorted({m.upper() for m in _REF.findall(_joined_assembly_words(text.upper()))} - {drawing.upper()})
     _sh = re.search(r"\bSHEET\s*(\d{1,2})\s*(?:OF|/)\s*(\d{1,2})\b", up)
     return {"read": bool(text), "carries_number": carries, "revision": best, "references": refs,
+            "page_drawings": getattr(text, "page_drawings", {}),
             "sheet_of": f"{_sh.group(1)} of {_sh.group(2)}" if _sh and int(_sh.group(2)) > 1 else ""}
 
 
@@ -288,6 +307,8 @@ def spellings(drawing: str) -> List[str]:
 def _joined_assembly_words(text: str) -> str:
     """"12773-02 GA" in a parts list is drawing 12773-02-GA. A glued "12773-02GA" is kept as
     printed and matched by `spellings`."""
+    text = re.sub(r"(?<=[0-9A-Z])[ \t]+-[ \t]*(?=[0-9A-Z])", "-", text)
+    text = re.sub(r"(?<=[0-9A-Z])-[ \t]+(?=[0-9A-Z])", "-", text)
     return _SPLIT_ASSEMBLY.sub(r"\1-\2", text)
 
 
@@ -506,7 +527,8 @@ def _looks_drawing(ref: str) -> bool:
     """A referenced number that is a drawing, not a dimension pair (2400-1200): three parts or more,
     or a last part with a letter in it."""
     parts = ref.split("-")
-    return len(parts) >= 3 or bool(re.search(r"[A-Z]", parts[-1]))
+    return (len(parts) >= 3 or bool(re.search(r"[A-Z]", parts[-1]))
+            or bool(re.fullmatch(r"\d{3,}-0\d", ref)))
 
 
 def _is_assembly(did: str) -> bool:
@@ -567,7 +589,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                       "carries_number": seen["carries_number"], "pdf_read": seen["read"],
                       "revision": seen["revision"] or name_rev,
                       "revision_from": "drawing" if seen["revision"] else ("file name" if name_rev else ""),
-                      "references": seen["references"],
+                      "references": seen["references"], "page_drawings": seen.get("page_drawings", {}),
                       "technical": "technical" in str(folder).lower(),
                       "newest": max(f[2] for f in own)})
     for c in cands:
@@ -654,6 +676,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                     seen = read_drawing(_newest_revision_pdf(_pdfs)[0], drawing, read_text)
                     c.update(carries_number=seen["carries_number"], pdf_read=seen["read"],
                              references=seen["references"],
+                             page_drawings=seen.get("page_drawings", {}),
                              revision=seen["revision"] or c["revision"],
                              revision_from="drawing" if seen["revision"] else c["revision_from"])
             arch = _arch[0]
@@ -663,6 +686,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             extra_ga = [f for f in arch["files"] if f[0].suffix.lower() == ".pdf"]
             best = dict(best, carries_number=arch["carries_number"], pdf_read=arch["pdf_read"],
                         references=arch["references"], revision=arch["revision"],
+                        page_drawings=arch.get("page_drawings", {}),
                         revision_from=arch["revision_from"])
             manifest["assumptions"].append(
                 f"{best['folder']} holds no PDF of {drawing}; its PDF is taken from the "
@@ -709,12 +733,40 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     # each drawing that calls for it, and the quantities stay with the BOM the estimate reads.
     parents_of: Dict[str, List[str]] = {}
     all_refs: set = set()
-    queue = [drawing] + sorted(d for d in groups if _is_assembly(d) and not _same(d, drawing))
+    sibling_products = [d for d in groups if _is_assembly(d) and not _same(d, drawing)
+                        and family_prefix(d) == family_prefix(drawing)]
+    # Do not read all alternative products just to discard them afterwards.
+    # Explicit references still bring a shared assembly (or another GA) back in.
+    queue = [drawing] + ([] if sibling_products else
+                         sorted(d for d in groups if _is_assembly(d) and not _same(d, drawing)))
     done: set = set()
     read_any: set = set()                  # assemblies whose own drawing, or a sheet of it, was read
     sheets_read: Dict[str, List[str]] = {}
     sheet_refs: Dict[str, Dict[str, List[str]]] = {}
     sheet_says: Dict[str, Dict[str, str]] = {}
+    embedded: Dict[str, Dict[str, Any]] = {}
+
+    def keep_pages(got: Dict[str, Any], holder: str) -> None:
+        for owner, refs in got.get("page_drawings", {}).items():
+            if not _same(owner, holder):
+                embedded.setdefault(owner, {"holder": holder, "references": refs})
+
+    keep_pages(best, drawing)
+    # A referenced assembly's PDF can live in its own archive. Recover it BEFORE
+    # walking its references, not after the dependency graph has already closed.
+    _elsewhere = [f for folder, files, archive in folders
+                  if rank(folder) == area and job and _in_job(str(folder), job.group(1)) for f in files]
+    _taken: List[str] = []
+
+    def recover_pdf(did: str) -> None:
+        have = groups.get(did, [])
+        if any(f[0].suffix.lower() == ".pdf" for f in have):
+            return
+        extra = [f for f in _elsewhere if f[0].suffix.lower() in DRAWING_EXT and f not in have
+                 and _same(drawing_id(f[0].name), did)]
+        if any(f[0].suffix.lower() == ".pdf" for f in extra):
+            groups[did] = list(have) + extra
+            _taken.append(did)
     if best.get("pdf_read"):
         read_any.add(drawing)
     while queue:
@@ -722,11 +774,22 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         if a in done:
             continue
         done.add(a)
+        recover_pdf(a)
+        # A subassembly outside the root's filename family may be issued only
+        # as numbered sheets. Gather those sheets before asking for its BOM.
+        _sheet_ids = set(sheets_of(a, (drawing_id(f[0].name) for f in wider_rows)))
+        for _sheet in _sheet_ids:
+            if _sheet not in groups:
+                groups[_sheet] = [f for f in wider_rows if _same(drawing_id(f[0].name), _sheet)]
         if a not in refs_of:
             pdfs = [f for f in groups.get(a, []) if f[0].suffix.lower() == ".pdf"]
-            refs_of[a] = set(read_drawing(_newest_revision_pdf(pdfs)[0], a, read_text)["references"]) \
-                if pdfs else set()
-            if pdfs:
+            got = read_drawing(_newest_revision_pdf(pdfs)[0], a, read_text) if pdfs else {}
+            refs_of[a] = set(got.get("references", []))
+            if got.get("read"):
+                read_any.add(a)
+                keep_pages(got, a)
+            elif a in embedded:
+                refs_of[a] = set(embedded[a]["references"])
                 read_any.add(a)
         # AN ASSEMBLY ISSUED AS NUMBERED SHEETS IS READ FROM ITS SHEETS (12 Nov 2026).
         # 11896-04-00-GA has no PDF of its own: its drawing is 11896-04-00-GA-01, -02 and -03.
@@ -738,15 +801,18 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             if not spdfs:
                 continue
             got = read_drawing(_newest_revision_pdf(spdfs)[0], a, read_text)
+            keep_pages(got, sheet)
             if got["read"]:
                 read_any.add(a)
                 sheets_read.setdefault(a, []).append(sheet)
+                refs_of[a].add(sheet)
                 sheet_refs.setdefault(a, {})[sheet] = sorted(
                     x for x in got["references"] if _looks_drawing(x) and not x.upper().startswith(a.upper() + "-0"))
                 if got.get("sheet_of"):
                     sheet_says.setdefault(a, {})[sheet] = got["sheet_of"]
             refs_of[a] |= {x for x in got["references"] if not x.upper().startswith(a.upper() + "-")
                            or not re.fullmatch(r"\d{1,2}", x[len(a) + 1:])}
+        canonical_refs: set = set()
         for x in sorted(refs_of[a]):
             if _same(x, a) or _same(x, drawing) or not _looks_drawing(x):
                 continue
@@ -764,6 +830,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                 x = _held
             if any(_same(x, alt) for alt in spellings(a)) or any(_same(x, alt) for alt in spellings(drawing)):
                 continue
+            canonical_refs.add(x)
             all_refs.add(x)
             parent_of.setdefault(x, a)
             if a not in parents_of.setdefault(x, []):
@@ -790,8 +857,19 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                         # THE JOB'S OWN PART IN A SIBLING FOLDER IS NOT A LIBRARY PART.
                         if not (job and str(x).startswith(job.group(1))):
                             manifest["library"].append(x)
-            if x in groups and _is_assembly(x) and x not in done:
+            if hasattr(lookup, "sheet_files"):
+                external_sheets = lookup.sheet_files(x)
+                if external_sheets:
+                    groups.setdefault(x, [])
+                    for file_row in external_sheets:
+                        sheet_id = drawing_id(file_row[0].name)
+                        sheet_group = groups.setdefault(sheet_id, [])
+                        if file_row not in sheet_group:
+                            sheet_group.append(file_row)
+            recover_pdf(x)
+            if x in groups and x not in done:
                 queue.append(x)
+        refs_of[a] = canonical_refs
     refs = all_refs
 
     # FILES IN THE PACK'S FOLDERS WHOSE NAMES CARRY NO DRAWING NUMBER (JG and the reviewer,
@@ -858,18 +936,8 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     # them"). A member, or a drawing the GA calls for, with no PDF in the pack's folders takes its
     # files from any other folder of the same job in the same area, archives included; its newest
     # revision is chosen below like any other, and each one taken this way is said.
-    _elsewhere = [f for folder, files, archive in folders
-                  if rank(folder) == area and job and _in_job(str(folder), job.group(1)) for f in files]
-    _taken: List[str] = []
     for did in sorted(set(groups) | set(refs)):
-        have = groups.get(did, [])
-        if any(f[0].suffix.lower() == ".pdf" for f in have):
-            continue
-        extra = [f for f in _elsewhere if f[0].suffix.lower() in DRAWING_EXT and f not in have
-                 and _same(drawing_id(f[0].name), did)]
-        if any(f[0].suffix.lower() == ".pdf" for f in extra):
-            groups[did] = list(have) + extra
-            _taken.append(did)
+        recover_pdf(did)
     if _taken:
         manifest["assumptions"].append(
             f"{len(_taken)} drawing(s) had no PDF in the pack's folders and were taken from other folders "
@@ -897,6 +965,11 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         _left_out = sorted(d for d in groups if not _same(d, drawing) and d not in _reach)
         for d in _left_out:
             groups.pop(d, None)
+        refs = _reach - {drawing}
+        done &= _reach | {drawing}
+        parents_of = {d: [p for p in ps if p in _reach or _same(p, drawing)]
+                      for d, ps in parents_of.items() if d in _reach}
+        parent_of = {d: ps[0] for d, ps in parents_of.items() if ps}
         manifest["left_out_other_products"] = _left_out
         manifest["assumptions"].append(
             f"the family holds other products' GAs ({', '.join(_other_gas[:6])}"
@@ -904,6 +977,8 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             f"{len(_left_out)} drawing(s) it does not call for are left out: "
             + ", ".join(_left_out[:10]) + (" ..." if len(_left_out) > 10 else ""))
     ids = set(groups)
+    manifest["embedded_drawing_pages"] = {a: e["holder"] for a, e in embedded.items()
+                                          if a in ids and e["holder"] in ids}
     for did in sorted(ids):
         chosen, rev, superseded, notes = _pick_revision(groups[did])
         manifest["members"].append({
@@ -946,8 +1021,12 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         # true of a GA nobody read: 11896-04-00-GA was called complete on 0 drawings read.
         manifest["references_read"] = drawing in read_any
         manifest["sheets_read"] = sheets_read.get(drawing, [])
-        manifest["unread_assemblies"] = sorted(a for a in done if a not in read_any and not _same(a, drawing))
-        manifest["complete"] = not manifest["missing"] and manifest["references_read"]
+        manifest["unread_assemblies"] = sorted(a for a in done if a not in read_any
+            and not _same(a, drawing) and (_is_assembly(a)
+                or any(f[0].suffix.lower() == ".sldasm" for f in groups.get(a, []))))
+        manifest["complete"] = (not manifest["missing"] and manifest["references_read"]
+                                and not manifest["unread_assemblies"])
+        manifest["dependency_references"] = {a: sorted(refs_of.get(a, set())) for a in sorted(done)}
         # SHEETS OF ONE ASSEMBLY, OR ALTERNATIVE CONFIGURATIONS? (reviewer, 12 Nov 2026:
         # "distinguishing alternative configurations from cumulative assemblies"). -GA-01, -02
         # and -03 that each say "sheet n of m" are one drawing. Where they do not, and they call
@@ -987,6 +1066,11 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                 "bought-in, no drawing needed, to be priced from the catalogue or as a labelled "
                 "allowance: " + ", ".join(manifest["bought_in_unmatched"]))
         manifest["price_ok"] = True
+        if manifest.get("left_out_other_products") and manifest["unread_assemblies"]:
+            manifest["price_ok"] = False
+            manifest["question"] = ("Pruned pack requires review: referenced assemblies have no "
+                "readable own or embedded drawing pages, so their dependencies are unproved: "
+                + ", ".join(manifest["unread_assemblies"]))
         if not best["carries_number"]:
             manifest["assumptions"].append("the GA was matched by its file name; its own text was not read")
         if best["revision_from"] == "file name":
@@ -999,6 +1083,8 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                                            "allowances: " + ", ".join(manifest["missing"]))
     manifest["reason"] = _reason(best, live, manifest)
     manifest["pdfs_read"] = _reads["n"]
+    if hasattr(lookup, "evidence"):
+        manifest["live_library_search"] = list(lookup.evidence)
     return manifest
 
 
@@ -1270,14 +1356,15 @@ def area_roots() -> List[Tuple[str, Path]]:
     return list(zip(labels, roots))
 
 
-def folders_now(drawing: str, design_only: bool = False) -> Tuple[List[FolderRow], str, None]:
+def folders_now(drawing: str, design_only: bool = False):
     """What folders_for gave, without the index: the job's folders in Design then Prototype,
     listed now. Same shape, so a caller changes one word. `design_only`: the AI runner's rule
     (JG, 15 Nov 2026: "the ai runner only differs in that it doesn't read from the prototype
     folder")."""
     areas = area_roots()
     rows, said, _first = rows_for_job_now(drawing, areas[:1] if design_only else areas)
-    return rows, said, None
+    from live_library_lookup import LiveLibraryLookup, library_areas
+    return rows, said, LiveLibraryLookup(library_areas(design_only=design_only))
 
 
 def main(argv: Optional[List[str]] = None) -> int:

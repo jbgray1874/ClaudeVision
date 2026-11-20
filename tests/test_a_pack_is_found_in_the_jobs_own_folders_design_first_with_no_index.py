@@ -176,7 +176,7 @@ def test_the_same_lookup_is_there_for_the_other_entry_points(share, monkeypatch,
     monkeypatch.setenv("SDI_DRAWING_INDEX_ROOTS", f"{d.parent}|{p.parent}")
     monkeypatch.setattr(pr, "folders_for", lambda *a, **k: pytest.fail("the drawing index was asked"))
     rows, said, lookup = pr.folders_now(GA)
-    assert lookup is None and "12181-00-GA.SLDASM" in _names(rows)
+    assert callable(lookup) and "12181-00-GA.SLDASM" in _names(rows)
     assert said.startswith("Design: 1 folder(s) for job 12181 listed now")
 
 
