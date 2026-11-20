@@ -4322,3 +4322,15 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **"Enter" = accept the [bracketed] answer**;
   - a prompt can show a wrong answer from an earlier try: the typed answer replaces it;
   - right-click pastes in PowerShell, and nothing shows for the secret.
+
+**20 Nov – Ian Knight's request (19 Nov): every part one customer has ordered over 3 years, and the ones they've stopped ordering.**
+- **Query:** `sagex3/reports/customer_parts_history.sql` (read-only, SDILive, force-added).
+  - The committed copy has the placeholder `XXXXX`; James's copy has the account code set (scratchpad). **The code and name are not in git.**
+  - Grids:
+    - **CHECK:** lines, parts, earliest / latest dates found;
+    - **SUMMARY:** one row per part; first / last ordered; lines / qty in the 2 years before against the last 12 months; status STOPPED / NEW / Still ordering; STOPPED first;
+    - **DETAIL:** every order line, sorted by part, description, date.
+- **Source:** order lines from `COR_TBL` (as the rebate report), descriptions from `PMA_TBL` (TOP 1 per part).
+  - Assumes `COR_CUSTOMER_CODE` / `COR_ORDER_STATUS` exist on `COR_TBL` as on `ASC_COR_TBL`. **If Msg 207, switch the FROM to `ASC_COR_TBL`.**
+  - If CHECK's earliest date is well after 3 years ago, older lines may be elsewhere.
+- **Status:** query sent to James. Reply to Ian drafted in chat (James to send). Results go to Ian only; never in git.
