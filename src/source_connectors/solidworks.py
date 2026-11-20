@@ -3412,9 +3412,11 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
         # enough to prove it was read, so a failed read cannot mislabel a whole job.
         if row is None and not _is_asm and len(job.bom) >= 3:
             part["not_in_assembly_bom"] = True
-            flags.append("SolidWorks: this part appears in NO assembly BOM — a fixture, jig "
-                         "or setup part, not a component of the product. Confirm before "
-                         "costing it into the job")
+            flags.append("SolidWorks: this part appears in NO assembly BOM read for this "
+                         "product. Its detail file was read, but that alone does not establish "
+                         "a product quantity. Check the declared GA and its parent assembly's "
+                         "drawing BOM before including it; absence does not prove it is a "
+                         "fixture, jig or setup part")
             out["not_in_bom"] += 1
             # NAMED, NOT JUST COUNTED. The count reached the console and nothing else; the
             # AI Provenance tab's identity block names the part so an estimator can say

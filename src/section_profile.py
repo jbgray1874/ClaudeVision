@@ -199,9 +199,13 @@ def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
         dia = float(rm.group(1) or rm.group(2))
         wall = float(rm.group(3))
         if 0 < wall <= 12 and dia > wall * 2 and dia <= 300:
-            _clean = _prose_free(up)
-            tail = [float(n) for n in _figures_in(_clean[rm.end():])]
-            length = next((n for n in tail if n >= dia * 2), None)
+            # THE LENGTH IS THE FIGURE THAT FOLLOWS, OR NONE (reviewer, 20 Nov 2026): on a page
+            # the next numbers may be anything, so only one written straight after the callout
+            # (or a table's own length column, read by bom_pipeline) is taken.
+            _lm = re.match(r"[ \t]*(?:(?:TUBE|CHS|PIPE)\b[ \t]*)?(?<=[ \t])(\d+(?:\.\d+)?)"
+                           r"(?:[ \t]*MM)?(?=[ \t\r\n]|$)",
+                           up[rm.end():])
+            length = float(_lm.group(1)) if _lm else None
             return {"a": dia, "b": dia, "t": wall, "outside_diameter_mm": dia,
                     "length_mm": length, "profile_form": "CHS",
                     "keyword": rm.group(4) or next(k for k in ("TUBE", "CHS", "PIPE") if k in up),

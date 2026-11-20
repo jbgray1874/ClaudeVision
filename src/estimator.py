@@ -10076,6 +10076,14 @@ def is_weldment_parent(part: Dict[str, Any]) -> bool:
     Narrow by construction: every caller also requires a welding operation on the part, so a
     bracket nobody welds reaches none of it whatever it is called.
     """
+    # A frame made from its own cut-list pieces is a leaf for MATERIAL (no
+    # separately priced coded members), but still a weldment for LABOUR.
+    # Clearing the assembly flag must not turn its stated weld and dressing
+    # into the single-piece/minimal-bead timer. Do not infer a joint count
+    # from cut-list length: a closed frame and a chain have different joints.
+    if (part.get("weldment_from_own_cut_list")
+            and len((part.get("section_stock") or {}).get("cut_lengths_mm") or []) > 1):
+        return True
     if part.get("is_assembly_parent") or part.get("is_sub_assembly"):
         return True
     if _weld_members(part) >= 2:

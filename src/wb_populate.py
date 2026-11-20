@@ -7557,53 +7557,52 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # 12110-04-01J, a 2430 x 1210 x 6 mm MDF backing panel, was priced by weight and given
         # no sheet, so this row wrote the default 2440 x 1220. The template's J formula leaves
         # 10 mm each side of a part and 5 mm off the width: (1220-5)/(1210+20) is 0, so the row
-        # charged £0 material beside an £18.08 sheet price, and asked nothing. As Sheet Steel
-        # does (steel_sheet_for_row, D-314), the row takes the smallest STOCKED board sheet its
-        # rule can nest the blank on, priced below from the same rate, and asks whether the
-        # part is really cut from that sheet. A supplier's price for one sheet is not moved to
-        # another, and with no stocked sheet that fits nothing is invented: both are asked.
-        _held_sheet_price_for_other_size = False
-        _mat_nest = pe.get("normalized_material") or me.get("material")
-        if length and width and _cf_blank.nest_on_sheet(_mat_nest, length, width,
-                                                        sh[0], sh[1]) is None:
-            _fits = [z for z in sorted(_cf_blank.stocked_sheet_sizes(_mat_nest),
-                                       key=lambda z: float(z[0]) * float(z[1]))
-                     if _cf_blank.nest_on_sheet(_mat_nest, length, width, z[0], z[1])]
-            _was = f"{float(sh[0]):g} x {float(sh[1]):g}"
+        # charged £0 material beside an £18.08 sheet price, and asked nothing. The smallest
+        # STOCKED board sheet the rule can nest it on is taken (board_stock_selection), priced
+        # below from the board's own kg rate, and asked. A sheet the costing chose, a supplier's
+        # sheet price, a per-piece price or a faced board is NOT moved to another size; that,
+        # and no stocked sheet that fits, are asked with no material charged.
+        from board_stock_selection import stock_for_board_row
+        _mat_nest = str(pe.get("normalized_material") or me.get("material") or "")
+        _std_tab = (getattr(config, "STANDARD_SHEET_SIZES_MM", {}) or {}) if config else {}
+        _mn = re.sub(r"[\s_]+", " ", _mat_nest.upper()).strip()
+        _board_sizes = next((_std_tab[k] for k in (_mn, _mn.replace(" ", "_"),
+                                                   f"{_mn}_BOARD", f"{_mn} BOARD")
+                             if _std_tab.get(k)), ())
+        _bound_sheet_price = bool(me.get("sheet_price_gbp") or se or per_piece_price_basis(me)
+                                  or faced_board_line(summary, pe))
+        _old_sh = [float(sh[0]), float(sh[1])] if len(sh) > 1 else list(sh)
+        sh, _stock_reason = stock_for_board_row(length, width, _old_sh, _board_sizes,
+                                               sheet_price_bound=_bound_sheet_price)
+        _board_resized = [float(x) for x in sh] != _old_sh
+        if _stock_reason:
             _pn_n = str(pe.get("part_number") or "")
-            if _fits and not _safe(me.get("sheet_price_gbp")):
-                sh = [float(_fits[0][0]), float(_fits[0][1])]
-                _q = (f"{_pn_n} is {length:g} x {width:g} mm: the board block's nest leaves 10 mm "
-                      f"each side, so it does not fit a {_was} sheet; costed on a "
-                      f"{sh[0]:g} x {sh[1]:g} sheet, one to a sheet")
-                _flag(f"other-sheet {_pn_n}: {_q} (PROVISIONAL).", flags)
-                try:
-                    import source_precedence as _sp_sheet
+            _was = f"{_old_sh[0]:g} x {_old_sh[1]:g}"
+            _flag(f"Other-sheet {_pn_n}: {_stock_reason}", flags)
+            pe["workbook_board_stock_selection"] = {
+                "sheet_mm": list(sh), "previous_sheet_mm": _old_sh,
+                "changed": _board_resized, "reason": _stock_reason}
+            try:
+                import source_precedence as _sp_sheet
+                if _board_resized:
                     _sp_sheet.raise_manufacturing_question(
-                        pe, _q,
-                        f"a {sh[0]:g} x {sh[1]:g} sheet each, priced from the board's own rate",
-                        f"if it is cut from one {_was} sheet trimmed to size, say so: it is then "
-                        f"one {_was} sheet each, and the sheet size on this row is changed",
-                        "wb_populate.board_sheet_for_row")
-                except Exception:                                    # noqa: BLE001
-                    pe.setdefault("review_flags", []).append(_q)
-            else:
-                _why_n = ("its sheet price is for that sheet, and a supplier's price is not "
-                          "moved to another size" if _fits else
-                          "no stocked board sheet can nest it by the block's rule")
-                _held_sheet_price_for_other_size = bool(_fits)
-                _q = (f"{_pn_n} is {length:g} x {width:g} mm and does not fit a {_was} sheet "
-                      f"by the board block's nest (10 mm each side); {_why_n}, so its material "
-                      f"is not charged")
-                _flag(f"other-sheet {_pn_n}: {_q}.", flags)
-                try:
-                    import source_precedence as _sp_sheet
+                        pe, (f"{_pn_n} is {length:g} x {width:g} mm and does not fit a {_was} "
+                             f"sheet by the board block's nest (10 mm each side); costed on a "
+                             f"{float(sh[0]):g} x {float(sh[1]):g} sheet"),
+                        (f"a {float(sh[0]):g} x {float(sh[1]):g} sheet, priced from the board's "
+                         f"own kg rate; stock availability not confirmed"),
+                        (f"if it is cut from one {_was} sheet trimmed to size, say so: it is "
+                         f"then one {_was} sheet each"), "wb_populate.board_sheet_for_row")
+                else:
                     _sp_sheet.raise_manufacturing_question(
-                        pe, _q, "no material is charged on this row",
+                        pe, (f"{_pn_n} is {length:g} x {width:g} mm and does not fit a {_was} "
+                             f"sheet by the board block's nest (10 mm each side), so its "
+                             f"material is not charged"),
+                        _stock_reason,
                         "give the sheet it is cut from (size and price), or say it is one "
                         f"{_was} sheet each", "wb_populate.board_sheet_for_row")
-                except Exception:                                    # noqa: BLE001
-                    pe.setdefault("review_flags", []).append(_q)
+            except Exception:                                        # noqa: BLE001
+                pe.setdefault("review_flags", []).append(_stock_reason)
         ws.cell(row=row, column=o["col_sheet_l"], value=_safe(sh[0]) if len(sh) > 0 else 2440)
         ws.cell(row=row, column=o["col_sheet_w"], value=_safe(sh[1]) if len(sh) > 1 else 1220)
         # Cost per sheet (col L): the WB formula M=(L/J)*(1+K)*D needs this input, else Cost Per
@@ -7612,7 +7611,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # neither are left blank + flagged (honest £0, not a silent guess).
         _sheet_price = _safe(me.get("sheet_price_gbp"))
         if not _sheet_price:
-            _sheet_price = sheet_price_rebuilt_from_part_cost(me)
+            # A price rebuilt from the part's cost is the OLD sheet's: never the larger one's.
+            _sheet_price = None if _board_resized else sheet_price_rebuilt_from_part_cost(me)
             if _sheet_price is None and per_piece_price_basis(me):
                 _flag(f"Other-sheet {pe.get('part_number')}: its £"
                       f"{float(_safe(me.get('cost_per_part_gbp')) or 0):.2f} is a per-piece "
@@ -7682,8 +7682,6 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 f"£{float(_cpp_chk):.2f} a part under a nest of {float(_pps_chk):g}; the "
                 f"row is left unpriced — confirm whether the figure bought a stock sheet "
                 f"or a cut piece")
-            _sheet_price = None
-        if _held_sheet_price_for_other_size:
             _sheet_price = None
         if _sheet_price:
             ws.cell(row=row, column=o["col_cost_per_sheet"], value=_sheet_price)

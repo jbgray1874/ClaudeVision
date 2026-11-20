@@ -596,7 +596,8 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
                 p["is_sub_assembly"] = False
                 if str(p.get("canonical_kind") or "").lower() == "assembly":
                     p["canonical_kind"] = "part"
-                p["weldment_from_own_cut_list"] = True
+                p["section_from_own_cut_list"] = True
+                p["weldment_from_own_cut_list"] = sum(len(v) for v in prof.values()) > 1
                 # The model's "children" were its cut-list bodies, names no record answers
                 # to; kept for the record under their own name, not as members.
                 if p.get("assembly_children"):
@@ -605,7 +606,9 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
                 p.setdefault("review_flags", []).append(
                     f"{p.get('part_number')} is listed as an assembly but names no member of "
                     f"its own — only the uncoded section pieces of its own detail sheet's "
-                    f"table — so it is costed as a weldment cut from those pieces (D-557)")
+                    f"table — so it is costed as "
+                    + ("a weldment cut from those pieces (D-557)"
+                       if p["weldment_from_own_cut_list"] else "one piece cut from section stock"))
         try:
             from bought_in_policy import has_fabrication_evidence as _measured
             _sheet = bool(_measured(p))
@@ -624,6 +627,11 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
                 "bom_pipeline.apply_stated_cut_list_to_parts")
             continue
         (lo, hi, t, form), pcs = next(iter(prof.items()))
+        # The classification belongs to fresh leaf records too, not only ones
+        # whose old assembly flags needed clearing above.
+        if not p.get("assembly_children"):
+            p["section_from_own_cut_list"] = True
+            p["weldment_from_own_cut_list"] = len(pcs) > 1
         _ss_now = p.get("section_stock") if isinstance(p.get("section_stock"), dict) else {}
         _held = [float(x) for x in (_ss_now.get("cut_lengths_mm") or [])
                  if isinstance(x, (int, float)) or str(x).replace(".", "", 1).isdigit()]

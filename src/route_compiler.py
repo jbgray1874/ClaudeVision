@@ -3764,7 +3764,8 @@ def build_part_graph(
         # here, the workbook writer excluded its material as "carried by leaf children" and
         # the frame reached the sheet priced by nothing: the record said part, the graph
         # said assembly, and the writer read the graph.
-        _own_pieces = bool(record.get("weldment_from_own_cut_list"))
+        _own_pieces = bool(record.get("weldment_from_own_cut_list")
+                           or record.get("section_from_own_cut_list"))
         is_assembly = bool(not _hardware_carrier and not _own_pieces and (
             (identity == top_id
              and not (_product_is_leaf and identity == product_root))
@@ -8135,7 +8136,22 @@ def _member_finish_weld_is_the_assemblys(decisions: Sequence[Any], graph: Mappin
         if not _stated and not _rec.get("finish_inherited_from") and _sw is not None:
             _fin_own = str(_rec.get("normalized_finish") or _rec.get("finish") or "")
             _stated = bool(_fin_own) and _sw(_fin_own)
-        if not _stated:
+        # A single stock length whose own detail says SEE ASSEMBLY is also
+        # welded at its parent, not fabricated into a separate weldment. The
+        # cut-list evidence is positive; graph leaf status alone is insufficient.
+        from finish_rules import _is_pointer, stated_finish
+        _single_cut_member = bool(
+            _rec.get("section_from_own_cut_list")
+            and len((_rec.get("section_stock") or {}).get("cut_lengths_mm") or []) == 1
+            and _is_pointer(stated_finish(_rec))
+            and not _record_states_its_weld(_rec)
+            and not _rec.get("weld_stated_by_note")
+            and not _rec.get("weld_length_mm") and not _rec.get("weld_joint_count")
+            and not any((_rec.get("manufacturing_features") or {}).get(k)
+                        for k in ("weld_length_mm", "weld_joint_count", "welding_required"))
+            and all(s in (_WELD_EVIDENCE_FREE_SOURCES | {"unrecorded"})
+                    for s in _claim_sources(_d)))
+        if not _stated and not _single_cut_member:
             continue
         _ws = _rec.get("weld_symbols")
         if _arc is not None and isinstance(_ws, Mapping) and _arc(_ws) > 0:
@@ -8144,6 +8160,9 @@ def _member_finish_weld_is_the_assemblys(decisions: Sequence[Any], graph: Mappin
             continue
         _dist = _ancestor_distances(_tid, parents)
         _cands = sorted((dd, a) for a, dd in _dist.items() if a != _tid and a in welded_assemblies)
+        if _single_cut_member:
+            _cands = [(dd, a) for dd, a in _cands
+                      if _record_states_its_weld(_graph_record(graph, a))]
         if not _cands:
             continue
         _owner = _cands[0][1]
@@ -8160,6 +8179,9 @@ def _member_finish_weld_is_the_assemblys(decisions: Sequence[Any], graph: Mappin
                                f"assembly's joint seen from the member, not a second weld")
                 _x.field_provenance["status"] = "member_weld_is_the_assemblys"
                 _x.field_provenance["weld_owner"] = _owner
+                if _single_cut_member:
+                    _x.reason += ("; its own cut list contains one stock length, not "
+                                  "pieces joined here into another weldment")
         moved.append(_tid)
         if issues is not None:
             issues.append({"code": "member_weld_is_the_assemblys", "part": _tid,
