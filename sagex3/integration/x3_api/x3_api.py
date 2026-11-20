@@ -12,6 +12,7 @@ signed with that secret).
     python x3_api.py schema            # lists what the GraphQL API offers (works orders, stock, orders ...)
     python x3_api.py draft             # writes api_datasets.json for the pinned nodes (NODES) from the schema
     python x3_api.py pull --limit 3    # trial: 3 rows per data set to SDI_X3_samples, prints the column names
+    python x3_api.py columns [names]   # the column names each data set will produce (no call to X3)
     python x3_api.py pull [names]      # pulls the data sets in api_datasets.json to the exports folder
     python x3_api.py rest ITMMASTER ITMMASTER --count 5          # one REST query
     python x3_api.py query my.graphql                            # one GraphQL query
@@ -566,9 +567,36 @@ def pull(a):
         except SystemExit as e:
             log.append(dict(name=n, ok=False, error=str(e)[:400]))
             print(f"{n}: FAILED - {e}")
+    day.mkdir(parents=True, exist_ok=True)           # even when every data set failed (20 Nov)
     (day / "api_log.json").write_text(json.dumps(dict(at=dt.datetime.now().isoformat(timespec="seconds"), runs=log), indent=1))
     print(f"Files in {day}")
     return 0 if all(l["ok"] for l in log) else 1
+
+
+def flat_names(fields):
+    """'a b c { x y } d' -> a, b, c.x, c.y, d : the column names a pull of these fields produces."""
+    out, stack, prev = [], [], None
+    for tok in re.findall(r"[{}]|[^\s{}]+", fields):
+        if tok == "{":
+            stack.append(prev)
+            if out and out[-1] == ".".join(stack):
+                out.pop()                              # the parent itself is not a column
+        elif tok == "}":
+            stack.pop()
+        else:
+            prev = tok
+            out.append(".".join(stack + [tok]))
+    return out
+
+
+def columns_cmd(a):
+    """Print the column names each data set will produce - from api_datasets.json, no call to X3."""
+    if not DATASETS.exists():
+        sys.exit("No api_datasets.json yet: run  python x3_api.py draft")
+    sets = json.loads(DATASETS.read_text())
+    for n in a.names or [n for n in sets if not n.startswith("_")]:
+        print(f"{n} ({'.'.join(sets[n]['path'])}):")
+        print("   " + ", ".join(flat_names(sets[n]["fields"])))
 
 
 def rest_cmd(a):
@@ -599,6 +627,9 @@ def main(argv=None):
     p.add_argument("--limit", type=int, default=0, help="trial: only this many rows per data set, to SDI_X3_samples")
     p.add_argument("--endpoint", help="trial only: read another X3 folder's endpoint (e.g. X3ERPV12_SEED) for column names")
     p.set_defaults(fn=pull)
+    cc = sp.add_parser("columns")
+    cc.add_argument("names", nargs="*")
+    cc.set_defaults(fn=columns_cmd)
     r = sp.add_parser("rest")
     r.add_argument("cls")
     r.add_argument("rep")

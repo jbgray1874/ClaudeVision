@@ -4332,6 +4332,10 @@ Keep this up to date with every setting we choose. **Never write the secret here
     - **PO:** purchaseSite.code, purchaseOrder.id, orderFromSupplier._id, orderDate, lineNumber, product.code, receiptSite.code, purchaseUnit.code, **remainingQuantityToReceiveInPurchaseUnit** (net, used alone), expectedReceiptDate, grossPrice, currency.code; **`isClosed` lines dropped**.
   - **Tested** on X3-shaped mock rows.
   - **WO / stock column names:** a trial against Sage's demo folder **SEED** (`pull --limit 3 --endpoint X3ERPV12_SEED`). `--endpoint` is refused without `--limit`, and the output goes to `SDI_X3_samples\<date>_<endpoint>`, never the exports. Read-only.
+- **20 Nov – SO/PO mapping confirmed on the real sample** (`x3_source.py --check`): all fields found, 3/3 rows kept each. Only SO `CUSORDREF` and `CUR` are not on the line (they're header-level).
+  - **SEED trial refused:** *"User does not exist for X3 user SDIJG"* (no X3 user for SDIJG in Sage's demo folder). **Not pursued:** creating a user there is an admin change.
+  - **Instead, `x3_api.py columns`** prints the WO / stock column names from the saved schema (`api_datasets.json`), with no call to X3.
+  - **Fixed:** `pull` crashed writing `api_log.json` when every data set failed (folder not created).
 - **Results to fill in as we find them:**
   - the endpoint name;
   - the GraphQL path / audience / header `probe` accepted;
