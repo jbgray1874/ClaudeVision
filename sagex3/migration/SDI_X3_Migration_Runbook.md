@@ -4707,3 +4707,17 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - new components (product + product-supplier) and the standard cost (YITC) in the load;
   - who ran it is the PC's address (no portal login).
 - **Names-out-of-git sweep while committing:** the customer-prefixed part code of Tim's estimate, the customer's name, and the estimate's file name (it carries the customer's article number) were in the estimating README (since 16 Nov) and in runbook entries (18 Nov and tonight). They are replaced with neutral wording / placeholders (`XX-0000001`, `<part>`, "the Gift Card Header part"). Git history still holds the old text. **Lesson: check `git diff --cached` for customer names and codes before every commit that touches estimating.**
+
+#### 20 Nov (late) – Live Orders: the Workbooks list Production asked for (James)
+- **James:** "a button … when you click it, the Live Orders s/sheets list appears with a view on that directory. We can order by date … the files get saved down with a date and time extension … for multiple run support". Also: "be able to see it from the live run".
+- He was looking at the afternoon's first version (history at the top of one page). The views all exist as tabs (Overview … How it works, Workbooks); they're near-empty only because SDI Mig has no works orders.
+- **Built:**
+  - **📂 Workbooks button in the header.** It opens the Workbooks tab even before any data has loaded.
+  - **Every spreadsheet in `K:\Operations\Reporting\LiveOrders`**, not only the generated pairs: anything Production saves there by hand too (tag "generated" / "saved by hand"). Excel's `~$` lock files are left out.
+  - **Sort:** newest first / oldest first / by name; filter: generated / saved by hand; search by file name. Columns: file, saved (date + time), size, the run's counts (works orders, red / amber / green, hours, notes carried).
+  - Per file: **Preview** (tabs + the first 300 rows, read-only, values as Excel last saved, including Production's typed notes), View in the dashboard (generated ones), Download, Copy path; and Copy folder path.
+  - **After a run:** "Done … – saved SDI_Live_Orders_<date>_<time>.xlsx · Preview · Download" next to Regenerate.
+  - The file names already carry date and time (`SDI_Live_Orders_YYYY-MM-DD_HHMM`, seconds added on a clash); never overwritten.
+  - Backend: `/api/live-orders/files`, `/file/{name}` (plain names in the folder only; path tricks refused), `/preview/{name}` (runs the new `xlsx_preview.py` with LIVE_ORDERS_PYTHON, which has openpyxl / xlrd; the portal's own Python needs neither).
+  - The page says plainly: **to edit, open from the folder** (a downloaded copy doesn't go back to the folder, and notes carry forward from the newest workbook *in the folder*).
+- **Tested** (test server, 3 generated workbooks + 1 hand-saved + 1 lock file): list without the lock file; all three sorts and the filter; previews of a generated and a hand-saved workbook (6 tabs; Live Orders 300 of 306 rows); View in the dashboard → "viewing 20/11/2026 16:29"; after-run link → preview + download; `../` name → refused; no key → 401.

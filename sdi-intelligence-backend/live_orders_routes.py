@@ -17,6 +17,9 @@ Endpoints (X-SDI-Key on all but the dashboard page, which holds no data):
     POST /api/live-orders/regenerate        start a new run (one at a time)
     GET  /api/live-orders/regenerate        is a run going, the last result, the last log lines
     GET  /api/live-orders/status            short status for a portal tile
+    GET  /api/live-orders/files             every spreadsheet in Production's folder (generated + saved by hand)
+    GET  /api/live-orders/file/{name}       download one of them
+    GET  /api/live-orders/preview/{name}    its tabs and first rows (xlsx_preview.py), to look without Excel
     GET  /api/live-orders/dashboard         the dashboard page
 
 .env (written by add_live_orders_to_portal.py; all optional):
@@ -186,6 +189,67 @@ def status(x_sdi_key: str | None = Header(default=None)):
     age = round((dt.datetime.now().timestamp() - f.stat().st_mtime) / 3600, 1) if f else None
     return {"folder": SHARE_USER, "latest": f.name if f else None, "age_hours": age, "running": _running(),
             "runs_saved": len(_runs_in_share()), "meta": _meta(f) if f else None}
+
+
+SHEET_EXT = (".xlsx", ".xlsm", ".xls")
+
+
+def _sheet_file(name):
+    """A spreadsheet directly in Production's folder - by its plain name only, never a path."""
+    if name != Path(name).name or not name.lower().endswith(SHEET_EXT) or name.startswith("~$") or len(name) > 160:
+        raise HTTPException(status_code=400, detail="Not a spreadsheet name")
+    f = SHARE / name
+    if not f.is_file():
+        raise HTTPException(status_code=404, detail=f"{name} is not in the Live Orders folder")
+    return f
+
+
+@router.get("/files")
+def files(x_sdi_key: str | None = Header(default=None)):
+    """Every spreadsheet in Production's folder (20 Nov, James): the generated ones and any saved there by hand.
+    Excel's ~$ lock files are left out. The page sorts and filters."""
+    _check_key(x_sdi_key)
+    out = []
+    if SHARE.exists():
+        for p in SHARE.iterdir():
+            if p.is_file() and p.suffix.lower() in SHEET_EXT and not p.name.startswith("~$"):
+                st = p.stat()
+                gen = bool(NAME.match(p.stem)) and p.with_suffix(".json").exists()
+                out.append({"name": p.name, "stem": p.stem, "modified": dt.datetime.fromtimestamp(st.st_mtime)
+                            .isoformat(timespec="seconds"), "size": st.st_size, "generated": gen,
+                            "path": f"{SHARE_USER}\\{p.name}"})
+    out.sort(key=lambda f: f["modified"], reverse=True)
+    return {"folder": SHARE_USER, "files": out}
+
+
+@router.get("/file/{name}")
+def sheet_download(name: str, x_sdi_key: str | None = Header(default=None)):
+    _check_key(x_sdi_key)
+    f = _sheet_file(name)
+    return FileResponse(f, filename=f.name, media_type="application/octet-stream")
+
+
+@router.get("/preview/{name}")
+def preview(name: str, sheet: str = "", rows: int = 300, x_sdi_key: str | None = Header(default=None)):
+    """A look inside a spreadsheet without Excel: its tabs and the first rows of one (xlsx_preview.py, run with the
+    Live Orders Python, which has openpyxl / xlrd)."""
+    _check_key(x_sdi_key)
+    f = _sheet_file(name)
+    script = HOME / "xlsx_preview.py"
+    if not script.exists():
+        raise HTTPException(status_code=500, detail=f"xlsx_preview.py not found in {HOME} (LIVE_ORDERS_HOME)")
+    try:
+        r = subprocess.run([PYTHON, str(script), str(f), "--sheet", sheet[:60], "--rows", str(max(10, min(rows, 2000)))],
+                           capture_output=True, text=True, timeout=90, env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="The workbook took too long to read")
+    try:
+        res = json.loads(r.stdout)
+    except ValueError:
+        raise HTTPException(status_code=500, detail=(r.stderr or r.stdout)[-400:] or "Couldn't read the workbook")
+    if res.get("error"):
+        raise HTTPException(status_code=500, detail=res["error"])
+    return res
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
