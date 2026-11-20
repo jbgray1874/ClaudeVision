@@ -4275,6 +4275,30 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "action": "confirm the size from a drawing or a model",
             "owner": "estimator", "gbp_at_stake": None})
 
+    # A LINE IN THE PACK THAT NOTHING LINKS TO THE PRODUCT IS A ROW (12110, 20 Nov 2026).
+    # 12110-07-06M is drawn on sheet 8 of the End Roofing Panel's own PDF; neither the model
+    # nor any printed parts list holds it, so it is rightly not priced. It was said only in
+    # the scope sentence at the top of the report, and a reviewer took the silence on the
+    # decision list for a part dropped. It is now a ruling the estimate waits on: in or out.
+    try:
+        from route_compiler import product_scope as _product_scope
+        _unlinked = list((_product_scope(source) or {}).get("unlinked") or []) \
+            if isinstance(source, Mapping) else []
+    except Exception:                                                # noqa: BLE001
+        _unlinked = []
+    _have = {(str(d.get("part") or "").upper(), d.get("check_code")) for d in decisions}
+    for _u in _unlinked:
+        if (str(_u).upper(), "not_linked_to_the_product") in _have:
+            continue
+        decisions.append({
+            "part": str(_u), "kind": "ruling", "check_code": "not_linked_to_the_product",
+            "issue": (f"{_u} is in the pack, but no parts list and no model links it to the "
+                      f"product"),
+            "assumption": "it is not part of this product, so it is not priced",
+            "action": ("confirm it is not supplied; if it is, the parts list or model that "
+                       "should hold it is missing the link"),
+            "owner": "estimator", "gbp_at_stake": None})
+
     # WORST FIRST, ONCE, HERE. Every surface lists the record in this order.
     decisions.sort(key=lambda d: (decision_kind(d.get("kind"))[2],
                                   -_num(d.get("gbp_at_stake"))))

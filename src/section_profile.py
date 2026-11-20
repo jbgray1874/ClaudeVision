@@ -84,6 +84,12 @@ def _prose_free(up: str) -> str:
     return out
 
 
+_ROUND_CALLOUT_RE = re.compile(
+    r"(?:(?:[Ø⌀]|\bDIA\.?|\bO/?D\b)\s*(\d+(?:\.\d+)?)\s*(?:MM\b)?"
+    r"|(\d+(?:\.\d+)?)\s*(?:MM)?\s*(?:[Ø⌀]|\bDIA(?:METER)?\b\.?|\bO/?D\b))"
+    r"\s*[X×]\s*(\d+(?:\.\d+)?)\s*(?:MM)?\s*(WALL|W/?T|THK)?")
+
+
 def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
     """Pull a hollow-section profile + cut length from page / cutting-list text.
 
@@ -179,8 +185,31 @@ def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
                         out["oval_shape"] = "flat_sided"
                 return out
 
+    # ── PATH 1b: an explicit ROUND callout, diameter x wall (12110, 20 Nov 2026) ──
+    #
+    # 12110-02-05M's own sheet prints its stock as "12.7mm DIA x 1.2mm WALL 50" (and the pin
+    # tube 12110-05-12M the same). No path read it: PATH 1 wants a x b x t, and the WALL pattern
+    # below wanted the figure hard against WALL, so "1.2mm WALL" was missed. The row was then
+    # minted a bought-in child ("BI-WALL"), the tube became an assembly of it, its material
+    # went to nil and it carried a weldment's weld and dressing allowance, 42 times over.
+    # A diameter marked as one (DIA, Ø, OD) times a wall marked as one (WALL, WT, THK), or
+    # beside a hollow word (TUBE, CHS, PIPE), is a printed section callout like PATH 1's.
+    rm = _ROUND_CALLOUT_RE.search(up)
+    if rm and (rm.group(4) or any(kw in up for kw in ("TUBE", "CHS", "PIPE"))):
+        dia = float(rm.group(1) or rm.group(2))
+        wall = float(rm.group(3))
+        if 0 < wall <= 12 and dia > wall * 2 and dia <= 300:
+            _clean = _prose_free(up)
+            tail = [float(n) for n in _figures_in(_clean[rm.end():])]
+            length = next((n for n in tail if n >= dia * 2), None)
+            return {"a": dia, "b": dia, "t": wall, "outside_diameter_mm": dia,
+                    "length_mm": length, "profile_form": "CHS",
+                    "keyword": rm.group(4) or next(k for k in ("TUBE", "CHS", "PIPE") if k in up),
+                    "detection_path": "canonical_profile",
+                    "source_text": text[rm.start():rm.start() + 60].strip()}
+
     # ── PATH 2: 'n.n WALL' notation (no keyword / no AxBxC) ──────────────────
-    wm = re.search(r"(\d+(?:\.\d+)?)\s*WALL", up)
+    wm = re.search(r"(\d+(?:\.\d+)?)\s*(?:MM)?\s*WALL", up)
     if wm:
         wall = float(wm.group(1))
         if 0 < wall <= 12:

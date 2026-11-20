@@ -1536,6 +1536,11 @@ def raise_manufacturing_question(part: Dict[str, Any], issue: str, assumption: s
     when the question was added."""
     if not isinstance(part, dict) or not str(issue or "").strip():
         return False
+    # A HELD None IS NO QUESTIONS, NOT A REASON TO DROP ONE (20 Nov 2026). A part estimate can
+    # carry the key as None; setdefault then returned None and every question raised on it was
+    # silently lost (12110-04-01J's sheet question, found by its test).
+    if part.get("manufacturing_questions") is None:
+        part["manufacturing_questions"] = []
     qs = part.setdefault("manufacturing_questions", [])
     if not isinstance(qs, list):
         return False
