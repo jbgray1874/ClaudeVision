@@ -144,9 +144,15 @@ def convert(rows, spec):
     keep = spec.get("keep", {})
     drop = {column_for(cols, [k]): {str(v).lower() for v in vals} for k, vals in spec.get("drop_if", {}).items()}
     drop = {k: v for k, v in drop.items() if k}
+    # drop_if_contains: a status whose value contains a word, whatever X3 calls it ("closed", "Closed", "isClosed")
+    # - X3 work-order and sales-order lines include closed ones; Access's extract only ever held open ones (20 Nov)
+    dropc = {column_for(cols, [k]): [str(v).lower() for v in vals] for k, vals in spec.get("drop_if_contains", {}).items()}
+    dropc = {k: v for k, v in dropc.items() if k}
     for r in rows:
         if any(str(r.get(k, "")).strip().lower() in v for k, v in drop.items()):
             continue                                       # e.g. a closed PO line
+        if any(w in str(r.get(k, "")).lower() for k, ws in dropc.items() for w in ws):
+            continue                                       # a closed works order / sales-order line
         rec = {}
         for field, (kind, src, minus) in used.items():
             if kind == "const":

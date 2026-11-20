@@ -102,7 +102,8 @@ From Python (to embed in a portal): `build_live_orders.build(extract, out_dir, p
 
 ## 5. How the board works it out (`build_live_orders.py`)
 
-- **Works orders:** every open Access works order with something left to make. Balance = (amended, or else ordered) − made (good quantity). Sub-assemblies (`/` in the WO number) are their own rows.
+- **The logic is written out once, in `live_orders_logic.py`** (20 Nov), and shown in two places: the workbook's **How it works** tab and the portal's **How it works** view. Change a rule there when you change it in the code.
+- **Works orders:** every open Access works order with something left to make. From X3: closed works orders and closed sales-order lines are left out (`drop_if_contains` in `x3_columns.json`), because X3 includes them and Access's extract never did. Balance = (amended, or else ordered) − made (good quantity). Sub-assemblies (`/` in the WO number) are their own rows.
 - **Part code:** the X3 code rule from `common.product_code` (upper case; spaces, `&`, `( )` removed; `. / _` → `-`). Drawing = the code without its customer prefix.
 - **Customer date:** from the works order's sales order. The SO line for the same part is used, else any line on that order. One date shows the date; no open line gives "SO not open"; several dates give "Check SO dates".
 - **Material status** (rule to agree with Production, LO-01):

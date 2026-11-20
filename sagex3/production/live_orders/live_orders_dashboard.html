@@ -85,7 +85,7 @@ button{cursor:pointer}button:disabled{opacity:.55;cursor:wait}
 <nav class="tabs hide" id="tabs"><div class="w">
   <button data-v="ov" class="on">Overview</button><button data-v="lo">Live Orders</button><button data-v="ld">Work-centre load</button>
   <button data-v="sh">Shortages</button><button data-v="sg">WO Suggestions</button><button data-v="cu">Customers</button>
-  <button data-v="tr">Trends</button><button data-v="wb">Workbooks</button>
+  <button data-v="tr">Trends</button><button data-v="hw">How it works</button><button data-v="wb">Workbooks</button>
 </div></nav>
 <main class="w">
   <div id="drop"><b>Choose or drop a Live Orders data file</b><br><span class="muted">SDI_Live_Orders_&lt;date&gt;.json, written beside each workbook</span></div>
@@ -143,6 +143,11 @@ button{cursor:pointer}button:disabled{opacity:.55;cursor:wait}
       <div class="card"><h2>Material status over time</h2><p class="note" id="trnote">From every saved generation.</p><div class="legend" id="lg6"></div><div id="c6"></div></div>
       <div class="card"><h2>Hours still to do over time</h2><p class="note">Total route hours on open works orders at each generation.</p><div id="c7"></div></div>
     </div></section>
+
+  <section class="view" id="v-hw"><div class="card">
+    <h2>How Live Orders works it out</h2><p class="note">The logic reverse-engineered from Access SupplyChain and Production's sheet, reconciled to Access on 16 Nov 2026, applied to live Sage X3 data. The workbook's "How it works" tab says the same.</p>
+    <div id="hwlive" style="border-left:4px solid var(--y);background:var(--soft);padding:10px 14px;border-radius:8px;margin-bottom:12px"></div>
+    <div class="tbl" id="t6" style="max-height:none"></div></div></section>
 
   <section class="view" id="v-wb"><div class="card" id="histcard">
     <h2>Workbooks</h2><p class="note" id="histnote">Every generation is kept. View any of them, or open the workbook to edit - Comments, Prog and Tube req carry forward to the next one.</p>
@@ -245,7 +250,11 @@ function render(data){
   $('#soon').innerHTML=soon.length?`<div class="tbl"><table><tr><th>Due</th><th>WO</th><th>Part</th><th>Status</th><th>Material</th></tr>`+soon.map(w=>`<tr><td>${dd(w.due)}</td><td>${esc(w.wo)}</td><td>${esc(w.p)}</td><td><span class="st ${esc(w.st)}">${esc(w.st)}</span></td><td class="wrap">${esc(w.mt)}</td></tr>`).join('')+'</table></div>':'<p class="muted">Nothing amber or red due in the next 14 days.</p>';
   // filters
   $('#fwk').innerHTML='<option value="">All weeks</option><option value="od">Overdue</option>'+[...new Set(D.wos.map(w=>w.wk).filter(Boolean))].sort().map(k=>`<option value="${k}">w/c ${dd(k)}</option>`).join('');
-  table();loadView();shortView();sugView();custView();trends()}
+  table();loadView();shortView();sugView();custView();trends();howView()}
+
+function howView(){const L=D.logic||[];$('#hwlive').innerHTML=D.live?`<b>Live data.</b> ${esc(D.live)}`:'<span class="muted">This data file is from before the logic was added - press Regenerate.</span>';
+  $('#t6').innerHTML=L.length?`<table><thead><tr><th>What</th><th>The rule</th><th>Access SupplyChain / Production's sheet</th><th>Where it comes from in Sage X3</th><th>Reconciled to Access (16 Nov)</th></tr></thead><tbody>`+
+    L.map(r=>`<tr><td style="vertical-align:top"><b>${esc(r[0])}</b></td>${r.slice(1).map((v,i)=>`<td class="wrap" style="vertical-align:top;${i==0?'min-width:320px':''}">${esc(v)}</td>`).join('')}</tr>`).join('')+'</tbody></table>':''}
 
 function filtered(){const st=$('#fst').value,fam=$('#ffam').value,wk=$('#fwk').value,lv=$('#flv').value,q=$('#fq').value.trim().toLowerCase();
   return D.wos.filter(w=>(!st||w.st===st)&&(!fam||w.F.includes(fam))&&(!lv||w.lv===lv)&&(!wk||(wk==='od'?w.due&&w.due<today:w.wk===wk))&&

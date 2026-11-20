@@ -394,6 +394,30 @@ def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_labe
         _header(cd, 1, ch_, [13, 20, 20, 10, 8, 8, 9, 9, 9, 10, 10, 40, 9, 40])
         for row in compare["rows"]:
             cd.append(row)
+    # ---------- How it works: the logic from Access SupplyChain, applied to live X3 data (live_orders_logic.py, 20 Nov)
+    from live_orders_logic import LIVE, LOGIC
+    hw = wb.create_sheet("How it works")
+    hw.sheet_properties.tabColor = YELLOW
+    _banner(hw, "How Live Orders works it out", "the logic reverse-engineered from Access SupplyChain and Production's "
+                                                "sheet (reconciled 16 Nov 2026), applied to live Sage X3 data", 5)
+    hw.cell(5, 1, "Live data").font = Font(bold=True, size=10)
+    hw.cell(5, 1).alignment = Alignment(vertical="top")
+    hw.cell(5, 2, LIVE).alignment = Alignment(wrap_text=True, vertical="top")
+    hw.merge_cells(start_row=5, start_column=2, end_row=5, end_column=5)
+    hw.row_dimensions[5].height = 48
+    _header(hw, 7, ["What", "The rule", "Access SupplyChain / Production's sheet", "Where it comes from in Sage X3",
+                    "Reconciled to Access (16 Nov)"], [22, 70, 38, 42, 38])
+    for i, row in enumerate(LOGIC, 8):
+        for j, v in enumerate(row, 1):
+            c = hw.cell(i, j, v)
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            c.border = Border(bottom=Side(style="thin", color="E3E4E0"))
+            if j == 1:
+                c.font = Font(bold=True)
+        hw.row_dimensions[i].height = max(30, 15 * (len(row[1]) // 80 + 1))
+    hw.freeze_panes = "B8"
+    _print(hw, 7)
+
     ck = wb.create_sheet("Checks")
     ck.sheet_properties.tabColor = "BFBFBA"
     _header(ck, 1, ["Level", "WO", "Check", "Detail"], [8, 14, 60, 50])

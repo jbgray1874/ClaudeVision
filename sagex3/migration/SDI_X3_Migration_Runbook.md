@@ -4587,3 +4587,16 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - Skipped records are **counted and reported**, never silent: "routes: N rows (skipped K record(s) X3 couldn't return: …)" in the pull, `notes` in `api_log.json`, and a **warning on the portal page** after a successful build.
   - `GqlError` (a SystemExit) keeps X3's error list and any partial data.
   - **Tested** against a simulated X3 (130 records, 4 bad: two next to each other and the very last), both ways X3 might answer (whole page refused / page with the record nulled): all 126 good records, 4 skipped and reported.
+
+#### 20 Nov (evening) – "We have that logic? It's live orders and live data, not a historical report" (James)
+- **Yes, and it is the same code.** `x3_source.py` turns X3's data into the shape of the Access extract; then the **same `build_live_orders.py`** that was reconciled to Access on 16 Nov works out the board. The X3 version has no logic of its own. Every Regenerate reads X3 at that moment (open WOs, stock, open SO and PO lines) and works it out from scratch. The saved workbooks are just a record of each generation; the portal always opens the newest.
+- **Gap found and fixed while checking:** X3's work-order lines and sales-order lines **include closed ones**; Access's extract never did.
+  - Without a filter, a short-closed works order would show as live with a balance, and a closed SO line with undelivered quantity would show as demand in WO Suggestions.
+  - Fix: `drop_if_contains` in `x3_columns.json` (wo_products: lineStatus / workOrderStatus contains "closed"; so_lines: lineStatus contains "closed"), in `x3_source.py`. It matches the word, whatever X3's enum spelling.
+  - Tested: closed WO lines, closed WOs and a closed SO line dropped; firm, planned, open and partly delivered kept. PO lines already dropped closed (`isClosed`).
+  - **To confirm on real data:** the actual lineStatus / workOrderStatus values once WOs are loaded (SO lines can be checked now from `so_lines.json`). Also whether **planned** (not firm) works orders belong on Live Orders: kept for now.
+- **The logic is now written out for Production:** `live_orders_logic.py` (12 rules: what / the rule / how Access and Production's sheet did it / where it comes from in X3 / the 16 Nov reconciliation score, plus the "live data" statement). It is shown in two places:
+  - the workbook's new **How it works** tab (the flash workbook had lost the old plain writer's Read me);
+  - the portal's **How it works** tab (data contract: `live`, `logic`).
+  - One list, so the two can't disagree. The material-status row says honestly that the 16 Nov reconciliation listed Production's typed status beside the board's, but didn't score it (LO-01).
+- Tested: workbook rebuilt (tabs: Dashboard, Live Orders, Work-centre load, WO Suggestions, Exploded BOMs, How it works, Checks), rendered with LibreOffice; the portal tab shows all 12 rows, no errors.

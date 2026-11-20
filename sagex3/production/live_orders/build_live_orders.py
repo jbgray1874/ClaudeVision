@@ -624,6 +624,8 @@ def write_html(path, meta, wos, wc_cols, wcnames, load, sug, compare):
     # (live_orders_dashboard.html), a portal endpoint, and later an AI agent, whether the source is the
     # Access extract today or Sage X3 exports / API tomorrow. Holds customer names: never in git (runs/).
     data["schema"] = "sdi.live_orders/1"
+    from live_orders_logic import LIVE, LOGIC              # "How it works" in the portal (20 Nov)
+    data["live"], data["logic"] = LIVE, [list(r) for r in LOGIC]
     Path(path).with_suffix(".json").write_text(json.dumps(data, default=str), encoding="utf-8")
 
 
