@@ -54,15 +54,20 @@ button{cursor:pointer}
 #drop{border:2px dashed var(--line);border-radius:12px;padding:40px 16px;text-align:center;background:var(--card)}
 #drop.on{border-color:var(--y)}
 .hide{display:none}
+.y{background:var(--y);color:#1c1c1c;border-color:var(--y);font-weight:700}
+#hist tr.cur td{background:var(--ab)}#hist a{color:var(--m);cursor:pointer;text-decoration:none;margin-right:10px;font-weight:600}
+#rstat{color:#cfd1ce;font-size:12px;max-width:520px}
 </style>
 </head>
 <body>
 <header><div class="w hd">
   <div><div class="brand">we.are.sdi</div><h1>Live Orders Dashboard</h1><div class="sub" id="asat">No data loaded</div></div>
-  <div class="bar" style="margin:0"><label class="sub" for="file">Data file</label><input type="file" id="file" accept=".json,application/json"></div>
+  <div class="bar" style="margin:0" id="filebar"><label class="sub" for="file">Data file</label><input type="file" id="file" accept=".json,application/json"></div>
+  <div class="bar hide" style="margin:0" id="portalbar"><span id="rstat"></span><button id="regen" class="y" title="Pull fresh data from Sage X3, build, and save a new workbook">↻ Regenerate</button></div>
 </div></header>
 <main class="w">
   <div id="drop"><b>Choose or drop a Live Orders data file</b><br><span class="muted">SDI_Live_Orders_&lt;date&gt;.json, written by build_live_orders.py beside the board</span></div>
+  <div class="card hide" id="histcard" style="margin-bottom:14px"><h2>Workbooks</h2><p class="note" id="histnote">Every generation is kept. View any of them here, or open the workbook to edit - Comments, Prog and Tube req carry forward to the next one.</p><div class="tbl" style="max-height:260px"><table id="hist"></table></div></div>
   <div id="app" class="hide">
     <div class="tiles" id="tiles"></div>
     <div class="grid2">
@@ -137,7 +142,7 @@ function render(data){
   legend($('#lg1'),ST.map(([s,c])=>[s.charAt(0)+s.slice(1).toLowerCase(),css(c)]));stackedBars($('#c1'),cats,s1,{label:'works orders by due week'});
 
   // chart 2: hours by week and shop, from the load grid
-  const famOf={};(D.wcs||[]).forEach(c=>famOf[c[0]]=c[2]||'');
+  const famOf={};(D.wcs||[]).forEach(c=>famOf[c[0]]=(c[2]||'').charAt(0));   // engine sends Metal/Joinery/Acrylics
   const lw=(D.load||[]).slice(0,10);const fams=['M','J','A',''];
   const s2=fams.map(f=>({name:FAM[f][0],color:css(FAM[f][1]),vals:lw.map(([k,v])=>Object.entries(v).reduce((a,[c,h])=>a+((famOf[c]||'')===f?h:0),0))}));
   legend($('#lg2'),fams.map(f=>[FAM[f][0],css(FAM[f][1])]));stackedBars($('#c2'),lw.map(([k])=>dd(k).slice(0,5)),s2,{dec:0,label:'hours by week'});
@@ -179,8 +184,32 @@ document.addEventListener('dragover',e=>e.preventDefault());document.addEventLis
 let sdiKey='';try{const m=location.hash.match(/key=([^&]+)/);if(m){sessionStorage.setItem('sdiKey',decodeURIComponent(m[1]));history.replaceState(null,'',location.pathname+location.search)}sdiKey=sessionStorage.getItem('sdiKey')||''}catch(e){}
 const onPortal=/\/api\/live-orders\/dashboard$/.test(location.pathname);
 const src=new URLSearchParams(location.search).get('data')||(onPortal?'/api/live-orders/latest':null);
+const H=()=>sdiKey?{'X-SDI-Key':sdiKey}:{};
+function load(url,name){return fetch(url,{headers:H()}).then(r=>{if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}).then(d=>{render(d);cur=name||'';markCur()}).catch(e=>{$('#drop').classList.remove('hide');$('#drop').innerHTML=`<b>No Live Orders data yet</b><br><span class="muted">${esc(e.message)}${onPortal?' - press Regenerate':''}</span>`})}
+let cur='',hist=[];
+function markCur(){document.querySelectorAll('#hist tr[data-n]').forEach(tr=>tr.classList.toggle('cur',tr.dataset.n===cur||(!cur&&tr===document.querySelector('#hist tr[data-n]'))))}
+function fmtWhen(n){const m=n.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`:n}
+function loadHistory(){return fetch('/api/live-orders/history',{headers:H()}).then(r=>r.json()).then(h=>{hist=h.runs||[];
+  $('#histnote').textContent=`Every generation is kept in ${h.folder} (${hist.length} so far). View any of them here, or open the workbook to edit - Comments, Prog and Tube req carry forward to the next one.`;
+  $('#hist').innerHTML='<tr><th>Generated</th><th class="n">Works orders</th><th class="n">Red</th><th class="n">Amber</th><th class="n">Green</th><th class="n">Overdue</th><th class="n">Hours</th><th class="n">Notes carried</th><th></th></tr>'+
+  hist.map((r,i)=>`<tr data-n="${esc(r.name)}"><td>${fmtWhen(r.name)}${i==0?' <span class="st GREEN">latest</span>':''}</td><td class="n">${r.wos??''}</td><td class="n" style="color:var(--r)">${r.red??''}</td><td class="n" style="color:var(--a)">${r.amber??''}</td><td class="n" style="color:var(--g)">${r.green??''}</td><td class="n">${r.overdue??''}</td><td class="n">${r.hours!=null?Math.round(r.hours):''}</td><td class="n">${r.carried??''}</td>
+  <td><a data-v="${esc(r.name)}">View</a>${r.workbook?`<a data-x="${esc(r.name)}">Workbook ⬇</a><a data-p="${esc(r.path)}" title="${esc(r.path)}">Copy path</a>`:''}</td></tr>`).join('');
+  markCur()})}
+$('#hist').addEventListener('click',e=>{const a=e.target.closest('a');if(!a)return;
+  if(a.dataset.v)load('/api/live-orders/run/'+encodeURIComponent(a.dataset.v),a.dataset.v);
+  if(a.dataset.x)fetch('/api/live-orders/workbook/'+encodeURIComponent(a.dataset.x),{headers:H()}).then(r=>r.blob()).then(b=>{const u=URL.createObjectURL(b),l=document.createElement('a');l.href=u;l.download=a.dataset.x+'.xlsx';l.click();setTimeout(()=>URL.revokeObjectURL(u),2000)});
+  if(a.dataset.p){navigator.clipboard&&navigator.clipboard.writeText(a.dataset.p);a.textContent='Copied ✓';setTimeout(()=>a.textContent='Copy path',1500)}});
+function poll(){fetch('/api/live-orders/regenerate',{headers:H()}).then(r=>r.json()).then(s=>{
+  const last=(s.log||[]).filter(x=>x.trim()).slice(-1)[0]||'';
+  if(s.running){$('#regen').disabled=true;$('#rstat').textContent='Generating… '+last.slice(0,90);setTimeout(poll,4000);return}
+  $('#regen').disabled=false;
+  if(s.started){$('#rstat').textContent=s.last&&s.last.ok?'Done '+(s.last.finished||'').replace('T',' ')+' - new workbook saved':'Last run failed: '+((s.last&&s.last.error)||last).slice(0,140);
+    if(s.last&&s.last.ok)loadHistory().then(()=>load('/api/live-orders/latest',''))}})}
+$('#regen').addEventListener('click',()=>{if(!confirm('Pull fresh data from Sage X3 and save a new Live Orders workbook?'))return;
+  fetch('/api/live-orders/regenerate',{method:'POST',headers:H()}).then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(()=>{$('#rstat').textContent='Starting…';setTimeout(poll,1500)}).catch(e=>{$('#rstat').textContent='Could not start: '+e.message})});
+if(onPortal){$('#filebar').classList.add('hide');$('#portalbar').classList.remove('hide');$('#histcard').classList.remove('hide');$('#drop').classList.add('hide');loadHistory().catch(()=>{});poll()}
 if(window.LIVE_ORDERS_DATA)render(window.LIVE_ORDERS_DATA);
-else if(src)fetch(src,{headers:sdiKey?{'X-SDI-Key':sdiKey}:{}}).then(r=>{if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}).then(render).catch(e=>{$('#drop').innerHTML+=`<p class="muted">Couldn't load ${esc(src)}: ${esc(e.message)}</p>`});
+else if(src)load(src,'');
 </script>
 </body>
 </html>

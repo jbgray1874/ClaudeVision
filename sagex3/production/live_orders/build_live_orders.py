@@ -192,7 +192,12 @@ def read_carry(path):
     the typed material note forward, so nothing is re-typed."""
     wb = load_workbook(path, data_only=True)
     ws = next((wb[n] for n in wb.sheetnames if n.strip().lower() == "live orders"), wb.worksheets[0])
-    head = [re.sub(r"\s+", " ", str(c.value or "")).strip().lower() for c in ws[1]]
+    hrow = 1                     # the heading row: row 1 on Dave's sheet, lower on the board (banner rows above it)
+    for r in range(1, 15):
+        if any(re.sub(r"[^a-z ]", "", str(c.value or "").lower()).strip() in ("wo num", "wo") for c in ws[r]):
+            hrow = r
+            break
+    head = [re.sub(r"\s+", " ", re.sub(r"^✎\s*", "", str(c.value or ""))).strip().lower() for c in ws[hrow]]
     def col(*names):
         return next((head.index(n) for n in names if n in head), None)
     wo_c, com_c, prog_c, tube_c = col("wo num", "wo"), col("comments"), col("prog"), col("tube req")
@@ -200,7 +205,7 @@ def read_carry(path):
     out = {}
     if wo_c is None:
         return out
-    for r in ws.iter_rows(min_row=2, values_only=True):
+    for r in ws.iter_rows(min_row=hrow + 1, values_only=True):
         wo = str(r[wo_c] or "").strip()
         if not wo:
             continue
@@ -459,6 +464,12 @@ def wc_label(wc, wcnames):
 
 
 def write_xlsx(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare):
+    """Production's workbook (live_orders_xlsx.py, 20 Nov). The older plain writer is kept below as write_xlsx_plain."""
+    import live_orders_xlsx
+    live_orders_xlsx.write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_label, drawing_of, STALE_DAYS)
+
+
+def write_xlsx_plain(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare):
     wb = Workbook()
     ws = wb.active
     ws.title = "Read me"

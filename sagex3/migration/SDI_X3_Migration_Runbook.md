@@ -4452,3 +4452,40 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - 22.20 (Dave's sheet re-analysed: his "game changer" notes); 22.23 (Dave's 26 Oct request and the Monday copy-over); 22.26 (focus on X3);
   - `sagex3/production/live_orders/README.md` and `INTEGRATION_PLAN.md`; the docstring in `build_live_orders.py`.
   - The 12 questions to Rachael and Liz (13 Nov) were due today (Fri 20 Nov).
+
+**20 Nov – Live Orders workbook, Production's folder, history and Regenerate (James: a spreadsheet "like Access's but super flash", editable; the portal sits on top of `K:\Operations\Reporting\LiveOrders`; every generation kept; regenerate from the portal; the whole history viewable).**
+- **Requirements re-confirmed from James's 17 Nov email to Acuity.** The screens: 2a Live Orders, 2b Work-centre load, 2c WO Suggestions, 2e Exploded BOM; notes that stay with the WO; REV red against the GA drawing; print, Excel and refresh. Files received again (Dave's sheet, the 13 Nov board xlsx / html, the reconciliation workbook); kept outside git (they name customers).
+- **`live_orders_xlsx.py` – the workbook:**
+  - same tabs and column names as Dave's sheet, plus a Dashboard;
+  - **Dashboard:** KPI tiles and native Excel charts (WOs by due week × status; hours by work centre); the chart figures sit on a hidden sheet; prints on one page;
+  - **Live Orders:**
+    - totals row on SUBTOTAL, so it follows the filter;
+    - status colours by conditional formatting, so they follow edits;
+    - overdue due dates red; customer date before due date shaded;
+    - heat-mapped work-centre hours; balance data bars; Dave's weekly break lines;
+    - ● M / J / A shop markers; part code → its Exploded BOM;
+    - ✎ yellow editable columns (Comments, Prog, Tube req, material note);
+    - detail columns fold away; A3 landscape, one page wide, headings repeated;
+  - **Work-centre load:** heat map, totals, a stacked chart by week;
+  - **WO Suggestions:** red rows for no BOM / no route; late starts red;
+  - **Exploded BOMs:** foldable per WO; indented by level; short bought-in parts red; link back to Live Orders; cost totals.
+  - `read_carry` finds the heading row (banner rows sit above it) and strips the ✎.
+- **`run_x3.py`:**
+  - **publishes every run as a new pair** `SDI_Live_Orders_<date>_<HHMM>.xlsx + .json` to `LIVE_ORDERS_SHARE` (default `\\sdi-dc01\shareddata$\Shared\Operations\Reporting\LiveOrders`, which is K:); **never overwrites: the folder is the history**;
+  - carries notes from the **latest generated** workbook (by name, so opening an old one doesn't change which is carried);
+  - `--pull api` pulls transactions every run and products / BOMs only if older than 24 h (`--master-hours`, `--full`).
+- **Portal (`live_orders_routes.py`):** `/latest`, `/history`, `/run/{name}`, `/workbook/{name}`, `POST /regenerate` (one at a time, a background run, log in `regenerate.log`), `/regenerate` (status), `/status`.
+  - File names are checked against a pattern, so only our own files can be served.
+- **Dashboard page (in the portal):**
+  - a **↻ Regenerate** button with progress;
+  - a **Workbooks** history table: generated, counts, notes carried, View / Workbook ⬇ / Copy path (K: path);
+  - **View** switches the page to that run;
+  - **fixed:** the "hours by week and shop" chart was always empty (shop names sent as Metal / Joinery / Acrylics, compared with M / J / A).
+- **Installer** now sets in `.env` (only the missing ones): `LIVE_ORDERS_RUNS / SHARE / SHARE_USER / HOME / ROUTES / PYTHON`, `X3_API_CONFIG`, `X3_EXPORT_DIR`. All are full paths: the service runs as a system account.
+- **Tested (fake data):**
+  - 300 WOs; round trip: Production typed notes → the next run carried 2 → the edited workbook untouched;
+  - in a browser on a patched portal copy: Regenerate ×2 → 2 pairs saved, history shows both, View of the older run, no errors;
+  - workbook rendered with LibreOffice and checked.
+- **To check on the real set-up:**
+  1. **the service account must be able to write** to `\\sdi-dc01\…\LiveOrders`. A Windows service reaches the network as the PC's computer account. If Regenerate fails with access denied, give that account write on the folder, or run the service as a domain user;
+  2. the route file path (`LIVE_ORDERS_ROUTES`), until X3 routings are mapped (the routes.csv values are still awaited).

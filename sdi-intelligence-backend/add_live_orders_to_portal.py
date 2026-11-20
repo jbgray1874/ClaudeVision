@@ -8,11 +8,14 @@ Default target: C:\\ClaudeVision\\sdi-intelligence-backend (the folder the SDIIn
   1. live_orders_routes.py and live_orders_dashboard.html, copied next to app.py
   2. two lines in app.py that mount the Live Orders endpoints (beside the HR ones)
   3. a "Live Orders" menu item, its page (the dashboard in a frame) and its label in sdi-intelligence-portal.html
-  4. LIVE_ORDERS_RUNS=<runs folder> in .env - the service runs as a system account, so it needs the full path
+  4. the Live Orders settings in .env (only those missing): runs folder, Production's folder (network path), the
+     repo's live_orders folder, the route file, the X3 API settings file and exports folder - full paths, because
+     the service runs as a system account (no mapped drives, no home folder of yours)
 Every changed file is backed up first as <name>.bak-<date time>. Safe to run twice: anything already there is skipped.
 Nothing else is touched. Restart the SDIIntelligence service afterwards so app.py is re-read.
 """
 import argparse
+import re
 import datetime as dt
 import shutil
 import sys
@@ -37,7 +40,7 @@ FRAME_JS = ('  // Live Orders: the dashboard reads /api/live-orders/latest with 
             'if(f)f.src="/api/live-orders/dashboard#key="+encodeURIComponent(API_KEY||"");})();\n')
 
 
-def plan(target, runs):
+def plan(target, runs, opts):
     app, page, env = target / "app.py", target / "sdi-intelligence-portal.html", target / ".env"
     for f in (app, page):
         if not f.exists():
@@ -83,9 +86,15 @@ def plan(target, runs):
         changes.append((page, p2, None, "portal page: Live Orders menu item, page and label"))
 
     e = env.read_text(encoding="utf-8") if env.exists() else ""
-    if "LIVE_ORDERS_RUNS" not in e:
-        changes.append((env, e + ("" if e.endswith("\n") or not e else "\n") + f"LIVE_ORDERS_RUNS={runs}\n", None,
-                        f".env: LIVE_ORDERS_RUNS={runs}"))
+    want = {"LIVE_ORDERS_RUNS": runs, "LIVE_ORDERS_SHARE": opts.share, "LIVE_ORDERS_SHARE_USER": opts.share_user,
+            "LIVE_ORDERS_HOME": str(REPO / "sagex3" / "production" / "live_orders"), "LIVE_ORDERS_ROUTES": opts.routes_file,
+            "X3_API_CONFIG": opts.x3_config, "X3_EXPORT_DIR": opts.exports,
+            "LIVE_ORDERS_PYTHON": sys.executable}          # the python you run this with (it has openpyxl)
+    add = [f"{k}={v}" for k, v in want.items() if v and not re.search(rf"(?m)^{k}=", e)]
+    if add:
+        block = "\n# -- Live Orders (add_live_orders_to_portal.py) --\n" + "\n".join(add) + "\n"
+        changes.append((env, e + ("" if e.endswith("\n") or not e else "\n") + block, None,
+                        ".env: " + "; ".join(add)))
     return changes
 
 
@@ -93,10 +102,17 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--target", default=r"C:\ClaudeVision\sdi-intelligence-backend")
     ap.add_argument("--runs", default=str(Path.home() / "SDI_X3_runs"))
+    ap.add_argument("--share", default=r"\\sdi-dc01\shareddata$\Shared\Operations\Reporting\LiveOrders",
+                    help="Production's workbook folder, as a network path (the service can't see K:)")
+    ap.add_argument("--share-user", default=r"K:\Operations\Reporting\LiveOrders", help="the same folder as people see it")
+    ap.add_argument("--routes-file", default="", help="the route load file (.txt) until X3 routings are mapped")
+    ap.add_argument("--x3-config", default=str(Path.home() / ".sdi" / "x3_api.json"),
+                    help="the read-only X3 API settings (the service runs as another account, so give the full path)")
+    ap.add_argument("--exports", default=str(Path.home() / "SDI_X3_exports"))
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args()
     target = Path(a.target)
-    changes = plan(target, a.runs)
+    changes = plan(target, a.runs, a)
     if not changes:
         print("Nothing to do - Live Orders is already in the portal.")
         return
