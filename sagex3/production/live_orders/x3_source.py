@@ -24,7 +24,7 @@ sys.path.insert(0, str(HERE))
 from build_live_orders import POH, SMR, SOH, WOR  # noqa: E402
 
 GRIDS = {"WOR": WOR, "SOH": SOH, "POH": POH, "SMR": SMR}
-ORDER = ["works_orders", "so_lines", "po_lines", "stock"]
+ORDER = ["wo_products", "works_orders", "so_lines", "po_lines", "stock"]   # wo_products (API) wins over works_orders
 
 
 def norm(s):
@@ -167,12 +167,22 @@ def to_extract(folder, out_path, conf_path=HERE / "x3_columns.json", check=False
     lines, report = [], []
     as_at = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     lines.append(f"CHECK\tas at\t{as_at}\tsource X3 {Path(folder).name}")
+    used_instead = set()
     for name in ORDER:
-        spec = conf[name]
-        f = find(folder, name)
-        if not f:
-            report.append(f"{name}: no file in {folder} - that grid is empty")
+        spec = conf.get(name)
+        if not spec:
             continue
+        f = find(folder, name)
+        if name in used_instead:
+            if f:
+                report.append(f"{name}: skipped - read from {', '.join(k for k in ORDER if conf.get(k, {}).get('instead_of') == name)} instead")
+            continue
+        if not f:
+            if not spec.get("instead_of"):
+                report.append(f"{name}: no file in {folder} - that grid is empty")
+            continue
+        if spec.get("instead_of"):
+            used_instead.add(spec["instead_of"])
         rows = read_rows(f)
         recs, used, missing = convert(rows, spec)
         if spec["grid"] == "WOR":

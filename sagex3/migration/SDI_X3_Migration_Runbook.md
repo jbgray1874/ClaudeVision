@@ -4336,6 +4336,15 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **SEED trial refused:** *"User does not exist for X3 user SDIJG"* (no X3 user for SDIJG in Sage's demo folder). **Not pursued:** creating a user there is an admin change.
   - **Instead, `x3_api.py columns`** prints the WO / stock column names from the saved schema (`api_datasets.json`), with no call to X3.
   - **Fixed:** `pull` crashed writing `api_log.json` when every data set failed (folder not created).
+- **20 Nov – works orders and stock mapped** (names from `x3_api.py columns`, i.e. the training schema).
+  - **WOR from `x3Manufacturing.workOrderProductLine`** (`wo_products`). It's used instead of the `workOrder` header when both exist. Fields:
+    - works order: workOrder.number; product: product.code; version: majorProductVersion.code;
+    - for: salesOrder, customer.code; status: workOrderStatus;
+    - quantities: expectedQuantity, totalCompletedQuantity, actualRejectedQuantity;
+    - dates: _createStamp, startDate, endDate.
+  - **SMR from `x3StockData.stock`:** stockSite.code, product._id, quantityInStockUnit, lot, location.code, status.code (A only).
+  - **Tested end to end** (adapter → engine) on X3-shaped mock rows: 1 WO, AMBER, as worked by hand.
+  - **For later:** `workOrderMaterialLine` carries X3's own requiredQuantity / allocatedQuantity / shortageQuantity. Once WOs exist in X3, the board's material status can come from X3's allocations instead of its own sharing-out.
 - **Results to fill in as we find them:**
   - the endpoint name;
   - the GraphQL path / audience / header `probe` accepted;

@@ -1,13 +1,61 @@
 {
-  "_note": "X3 data set -> the Live Orders grids (build_live_orders.py). Each grid field lists the column names it may arrive under: X3 field codes (MFGNUM), GraphQL names (workOrderNumber, or line.product.code after flattening) and screen labels (Work order). Matching ignores case, spaces and punctuation; the first match wins. 'minus' takes another column off (ordered - delivered = still open). 'const' fixes a value. PROVISIONAL until the first real exports from the training site: run  python x3_source.py <folder> --check  and correct any field it can't find. Written 20 Nov 2026. 20 Nov: so_lines / po_lines mapped to the real X3 GraphQL names (x3Sales.salesOrderLine, x3Purchasing.purchaseOrderLine) from a trial pull on training. 'net' = a column that is already the open quantity (used alone, no minus). 'drop_if' = raw X3 columns that exclude a row (closed lines).",
+  "_note": "X3 data set -> the Live Orders grids (build_live_orders.py). Each grid field lists the column names it may arrive under: X3 field codes (MFGNUM), GraphQL names (workOrderNumber, or line.product.code after flattening) and screen labels (Work order). Matching ignores case, spaces and punctuation; the first match wins. 'minus' takes another column off (ordered - delivered = still open). 'const' fixes a value. PROVISIONAL until the first real exports from the training site: run  python x3_source.py <folder> --check  and correct any field it can't find. Written 20 Nov 2026. 20 Nov: so_lines / po_lines mapped to the real X3 GraphQL names (x3Sales.salesOrderLine, x3Purchasing.purchaseOrderLine) from a trial pull on training. 'net' = a column that is already the open quantity (used alone, no minus). 'drop_if' = raw X3 columns that exclude a row (closed lines). 20 Nov: works orders read from x3Manufacturing.workOrderProductLine (wo_products: product, quantities, dates, sales order, customer in one row) - used instead of works_orders when both exist; stock from x3StockData.stock. Names from 'x3_api.py columns' (the training schema).",
+  "wo_products": {
+    "grid": "WOR",
+    "instead_of": "works_orders",
+    "fields": {
+      "works_order": [
+        "workOrder.number"
+      ],
+      "product": [
+        "product.code"
+      ],
+      "rev": [
+        "majorProductVersion.code"
+      ],
+      "sales_order": [
+        "salesOrder"
+      ],
+      "customer": [
+        "customer.code",
+        "customer._id"
+      ],
+      "order_type": [
+        "workOrderStatus"
+      ],
+      "orig_qty": [
+        "expectedQuantity",
+        "releaseQuantity"
+      ],
+      "amd_qty": [
+        "expectedQuantity",
+        "releaseQuantity"
+      ],
+      "good_qty": [
+        "totalCompletedQuantity"
+      ],
+      "rejected_qty": [
+        "actualRejectedQuantity"
+      ],
+      "created": [
+        "_createStamp"
+      ],
+      "first_date": [
+        "startDate"
+      ],
+      "scheduled": [
+        "endDate"
+      ]
+    }
+  },
   "works_orders": {
     "grid": "WOR",
     "fields": {
       "works_order": [
+        "number",
         "MFGNUM",
         "workOrderNumber",
         "workOrder",
-        "number",
         "Work order",
         "WO number",
         "Order no."
@@ -47,6 +95,7 @@
         "Customer"
       ],
       "order_type": [
+        "orderStatus",
         "MFGTRKFLG",
         "MFGSTA",
         "status",
@@ -54,6 +103,7 @@
         "Order status"
       ],
       "orig_qty": [
+        "plannedQuantity",
         "EXTQTY",
         "plannedQuantity",
         "releasedQuantity",
@@ -62,6 +112,7 @@
         "Quantity"
       ],
       "amd_qty": [
+        "plannedQuantity",
         "EXTQTY",
         "plannedQuantity",
         "releasedQuantity",
@@ -70,6 +121,7 @@
         "Quantity"
       ],
       "good_qty": [
+        "totalCompletedQuantity",
         "CPLQTY",
         "completedQuantity",
         "Completed quantity",
@@ -99,6 +151,7 @@
         "End date"
       ],
       "mat_stat": [
+        "allocationStatus",
         "MFGALLSTA",
         "allocationStatus",
         "Allocation status"
@@ -385,6 +438,7 @@
     "grid": "SMR",
     "fields": {
       "STOFCY": [
+        "stockSite.code",
         "STOFCY",
         "stockSite.code",
         "site.code",
@@ -392,8 +446,9 @@
         "Stock site"
       ],
       "ITMREF": [
-        "ITMREF",
         "product.code",
+        "product._id",
+        "ITMREF",
         "Product",
         "Item"
       ],
@@ -404,27 +459,27 @@
         "STK unit"
       ],
       "QTYSTU": [
-        "QTYSTU",
         "quantityInStockUnit",
+        "QTYSTU",
         "quantity",
         "Quantity",
         "Stock quantity",
         "Qty STK"
       ],
       "LOT": [
-        "LOT",
         "lot",
+        "LOT",
         "Lot"
       ],
       "LOC": [
-        "LOC",
         "location.code",
+        "LOC",
         "location",
         "Location"
       ],
       "STA": [
-        "STA",
         "status.code",
+        "STA",
         "status",
         "Status"
       ]
