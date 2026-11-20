@@ -1,7 +1,7 @@
 """A SERVICE ON THE SAME COMMIT IS NOT CALLED STALE (20 Nov 2026).
 
 The 8fe4a122 release: 8071 was restarted and served c384dc8; git on the laptop gave the same
-commit as c384dc80 (git lengthens a short hash that 7 characters do not make unique). Compared
+commit as c384dc80 (callers can use different abbreviation lengths). Compared
 whole, restart-service.ps1 printed "STILL STALE", the release stopped, and the runners were
 not updated. check-services.ps1 already compared the common prefix; restart-service.ps1 now
 does the same, through one function.

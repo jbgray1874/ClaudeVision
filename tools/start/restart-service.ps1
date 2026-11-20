@@ -84,13 +84,15 @@ if (-not $Root) {
 # beside the code it copied. So the answer travels with the deploy instead of being
 # recomputed somewhere it cannot be.
 # ONE COMMIT, TWO SPELLINGS (20 Nov 2026). The service reports its commit in 7 characters;
-# git on the laptop gave 8 (c384dc8 / c384dc80), because git lengthens a short hash that 7 do
-# not make unique. Compared whole, the restarted 8071 read as "STILL STALE" and the release
+# git on the laptop gave 8 (c384dc8 / c384dc80). Abbreviation lengths can differ between
+# callers. Compared whole, the restarted 8071 read as "STILL STALE" and the release
 # stopped before the runners were updated. Same commit when one is the start of the other, as
 # check-services.ps1 already compares them.
 function Test-SameCommit([string]$a, [string]$b) {
-    $a = "$a".Trim().ToLower(); $b = "$b".Trim().ToLower()
-    if (-not $a -or -not $b -or $a -eq "unknown" -or $b -eq "unknown") { return $false }
+    $a = "$a".Trim().ToLowerInvariant(); $b = "$b".Trim().ToLowerInvariant()
+    # Only bare SHA-1 IDs/abbreviations (this repository's object format). Do not
+    # accept "unknown", a branch name, or a dirty/decorated build as proof of a match.
+    if ($a -notmatch '\A[0-9a-f]{7,40}\z' -or $b -notmatch '\A[0-9a-f]{7,40}\z') { return $false }
     $n = [Math]::Min($a.Length, $b.Length)
     if ($n -lt 7) { return $false }
     return $a.Substring(0, $n) -eq $b.Substring(0, $n)
