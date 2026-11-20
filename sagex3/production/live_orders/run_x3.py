@@ -81,6 +81,20 @@ def run_streamed(cmd, timeout_s):
     return p.wait(), tail
 
 
+def pull_failures(day, out):
+    """What failed in the pull, in X3's own words: api_log.json for the day, or a crash's last line."""
+    msgs = []
+    try:
+        log = json.loads((Path(day) / "api_log.json").read_text())
+        if dt.datetime.fromisoformat(log["at"]) > dt.datetime.now() - dt.timedelta(hours=4):
+            msgs = [f"{r['name']}: {r.get('error', '')[:200]}" for r in log["runs"] if not r.get("ok")]
+    except (OSError, ValueError, KeyError):
+        pass
+    if "Traceback" in out:                                     # the pull itself crashed
+        msgs.append("pull crashed: " + [l for l in out.strip().splitlines() if l.strip()][-1][:300])
+    return msgs
+
+
 def master_file(name, src, max_hours):
     """products / boms: from this pull if there, else the newest earlier pull - fresh enough if under max_hours."""
     here = next((src / f"{name}{e}" for e in (".json", ".csv") if (src / f"{name}{e}").exists()), None)
@@ -131,6 +145,7 @@ def main(argv=None):
                 status["master_refreshed"] = stale
             code, out = run_streamed(cmd, a.pull_hours * 3600)
             status["pull"] = dict(cmd=" ".join(cmd[1:]), code=code, out=out)
+            status["pull_failed"] = pull_failures(EXPORTS / dt.date.today().isoformat(), out)
             if code not in (0, 1):                              # 1 = some data sets failed; carry on with the rest
                 raise SystemExit(f"pull failed ({code}): {out[-400:]}")
         src = Path(a.exports) if a.exports else newest_exports(EXPORTS)
@@ -140,7 +155,9 @@ def main(argv=None):
             if not getattr(a, k):
                 f, _ = master_file(k, src, a.master_hours)
                 if not f:
-                    raise SystemExit(f"No --{k} given and no {k}.json in any pull: run  x3_api.py pull {k}  or name a file")
+                    why = "; ".join(status.get("pull_failed") or [])
+                    raise SystemExit(f"No {k} from Sage X3" + (f" - the pull said: {why}" if why else
+                                     f": no {k}.json in any pull (run  x3_api.py pull {k}  or name a file)"))
                 setattr(a, k, str(f))
         status["master_data"] = dict(products=a.products, boms=a.boms, routes=a.routes)
         from x3_source import to_extract
@@ -158,6 +175,8 @@ def main(argv=None):
         if a.share:
             status["published"] = publish([out / f for f in res["files"] if f.endswith((".xlsx", ".json"))], a.share)
         status.update(ok=True, run=str(out), json=str(j), meta=res["meta"])
+        if status.get("pull_failed"):                     # built, but on some of yesterday's data - say so
+            status["warning"] = "built, but these failed in the pull: " + "; ".join(status["pull_failed"])
         old = sorted(p for p in runs.iterdir() if p.is_dir())[:-a.keep] if a.keep else []
         for p in old:
             shutil.rmtree(p, ignore_errors=True)
@@ -166,7 +185,7 @@ def main(argv=None):
         status["trace"] = traceback.format_exc()[-1500:]
     status["finished"] = dt.datetime.now().isoformat(timespec="seconds")
     (runs / "status.json").write_text(json.dumps(status, indent=1, default=str))
-    print(json.dumps({k: status.get(k) for k in ("ok", "exports", "run", "carried_from", "published", "meta", "error")},
+    print(json.dumps({k: status.get(k) for k in ("ok", "exports", "run", "carried_from", "published", "meta", "warning", "error")},
                      indent=1, default=str))
     for l in status.get("adapter", []):
         print(" ", l)

@@ -4552,3 +4552,12 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - `live_orders_routes.py` starts `run_x3.py` with `-u` (installer copy and restart needed);
   - `x3_api.py` no longer needs `api_datasets.json`: without it, it uses the Live Orders data sets in the code (NODES / LEAN). The file was only on James's PC (git-ignored); a fresh copy on the server now pulls without a `draft`.
 - **Next:** refresh products / BOMs / routings overnight (Task Scheduler, `run_x3.py --full` or a master-only pull), so a daytime Regenerate only pulls orders and stock (minutes).
+- **First Regenerate result:** "Last run failed: No --routes given and no routes.json in any pull". Routings **were** asked for, but nothing came back, and the reason was lost:
+  - `x3_api.pull` caught only SystemExit per data set, so any other error (connection reset, an unexpected X3 reply) **crashed the whole pull**;
+  - Python exits 1 on a crash, and `run_x3` treats exit 1 as "some data sets failed, carry on". So it built with the morning's products and BOMs, then stopped on the missing routings with a misleading message.
+- **Fixed:**
+  - `x3_api.pull` catches every error per data set ("<name>: FAILED - <Error>: <message>"), carries on with the rest, and logs an unknown data-set name instead of crashing;
+  - `run_x3.pull_failures` reads that day's `api_log.json` (and a crash's last line). Failures go in `status.json` (`pull_failed`); a missing master file now says "No routes from Sage X3 - the pull said: …"; a build that succeeded on partly old data gets a `warning`;
+  - the portal shows the warning, and up to 400 characters of an error.
+  - Tested: a forced ConnectionResetError on routes → so_lines and products still pulled, exit 1, the failure reported in X3's words.
+- **To find this run's actual reason:** `status.json` → `pull.out` (the pull's last 2,000 characters; no secrets).

@@ -337,7 +337,7 @@ function poll(){fetch('/api/live-orders/regenerate',{headers:HD()}).then(r=>r.js
   const last=(s.log||[]).filter(x=>x.trim()).slice(-1)[0]||'';
   if(s.running){$('#regen').disabled=true;$('#rstat').textContent='Generating… '+last.slice(0,90);setTimeout(poll,4000);return}
   $('#regen').disabled=false;
-  if(s.started){$('#rstat').textContent=s.last&&s.last.ok?'Done '+(s.last.finished||'').replace('T',' ')+' - new workbook saved':'Last run failed: '+((s.last&&s.last.error)||last).slice(0,140);
+  if(s.started){$('#rstat').textContent=s.last&&s.last.ok?'Done '+(s.last.finished||'').replace('T',' ')+' - new workbook saved'+(s.last.warning?' ('+s.last.warning.slice(0,200)+')':''):'Last run failed: '+((s.last&&s.last.error)||last).slice(0,400);
     if(s.last&&s.last.ok)loadHistory().then(()=>load('/api/live-orders/latest',''))}}).catch(()=>{})}
 $('#regen').addEventListener('click',()=>{if(!confirm('Pull fresh data from Sage X3 and save a new Live Orders workbook?'))return;
   fetch('/api/live-orders/regenerate',{method:'POST',headers:HD()}).then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(()=>{$('#rstat').textContent='Starting…';setTimeout(poll,1500)}).catch(e=>{$('#rstat').textContent='Could not start: '+e.message})});

@@ -175,7 +175,8 @@ def regenerate_status(x_sdi_key: str | None = Header(default=None)):
         st = json.loads((RUNS / "status.json").read_text(encoding="utf-8"))
         st.pop("trace", None)
     return {"running": _running(), "started": _proc["started"], "log": tail,
-            "last": {k: st.get(k) for k in ("ok", "finished", "error", "published", "carried_from", "master_refreshed")}}
+            "last": {k: st.get(k) for k in ("ok", "finished", "error", "warning", "published", "carried_from",
+                                            "master_refreshed", "pull_failed")}}
 
 
 @router.get("/status")

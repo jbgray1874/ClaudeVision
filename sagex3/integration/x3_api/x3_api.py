@@ -599,6 +599,10 @@ def pull(a):
         day = day.with_name(day.name + "_" + a.endpoint)
     log = []
     for n in names:
+        if n not in sets:
+            log.append(dict(name=n, ok=False, error="not a data set in api_datasets.json / the code"))
+            print(f"{n}: FAILED - not a data set (api_datasets.json has no '{n}': run  draft --force  or delete the file)")
+            continue
         ds = sets[n]
         t0 = time.time()
         try:
@@ -609,9 +613,10 @@ def pull(a):
             if a.limit and rows:                       # column names only - no values printed
                 cols = list(dict.fromkeys(k for r in rows for k in r))
                 print("   columns:", ", ".join(cols))
-        except SystemExit as e:
-            log.append(dict(name=n, ok=False, error=str(e)[:400]))
-            print(f"{n}: FAILED - {e}")
+        except (SystemExit, Exception) as e:            # noqa: BLE001 - one data set failing never stops the
+            err = f"{e.__class__.__name__}: {e}" if not isinstance(e, SystemExit) else str(e)   # rest (20 Nov)
+            log.append(dict(name=n, ok=False, error=err[:400]))
+            print(f"{n}: FAILED - {err[:400]}", flush=True)
     day.mkdir(parents=True, exist_ok=True)           # even when every data set failed (20 Nov)
     (day / "api_log.json").write_text(json.dumps(dict(at=dt.datetime.now().isoformat(timespec="seconds"), runs=log), indent=1))
     print(f"Files in {day}")
