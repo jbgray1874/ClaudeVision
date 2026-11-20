@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -63,6 +64,23 @@ def publish(files, folder):
     return out
 
 
+def run_streamed(cmd, timeout_s):
+    """Run the pull, passing its lines straight through (the portal shows the latest one while it runs - 20 Nov:
+    with the output held until the end the page said only "Generating..."). Returns (exit code, last 2000 chars).
+    Data sets already written stay in today's exports folder, so a pull stopped part-way resumes on the next run."""
+    env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
+    p = subprocess.Popen([cmd[0], "-u"] + cmd[1:], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                         encoding="utf-8", errors="replace", env=env)
+    t0, tail = time.time(), ""
+    for line in p.stdout:
+        print(line, end="", flush=True)
+        tail = (tail + line)[-2000:]
+        if time.time() - t0 > timeout_s:
+            p.kill()
+            return -9, tail + f"\nstopped after {timeout_s / 3600:.1f} h"
+    return p.wait(), tail
+
+
 def master_file(name, src, max_hours):
     """products / boms: from this pull if there, else the newest earlier pull - fresh enough if under max_hours."""
     here = next((src / f"{name}{e}" for e in (".json", ".csv") if (src / f"{name}{e}").exists()), None)
@@ -94,7 +112,8 @@ def main(argv=None):
     ap.add_argument("--runs", default=str(RUNS))
     ap.add_argument("--keep", type=int, default=60, help="runs to keep (oldest removed)")
     ap.add_argument("--master-hours", type=float, default=24, help="re-pull products / BOMs when older than this")
-    ap.add_argument("--full", action="store_true", help="re-pull products / BOMs now as well")
+    ap.add_argument("--full", action="store_true", help="re-pull products / BOMs / routings now as well")
+    ap.add_argument("--pull-hours", type=float, default=4, help="stop the pull after this long (default 4 h)")
     ap.add_argument("--share", default=SHARE, help="Production's workbook folder (LIVE_ORDERS_SHARE); '' = don't publish")
     a = ap.parse_args(argv)
 
@@ -110,10 +129,10 @@ def main(argv=None):
                 stale = [m for m in MASTER if a.full or not master_file(m, today, a.master_hours)[1]]
                 cmd += TRANSACTIONS + stale
                 status["master_refreshed"] = stale
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-            status["pull"] = dict(cmd=" ".join(cmd[1:]), code=r.returncode, out=(r.stdout + r.stderr)[-2000:])
-            if r.returncode not in (0, 1):                      # 1 = some data sets failed; carry on with the rest
-                raise SystemExit(f"pull failed ({r.returncode}): {(r.stdout + r.stderr)[-400:]}")
+            code, out = run_streamed(cmd, a.pull_hours * 3600)
+            status["pull"] = dict(cmd=" ".join(cmd[1:]), code=code, out=out)
+            if code not in (0, 1):                              # 1 = some data sets failed; carry on with the rest
+                raise SystemExit(f"pull failed ({code}): {out[-400:]}")
         src = Path(a.exports) if a.exports else newest_exports(EXPORTS)
         out = runs / dt.datetime.now().strftime("%Y-%m-%d_%H%M")
         out.mkdir(parents=True, exist_ok=True)

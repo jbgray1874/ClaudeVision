@@ -577,11 +577,17 @@ def write_rows(rows, path):
         w.writerows(rows)
 
 
+def load_datasets():
+    """api_datasets.json if there (written by  draft , may be edited); otherwise the Live Orders data sets straight from
+    NODES / LEAN above - so a fresh copy of the repo (e.g. on the portal server, 20 Nov) can pull without a draft."""
+    if DATASETS.exists():
+        return json.loads(DATASETS.read_text())
+    return {n: {"path": NODES[n], "fields": LEAN[n], "filter": "", "enabled": n in LIVE_ORDERS} for n in NODES if n in LEAN}
+
+
 def pull(a):
     c = load_conf()
-    if not DATASETS.exists():
-        sys.exit("No api_datasets.json yet: run  python x3_api.py draft , check it, save it as api_datasets.json")
-    sets = json.loads(DATASETS.read_text())
+    sets = load_datasets()
     if a.endpoint:                                   # another X3 folder (e.g. Sage's demo SEED): trials only
         if not a.limit:
             sys.exit("--endpoint is only for trials (with --limit): another folder's data never goes to the exports")
@@ -630,9 +636,7 @@ def flat_names(fields):
 
 def columns_cmd(a):
     """Print the column names each data set will produce - from api_datasets.json, no call to X3."""
-    if not DATASETS.exists():
-        sys.exit("No api_datasets.json yet: run  python x3_api.py draft")
-    sets = json.loads(DATASETS.read_text())
+    sets = load_datasets()
     for n in a.names or [n for n in sets if not n.startswith("_")]:
         print(f"{n} ({'.'.join(sets[n]['path'])}):")
         print("   " + ", ".join(flat_names(sets[n]["fields"])))

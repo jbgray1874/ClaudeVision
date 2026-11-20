@@ -153,7 +153,7 @@ def regenerate(full: bool = False, x_sdi_key: str | None = Header(default=None))
         if not script.exists():
             raise HTTPException(status_code=500, detail=f"run_x3.py not found in {HOME} (LIVE_ORDERS_HOME)")
         RUNS.mkdir(parents=True, exist_ok=True)
-        cmd = [PYTHON, str(script), "--pull", "api", "--runs", str(RUNS), "--share", str(SHARE)]
+        cmd = [PYTHON, "-u", str(script), "--pull", "api", "--runs", str(RUNS), "--share", str(SHARE)]
         if ROUTES and Path(ROUTES).is_file():     # optional: an old route load file. Default: routings from X3
             cmd += ["--routes", ROUTES]
         if full:

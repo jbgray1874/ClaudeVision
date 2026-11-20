@@ -4545,3 +4545,10 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **Fix for the PC today:** in `services.msc`, set the service's Log On to James's own account (the password goes in the Windows dialog, never on a command line or in chat), then restart.
   - **On SDI-APP01:** a proper service account with read on the file roots and write on LiveOrders.
 - **The server check was run in Command Prompt, not PowerShell** ("'Get-NetTCPConnection' is not recognized"). Type `powershell` first.
+- **First Regenerate pressed on James's PC (20 Nov, evening).** That run reuses today's products and BOMs (pulled earlier today, under 24 h old) and pulls the transactions plus **routings for the first time** (every routing operation, 50 a page, 1 s pause).
+- **Fixed after it started (applies from the next run, after `git pull`):**
+  - `run_x3.py` streams the pull's lines (`run_streamed`, `python -u`, PYTHONUNBUFFERED), so the portal shows live progress instead of only "Generating…". Before, the output was captured and only appeared at the end;
+  - the pull's limit is now 4 h (`--pull-hours`), not 60 min. Data sets already written stay in today's exports folder, so a stopped pull resumes on the next press;
+  - `live_orders_routes.py` starts `run_x3.py` with `-u` (installer copy and restart needed);
+  - `x3_api.py` no longer needs `api_datasets.json`: without it, it uses the Live Orders data sets in the code (NODES / LEAN). The file was only on James's PC (git-ignored); a fresh copy on the server now pulls without a `draft`.
+- **Next:** refresh products / BOMs / routings overnight (Task Scheduler, `run_x3.py --full` or a master-only pull), so a daytime Regenerate only pulls orders and stock (minutes).
