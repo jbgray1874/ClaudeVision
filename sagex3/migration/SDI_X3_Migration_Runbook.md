@@ -4489,3 +4489,21 @@ Keep this up to date with every setting we choose. **Never write the secret here
 - **To check on the real set-up:**
   1. **the service account must be able to write** to `\\sdi-dc01\…\LiveOrders`. A Windows service reaches the network as the PC's computer account. If Regenerate fails with access denied, give that account write on the folder, or run the service as a domain user;
   2. the route file path (`LIVE_ORDERS_ROUTES`), until X3 routings are mapped (the routes.csv values are still awaited).
+
+#### 20 Nov (late) – Live Orders page glammed up: eight views (James: "glam up the site … lots of views of the data")
+- **`live_orders_dashboard.html` rewritten as tabs.** Same data file, same portal endpoints, still read-only (apart from Regenerate), no libraries, light and dark:
+  | Tab | What it shows |
+  |---|---|
+  | **Overview** | Headline tiles (count up), red / amber / green ring, WOs by due week, hours by week × shop, busiest work centres, top 10 shortages, not-green WOs due in the next 14 days |
+  | **Live Orders** | Production's grid: filters for status / shop / week (incl. overdue) / top level, search (part, WO, SO, account, description), Production's notes (Comments, Prog, Tube), click a row for the exploded BOM, Export CSV |
+  | **Work-centre load** | Heat map: work centre × week, busiest first, filter by shop, totals |
+  | **Shortages** | Every bought-in component (all BOM levels): short, needed, stock, on PO, next PO, on WO, WOs held up, first WO due. Purchasing's list, Export CSV |
+  | **WO Suggestions** | Uncovered SO lines for made parts; no-BOM / no-route rows red; late starts red |
+  | **Customers** | WOs per account by status, overdue, hours, next due; click an account to filter Live Orders |
+  | **Trends** | Red / amber / green and hours across every saved generation (portal only; needs 2+) |
+  | **Workbooks** | The history table (View / Workbook ⬇ / Copy path), portal only |
+- **Data contract additions** (`build_live_orders.py`, schema unchanged `sdi.live_orders/1`, additive): per WO `pa` (parent), `dr` (drawing), `cat`, `n` (Production's notes carried from the workbook); per suggestion: start date, shops, SO qty, drawing.
+- **Fixed:** the Live Orders shop filter never matched (shops are sent as words, the filter used M / J / A). Lesson, again: **compare shop families by first letter everywhere** (`charAt(0)`).
+- **Fixed in dark mode:** text on the yellow tiles; charts redraw when the theme changes (their colours are read at draw time).
+- **Tested (fake data, 300 WOs):** every tab standalone and in the portal (local FastAPI with the real routes file, 3 saved runs): Trends, Workbooks, View an older run → "viewing … back to latest", shop filter 150 Metal of 300, phone width (390 px) no sideways scroll, no script errors.
+- **To get it on the portal:** `git pull` in `C:\SDI_X3\repo`, then run the installer with the real route file and `--apply` (it copies the new page and routes, backs up first), then restart SDIIntelligence.

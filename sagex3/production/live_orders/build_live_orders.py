@@ -575,11 +575,14 @@ def write_html(path, meta, wos, wc_cols, wcnames, load, sug, compare):
                           wo=w["wo"], lv=w["level"], so=w["so"], ac=w["account"], p=w["code"], d=w["des"], rev=w["rev"],
                           st=w["status"], mt=w["mat_text"], q=w["qty"], b=w["done"], bal=w["bal"], f=w["families"],
                           h={c: round(v, 2) for c, v in w["hours"].items() if v},
+                          pa=w["parent"], dr=drawing_of(w["code"]), cat=w.get("cat", ""),
+                          n={k: v for k, v in (w.get("carry") or {}).items() if v},     # Production's notes
                           x=[[e_["level"], e_["comp"], e_["des"], round(e_["need"], 3), e_["stock"], e_["on_po"], e_["po_due"],
                               e_["on_wo"], e_["make"]] for e_ in w["explode"]]) for w in wos],
                 load=[[k.isoformat(), {c: round(v, 1) for c, v in load[k].items()}] for k in sorted(k for k in load if k)],
                 sug=[[s["code"], s["des"], s["so"], s["mrp_qty"], s["due"].isoformat() if s["due"] else "", s["bom"], s["route"],
-                      s["account"]] for s in sug],
+                      s["account"], s["start"].isoformat() if s["start"] else "", [f[:1] for f in s["families"]],
+                      s["so_qty"], s["drawing"]] for s in sug],
                 cmp=compare["summary"] if compare else None)
     page = TEMPLATE.replace("__DATA__", json.dumps(data, default=str).replace("</", "<\\/")).replace("__ASAT__", html.escape(meta["as_at"]))
     Path(path).write_text(page, encoding="utf-8")

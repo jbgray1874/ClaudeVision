@@ -3,211 +3,348 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Live Orders Dashboard</title>
+<title>Live Orders</title>
 <!--
-  SDI Live Orders - visual dashboard (19 Nov 2026).
-  Reads the Live Orders data contract (schema "sdi.live_orders/1"): the SDI_Live_Orders_<date>.json that
-  build_live_orders.py writes beside the board. The source can be the Access extract today, Sage X3 exports
-  or the X3 API tomorrow - the dashboard doesn't change.
-  Three ways to give it data:
-    1. open the page and choose / drop the .json file;
-    2. live_orders_dashboard.html?data=<url of the .json>   (e.g. a portal endpoint);
-    3. set window.LIVE_ORDERS_DATA before this script runs (embedding).
-  Self-contained: no external libraries, works offline and inside the SDI portal (one tile / iframe).
-  Read-only: it shows data, it never changes anything.
+  SDI Live Orders - the portal's Live Orders page (19 Nov 2026; tabbed views 20 Nov).
+  Reads the Live Orders data contract (schema "sdi.live_orders/1") that build_live_orders.py writes. The source
+  is Sage X3 (API) - or the Access extract / screen exports before go-live; the page doesn't change.
+  Views: Overview · Live Orders · Work-centre load · Shortages · WO Suggestions · Customers · Trends · Workbooks.
+  Data: in the portal it loads /api/live-orders/latest (key after # in the address, never sent to the server);
+  standalone, choose / drop a .json, use ?data=<url>, or set window.LIVE_ORDERS_DATA.
+  Self-contained (no libraries), read-only apart from the portal's Regenerate button.
 -->
 <style>
-:root{--y:#F5D947;--ink:#282928;--t:#1f2321;--muted:#626763;--line:#e3e4e0;--bg:#f4f4f1;--card:#fff;
+:root{--y:#F5D947;--ink:#1d1e1d;--t:#1f2321;--muted:#626763;--line:#e3e4e0;--bg:#f2f2ee;--card:#fff;--soft:#f7f7f4;
   --g:#1e7a3a;--gb:#e3f4e8;--a:#a06400;--ab:#fff1c7;--r:#b42318;--rb:#fde2e1;
-  --m:#3b6ea8;--j:#9a6a2f;--ac:#7a4fa3;--o:#8a8f8b;--grid:#ecedea}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--t:#ececea;--muted:#a3a7a4;--line:#363837;--bg:#141514;--card:#1c1d1c;
-  --g:#7fd39a;--gb:#16301f;--a:#f2c661;--ab:#3a2f12;--r:#ff998d;--rb:#3a1d1b;--m:#7fa9dc;--j:#d4a46a;--ac:#b391d6;--o:#8d928e;--grid:#2a2c2b}}
-:root[data-theme="dark"]{--t:#ececea;--muted:#a3a7a4;--line:#363837;--bg:#141514;--card:#1c1d1c;
-  --g:#7fd39a;--gb:#16301f;--a:#f2c661;--ab:#3a2f12;--r:#ff998d;--rb:#3a1d1b;--m:#7fa9dc;--j:#d4a46a;--ac:#b391d6;--o:#8d928e;--grid:#2a2c2b}
+  --m:#3b6ea8;--j:#9a6a2f;--ac:#7a4fa3;--o:#8a8f8b;--grid:#ecedea;--sh:0 1px 2px rgba(0,0,0,.04),0 6px 18px rgba(0,0,0,.05)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--t:#ececea;--muted:#a3a7a4;--line:#363837;--bg:#121312;--card:#1c1d1c;--soft:#222322;
+  --g:#7fd39a;--gb:#16301f;--a:#f2c661;--ab:#3a2f12;--r:#ff998d;--rb:#3a1d1b;--m:#7fa9dc;--j:#d4a46a;--ac:#b391d6;--o:#8d928e;--grid:#2a2c2b;--sh:none}}
+:root[data-theme="dark"]{--t:#ececea;--muted:#a3a7a4;--line:#363837;--bg:#121312;--card:#1c1d1c;--soft:#222322;
+  --g:#7fd39a;--gb:#16301f;--a:#f2c661;--ab:#3a2f12;--r:#ff998d;--rb:#3a1d1b;--m:#7fa9dc;--j:#d4a46a;--ac:#b391d6;--o:#8d928e;--grid:#2a2c2b;--sh:none}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--t);font:14px/1.45 'Segoe UI','Helvetica Neue',Arial,sans-serif}
-header{background:var(--ink);color:#fff;border-bottom:6px solid var(--y)}
-.w{max-width:1500px;margin:0 auto;padding:0 16px}
-.hd{padding-top:16px;padding-bottom:12px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}
-.brand{color:var(--y);font-weight:700}h1{margin:2px 0 0;font-size:24px}.sub{color:#cfd1ce;font-size:13px}
-main{padding:16px 0 40px}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
-.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
-.tile b{display:block;font-size:24px;font-variant-numeric:tabular-nums}.tile span{color:var(--muted);font-size:12px}
-.tile.r b{color:var(--r)}.tile.a b{color:var(--a)}.tile.g b{color:var(--g)}
-.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr));gap:14px;margin-bottom:14px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0}
+header{background:radial-gradient(1200px 300px at 85% -40%,rgba(245,217,71,.22),transparent 60%),linear-gradient(135deg,#1b1c1b,#2b2c2a);color:#fff;border-bottom:4px solid var(--y)}
+.w{max-width:1560px;margin:0 auto;padding:0 18px}
+.hd{padding-top:18px;padding-bottom:14px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;justify-content:space-between}
+.brand{color:var(--y);font-weight:800;letter-spacing:.3px;font-size:13px}h1{margin:2px 0 2px;font-size:28px;letter-spacing:-.3px}
+.sub{color:#cfd1ce;font-size:13px}.chip{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:99px;font-size:11px;font-weight:700;background:var(--y);color:#1c1c1c;vertical-align:2px}
+.chip.old{background:#ffb35c}
+nav.tabs{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+nav.tabs .w{display:flex;gap:4px;overflow-x:auto;padding-top:8px;padding-bottom:8px}
+nav.tabs button{border:0;background:transparent;padding:8px 14px;border-radius:99px;font-weight:600;color:var(--muted);white-space:nowrap}
+nav.tabs button.on{background:var(--ink);color:#fff}nav.tabs button:hover:not(.on){background:var(--card)}
+:root[data-theme="dark"] nav.tabs button.on{background:var(--y);color:#1c1c1c}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) nav.tabs button.on{background:var(--y);color:#1c1c1c}}
+main{padding:18px 0 48px}
+.view{display:none;animation:fade .25s ease}.view.on{display:block}@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:var(--sh);position:relative;overflow:hidden}
+.tile b{display:block;font-size:30px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums}.tile span{color:var(--muted);font-size:12px}
+.tile::after{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--line)}
+.tile.r b{color:var(--r)}.tile.r::after{background:var(--r)}.tile.a b{color:var(--a)}.tile.a::after{background:var(--a)}
+.tile.g b{color:var(--g)}.tile.g::after{background:var(--g)}.tile.y::after{background:var(--y)}
+.tile.y span,.tile.y small{color:#4a4838}
+.tile small{display:block;color:var(--muted);font-size:11px;margin-top:2px}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,560px),1fr));gap:16px;margin-bottom:16px}
+.grid3{display:grid;grid-template-columns:minmax(260px,1fr) minmax(0,2.2fr);gap:16px;margin-bottom:16px}
+@media (max-width:900px){.grid3{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;min-width:0;box-shadow:var(--sh)}
 .card h2{font-size:15px;margin:0 0 2px}.card p.note{margin:0 0 10px;color:var(--muted);font-size:12px}
 .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-bottom:6px}
-.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
 svg{display:block;width:100%;height:auto}svg text{fill:var(--muted);font-size:11px}
-.tbl{overflow:auto;max-height:520px}table{border-collapse:collapse;width:100%;font-size:13px}
-th,td{padding:5px 7px;border-top:1px solid var(--line);text-align:left;white-space:nowrap}
-th{position:sticky;top:0;background:var(--ink);color:#fff;font-weight:600;z-index:1}
-td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}td.wrap{white-space:normal;min-width:220px}
-.st{font-weight:700;border-radius:4px;padding:1px 6px;font-size:12px}
+.tbl{overflow:auto;max-height:640px;border-radius:10px;border:1px solid var(--line)}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:6px 8px;border-top:1px solid var(--line);text-align:left;white-space:nowrap}
+th{position:sticky;top:0;background:var(--ink);color:#fff;font-weight:600;z-index:1;font-size:12px}
+tbody tr:hover td{background:var(--soft)}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}td.wrap{white-space:normal;min-width:220px;max-width:420px}
+.st{font-weight:700;border-radius:99px;padding:1px 8px;font-size:11px;letter-spacing:.2px}
 .GREEN{background:var(--gb);color:var(--g)}.AMBER{background:var(--ab);color:var(--a)}.RED{background:var(--rb);color:var(--r)}
-tr.main{cursor:pointer}tr.x td{background:var(--bg);white-space:normal}.muted{color:var(--muted)}
+tr.main{cursor:pointer}tr.x>td{background:var(--soft);white-space:normal;padding:10px}.muted{color:var(--muted)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:3px}
 .bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center}
-input,select,button{font:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--t);max-width:100%}
-button{cursor:pointer}
-#drop{border:2px dashed var(--line);border-radius:12px;padding:40px 16px;text-align:center;background:var(--card)}
-#drop.on{border-color:var(--y)}
-.hide{display:none}
-.y{background:var(--y);color:#1c1c1c;border-color:var(--y);font-weight:700}
-#hist tr.cur td{background:var(--ab)}#hist a{color:var(--m);cursor:pointer;text-decoration:none;margin-right:10px;font-weight:600}
+input,select,button{font:inherit;padding:7px 11px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--t);max-width:100%}
+button{cursor:pointer}button:disabled{opacity:.55;cursor:wait}
+.y{background:var(--y);color:#1c1c1c;border-color:var(--y);font-weight:800}
+#drop{border:2px dashed var(--line);border-radius:14px;padding:44px 16px;text-align:center;background:var(--card)}
+#drop.on{border-color:var(--y)}.hide{display:none!important}
+#hist tr.cur td{background:var(--ab)}a.lk,#hist a{color:var(--m);cursor:pointer;text-decoration:none;margin-right:10px;font-weight:600}
 #rstat{color:#cfd1ce;font-size:12px;max-width:520px}
+.heat td.n{min-width:52px}.mini{display:flex;height:8px;border-radius:99px;overflow:hidden;min-width:120px;background:var(--grid)}
+.mini i{display:block;height:100%}.notes{font-size:12px;color:var(--t)}.notes b{color:var(--muted);font-weight:600}
+.pill{display:inline-block;padding:1px 7px;border-radius:99px;background:var(--soft);border:1px solid var(--line);font-size:11px;margin:1px 2px 1px 0}
 </style>
 </head>
 <body>
 <header><div class="w hd">
-  <div><div class="brand">we.are.sdi</div><h1>Live Orders Dashboard</h1><div class="sub" id="asat">No data loaded</div></div>
+  <div><div class="brand">we.are.sdi · Production</div><h1>Live Orders</h1><div class="sub"><span id="asat">No data loaded</span><span id="viewing"></span></div></div>
   <div class="bar" style="margin:0" id="filebar"><label class="sub" for="file">Data file</label><input type="file" id="file" accept=".json,application/json"></div>
   <div class="bar hide" style="margin:0" id="portalbar"><span id="rstat"></span><button id="regen" class="y" title="Pull fresh data from Sage X3, build, and save a new workbook">↻ Regenerate</button></div>
 </div></header>
+<nav class="tabs hide" id="tabs"><div class="w">
+  <button data-v="ov" class="on">Overview</button><button data-v="lo">Live Orders</button><button data-v="ld">Work-centre load</button>
+  <button data-v="sh">Shortages</button><button data-v="sg">WO Suggestions</button><button data-v="cu">Customers</button>
+  <button data-v="tr">Trends</button><button data-v="wb">Workbooks</button>
+</div></nav>
 <main class="w">
-  <div id="drop"><b>Choose or drop a Live Orders data file</b><br><span class="muted">SDI_Live_Orders_&lt;date&gt;.json, written by build_live_orders.py beside the board</span></div>
-  <div class="card hide" id="histcard" style="margin-bottom:14px"><h2>Workbooks</h2><p class="note" id="histnote">Every generation is kept. View any of them here, or open the workbook to edit - Comments, Prog and Tube req carry forward to the next one.</p><div class="tbl" style="max-height:260px"><table id="hist"></table></div></div>
-  <div id="app" class="hide">
+  <div id="drop"><b>Choose or drop a Live Orders data file</b><br><span class="muted">SDI_Live_Orders_&lt;date&gt;.json, written beside each workbook</span></div>
+
+  <section class="view on" id="v-ov">
     <div class="tiles" id="tiles"></div>
-    <div class="grid2">
-      <div class="card"><h2>Works orders by due week</h2><p class="note">Material status of each works order still to make, by the week it's due. Overdue orders sit on the left.</p><div class="legend" id="lg1"></div><div id="c1"></div></div>
-      <div class="card"><h2>Hours still to do, by week and shop</h2><p class="note">Route hours on open works orders, by the week each is due (overdue counts in this week). Capacity per work centre comes from Sage X3 later.</p><div class="legend" id="lg2"></div><div id="c2"></div></div>
+    <div class="grid3">
+      <div class="card"><h2>Material status</h2><p class="note">Can each works order be made? Green in stock, amber covered in time, red short.</p><div id="donut"></div></div>
+      <div class="card"><h2>Works orders by due week</h2><p class="note">By the week each works order is due; overdue on the left.</p><div class="legend" id="lg1"></div><div id="c1"></div></div>
     </div>
     <div class="grid2">
-      <div class="card"><h2>Hours by work centre</h2><p class="note">All open works orders, busiest work centres first.</p><div id="c3"></div></div>
-      <div class="card"><h2>Bought-in material: demand against supply</h2><p class="note">Every purchased component across the open works orders (all BOM levels): total needed against stock, on order and on works orders. Short = needed − stock − on PO − on WO.</p><div class="tbl" id="t2" style="max-height:330px"></div></div>
+      <div class="card"><h2>Hours still to do, by week and shop</h2><p class="note">Route hours on open works orders by due week (overdue counts this week).</p><div class="legend" id="lg2"></div><div id="c2"></div></div>
+      <div class="card"><h2>Busiest work centres</h2><p class="note">Hours still to do across all open works orders.</p><div id="c3"></div></div>
     </div>
-    <div class="card">
-      <h2>Works orders</h2><p class="note">Click a row for its exploded BOM. Filter by status, shop or text.</p>
-      <div class="bar">
-        <select id="fst"><option value="">All statuses</option><option>RED</option><option>AMBER</option><option>GREEN</option></select>
-        <select id="ffam"><option value="">All shops</option><option value="M">Metal</option><option value="J">Joinery</option><option value="A">Acrylics</option></select>
-        <input id="fq" placeholder="Search part, WO, SO, description" size="32">
-        <span class="muted" id="count"></span>
-      </div>
-      <div class="tbl" id="t1"></div>
+    <div class="grid2">
+      <div class="card"><h2>Biggest shortages</h2><p class="note">Bought-in components short across the open works orders - the full list is under Shortages.</p><div id="topshort"></div></div>
+      <div class="card"><h2>Due in the next 14 days</h2><p class="note">Works orders due soon that aren't green.</p><div id="soon"></div></div>
     </div>
-  </div>
+  </section>
+
+  <section class="view" id="v-lo"><div class="card">
+    <h2>Live Orders</h2><p class="note">One line per works order, as Production's sheet. Click a row for its exploded BOM - stock, on order and the PO due date. Notes are Production's, from the workbook.</p>
+    <div class="bar">
+      <select id="fst"><option value="">All statuses</option><option>RED</option><option>AMBER</option><option>GREEN</option></select>
+      <select id="ffam"><option value="">All shops</option><option value="M">Metal</option><option value="J">Joinery</option><option value="A">Acrylics</option></select>
+      <select id="fwk"><option value="">All weeks</option></select>
+      <select id="flv"><option value="">Top level and subs</option><option value="Top">Top level only</option></select>
+      <input id="fq" placeholder="Search part, WO, SO, account, description" size="34">
+      <button id="csv1">Export CSV</button><span class="muted" id="count"></span>
+    </div>
+    <div class="tbl" id="t1"></div></div></section>
+
+  <section class="view" id="v-ld"><div class="card">
+    <h2>Work-centre load</h2><p class="note">Hours still to do in each work centre, by the week the works order is due. Darker = busier. Overdue work counts in the current week.</p>
+    <div class="bar"><select id="lfam"><option value="">All shops</option><option value="M">Metal</option><option value="J">Joinery</option><option value="A">Acrylics</option></select></div>
+    <div class="tbl heat" id="t3"></div></div></section>
+
+  <section class="view" id="v-sh"><div class="card">
+    <h2>Shortages</h2><p class="note">Every bought-in component the open works orders need (all BOM levels), against stock, on order and on works orders. Short = needed − stock − on PO − on WO. Purchasing's list.</p>
+    <div class="bar"><select id="sonly"><option value="1">Short only</option><option value="">All bought-in components</option></select><input id="sq" placeholder="Search component" size="24"><button id="csv2">Export CSV</button><span class="muted" id="scount"></span></div>
+    <div class="tbl" id="t2"></div></div></section>
+
+  <section class="view" id="v-sg"><div class="card">
+    <h2>WO Suggestions</h2><p class="note">Sales-order lines for made parts that no works order or stock covers. Red = no BOM or no route. Lines due over 60 days ago are left out for Customer Services to close.</p>
+    <div class="tbl" id="t4"></div></div></section>
+
+  <section class="view" id="v-cu">
+    <div class="grid2">
+      <div class="card"><h2>Works orders by customer</h2><p class="note">Open works orders per account, coloured by material status.</p><div class="legend" id="lg5"></div><div id="c5"></div></div>
+      <div class="card"><h2>Customers</h2><p class="note">Click an account to see its works orders on Live Orders.</p><div class="tbl" id="t5" style="max-height:460px"></div></div>
+    </div></section>
+
+  <section class="view" id="v-tr">
+    <div class="grid2">
+      <div class="card"><h2>Material status over time</h2><p class="note" id="trnote">From every saved generation.</p><div class="legend" id="lg6"></div><div id="c6"></div></div>
+      <div class="card"><h2>Hours still to do over time</h2><p class="note">Total route hours on open works orders at each generation.</p><div id="c7"></div></div>
+    </div></section>
+
+  <section class="view" id="v-wb"><div class="card" id="histcard">
+    <h2>Workbooks</h2><p class="note" id="histnote">Every generation is kept. View any of them, or open the workbook to edit - Comments, Prog and Tube req carry forward to the next one.</p>
+    <div class="tbl" style="max-height:560px"><table id="hist"></table></div></div></section>
 </main>
 <script>
-const $=s=>document.querySelector(s);
+const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const esc=v=>String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmtN=(v,d=0)=>Number(v||0).toLocaleString('en-GB',{maximumFractionDigits:d,minimumFractionDigits:d});
 const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const FAM={M:['Metal','--m'],J:['Joinery','--j'],A:['Acrylics','--ac'],'':['Other','--o']};
 const ST=[['RED','--r'],['AMBER','--a'],['GREEN','--g']];
-let D=null;
+let D=null,MAT=[],hist=[],cur='';
+const today=new Date().toISOString().slice(0,10);
+function monday(d){const x=new Date(String(d).slice(0,10)+'T12:00:00');const k=(x.getDay()+6)%7;x.setDate(x.getDate()-k);return x.toISOString().slice(0,10)}
+function dd(s){if(!s)return '';const [y,m,d]=String(s).slice(0,10).split('-');return d?`${d}/${m}/${y.slice(2)}`:s}
+function niceStep(x){const p=Math.pow(10,Math.floor(Math.log10(Math.max(x,1e-9))));const n=x/p;return (n<=1?1:n<=2?2:n<=5?5:10)*p}
+function dots(F){return (F||[]).map(f=>`<span class="dot" title="${(FAM[f]||FAM[''])[0]}" style="background:${css((FAM[f]||FAM[''])[1])}"></span>`).join('')}
+function hrsOf(w){return Object.values(w.h||{}).reduce((a,b)=>a+b,0)}
 
-function monday(d){const x=new Date(d+'T00:00:00');const k=(x.getDay()+6)%7;x.setDate(x.getDate()-k);return x.toISOString().slice(0,10)}
-function dd(s){if(!s)return '';const [y,m,d]=s.split('-');return `${d}/${m}/${y.slice(2)}`}
-
+// ---------------------------------------------------------------- charts (plain SVG)
 function stackedBars(el,cats,series,opts={}){
-  // cats: labels; series: [{name,color,vals:[]}]
-  const W=640,H=opts.h||230,L=44,B=34,T=8,R=8,iw=W-L-R,ih=H-T-B;
+  const W=640,H=opts.h||230,L=44,B=34,T=12,R=8,iw=W-L-R,ih=H-T-B;
   const tot=cats.map((_,i)=>series.reduce((a,s)=>a+(s.vals[i]||0),0));const max=Math.max(1,...tot);
-  const step=niceStep(max/4);const top=Math.ceil(max/step)*step;const bw=iw/cats.length;
+  const step=niceStep(max/4);const top=Math.ceil(max/step)*step;const bw=iw/Math.max(cats.length,1);
   let g='';for(let v=0;v<=top+1e-9;v+=step){const y=T+ih-(v/top)*ih;g+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="${css('--grid')}"/><text x="${L-6}" y="${y+4}" text-anchor="end">${fmtN(v)}</text>`}
   cats.forEach((c,i)=>{let y=T+ih;series.forEach(s=>{const v=s.vals[i]||0;if(!v)return;const h=v/top*ih;y-=h;
-    g+=`<rect x="${L+i*bw+bw*0.15}" y="${y}" width="${bw*0.7}" height="${h}" fill="${s.color}"><title>${esc(c)} · ${esc(s.name)}: ${fmtN(v,opts.dec||0)}</title></rect>`});
-    const tl=opts.labelEvery&&i%opts.labelEvery?'':esc(c);g+=`<text x="${L+i*bw+bw/2}" y="${H-B+14}" text-anchor="middle">${tl}</text>`;
-    if(tot[i])g+=`<text x="${L+i*bw+bw/2}" y="${T+ih-tot[i]/top*ih-3}" text-anchor="middle">${fmtN(tot[i],opts.dec||0)}</text>`});
+    g+=`<rect x="${L+i*bw+bw*0.16}" y="${y}" width="${bw*0.68}" height="${h}" rx="2" fill="${s.color}"><title>${esc(c)} · ${esc(s.name)}: ${fmtN(v,opts.dec||0)}</title></rect>`});
+    g+=`<text x="${L+i*bw+bw/2}" y="${H-B+14}" text-anchor="middle">${esc(c)}</text>`;
+    if(tot[i])g+=`<text x="${L+i*bw+bw/2}" y="${T+ih-tot[i]/top*ih-4}" text-anchor="middle">${fmtN(tot[i],opts.dec||0)}</text>`});
   el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.label||'chart')}">${g}</svg>`}
-function niceStep(x){const p=Math.pow(10,Math.floor(Math.log10(Math.max(x,1e-9))));const n=x/p;return (n<=1?1:n<=2?2:n<=5?5:10)*p}
-function hbars(el,rows,color){
-  const W=640,rh=22,L=170,R=60,H=rows.length*rh+8,max=Math.max(1,...rows.map(r=>r[1]));let g='';
-  rows.forEach((r,i)=>{const y=4+i*rh,w=(W-L-R)*r[1]/max;g+=`<text x="${L-8}" y="${y+14}" text-anchor="end">${esc(r[0])}</text>
-    <rect x="${L}" y="${y+3}" width="${Math.max(w,1)}" height="${rh-8}" rx="3" fill="${color}"><title>${esc(r[0])}: ${fmtN(r[1],1)} h</title></rect>
-    <text x="${L+w+6}" y="${y+14}">${fmtN(r[1],0)}</text>`});
-  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="hours by work centre">${g}</svg>`}
+function hbars(el,rows,colorOf,unit='h'){
+  const W=640,rh=24,L=180,R=64,H=rows.length*rh+8,max=Math.max(1,...rows.map(r=>r[1]));let g='';
+  rows.forEach((r,i)=>{const y=4+i*rh,w=(W-L-R)*r[1]/max;g+=`<text x="${L-8}" y="${y+15}" text-anchor="end">${esc(r[0])}</text>
+    <rect x="${L}" y="${y+4}" width="${Math.max(w,1)}" height="${rh-9}" rx="4" fill="${colorOf(r)}"><title>${esc(r[0])}: ${fmtN(r[1],1)} ${unit}</title></rect>
+    <text x="${L+w+6}" y="${y+15}">${fmtN(r[1],0)}</text>`});
+  el.innerHTML=rows.length?`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="bar chart">${g}</svg>`:'<p class="muted">No route hours.</p>'}
+function stackedH(el,rows){ // rows: [label,[red,amber,green]]
+  const W=640,rh=24,L=170,R=50,H=rows.length*rh+8,max=Math.max(1,...rows.map(r=>r[1].reduce((a,b)=>a+b,0)));let g='';
+  rows.forEach((r,i)=>{const y=4+i*rh;let x=L;r[1].forEach((v,k)=>{const w=(W-L-R)*v/max;if(w>0)g+=`<rect x="${x}" y="${y+4}" width="${w}" height="${rh-9}" fill="${css(ST[k][1])}"><title>${esc(r[0])} · ${ST[k][0]}: ${v}</title></rect>`;x+=w});
+    g+=`<text x="${L-8}" y="${y+15}" text-anchor="end">${esc(r[0])}</text><text x="${x+6}" y="${y+15}">${r[1].reduce((a,b)=>a+b,0)}</text>`});
+  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="works orders by customer">${g}</svg>`}
+function donut(el,parts){const tot=parts.reduce((a,p)=>a+p[1],0)||1;let a0=-Math.PI/2,g='';const R=78,r=52,cx=100,cy=100;
+  parts.forEach(([n,v,c])=>{if(!v)return;let a1=a0+v/tot*2*Math.PI;if(a1-a0>=2*Math.PI-1e-6)a1=a0+2*Math.PI-1e-4;const big=a1-a0>Math.PI?1:0;
+    const p=(ang,rad)=>[cx+rad*Math.cos(ang),cy+rad*Math.sin(ang)];const [x0,y0]=p(a0,R),[x1,y1]=p(a1,R),[x2,y2]=p(a1,r),[x3,y3]=p(a0,r);
+    g+=`<path d="M${x0} ${y0}A${R} ${R} 0 ${big} 1 ${x1} ${y1}L${x2} ${y2}A${r} ${r} 0 ${big} 0 ${x3} ${y3}Z" fill="${c}"><title>${n}: ${v} (${Math.round(v/tot*100)}%)</title></path>`;a0=a1});
+  const red=parts[0][1];el.innerHTML=`<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap"><svg viewBox="0 0 200 200" style="width:190px;flex:none" role="img" aria-label="material status">${g}
+    <text x="100" y="98" text-anchor="middle" style="font-size:30px;font-weight:800;fill:${css('--t')}">${Math.round(red/tot*100)}%</text><text x="100" y="120" text-anchor="middle">short (red)</text></svg>
+    <div>${parts.map(([n,v,c])=>`<div style="margin:6px 0"><span class="dot" style="background:${c};width:11px;height:11px"></span><b>${fmtN(v)}</b> <span class="muted">${n.toLowerCase()} · ${Math.round(v/tot*100)}%</span></div>`).join('')}</div></div>`}
+function lines(el,cats,series,opts={}){const W=640,H=240,L=44,B=34,T=12,R=12,iw=W-L-R,ih=H-T-B;
+  const max=Math.max(1,...series.flatMap(s=>s.vals));const step=niceStep(max/4);const top=Math.ceil(max/step)*step;let g='';
+  for(let v=0;v<=top+1e-9;v+=step){const y=T+ih-(v/top)*ih;g+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="${css('--grid')}"/><text x="${L-6}" y="${y+4}" text-anchor="end">${fmtN(v)}</text>`}
+  const X=i=>L+(cats.length<2?iw/2:i*iw/(cats.length-1));
+  series.forEach(s=>{const pts=s.vals.map((v,i)=>`${X(i)},${T+ih-v/top*ih}`).join(' ');
+    g+=`<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round"/>`+s.vals.map((v,i)=>`<circle cx="${X(i)}" cy="${T+ih-v/top*ih}" r="3.5" fill="${s.color}"><title>${esc(cats[i])} · ${esc(s.name)}: ${fmtN(v,opts.dec||0)}</title></circle>`).join('')});
+  const every=Math.ceil(cats.length/8);cats.forEach((c,i)=>{if(i%every==0||i==cats.length-1)g+=`<text x="${X(i)}" y="${H-B+16}" text-anchor="middle">${esc(c)}</text>`});
+  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.label||'trend')}">${g}</svg>`}
 function legend(el,items){el.innerHTML=items.map(([n,c])=>`<span><i style="background:${c}"></i>${esc(n)}</span>`).join('')}
+function countUp(el,to,dec=0){const t0=performance.now(),d=650;function f(t){const k=Math.min(1,(t-t0)/d);el.textContent=fmtN(to*(1-Math.pow(1-k,3)),dec);if(k<1)requestAnimationFrame(f)}el.textContent=fmtN(to,dec);requestAnimationFrame(f)}
+function csv(name,head,rows){const q=v=>/[",\n]/.test(String(v??''))?`"${String(v).replace(/"/g,'""')}"`:String(v??'');
+  const b=new Blob(['﻿'+[head,...rows].map(r=>r.map(q).join(',')).join('\r\n')],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=name;a.click()}
 
+// ---------------------------------------------------------------- render
 function render(data){
   if(!data||!Array.isArray(data.wos)){alert('This file is not a Live Orders data file.');return}
-  D=data;const m=D.meta||{};$('#drop').classList.add('hide');$('#app').classList.remove('hide');
-  $('#asat').textContent=`as at ${m.as_at||''} · ${D.wos.length} works orders still to make`;
-  const today=new Date().toISOString().slice(0,10);
-  const tiles=[[fmtN(m.wos??D.wos.length),'works orders to make',''],[fmtN(m.red),'red: short, nothing due in time','r'],
-    [fmtN(m.amber),'amber: covered by PO / WO','a'],[fmtN(m.green),'green: material in stock','g'],
-    [fmtN(m.overdue),'overdue','r'],[fmtN(m.hours),'hours still to do',''],[fmtN(m.suggestions),'WO suggestions',''],
-    [fmtN((m.no_bom||0)+(m.no_route||0)),'no BOM / no route','r']];
-  $('#tiles').innerHTML=tiles.map(t=>`<div class="tile ${t[2]}"><b>${t[0]}</b><span>${t[1]}</span></div>`).join('');
-
-  // chart 1: WOs by due week and status (overdue bucket + this week + 8 weeks + later)
-  const thisMon=monday(today);const weeks=[];for(let i=0;i<9;i++){const d=new Date(thisMon+'T00:00:00');d.setDate(d.getDate()+7*i);weeks.push(d.toISOString().slice(0,10))}
-  const cats=['Overdue',...weeks.map((w,i)=>i?dd(w).slice(0,5):'This wk'),'Later','No date'];
-  const bucket=w=>{if(!w.due)return cats.length-1;if(w.due<today)return 0;const k=monday(w.due);const i=weeks.indexOf(k);return i>=0?i+1:cats.length-2};
+  D=data;const m=D.meta||{};
+  D.wos.forEach(w=>{w.F=(w.f||[]).map(x=>String(x).charAt(0));w.H=hrsOf(w);w.wk=w.due?monday(w.due):''});
+  $('#drop').classList.add('hide');$('#tabs').classList.remove('hide');
+  $('#asat').textContent=`as at ${m.as_at||''} · ${fmtN(D.wos.length)} works orders still to make`;
+  const tiles=[[m.wos??D.wos.length,'works orders to make','y',m.top!=null?`${fmtN(m.top)} top level`:''],[m.red,'red: short, nothing due in time','r'],
+    [m.amber,'amber: covered by PO / WO','a'],[m.green,'green: material in stock','g'],[m.overdue,'overdue','r'],
+    [m.hours,'hours still to do','y'],[m.suggestions,'WO suggestions','',m.sug_red!=null?`${fmtN(m.sug_red)} with no BOM / route`:''],[(m.no_bom||0)+(m.no_route||0),'no BOM / no route','r']];
+  $('#tiles').innerHTML=tiles.map((t,i)=>`<div class="tile ${t[2]}"><b id="k${i}">0</b><span>${t[1]}</span>${t[3]?`<small>${t[3]}</small>`:''}</div>`).join('');
+  tiles.forEach((t,i)=>countUp($('#k'+i),Number(t[0]||0)));
+  donut($('#donut'),[['RED',m.red||0,css('--r')],['AMBER',m.amber||0,css('--a')],['GREEN',m.green||0,css('--g')]]);
+  // chart 1: WOs by due week
+  const wk0=monday(today),weeks=[...new Set(D.wos.map(w=>w.wk).filter(k=>k&&k>=wk0))].sort().slice(0,12);
+  const cats=['Overdue',...weeks.map(k=>dd(k).slice(0,5)),'Later'];
+  const bucket=w=>!w.due||w.due<today?0:(weeks.indexOf(w.wk)>=0?weeks.indexOf(w.wk)+1:cats.length-1);
   const s1=ST.map(([s,c])=>({name:s,color:css(c),vals:cats.map(()=>0)}));
   D.wos.forEach(w=>{const k=ST.findIndex(x=>x[0]===w.st);if(k>=0)s1[k].vals[bucket(w)]++});
   legend($('#lg1'),ST.map(([s,c])=>[s.charAt(0)+s.slice(1).toLowerCase(),css(c)]));stackedBars($('#c1'),cats,s1,{label:'works orders by due week'});
-
-  // chart 2: hours by week and shop, from the load grid
-  const famOf={};(D.wcs||[]).forEach(c=>famOf[c[0]]=(c[2]||'').charAt(0));   // engine sends Metal/Joinery/Acrylics
+  // chart 2: hours by week and shop
+  const famOf={};(D.wcs||[]).forEach(c=>famOf[c[0]]=(c[2]||'').charAt(0));
   const lw=(D.load||[]).slice(0,10);const fams=['M','J','A',''];
   const s2=fams.map(f=>({name:FAM[f][0],color:css(FAM[f][1]),vals:lw.map(([k,v])=>Object.entries(v).reduce((a,[c,h])=>a+((famOf[c]||'')===f?h:0),0))}));
   legend($('#lg2'),fams.map(f=>[FAM[f][0],css(FAM[f][1])]));stackedBars($('#c2'),lw.map(([k])=>dd(k).slice(0,5)),s2,{dec:0,label:'hours by week'});
-
-  // chart 3: hours by work centre
+  // chart 3: busiest work centres
   const byWc={};D.wos.forEach(w=>Object.entries(w.h||{}).forEach(([c,h])=>byWc[c]=(byWc[c]||0)+h));
   const lab=Object.fromEntries((D.wcs||[]).map(c=>[c[0],c[1]||c[0]]));
-  hbars($('#c3'),Object.entries(byWc).sort((a,b)=>b[1]-a[1]).slice(0,14).map(([c,h])=>[lab[c]||c,h]),css('--m'));
+  hbars($('#c3'),Object.entries(byWc).sort((a,b)=>b[1]-a[1]).slice(0,12).map(([c,h])=>[lab[c]||c,h,c]),r=>css((FAM[famOf[r[2]]||'']||FAM[''])[1]));
+  // shortages: every bought-in component, all levels
+  const agg={};D.wos.forEach(w=>(w.x||[]).forEach(e=>{if(e[8]!=='Purchased')return;const a=agg[e[1]]||(agg[e[1]]={c:e[1],d:e[2],need:0,stock:e[4],po:e[5],due:e[6],wo:e[7],ws:new Set(),first:''});
+    a.need+=e[3];a.ws.add(w.wo);if(w.due&&(!a.first||w.due<a.first))a.first=w.due}));
+  MAT=Object.values(agg).map(a=>({...a,short:a.need-a.stock-a.po-a.wo,n:a.ws.size})).sort((a,b)=>b.short-a.short||b.n-a.n);
+  const top=MAT.filter(a=>a.short>1e-6).slice(0,10);
+  $('#topshort').innerHTML=top.length?`<div class="tbl"><table><tr><th>Component</th><th class="n">Short</th><th class="n">WOs held up</th><th>First WO due</th><th>Next PO</th></tr>`+top.map(a=>`<tr><td>${esc(a.c)}</td><td class="n"><span class="st RED">${fmtN(a.short,1)}</span></td><td class="n">${a.n}</td><td>${dd(a.first)}</td><td>${esc(a.due)||'<span class="muted">none</span>'}</td></tr>`).join('')+'</table></div><p class="note" style="margin-top:8px"><a class="lk" data-go="sh">All shortages →</a></p>':'<p class="muted">No bought-in shortages.</p>';
+  const lim=new Date(Date.now()+14*864e5).toISOString().slice(0,10);
+  const soon=D.wos.filter(w=>w.due&&w.due>=today&&w.due<=lim&&w.st!=='GREEN').sort((a,b)=>a.due<b.due?-1:1).slice(0,12);
+  $('#soon').innerHTML=soon.length?`<div class="tbl"><table><tr><th>Due</th><th>WO</th><th>Part</th><th>Status</th><th>Material</th></tr>`+soon.map(w=>`<tr><td>${dd(w.due)}</td><td>${esc(w.wo)}</td><td>${esc(w.p)}</td><td><span class="st ${esc(w.st)}">${esc(w.st)}</span></td><td class="wrap">${esc(w.mt)}</td></tr>`).join('')+'</table></div>':'<p class="muted">Nothing amber or red due in the next 14 days.</p>';
+  // filters
+  $('#fwk').innerHTML='<option value="">All weeks</option><option value="od">Overdue</option>'+[...new Set(D.wos.map(w=>w.wk).filter(Boolean))].sort().map(k=>`<option value="${k}">w/c ${dd(k)}</option>`).join('');
+  table();loadView();shortView();sugView();custView();trends()}
 
-  // table 2: bought-in material, demand against supply (x = [level, comp, des, need, stock, on_po, po_due, on_wo, make])
-  const agg={};D.wos.forEach(w=>(w.x||[]).forEach(e=>{if(e[8]!=='Purchased')return;const a=agg[e[1]]||(agg[e[1]]={c:e[1],d:e[2],need:0,stock:e[4],po:e[5],due:e[6],wo:e[7],n:0});a.need+=e[3];a.n++}));
-  const mat=Object.values(agg).map(a=>({...a,short:a.need-a.stock-a.po-a.wo})).sort((a,b)=>b.short-a.short);
-  const shortN=mat.filter(a=>a.short>1e-6).length;
-  $('#t2').innerHTML=`<p class="note" style="margin:0 0 6px">${fmtN(shortN)} of ${fmtN(mat.length)} bought-in components are short across the open works orders.</p><table><tr><th>Component</th><th class="n">Short</th><th class="n">Needed</th><th class="n">Stock</th><th class="n">On PO</th><th>Next PO</th><th class="n">On WO</th><th>Description</th></tr>`+
-    mat.slice(0,150).map(a=>`<tr><td>${esc(a.c)}</td><td class="n">${a.short>1e-6?`<span class="st RED">${fmtN(a.short,2)}</span>`:''}</td><td class="n">${fmtN(a.need,2)}</td><td class="n">${fmtN(a.stock,2)}</td><td class="n">${fmtN(a.po,2)}</td><td>${esc(a.due)}</td><td class="n">${fmtN(a.wo,2)}</td><td class="wrap">${esc(a.d)}</td></tr>`).join('')+'</table>';
-  table()}
+function filtered(){const st=$('#fst').value,fam=$('#ffam').value,wk=$('#fwk').value,lv=$('#flv').value,q=$('#fq').value.trim().toLowerCase();
+  return D.wos.filter(w=>(!st||w.st===st)&&(!fam||w.F.includes(fam))&&(!lv||w.lv===lv)&&(!wk||(wk==='od'?w.due&&w.due<today:w.wk===wk))&&
+    (!q||[w.p,w.wo,w.so,w.d,w.ac,w.pa].some(v=>String(v||'').toLowerCase().includes(q))))}
+function table(){const rows=filtered();$('#count').textContent=`${fmtN(rows.length)} of ${fmtN(D.wos.length)}`;
+  $('#t1').innerHTML=`<table><thead><tr><th>Due</th><th>Customer date</th><th>WO</th><th>Level</th><th>SO</th><th>Account</th><th>Part</th><th>Description</th><th>Rev</th><th>Status</th><th>Material</th><th class="n">Qty</th><th class="n">Made</th><th class="n">Balance</th><th>Shops</th><th class="n">Hours</th><th>Production's notes</th></tr></thead><tbody>`+
+    rows.slice(0,1000).map(w=>{const od=w.due&&w.due<today,n=w.n||{};
+      const notes=[n.comments&&esc(n.comments),n.prog&&`<b>Prog</b> ${esc(n.prog)}`,n.tube&&`<b>Tube</b> ${esc(n.tube)}`,n.note&&esc(n.note)].filter(Boolean);
+      return `<tr class="main" data-wo="${esc(w.wo)}"><td style="${od?'color:var(--r);font-weight:700':''}">${dd(w.due)}</td><td>${/^\d{4}-/.test(w.cd||'')?dd(w.cd):`<span class="muted">${esc(w.cd)}</span>`}</td><td>${esc(w.wo)}</td><td>${w.lv==='Top'?'Top':'<span class="muted">Sub</span>'}</td><td>${esc(w.so)}</td><td>${esc(w.ac)}</td><td><b>${esc(w.p)}</b></td><td class="wrap">${esc(w.d)}</td><td>${esc(w.rev)}</td><td><span class="st ${esc(w.st)}">${esc(w.st)}</span></td><td class="wrap">${esc(w.mt)}</td><td class="n">${fmtN(w.q,0)}</td><td class="n">${fmtN(w.b,0)}</td><td class="n"><b>${fmtN(w.bal,0)}</b></td><td>${dots(w.F)}</td><td class="n">${fmtN(w.H,1)}</td><td class="wrap notes">${notes.join(' · ')}</td></tr>`}).join('')+'</tbody></table>'+
+    (rows.length>1000?`<p class="note" style="padding:8px">Showing the first 1,000 - filter to narrow it down.</p>`:'')}
+$('#t1').addEventListener('click',e=>{const t=e.target.closest('tr.main');if(!t)return;const n=t.nextElementSibling;if(n&&n.classList.contains('x')){n.remove();return}
+  const w=D.wos.find(x=>x.wo===t.dataset.wo);const x=document.createElement('tr');x.className='x';
+  x.innerHTML=`<td colspan="17">${(w.x||[]).length?`<b>Exploded BOM · ${esc(w.p)} × ${fmtN(w.bal,0)}</b><table style="margin-top:6px"><tr><th>Level</th><th>Component</th><th>Description</th><th class="n">Required</th><th class="n">In stock</th><th class="n">On PO</th><th>Next PO</th><th class="n">On WO</th><th>Make / buy</th></tr>`+
+    w.x.map(e=>{const sh=e[8]==='Purchased'&&e[3]>e[4]+e[5]+e[7];return `<tr><td>${'·&nbsp;'.repeat(Math.max(0,e[0]-1))}${e[0]}</td><td style="${sh?'color:var(--r);font-weight:700':''}">${esc(e[1])}</td><td class="wrap">${esc(e[2])}</td><td class="n">${fmtN(e[3],2)}</td><td class="n">${fmtN(e[4],2)}</td><td class="n">${fmtN(e[5],2)}</td><td>${esc(e[6])}</td><td class="n">${fmtN(e[7],2)}</td><td>${esc(e[8])}</td></tr>`}).join('')+'</table>':'<span class="muted">No BOM in Sage X3 for this part.</span>'}</td>`;t.after(x)});
+['#fst','#ffam','#fwk','#flv'].forEach(s=>$(s).onchange=table);$('#fq').oninput=table;
+$('#csv1').onclick=()=>csv(`Live_Orders_${today}.csv`,['Due','Customer date','WO','Level','SO','Account','Part','Description','Rev','Status','Material','Qty','Made','Balance','Shops','Hours','Comments','Prog','Tube req'],
+  filtered().map(w=>[w.due,w.cd,w.wo,w.lv,w.so,w.ac,w.p,w.d,w.rev,w.st,w.mt,w.q,w.b,w.bal,w.F.join('/'),Math.round(w.H*10)/10,(w.n||{}).comments,(w.n||{}).prog,(w.n||{}).tube]));
 
-function table(){
-  const st=$('#fst').value,fam=$('#ffam').value,q=$('#fq').value.trim().toLowerCase();
-  const rows=D.wos.filter(w=>(!st||w.st===st)&&(!fam||(w.f||[]).includes(fam))&&(!q||[w.p,w.wo,w.so,w.d,w.ac].some(v=>String(v||'').toLowerCase().includes(q))));
-  $('#count').textContent=`${fmtN(rows.length)} of ${fmtN(D.wos.length)}`;
-  $('#t1').innerHTML=`<table><tr><th>Due</th><th>Customer date</th><th>WO</th><th>Part</th><th>Description</th><th>SO</th><th>Status</th><th>Material</th><th class="n">Balance</th><th class="n">Hours</th><th>Shops</th></tr>`+
-    rows.slice(0,800).map(w=>{const hrs=Object.values(w.h||{}).reduce((a,b)=>a+b,0);
-      return `<tr class="main" data-wo="${esc(w.wo)}"><td>${dd(w.due)}</td><td>${/^\d{4}-/.test(w.cd||'')?dd(w.cd):esc(w.cd)}</td><td>${esc(w.wo)}</td><td>${esc(w.p)}</td><td class="wrap">${esc(w.d)}</td><td>${esc(w.so)}</td><td><span class="st ${esc(w.st)}">${esc(w.st)}</span></td><td class="wrap">${esc(w.mt)}</td><td class="n">${fmtN(w.bal,2)}</td><td class="n">${fmtN(hrs,1)}</td><td>${(w.f||[]).map(f=>FAM[f]?FAM[f][0]:f).join(', ')}</td></tr>`}).join('')+'</table>'+
-    (rows.length>800?`<p class="note">Showing the first 800 - filter to narrow it down.</p>`:'');
-  document.querySelectorAll('#t1 tr.main').forEach(t=>t.onclick=()=>{const n=t.nextElementSibling;if(n&&n.classList.contains('x')){n.remove();return}
-    const w=D.wos.find(x=>x.wo===t.dataset.wo);const x=document.createElement('tr');x.className='x';
-    x.innerHTML=`<td colspan="11">${(w.x||[]).length?`<table><tr><th>Level</th><th>Component</th><th>Description</th><th class="n">Required</th><th class="n">In stock</th><th class="n">On PO</th><th>Next PO</th><th class="n">On WO</th><th>Make / buy</th></tr>`+
-      w.x.map(e=>`<tr><td>${'· '.repeat(e[0])}${e[0]}</td><td>${esc(e[1])}</td><td class="wrap">${esc(e[2])}</td><td class="n">${fmtN(e[3],3)}</td><td class="n">${fmtN(e[4],2)}</td><td class="n">${fmtN(e[5],2)}</td><td>${esc(e[6])}</td><td class="n">${fmtN(e[7],2)}</td><td>${esc(e[8])}</td></tr>`).join('')+'</table>':'<span class="muted">No BOM in Sage X3 for this part.</span>'}</td>`;t.after(x)})}
+function loadView(){const fam=$('#lfam').value,famOf={},lab={};(D.wcs||[]).forEach(c=>{famOf[c[0]]=(c[2]||'').charAt(0);lab[c[0]]=c[1]||c[0]});
+  const L=(D.load||[]).slice(0,14);const wcs=Object.keys(famOf).filter(c=>!fam||famOf[c]===fam);
+  const tot=c=>L.reduce((a,[k,v])=>a+(v[c]||0),0);wcs.sort((a,b)=>tot(b)-tot(a));
+  const max=Math.max(1,...L.flatMap(([k,v])=>wcs.map(c=>v[c]||0)));const y=css('--y'),o='#f28c28';
+  const cell=v=>{if(!v)return '<td class="n"></td>';const k=v/max;return `<td class="n" style="background:color-mix(in srgb,${k>.6?o:y} ${Math.round(18+k*72)}%,transparent);${k>.6?'color:#1c1c1c;font-weight:700':''}">${fmtN(v,1)}</td>`};
+  $('#t3').innerHTML=`<table><thead><tr><th>Work centre</th><th>Shop</th>${L.map(([k])=>`<th class="n">w/c ${dd(k).slice(0,5)}</th>`).join('')}<th class="n">Total</th></tr></thead><tbody>`+
+    wcs.map(c=>`<tr><td><b>${esc(lab[c])}</b> <span class="muted">${esc(c)}</span></td><td>${dots([famOf[c]])} ${(FAM[famOf[c]]||FAM[''])[0]}</td>${L.map(([k,v])=>cell(v[c]||0)).join('')}<td class="n"><b>${fmtN(tot(c),1)}</b></td></tr>`).join('')+
+    `<tr><td><b>Total</b></td><td></td>${L.map(([k,v])=>`<td class="n"><b>${fmtN(wcs.reduce((a,c)=>a+(v[c]||0),0),0)}</b></td>`).join('')}<td class="n"><b>${fmtN(wcs.reduce((a,c)=>a+tot(c),0),0)}</b></td></tr></tbody></table>`}
+$('#lfam').onchange=loadView;
 
-['#fst','#ffam'].forEach(s=>$(s).onchange=table);$('#fq').oninput=table;
+function shortRows(){const only=$('#sonly').value,q=$('#sq').value.trim().toLowerCase();return MAT.filter(a=>(!only||a.short>1e-6)&&(!q||(a.c+' '+a.d).toLowerCase().includes(q)))}
+function shortView(){const rows=shortRows();$('#scount').textContent=`${fmtN(rows.length)} components · ${fmtN(MAT.filter(a=>a.short>1e-6).length)} short`;
+  $('#t2').innerHTML=`<table><thead><tr><th>Component</th><th>Description</th><th class="n">Short</th><th class="n">Needed</th><th class="n">Stock</th><th class="n">On PO</th><th>Next PO</th><th class="n">On WO</th><th class="n">WOs</th><th>First WO due</th><th>Works orders</th></tr></thead><tbody>`+
+    rows.slice(0,1500).map(a=>`<tr><td><b>${esc(a.c)}</b></td><td class="wrap">${esc(a.d)}</td><td class="n">${a.short>1e-6?`<span class="st RED">${fmtN(a.short,2)}</span>`:'<span class="muted">-</span>'}</td><td class="n">${fmtN(a.need,2)}</td><td class="n">${fmtN(a.stock,2)}</td><td class="n">${fmtN(a.po,2)}</td><td>${esc(a.due)||'<span class="muted">none</span>'}</td><td class="n">${fmtN(a.wo,2)}</td><td class="n">${a.n}</td><td style="${a.first&&a.first<today?'color:var(--r);font-weight:700':''}">${dd(a.first)}</td><td class="wrap">${[...a.ws].slice(0,6).map(x=>`<span class="pill">${esc(x)}</span>`).join('')}${a.ws.size>6?` <span class="muted">+${a.ws.size-6}</span>`:''}</td></tr>`).join('')+'</tbody></table>'}
+$('#sonly').onchange=shortView;$('#sq').oninput=shortView;
+$('#csv2').onclick=()=>csv(`Shortages_${today}.csv`,['Component','Description','Short','Needed','Stock','On PO','Next PO','On WO','WOs','First WO due','Works orders'],
+  shortRows().map(a=>[a.c,a.d,Math.round(a.short*100)/100,Math.round(a.need*100)/100,a.stock,a.po,a.due,a.wo,a.n,a.first,[...a.ws].join(' ')]));
+
+function sugView(){const S=D.sug||[];
+  $('#t4').innerHTML=S.length?`<table><thead><tr><th>Part</th><th>Description</th><th>Sales order</th><th class="n">To make</th><th>Suggested start</th><th>SO due</th><th>BOM</th><th>Route</th><th>Shops</th><th>Account</th></tr></thead><tbody>`+
+    S.map(s=>{const bad=!(s[5]&&s[6]);return `<tr style="${bad?'background:var(--rb)':''}"><td><b>${esc(s[0])}</b></td><td class="wrap">${esc(s[1])}</td><td>${esc(s[2])}</td><td class="n">${fmtN(s[3],0)}</td><td style="${s[8]&&s[8]<today?'color:var(--r);font-weight:700':''}">${dd(s[8])}</td><td>${dd(s[4])}</td><td>${s[5]?'✓':'<b style="color:var(--r)">No</b>'}</td><td>${s[6]?'✓':'<b style="color:var(--r)">No</b>'}</td><td>${dots(s[9])}</td><td>${esc(s[7])}</td></tr>`}).join('')+'</tbody></table>':'<p class="muted" style="padding:10px">No suggestions - every sales-order line for a made part is covered.</p>'}
+
+function custView(){const by={};D.wos.forEach(w=>{const a=w.ac||'(no sales order)';const c=by[a]||(by[a]={a,n:0,r:0,am:0,g:0,od:0,h:0,next:''});c.n++;c.h+=w.H;
+    if(w.st==='RED')c.r++;else if(w.st==='AMBER')c.am++;else c.g++;if(w.due&&w.due<today)c.od++;if(w.due&&w.due>=today&&(!c.next||w.due<c.next))c.next=w.due});
+  const C=Object.values(by).sort((a,b)=>b.n-a.n);
+  legend($('#lg5'),ST.map(([s,c])=>[s.charAt(0)+s.slice(1).toLowerCase(),css(c)]));
+  stackedH($('#c5'),C.slice(0,14).map(c=>[c.a,[c.r,c.am,c.g]]));
+  $('#t5').innerHTML=`<table><thead><tr><th>Account</th><th class="n">WOs</th><th>Status</th><th class="n">Overdue</th><th class="n">Hours</th><th>Next due</th></tr></thead><tbody>`+
+    C.map(c=>`<tr><td><a class="lk" data-ac="${esc(c.a)}">${esc(c.a)}</a></td><td class="n">${c.n}</td><td><div class="mini"><i style="width:${c.r/c.n*100}%;background:var(--r)"></i><i style="width:${c.am/c.n*100}%;background:var(--a)"></i><i style="width:${c.g/c.n*100}%;background:var(--g)"></i></div></td><td class="n" style="${c.od?'color:var(--r);font-weight:700':''}">${c.od||''}</td><td class="n">${fmtN(c.h,1)}</td><td>${dd(c.next)}</td></tr>`).join('')+'</tbody></table>'}
+$('#t5').addEventListener('click',e=>{const a=e.target.closest('a[data-ac]');if(!a)return;$('#fq').value=a.dataset.ac==='(no sales order)'?'':a.dataset.ac;go('lo');table()});
+
+function trends(){const H=[...hist].reverse();
+  if(H.length<2){$('#trnote').textContent=onPortal?`Trends build up as the workbook is regenerated - ${H.length} saved so far.`:'Open this page in the portal to see trends across saved generations.';$('#c6').innerHTML=$('#c7').innerHTML='';$('#lg6').innerHTML='';return}
+  const cats=H.map(r=>fmtWhen(r.name).replace(/\/\d{4}/,''));$('#trnote').textContent=`${H.length} saved generations, oldest on the left.`;
+  legend($('#lg6'),ST.map(([s,c])=>[s.charAt(0)+s.slice(1).toLowerCase(),css(c)]));
+  lines($('#c6'),cats,ST.map(([s,c])=>({name:s,color:css(c),vals:H.map(r=>r[s.toLowerCase()]||0)})),{label:'status over time'});
+  lines($('#c7'),cats,[{name:'Hours',color:css('--m'),vals:H.map(r=>r.hours||0)}],{label:'hours over time'})}
+
+// ---------------------------------------------------------------- tabs
+function go(v){$$('nav.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.v===v));$$('.view').forEach(s=>s.classList.toggle('on',s.id==='v-'+v));try{sessionStorage.setItem('loTab',v)}catch(e){}}
+$('#tabs').addEventListener('click',e=>{const b=e.target.closest('button[data-v]');if(b)go(b.dataset.v)});
+document.addEventListener('click',e=>{const a=e.target.closest('[data-go]');if(a)go(a.dataset.go)});
+
+// ---------------------------------------------------------------- loading: file, ?data=, or the portal
 function readFile(f){const r=new FileReader();r.onload=()=>{try{render(JSON.parse(r.result))}catch(e){alert('Could not read that file: '+e.message)}};r.readAsText(f)}
 $('#file').onchange=e=>e.target.files[0]&&readFile(e.target.files[0]);
 const dz=$('#drop');['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('on')}));
 ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,()=>dz.classList.remove('on')));
-dz.addEventListener('drop',e=>{e.preventDefault();e.dataTransfer.files[0]&&readFile(e.dataTransfer.files[0])});
 document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',e=>{e.preventDefault();e.dataTransfer.files[0]&&readFile(e.dataTransfer.files[0])});
 // Portal: opened as /api/live-orders/dashboard#key=<key>. The key (after #) never reaches the server; kept for this tab only.
 let sdiKey='';try{const m=location.hash.match(/key=([^&]+)/);if(m){sessionStorage.setItem('sdiKey',decodeURIComponent(m[1]));history.replaceState(null,'',location.pathname+location.search)}sdiKey=sessionStorage.getItem('sdiKey')||''}catch(e){}
 const onPortal=/\/api\/live-orders\/dashboard$/.test(location.pathname);
 const src=new URLSearchParams(location.search).get('data')||(onPortal?'/api/live-orders/latest':null);
-const H=()=>sdiKey?{'X-SDI-Key':sdiKey}:{};
-function load(url,name){return fetch(url,{headers:H()}).then(r=>{if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}).then(d=>{render(d);cur=name||'';markCur()}).catch(e=>{$('#drop').classList.remove('hide');$('#drop').innerHTML=`<b>No Live Orders data yet</b><br><span class="muted">${esc(e.message)}${onPortal?' - press Regenerate':''}</span>`})}
-let cur='',hist=[];
-function markCur(){document.querySelectorAll('#hist tr[data-n]').forEach(tr=>tr.classList.toggle('cur',tr.dataset.n===cur||(!cur&&tr===document.querySelector('#hist tr[data-n]'))))}
-function fmtWhen(n){const m=n.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`:n}
-function loadHistory(){return fetch('/api/live-orders/history',{headers:H()}).then(r=>r.json()).then(h=>{hist=h.runs||[];
-  $('#histnote').textContent=`Every generation is kept in ${h.folder} (${hist.length} so far). View any of them here, or open the workbook to edit - Comments, Prog and Tube req carry forward to the next one.`;
+const HD=()=>sdiKey?{'X-SDI-Key':sdiKey}:{};
+function load(url,name){return fetch(url,{headers:HD()}).then(r=>{if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}).then(d=>{cur=name||'';render(d);markCur()}).catch(e=>{$('#drop').classList.remove('hide');$('#drop').innerHTML=`<b>No Live Orders data yet</b><br><span class="muted">${esc(e.message)}${onPortal?' - press Regenerate':''}</span>`})}
+function markCur(){const first=$('#hist tr[data-n]');$$('#hist tr[data-n]').forEach(tr=>tr.classList.toggle('cur',tr.dataset.n===cur||(!cur&&tr===first)));
+  $('#viewing').innerHTML=cur&&hist.length&&cur!==hist[0].name?`<span class="chip old">viewing ${esc(fmtWhen(cur))} · <a style="color:inherit;cursor:pointer;text-decoration:underline" data-latest="1">back to latest</a></span>`:(onPortal&&hist.length?'<span class="chip">latest</span>':'')}
+document.addEventListener('click',e=>{if(e.target.closest('[data-latest]'))load('/api/live-orders/latest','')});
+function fmtWhen(n){const m=String(n).match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`:n}
+function loadHistory(){return fetch('/api/live-orders/history',{headers:HD()}).then(r=>r.json()).then(h=>{hist=h.runs||[];
+  $('#histnote').textContent=`Every generation is kept in ${h.folder} (${hist.length} so far). View any of them, or open the workbook to edit - Comments, Prog and Tube req carry forward to the next one.`;
   $('#hist').innerHTML='<tr><th>Generated</th><th class="n">Works orders</th><th class="n">Red</th><th class="n">Amber</th><th class="n">Green</th><th class="n">Overdue</th><th class="n">Hours</th><th class="n">Notes carried</th><th></th></tr>'+
-  hist.map((r,i)=>`<tr data-n="${esc(r.name)}"><td>${fmtWhen(r.name)}${i==0?' <span class="st GREEN">latest</span>':''}</td><td class="n">${r.wos??''}</td><td class="n" style="color:var(--r)">${r.red??''}</td><td class="n" style="color:var(--a)">${r.amber??''}</td><td class="n" style="color:var(--g)">${r.green??''}</td><td class="n">${r.overdue??''}</td><td class="n">${r.hours!=null?Math.round(r.hours):''}</td><td class="n">${r.carried??''}</td>
-  <td><a data-v="${esc(r.name)}">View</a>${r.workbook?`<a data-x="${esc(r.name)}">Workbook ⬇</a><a data-p="${esc(r.path)}" title="${esc(r.path)}">Copy path</a>`:''}</td></tr>`).join('');
-  markCur()})}
+  hist.map((r,i)=>`<tr data-n="${esc(r.name)}"><td>${fmtWhen(r.name)}${i==0?' <span class="st GREEN">latest</span>':''}</td><td class="n">${r.wos??''}</td><td class="n" style="color:var(--r)">${r.red??''}</td><td class="n" style="color:var(--a)">${r.amber??''}</td><td class="n" style="color:var(--g)">${r.green??''}</td><td class="n">${r.overdue??''}</td><td class="n">${r.hours!=null?fmtN(r.hours):''}</td><td class="n">${r.carried??''}</td>
+  <td><a data-run="${esc(r.name)}">View</a>${r.workbook?`<a data-x="${esc(r.name)}">Workbook ⬇</a><a data-p="${esc(r.path)}" title="${esc(r.path)}">Copy path</a>`:''}</td></tr>`).join('');
+  markCur();if(D)trends()})}
 $('#hist').addEventListener('click',e=>{const a=e.target.closest('a');if(!a)return;
-  if(a.dataset.v)load('/api/live-orders/run/'+encodeURIComponent(a.dataset.v),a.dataset.v);
-  if(a.dataset.x)fetch('/api/live-orders/workbook/'+encodeURIComponent(a.dataset.x),{headers:H()}).then(r=>r.blob()).then(b=>{const u=URL.createObjectURL(b),l=document.createElement('a');l.href=u;l.download=a.dataset.x+'.xlsx';l.click();setTimeout(()=>URL.revokeObjectURL(u),2000)});
+  if(a.dataset.run){load('/api/live-orders/run/'+encodeURIComponent(a.dataset.run),a.dataset.run).then(()=>go('ov'))}
+  if(a.dataset.x)fetch('/api/live-orders/workbook/'+encodeURIComponent(a.dataset.x),{headers:HD()}).then(r=>r.blob()).then(b=>{const u=URL.createObjectURL(b),l=document.createElement('a');l.href=u;l.download=a.dataset.x+'.xlsx';l.click();setTimeout(()=>URL.revokeObjectURL(u),2000)});
   if(a.dataset.p){navigator.clipboard&&navigator.clipboard.writeText(a.dataset.p);a.textContent='Copied ✓';setTimeout(()=>a.textContent='Copy path',1500)}});
-function poll(){fetch('/api/live-orders/regenerate',{headers:H()}).then(r=>r.json()).then(s=>{
+function poll(){fetch('/api/live-orders/regenerate',{headers:HD()}).then(r=>r.json()).then(s=>{
   const last=(s.log||[]).filter(x=>x.trim()).slice(-1)[0]||'';
   if(s.running){$('#regen').disabled=true;$('#rstat').textContent='Generating… '+last.slice(0,90);setTimeout(poll,4000);return}
   $('#regen').disabled=false;
   if(s.started){$('#rstat').textContent=s.last&&s.last.ok?'Done '+(s.last.finished||'').replace('T',' ')+' - new workbook saved':'Last run failed: '+((s.last&&s.last.error)||last).slice(0,140);
-    if(s.last&&s.last.ok)loadHistory().then(()=>load('/api/live-orders/latest',''))}})}
+    if(s.last&&s.last.ok)loadHistory().then(()=>load('/api/live-orders/latest',''))}}).catch(()=>{})}
 $('#regen').addEventListener('click',()=>{if(!confirm('Pull fresh data from Sage X3 and save a new Live Orders workbook?'))return;
-  fetch('/api/live-orders/regenerate',{method:'POST',headers:H()}).then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(()=>{$('#rstat').textContent='Starting…';setTimeout(poll,1500)}).catch(e=>{$('#rstat').textContent='Could not start: '+e.message})});
-if(onPortal){$('#filebar').classList.add('hide');$('#portalbar').classList.remove('hide');$('#histcard').classList.remove('hide');$('#drop').classList.add('hide');loadHistory().catch(()=>{});poll()}
+  fetch('/api/live-orders/regenerate',{method:'POST',headers:HD()}).then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(()=>{$('#rstat').textContent='Starting…';setTimeout(poll,1500)}).catch(e=>{$('#rstat').textContent='Could not start: '+e.message})});
+if(onPortal){$('#filebar').classList.add('hide');$('#portalbar').classList.remove('hide');$('#drop').classList.add('hide');loadHistory().catch(()=>{});poll()}
+else{$('nav.tabs [data-v="wb"]').classList.add('hide')}
+try{const t=sessionStorage.getItem('loTab');if(t&&(onPortal||t!=='wb'))go(t)}catch(e){}
+try{matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(D){const t=document.querySelector('nav.tabs button.on');render(D);if(t)go(t.dataset.v)}})}catch(e){}
 if(window.LIVE_ORDERS_DATA)render(window.LIVE_ORDERS_DATA);
 else if(src)load(src,'');
 </script>
