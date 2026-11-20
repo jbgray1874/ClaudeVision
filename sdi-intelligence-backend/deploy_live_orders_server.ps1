@@ -26,7 +26,8 @@ param(
     [string]$Data = "C:\ProgramData\SDI\LiveOrders",
     [string]$EstRuns = "C:\ProgramData\SDI\Estimating",
     [string]$Share = "\\sdi-dc01\shareddata$\Shared\Operations\Reporting\LiveOrders",
-    [string]$EstShare = "\\sdi-dc01\shareddata$\Shared\Operations\Reporting\SageEstimates"
+    [string]$EstShare = "\\sdi-dc01\shareddata$\Shared\Operations\Reporting\SageEstimates",
+    [string]$Server = "SDI-APP01"                           # the machine this is meant for
 )
 $ErrorActionPreference = "Continue"
 $Installer = Join-Path $PSScriptRoot "add_live_orders_to_portal.py"
@@ -37,21 +38,34 @@ Say "== Live Orders -> SDI Intelligence portal on $env:COMPUTERNAME ==" Yellow
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator)) { Fail "run PowerShell as administrator" }
 if (-not (Test-Path $Installer)) { Fail "can't find $Installer - is the repo copied to C:\SDI_X3\repo?" }
+if ($env:COMPUTERNAME -ne $Server) {                       # 20 Nov: first run was on James's PC by mistake
+    Say "This is $env:COMPUTERNAME, not the server $Server." DarkYellow
+    if ((Read-Host "Carry on here anyway? (Y/N)") -notmatch '^[Yy]') { Say "Nothing changed. Run it on $Server (remote desktop)."; exit 0 }
+}
 
 # 1. the running portal ------------------------------------------------------------------------------------------
 $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $conn) { Fail "nothing is listening on port $Port - start the portal first" }
 $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($conn.OwningProcess)"
 $py = $proc.ExecutablePath
+$svc = Get-CimInstance Win32_Service | Where-Object { $_.ProcessId -eq $proc.ProcessId -or $_.ProcessId -eq $proc.ParentProcessId } |
+       Select-Object -First 1
 if (-not $Target) {
     $tokens = [regex]::Matches([string]$proc.CommandLine, '"[^"]+"|\S+') | ForEach-Object { $_.Value.Trim('"') }
     $app = $tokens | Where-Object { $_ -match '\\app\.py$' } | Select-Object -First 1
-    if (-not $app) { Fail "can't see app.py in '$($proc.CommandLine)' - run again with -Target <portal folder>" }
-    $Target = Split-Path -Parent $app
+    if ($app) { $Target = Split-Path -Parent $app }        # python ...\app.py
 }
+if (-not $Target -and $svc) {                              # an NSSM service: its start-in folder (AppDirectory)
+    $reg = "HKLM:\SYSTEM\CurrentControlSet\Services\$($svc.Name)\Parameters"
+    $dir = (Get-ItemProperty -Path $reg -Name AppDirectory -ErrorAction SilentlyContinue).AppDirectory
+    if ($dir -and (Test-Path (Join-Path $dir "app.py"))) { $Target = $dir }
+}
+if (-not $Target) {                                        # uvicorn from the portal's own .venv: ...\.venv\Scripts\uvicorn.exe
+    $uv = $tokens | Where-Object { $_ -match '\\\.?venv\\Scripts\\uvicorn(\.exe)?$' } | Select-Object -First 1
+    if ($uv) { $Target = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $uv)) }
+}
+if (-not $Target) { Fail "can't tell the portal folder from '$($proc.CommandLine)' - run again with -Target <portal folder>" }
 if (-not (Test-Path (Join-Path $Target "app.py"))) { Fail "no app.py in $Target" }
-$svc = Get-CimInstance Win32_Service | Where-Object { $_.ProcessId -eq $proc.ProcessId -or $_.ProcessId -eq $proc.ParentProcessId } |
-       Select-Object -First 1
 Say "Portal folder : $Target"
 Say "Python        : $py"
 if ($svc) { Say "Service       : $($svc.Name), runs as $($svc.StartName)" }
