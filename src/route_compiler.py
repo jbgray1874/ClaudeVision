@@ -2098,6 +2098,28 @@ def build_part_graph(
             children[parent_id][child_id] = qty
             parents.setdefault(child_id, set()).add(parent_id)
 
+    # A measured model edge is not the description fallback above. An LLM list
+    # can omit an entire configured subassembly, or flatten its children, while
+    # the model explicitly connects it to the selected product. Keep those
+    # edges before root/variant pruning; quantities still use the existing
+    # per-parent arbitration, not the model's whole-product total as an edge.
+    for part in parts or []:
+        if not isinstance(part, Mapping):
+            continue
+        if rank(str(part.get("native_assembly_children_source") or "")) <= rank("bom_table"):
+            continue
+        _pid = clean_part_number(part.get("part_number"))
+        _pid = aliases.get(_pid, _pid)
+        for _kid in part.get("native_assembly_children") or []:
+            _cid = clean_part_number(_kid)
+            _cid = aliases.get(_cid, _cid)
+            if not _pid or not _cid or _pid == _cid or _cid not in records:
+                continue
+            _rec = raw.get(_cid) or records.get(_cid) or {}
+            children.setdefault(_pid, {}).setdefault(
+                _cid, number(_rec.get("quantity"), 1.0) or 1.0)
+            parents.setdefault(_cid, set()).add(_pid)
+
     # ── HIERARCHY THE BOM TABLE STATED, where nothing else claimed the part ──────────
     # THE DRAWINGS WE ACTUALLY OPENED are assemblies we know exist, whether or not any part
     # record was created for them. On a pack whose second GA the extract never read, this is

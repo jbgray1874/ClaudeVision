@@ -2320,6 +2320,7 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
     invented for an assembly the extract did not open.
     """
     stamped: List[Dict[str, Any]] = []
+    minted_parents: List[Dict[str, Any]] = []
     if not parts or not getattr(job, "hierarchy", None):
         return stamped
     by_code = {_clean_pn(str(p.get("part_number") or "")).upper(): p
@@ -2440,11 +2441,21 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
                     "never material"],
             }
             parts.append(target)
+            minted_parents.append(target)
             by_code[_clean_pn(str(parent)).upper()] = target
             kids = [(c, q) for c, q in kids
                     if _clean_pn(str(c)).upper() in {k.upper() for k in _known_kids}]
         existing = [str(c) for c in (target.get("assembly_children") or [])
                     if str(c).strip()]
+        # Preserve which edges were actually read from this model, separately
+        # from description-inferred children. The compiler must not discard
+        # these just because an LLM supplied an incomplete list for the parent.
+        target["native_assembly_children"] = [
+            str(by_code[_resolve(c)].get("part_number") or c)
+            if _resolve(c) in by_code else _clean_pn(str(c))
+            for c, _q in kids if _clean_pn(str(c))
+            and _resolve(c) != _resolve(parent)]
+        target["native_assembly_children_source"] = job_source(job)
         seen = {c.upper() for c in existing}
         added = []
         for child, _qty in kids:
@@ -2469,6 +2480,14 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
             f"hierarchy from the SolidWorks model: {', '.join(added)} "
             f"{'is' if len(added) == 1 else 'are'} held by {target.get('part_number')}")
         stamped.append({"part_number": target.get("part_number"), "children": added})
+    # These records did not exist when apply_native_to_pre_estimate ran. Their
+    # new edges alone leave quantity=1 with no provenance, so a weaker table
+    # can supply a product total as a per-parent count. Apply the SAME native
+    # quantity arbitration to the newly minted parents, not a second divider
+    # in the graph and not a job-specific correction. Existing records (and
+    # their human overrides) are deliberately not reprocessed here.
+    if minted_parents and getattr(job, "found", False):
+        apply_native_to_pre_estimate(minted_parents, job, population=parts)
     return stamped
 
 

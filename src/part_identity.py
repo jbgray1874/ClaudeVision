@@ -1330,7 +1330,7 @@ _PLAIN_WORDS = frozenset({"THE", "AND", "FOR", "WITH", "OFF", "QTY", "REV", "ITE
 
 
 def one_digit_apart(a: Any, b: Any) -> Optional[int]:
-    """The position at which two codes differ by a single digit outside the item number, or
+    """The position at which two codes differ by one digit in the leading job reference, or
     None. Compared as normalize_part_code reads them, so spacing never counts."""
     x, y = normalize_part_code(a), normalize_part_code(b)
     if not x or not y or len(x) != len(y) or x == y:
@@ -1344,6 +1344,12 @@ def one_digit_apart(a: Any, b: Any) -> Optional[int]:
     runs = list(re.finditer(r"\d+", x))
     if not runs or runs[-1].start() <= i < runs[-1].end():
         return None                                   # the item number decides the item
+    # Only a typo in the leading job/drawing reference may use this heuristic.
+    # Intermediate numeric fields are identity too: 50005-05-101 and
+    # 50005-06-101 can both be HOLDER WELD ASSY, but are distinct subassemblies.
+    # A matching description and sibling code cannot authorise that merge.
+    if not (runs[0].start() <= i < runs[0].end()):
+        return None
     return i
 
 
