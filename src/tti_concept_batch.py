@@ -135,15 +135,46 @@ def check_build(runners, expected, required=2):
             raise RuntimeError('Runner build/health mismatch: '+str(r.get('runner_id')))
 
 
+class UnpricedResult(ValueError):
+    """Identified completed run, but no usable price. Never means zero."""
+
+
 def checked_price(snapshot,item):
     if not matches(snapshot,item): raise ValueError('run identity/quantity does not match source row')
     if snapshot.get('status') != 'done' or snapshot.get('error') or snapshot.get('price_validated') is not True:
-        raise ValueError('no validated finished workbook price')
+        raise UnpricedResult('no validated finished workbook price')
     quotes = snapshot.get('quantity_prices') or []
-    exact = [money(q.get('unit_gbp')) for q in quotes if units(q.get('quantity')) == item['quantity']]
-    if quotes and not exact: raise ValueError('requested quantity missing from price breaks')
+    try:
+        exact = [money(q.get('unit_gbp')) for q in quotes if units(q.get('quantity')) == item['quantity']]
+    except ValueError as exc:
+        raise UnpricedResult('invalid exact-quantity unit price') from exc
+    if quotes and not exact: raise UnpricedResult('requested quantity missing from price breaks')
     if len(set(exact)) > 1: raise ValueError('conflicting unit prices for requested quantity')
-    return exact[0] if exact else money(snapshot.get('engine_price_gbp'))
+    try:
+        return exact[0] if exact else money(snapshot.get('engine_price_gbp'))
+    except ValueError as exc:
+        raise UnpricedResult('completed run has no positive finite unit price; retained for review') from exc
+
+
+def archive_unpriced(api,archive,item,entry,snapshot,why):
+    if not matches(snapshot,item): raise ValueError('unpriced run identity differs')
+    base=item['reference']+'/unpriced/'+safe_id(entry['run_id'])+'/'
+    archive.put(base+'status.json',json_bytes(status_evidence(snapshot)))
+    inventory=[]
+    for d in snapshot.get('deliverables') or []:
+        name=str(d.get('name') or '')
+        if not name or Path(name).name!=name or any(c in name for c in '/\\:'):
+            raise ValueError('unsafe unpriced output name')
+        try: raw=api.download(entry['run_id'],name)
+        except urllib.error.HTTPError as exc:
+            if exc.code==403:
+                inventory.append({'name':name,'not_copied':'403: release gate retained'}); continue
+            raise
+        archive.put(base+name,raw)
+        inventory.append({'name':name,'sha256':sha(raw),'bytes':len(raw)})
+    archive.put(base+'inventory.json',json_bytes(inventory))
+    archive.put(base+'HOLD.json',json_bytes({'row':item['row'],'reference':item['reference'],
+        'run_id':entry['run_id'],'why':str(why),'AiCost_written':False,'automatic_resubmission':False}))
 
 
 def status_evidence(snapshot):
@@ -390,9 +421,8 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
             pending=False; active=0
             for item in items:
                 entry=state['entries'].get(item['reference'],{})
-                if entry.get('phase')=='done': continue
+                if entry.get('phase') in ('done','held'): continue
                 pending=True
-                if entry.get('phase')=='held': raise RuntimeError(f"Row {item['row']} held: {entry.get('why')}")
                 if entry.get('phase')=='archived':
                     if item['reference'] not in attempted_writebacks:
                         attempt_writeback(plan,archive,state,item,writer)
@@ -408,9 +438,23 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
                     if not matches(snapshot,item): raise ValueError('service run identity changed')
                     archive.put(item['reference']+'/polls/'+uuid.uuid4().hex+'.json',json_bytes(status_evidence(snapshot)))
                     if snapshot.get('status') in TERMINAL_FAILURE:
-                        entry.update(phase='held',why=str(snapshot.get('error') or snapshot.get('status')))
-                        archive.state(state); raise RuntimeError(f"Row {item['row']} failed/held; no new jobs")
+                        # A RUN THAT FAILED HOLDS ITS OWN ROW, LIKE ONE THAT FINISHED UNPRICED (JG,
+                        # 21 Nov 2026: "one unpriced row mustn't stop the whole queue"). The reason
+                        # is filed on both archives; nothing is resent; the other rows carry on.
+                        why='run '+str(snapshot.get('status'))+': '+str(snapshot.get('error') or 'no reason given')
+                        entry.update(phase='held',why=why,held_at=now(),automatic_resubmission=False)
+                        archive.state(state)
+                        archive.event('ROW FAILED - CONTINUING',row=item['row'],run_id=entry['run_id'],why=why,AiCost_written=False)
+                        continue
                     if snapshot.get('status')=='done':
+                        try:
+                            checked_price(snapshot,item)
+                        except UnpricedResult as exc:
+                            archive_unpriced(api,archive,item,entry,snapshot,str(exc))
+                            entry.update(phase='held',why=str(exc),held_at=now(),automatic_resubmission=False)
+                            archive.state(state)
+                            archive.event('ROW UNPRICED - CONTINUING',row=item['row'],run_id=entry['run_id'],why=str(exc),AiCost_written=False)
+                            continue
                         price=archive_result(api,archive,item,entry,snapshot)
                         entry.update(phase='archived',unit_gbp=str(price)); archive.state(state)
                         attempt_writeback(plan,archive,state,item,writer)
@@ -443,7 +487,7 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
                     archive.state(state); active+=1
                     archive.event('RUN ATTACHED',row=item['row'],run_id=entry['run_id'],images=len(item['images']))
                     if active>=at_once: break
-            if all(state['entries'].get(i['reference'],{}).get('phase') in ('done','archived') for i in items): break
+            if all(state['entries'].get(i['reference'],{}).get('phase') in ('done','archived','held') for i in items): break
             print(f'{now()} WAITING: {active} active; '+str(sum(e.get('phase')=='done' for e in state['entries'].values()))+f'/{len(items)} written. State saved on C and K.',flush=True)
             sleep(poll_seconds)
     except BaseException as exc:
@@ -452,16 +496,23 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
         except OSError: pass
         raise
     waiting=[i['row'] for i in items if state['entries'][i['reference']]['phase']=='archived']
-    archive.event('ESTIMATES SAVED' if waiting else 'COMPLETE',written=len(items)-len(waiting),
-                  estimates_saved=len(items),pending_writeback_rows=waiting,
+    held=[{'row':i['row'],'run_id':state['entries'][i['reference']].get('run_id'),
+           'why':state['entries'][i['reference']].get('why')} for i in items if state['entries'][i['reference']]['phase']=='held']
+    archive.put('hold-reports/'+uuid.uuid4().hex+'.json',json_bytes(held))
+    archive.event('FINISHED WITH HOLDS' if held else ('ESTIMATES SAVED' if waiting else 'COMPLETE'),written=len(items)-len(waiting)-len(held),
+                  estimates_saved=len(items)-len(held),pending_writeback_rows=waiting,held_rows=held,
                   note='Provisional estimates on C and K. Pending AiCost is not a pricing failure; retry --writeback-only. No estimate approved.')
-    return 3 if waiting else 0
+    return 4 if held else (3 if waiting else 0)
 
 
-def validate_health_only_proof_build(repo, old, expected, git=None):
-    """Explicit proof carry-forward ONLY for this reporting-only patch.
+def validate_health_only_proof_build(repo, old, expected, git=None, reviewed_paths=(), statement=''):
+    """Explicit proof carry-forward ONLY for a reporting-only release, or one whose every
+    other changed path a person has named and vouched for.
 
-    No ledger build is rewritten. Any other intervening source change refuses.
+    No ledger build is rewritten. A path outside the reporting-only set that is NOT named
+    in reviewed_paths refuses; a named path that did not change refuses too (the statement
+    must be about this release and no other). Test files cannot change a price and are not
+    counted. The decision, the paths and the exact commit are returned to be archived.
     """
     git = git or (lambda *args: subprocess.check_output(['git',*args],cwd=repo,text=True).strip())
     if not re.fullmatch(r'[a-fA-F0-9]{7,40}',old): raise ValueError('proof execution build must be bare hash')
@@ -471,9 +522,21 @@ def validate_health_only_proof_build(repo, old, expected, git=None):
              'src/tti_concept_batch.py','tests/test_busy_runner_process_health.py',
              'tests/test_health_only_proof_carry_forward.py'}
     changed=set(git('diff','--name-only',before,after).splitlines())
-    if not changed or changed-allowed: raise ValueError('Not a reporting-only release: proof carry-forward refused')
-    return {'proof_execution_build':before,'resume_build':after,'changed_paths':sorted(changed),
-            'basis':'Explicit operator carry-forward of unchanged pricing proofs after reporting-only integration'}
+    if not changed: raise ValueError('Not a reporting-only release: proof carry-forward refused')
+    extra={p for p in changed-allowed if not p.startswith('tests/')}
+    reviewed=set(reviewed_paths or ())
+    if extra and not reviewed: raise ValueError('Not a reporting-only release: proof carry-forward refused')
+    if extra-reviewed: raise ValueError('changed paths not named in the reviewed carry-forward: '+', '.join(sorted(extra-reviewed)))
+    if reviewed-changed: raise ValueError('reviewed carry-forward names paths this release did not change: '+', '.join(sorted(reviewed-changed)))
+    if reviewed and len(' '.join(str(statement).split()))<40:
+        raise ValueError('a reviewed carry-forward must say, in a full sentence, why the named changes leave the proofs valid')
+    out={'proof_execution_build':before,'resume_build':after,'changed_paths':sorted(changed),
+         'basis':'Explicit operator carry-forward of unchanged pricing proofs after reporting-only integration'}
+    if reviewed:
+        out.update(reviewed_paths=sorted(reviewed),statement=' '.join(str(statement).split()),
+                   reviewed_by=os.getenv('USERNAME') or os.getenv('USER') or 'explicit operator',reviewed_at=now(),
+                   basis='Explicit reviewed operator carry-forward: the named changes do not alter the proofs\' source, inputs or prices')
+    return out
 
 
 def argument_parser():
@@ -488,6 +551,8 @@ def argument_parser():
     p.add_argument('--server',default='http://localhost:8071')
     p.add_argument('--expected-build',help='Bare reviewed production commit; required for execution')
     p.add_argument('--proof-execution-build',help='Explicit original proof build for a reviewed health-only release; strict changed-path/ancestor check, no ledger rewrite')
+    p.add_argument('--carry-forward-reviewed-paths',help='With --proof-execution-build: every changed path outside the reporting-only set, comma separated, that a person has reviewed and vouches for')
+    p.add_argument('--carry-forward-statement',help='With --carry-forward-reviewed-paths: why those changes leave the two proofs valid. Archived with the exact commit')
     p.add_argument('--at-once',type=int,choices=(1,2),default=2)
     p.add_argument('--rows',help='Optional comma-separated eligible rows for an initial proof; omit for the full plan')
     p.add_argument('--assume-missing-quantity-one','--blank-quantity-as-one',dest='assume_missing_quantity_one',action='store_true',help='Explicit user ruling: blank/zero/unreadable concept quantities are one; original values and assumptions retained')
@@ -504,6 +569,8 @@ def main(argv=None):
     p=argument_parser(); a=p.parse_args(argv)
     if sum((a.execute,a.approve_proof,a.writeback_only))>1: p.error('--execute, --approve-proof and --writeback-only are mutually exclusive')
     if a.approval_basis and not a.approve_proof: p.error('--approval-basis belongs with --approve-proof')
+    if (a.carry_forward_reviewed_paths or a.carry_forward_statement) and not a.proof_execution_build:
+        p.error('--carry-forward-reviewed-paths and --carry-forward-statement go with --proof-execution-build')
     try: proof_rows=tuple(int(v.strip()) for v in a.proof_rows.split(','))
     except ValueError: p.error('--proof-rows must name two row numbers')
     if len(proof_rows)!=2 or len(set(proof_rows))!=2: p.error('--proof-rows must name two DISTINCT row numbers')
@@ -537,7 +604,9 @@ def main(argv=None):
     key=sha(str(Path(a.sheet).resolve()).casefold().encode())[:20]
     archive=Archive(Path(a.local_root)/key,Path(a.shared_root)/key)
     if a.proof_execution_build:
-        bridge=validate_health_only_proof_build(ROOT,a.proof_execution_build,a.expected_build)
+        bridge=validate_health_only_proof_build(ROOT,a.proof_execution_build,a.expected_build,
+            reviewed_paths=[x.strip() for x in (a.carry_forward_reviewed_paths or '').split(',') if x.strip()],
+            statement=a.carry_forward_statement or '')
         archive.put('proof-build-carry-forward/'+bridge['resume_build']+'.json',json_bytes(bridge))
     if a.approve_proof:
         from tti_concept_proof import approve_proof

@@ -394,7 +394,7 @@ class Run:
             "llm_price_gbp": self.llm_price_gbp, "llm": self.llm,
             "engine_price_gbp": self.engine_price_gbp,
             # A PRICE IS VALIDATED ONLY BY A FINISHED RUN THAT FILED ITS WORKBOOK (12 Nov 2026).
-            "price_validated": price_is_validated(self.status, self.error, self.deliverables),
+            "price_validated": price_is_validated(self.status, self.error, self.deliverables, self.engine_price_gbp),
             "quantity_prices": list(self.quantity_prices),
             "walkthrough_url": (estimate_walkthrough.url_for(self.walkthrough)
                                 if self.walkthrough else ""),
@@ -725,13 +725,19 @@ _EXTRACT_NAME = "_sw_native_extract.json"
 _MODEL_POINTER = "_sdi_model_sources.json"
 
 
-def price_is_validated(status: Any, error: Any, deliverables: Any) -> bool:
+def price_is_validated(status: Any, error: Any, deliverables: Any, unit_price: Any = None) -> bool:
     """Whether a run's price may be shown as its result.
 
     "Incomplete runs must not present a validated price." A run that failed, or finished
     without filing a workbook, has a figure nobody can check against a record.
     """
     if status != "done" or error:
+        return False
+    from decimal import Decimal, InvalidOperation
+    try:
+        price=Decimal(str(unit_price))
+        if isinstance(unit_price,bool) or not price.is_finite() or price<=0: return False
+    except (InvalidOperation,ValueError,TypeError):
         return False
     names = [str((d or {}).get("name") if isinstance(d, dict) else d or "").lower()
              for d in (deliverables or [])]

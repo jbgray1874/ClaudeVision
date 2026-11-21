@@ -50,6 +50,10 @@ def ask(prompt: str, png_pages: List[bytes], what: str, why: str,
     try:
         text = mod.ask_image(prompt, list(png_pages))
     except Exception as exc:                                         # noqa: BLE001
+        if getattr(exc, 'status_code', None) in (401,403) or type(exc).__name__ == 'AuthenticationError':
+            message = 'Concept/image reader authentication failed: the OpenAI fallback rejected its credentials. No image read or price was produced. Repair the runner settings; retain this run, do not retry automatically.'
+            say('   [llm-fallback] '+message)
+            raise RuntimeError(message) from exc
         say(f"   [llm-fallback] openai did not answer {what} ({type(exc).__name__}: "
             f"{str(exc)[:160]}). This read is NOT done and is said so on the book.")
         raise

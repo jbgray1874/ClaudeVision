@@ -52,7 +52,8 @@ def test_the_service_says_a_run_filed_no_workbook_and_the_ledger_follows():
     sys.path.insert(0, str(ROOT / "sdi-intelligence-backend"))
     import estimate_routes as er
     book = [{"name": "J-01_20261112_1609.xlsm"}, {"name": "J-01_record.json"}]
-    assert er.price_is_validated("done", "", book) is True
+    assert er.price_is_validated("done", "", book, 1015.79) is True
+    assert er.price_is_validated("done", "", book, None) is False
     assert er.price_is_validated("done", "", [{"name": "run.log"}]) is False
     assert er.price_is_validated("done", "", []) is False
     assert er.price_is_validated("error", "engine exited 1", book) is False
@@ -61,7 +62,7 @@ def test_the_service_says_a_run_filed_no_workbook_and_the_ledger_follows():
                              "deliverables": []}, {})
     assert got["engine_price_gbp"] is None and got["unvalidated_price_gbp"] == 700.0
     src = (ROOT / "sdi-intelligence-backend" / "estimate_routes.py").read_text(encoding="utf-8")
-    assert '"price_validated": price_is_validated(self.status, self.error, self.deliverables)' in src
+    assert '"price_validated": price_is_validated(self.status, self.error, self.deliverables, self.engine_price_gbp)' in src
 
 
 def test_a_finished_run_keeps_its_price_through_the_same_door():

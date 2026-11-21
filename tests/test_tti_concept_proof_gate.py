@@ -116,7 +116,7 @@ def test_tampered_missing_stale_or_failed_evidence_cannot_start_remainder(tmp_pa
 
 def test_cannot_approve_failed_or_incomplete_pilot(tmp_path):
     _,plan,pics,archive,api=three_rows(tmp_path); api.failure=True
-    with pytest.raises(RuntimeError): run(plan,pics,archive,api,selected_rows=[3,4],proof_rows=(3,4))
+    assert run(plan,pics,archive,api,selected_rows=[3,4],proof_rows=(3,4))==4, 'the failed pilots are held, not a crash'
     with pytest.raises(ValueError): proof.approve_proof(archive,plan,(3,4))
     assert not (archive.roots[0]/proof.APPROVAL).exists()
 

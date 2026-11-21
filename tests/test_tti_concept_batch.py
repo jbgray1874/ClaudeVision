@@ -207,10 +207,14 @@ def test_uncertain_post_not_found_stops_no_resend(tmp_path):
     assert len(api.posts)==1
 
 
-def test_engine_failure_stops_further_submissions(tmp_path):
+def test_engine_failure_holds_that_row_and_the_rest_carry_on(tmp_path):
+    """Was "engine failure stops further submissions". JG, 21 Nov 2026: one row's fault must
+    not stop the other rows; see tests/test_a_failed_run_holds_its_own_row.py."""
     _,plan,pics,a,api=setup(tmp_path,[(3,'One',1,''),(4,'Two',2,''),(5,'Three',3,'')]); api.failure=True
-    with pytest.raises(RuntimeError,match='failed/held'): run(plan,pics,a,api)
-    assert len(api.posts)==2
+    assert run(plan,pics,a,api)==4
+    assert len(api.posts)==3, 'every row was sent once'
+    state=json.loads((a.roots[0]/'state.json').read_text())
+    assert {e['phase'] for e in state['entries'].values()}=={'held'}
 
 
 def test_archive_failure_prevents_cost_write(tmp_path):
