@@ -572,7 +572,8 @@ class DesignShare:
 
     NO DRAWING INDEX (JG, 15 Nov 2026: "I never asked for it to use the index ... just fix it
     all"). The job's own folders in the Design area are listed at that moment from the job
-    number, Design only: this runner does not read Prototype. A Design area or folder that
+    number. Design is primary; TTI and explicitly opted-in bespoke jobs also check Prototype.
+    The portal's pack finder uses the same policy. A Design area or folder that
     cannot be read holds the row; it is never read as "nothing on design".
 
     Packs come from the design area (\\\\sdi-dc01\\CAD\\Design\\Customers April 08 Onwards, then
@@ -623,7 +624,7 @@ class DesignShare:
         if self._folders is not None:
             folders, lookup = self._folders(), None
         else:
-            folders, _source, lookup = pr.folders_now(row.drawing, design_only=True)
+            folders, _source, lookup = pr.folders_for_customer_now(row.drawing, row.customer)
         if not folders:
             return None             # nothing to search: the share's own reason is the useful one
         m = pr.resolve(row.drawing, folders, client=row.customer, lookup=lookup)
@@ -659,7 +660,7 @@ class DesignShare:
             if self._folders is not None:
                 folders, lookup = self._folders(), None
             else:
-                folders, _source, lookup = pr.folders_now(row.drawing, design_only=True)
+                folders, _source, lookup = pr.folders_for_customer_now(row.drawing, row.customer)
             if not folders:
                 return None
             m = pr.resolve(row.drawing, folders, client=row.customer, lookup=lookup)
@@ -669,6 +670,9 @@ class DesignShare:
             return None             # the estimator's folder still stands as it is
         if m.get("status") in ("not found",):
             return None
+        if not m.get('price_ok', False):
+            return Located('held', 'Cannot supplement the supplied pack from an unresolved selection: '
+                           + str(m.get('question') or m.get('status')), source=self.name)
         held = set()
         for f in share.files or pack_files(Path(share.folder)):
             did = pr.drawing_id(Path(f).name)

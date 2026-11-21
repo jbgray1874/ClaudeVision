@@ -69,13 +69,20 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_real_resolver_finds_design_models_and_parts_without_any_index(self):
         folder = self.design_pack()
-        self.file(self.proto / 'Rome 2026' / '12181 - Demo', '12181-00-GA_REV B.PDF')
+        self.file(self.proto / 'Rome 2026' / '12181 - Demo', '12181-00-GA_REV A.PDF')
         got = self.lookup()('12181-00-GA')
         self.assertEqual(got['state'], 'ready', got)
         self.assertEqual(got['evidence']['selected_folder'], str(folder))
         names = {Path(f['path']).suffix for f in got['evidence']['files']}
         self.assertTrue({'.sldasm', '.sldprt', '.pdf', '.dxf'} <= names)
         self.assertIn('Design: 1 folder(s)', got['evidence']['looked'])
+
+    def test_newer_prototype_revision_holds_instead_of_silently_using_design(self):
+        self.design_pack()
+        self.file(self.proto / 'Rome 2026' / '12181 - Demo', '12181-00-GA_REV B.PDF')
+        got = self.lookup()('12181-00-GA')
+        self.assertEqual(got['state'], 'held')
+        self.assertIn('revision B', ' '.join(got['holds']))
 
     def test_prototype_is_allowed_only_after_design_was_read(self):
         self.file(self.design / '12181 - Demo', '12181-99-GA.PDF')

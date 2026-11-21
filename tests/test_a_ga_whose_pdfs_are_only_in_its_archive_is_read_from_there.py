@@ -130,7 +130,8 @@ def test_a_pdf_from_the_archive_never_verifies_the_pack(tmp_path):
 def test_a_pdf_in_the_current_folder_can_still_verify_the_pack(tmp_path):
     m = pr.resolve(GA, _job(tmp_path, current_pdf=True), client="TTI", read_text=_read,
                    area_rank=lambda f: 0)
-    assert m["identity"] == "verified" and "ga_pdf_source" not in m
+    assert m["identity"] == "verified" and m["ga_pdf_source"]["archive"] is False
+    assert "superseded" not in m["ga_pdf_source"], "its own current PDF is not a borrowed one"
 
 
 def test_a_current_drawing_that_names_a_later_revision_makes_the_pdf_superseded(tmp_path):

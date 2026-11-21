@@ -203,6 +203,7 @@ def test_actual_ga17_retains_available_dependencies_and_names_absent_library_dra
     assert required <= ids
     assert {'1264-GA', '1338-GA', '3512-GA-A', '9976-01'} <= set(m['missing'])
     assert not m['complete']
+    assert not m['price_ok'], 'pruning is not proved safe while required library drawings are unresolved'
     assert '11671-01-GA16' not in ids and '11671-01-GA18' not in ids
     assert '11671-52-01M' not in m['missing']  # another product, not GA17
     assert len(m['members']) == 45

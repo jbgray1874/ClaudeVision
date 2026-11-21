@@ -84,6 +84,13 @@ def drawing_id(name: str) -> str:
         return ""
     m = _ID.match(tokens[0])
     first = _without_words(m.group(1).upper()) if m else ""
+    # A separated hand marker is identity, not description. Keep it distinct from
+    # the base: otherwise the present handed model is merged then reported missing.
+    tail = tokens[1:]
+    if tail and tail[0] == '-':
+        tail = tail[1:]
+    if first and '-' in first and tail and tail[0].upper() == 'HANDED' and not first.endswith('-HANDED'):
+        first += '-HANDED'
     # "12773-02 GA.SLDASM" IS DRAWING 12773-02-GA (12 Nov 2026): the assembly word stood apart
     # from its number, the file read as "12773-02", and the lower-body assembly the GA calls
     # for was never gathered; the estimate priced a lower body with no members.
@@ -108,7 +115,7 @@ _WORD_SEGMENT = re.compile(r"^[A-Z]{4,}$")
 
 def _without_words(number: str) -> str:
     parts = number.split("-")
-    while len(parts) > 2 and _WORD_SEGMENT.match(parts[-1]) and not _ASSEMBLY.match(parts[-1]) \
+    while len(parts) > 2 and _WORD_SEGMENT.match(parts[-1]) and parts[-1] != 'HANDED' and not _ASSEMBLY.match(parts[-1]) \
             and re.search(r"\d", "-".join(parts[:-1])):
         parts.pop()
     return "-".join(parts)
@@ -535,6 +542,45 @@ def _is_assembly(did: str) -> bool:
     return bool(_ASSEMBLY.match(did.split("-")[-1]))
 
 
+def check_revision_alternatives(manifest: Dict[str, Any], drawing: str,
+                                chosen: Dict[str, Any], candidates: Sequence[Dict[str, Any]],
+                                rank: Callable[[Path], int]) -> None:
+    """Design-first is a search preference, not authority to ignore a newer issue.
+
+    Filename evidence is enough to require a decision, not to auto-promote Prototype.
+    Same/older copies retain the existing area preference. Other jobs' reuse copies and
+    archives are not competing current issues. No additional share listing or PDF read.
+    Called AFTER an archived PDF has supplied the effective selected revision.
+    """
+    job = job_number(drawing)
+    for candidate in candidates:
+        if candidate.get('archive') or rank(Path(candidate['folder'])) <= rank(Path(chosen['folder'])):
+            continue
+        if job and not _in_job(candidate['folder'], job):
+            continue
+        client = str(manifest.get('client') or '').strip().lower()
+        if client and client in _segments(chosen['folder']) and client not in _segments(candidate['folder']):
+            continue
+        old, new = chosen.get('revision', ''), candidate.get('revision', '')
+        if not new or new == old:
+            continue
+        comparison = later(new, old)
+        if comparison is False:
+            continue
+        why = 'newer' if comparison is True else 'not comparable'
+        evidence = {'drawing': drawing, 'selected_folder': chosen['folder'],
+                    'selected_revision': old, 'alternative_folder': candidate['folder'],
+                    'alternative_revision': new,
+                    'alternative_revision_from': candidate.get('revision_from', ''), 'comparison': why}
+        if evidence in manifest.setdefault('revision_conflicts', []):
+            continue
+        manifest['revision_conflicts'].append(evidence)
+        manifest['conflicts'].append(
+            f"{drawing}: selected revision {old or '?'} in {chosen['folder']}, but a current copy "
+            f"in {candidate['folder']} states revision {new} ({candidate.get('revision_from') or 'named'}; "
+            f"{why}). Confirm the issued revision before pricing; the later search area is not ignored.")
+
+
 def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             read_text: Callable[[Path], str] = read_pdf_text, now: Optional[datetime] = None,
             area_rank: Optional[Callable[[Path], int]] = None,
@@ -604,13 +650,14 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     live = [c for c in cands if not c["archive"]] or cands
     if live is cands and all(c["archive"] for c in cands):
         manifest["assumptions"].append("only archive copies exist; the latest of them is used and said")
-    # THE FIRST SEARCH AREA WINS (JG, 10 Nov): design, then Prototype, which is for drawings not in
-    # design. A copy in a later area is noted, never compared, so it can never make a conflict.
+    # Design remains preferred. A newer/incomparable current issue in a later area is
+    # checked after archive recovery has established the PDF revision actually used.
     first = min(rank(Path(c["folder"])) for c in live)
     for c in live:
         if rank(Path(c["folder"])) != first:
             manifest["assumptions"].append(f"{c['folder']} also holds {drawing} (revision {c['revision'] or '?'}) "
-                                           f"in a later search area; the first area's copy is used")
+                                           f"in a later search area; the first area's copy is preferred, "
+                                           "subject to the revision conflict check")
     live = [c for c in live if rank(Path(c["folder"])) == first]
     # THE DRAWING'S OWN JOB FOLDER OVER ANOTHER JOB'S COPY (TTI dry run, 11 Nov 2026): 11203-01-GA
     # also sits in 11437's data folder, where that job reused it. A copy in another job's folder
@@ -658,6 +705,10 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     for c in live[1:]:
         if better(c, best):
             best = c
+    chosen_pdfs = [f for f in best['files'] if f[0].suffix.lower() == '.pdf']
+    if chosen_pdfs:
+        manifest['ga_pdf_source'] = {'path': str(_newest_revision_pdf(chosen_pdfs)[0]),
+                                     'archive': best['archive'], 'revision': best['revision']}
     # THE GA'S PDF FROM ITS OWN ARCHIVE WHEN THE CURRENT FOLDER HOLDS NONE (18 Nov 2026). 12132-01-GA:
     # 12132-Technical holds the SolidWorks drawing and models, and every PDF of the GA (REV A, REV
     # B) sits in 12132-Technical\12132-Archive. The archive was never looked at because a current
@@ -685,20 +736,23 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                     arch = c
             extra_ga = [f for f in arch["files"] if f[0].suffix.lower() == ".pdf"]
             # WHAT THE CURRENT FOLDER SAYS OF ITSELF IS KEPT (21 Nov 2026). 12132-01-GA was priced
-            # from the archive's revision B while the current folder's own drawing is a later
-            # issue, and the pack was still called "verified": the archive's title block proved
-            # the number, and nothing remembered the PDF was not the current drawing. A PDF from
-            # another folder never verifies the pack, and a current file that NAMES a later
-            # revision makes the PDF a superseded one, said as a fact and not as "may be".
+            # from the archive's revision B while a later issue exists, and the pack was still
+            # called "verified": the archive's title block proved the number, and nothing
+            # remembered the PDF was not the current drawing. A PDF from the archive never proves
+            # the pack, and a current file that NAMES a later revision makes the PDF a superseded
+            # one, said as a fact and not as "may be". (A later issue in ANOTHER search area is
+            # a conflict, held by check_revision_alternatives below.)
             _own_rev = best["revision"] if best["revision_from"] == "file name" else ""
             _superseded = bool(_own_rev) and later(_own_rev, arch["revision"]) is True
+            manifest['ga_pdf_source'] = {'path': str(_newest_revision_pdf(extra_ga)[0]),
+                                         'folder': arch['folder'],
+                                         'archive': arch['archive'], 'revision': arch['revision'],
+                                         'selected_folder_revision': best['revision'],
+                                         'current_revision': _own_rev, 'superseded': _superseded}
             best = dict(best, carries_number=arch["carries_number"], pdf_read=arch["pdf_read"],
                         references=arch["references"], revision=arch["revision"],
                         page_drawings=arch.get("page_drawings", {}),
-                        revision_from=arch["revision_from"], ga_pdf_elsewhere=True)
-            manifest["ga_pdf_source"] = {"folder": arch["folder"], "archive": bool(arch["archive"]),
-                                         "revision": arch["revision"], "current_revision": _own_rev,
-                                         "superseded": _superseded}
+                        revision_from=arch["revision_from"], ga_pdf_from_archive=bool(arch["archive"]))
             _said = (f"{best['folder']} holds no PDF of {drawing}; its PDF is taken from the "
                      f"{'archive ' if arch['archive'] else ''}folder "
                      f"{arch['folder']} (revision {arch['revision'] or '?'}). ")
@@ -727,6 +781,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     manifest["selected_folder"] = best["folder"]
     manifest["revision"] = best["revision"]
     manifest["revision_from"] = best["revision_from"]
+    check_revision_alternatives(manifest, drawing, best, cands, rank)
 
     # 3. MEMBERS: the family's files in the chosen folder and below it; then every reference the GA
     #    makes, FOLLOWED THROUGH EACH SUB-ASSEMBLY'S OWN DRAWING (11896-01-00-GA -> 11896-01-01-GA ->
@@ -782,6 +837,86 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
     _elsewhere = [f for folder, files, archive in folders
                   if rank(folder) == area and job and _in_job(str(folder), job.group(1)) for f in files]
     _taken: List[str] = []
+    # Both job trees have already been listed. A missing own-job part must be
+    # recovered from those listings before a library lookup (which deliberately
+    # refuses the job's own number). Only explicit dependencies/sheets are added;
+    # do not import the other area's whole family or another job's reused copy.
+    own_current = [(folder, files) for folder, files, archive in folders
+                   if not archive and job and _in_job(str(folder), job.group(1))
+                   and (not _cl or _cl not in _segments(best['folder']) or _cl in _segments(str(folder)))]
+
+    def own_files(did: str) -> List[FileRow]:
+        matches = [(folder, f) for folder, files in own_current for f in files
+                   if _same(drawing_id(f[0].name), did)]
+        if not matches:
+            return []
+        first_rank = min(rank(folder) for folder, f in matches)
+        return [f for folder, f in matches if rank(folder) == first_rank]
+
+    def note_recovered(did: str, files: List[FileRow]) -> None:
+        paths = sorted({str(f[0]) for f in files if rank(f[0].parent) != area})
+        if not paths:
+            return
+        evidence = {'drawing': did, 'files': paths, 'reason': 'explicit dependency recovered from listed own-job folders'}
+        if evidence not in manifest.setdefault('cross_area_recovery', []):
+            manifest['cross_area_recovery'].append(evidence)
+            manifest['assumptions'].append(f"{did}: missing file(s) recovered from the job's other search area: " + '; '.join(paths))
+
+    def recover_own(did: str) -> None:
+        if job_number(did) != job_number(drawing):
+            return
+        have = groups.get(did, [])
+        if not have:
+            hits = own_files(did)
+            if hits:
+                groups[did] = hits
+                note_recovered(did, hits)
+                have = hits
+        if have and did != drawing:
+            # The preference applies to parts as well as the root GA. A present
+            # Design PDF must not hide a newer Prototype part or subassembly.
+            pdfs = [f for f in have if f[0].suffix.lower() == '.pdf']
+            selected = _newest_revision_pdf(pdfs or have)
+            alternatives = [{'folder': str(folder), 'revision': revision_from_name(f[0].name),
+                             'revision_from': 'file name', 'archive': False}
+                            for folder, files in own_current for f in files
+                            if _same(drawing_id(f[0].name), did)]
+            selected_revision = revision_from_name(selected[0].name)
+            # An unrevisioned native model is not evidence of a conflicting issue;
+            # its missing drawing may be supplemented by the issued PDF.
+            if pdfs or selected_revision:
+                check_revision_alternatives(manifest, did,
+                    {'folder': str(selected[0].parent), 'revision': selected_revision},
+                    alternatives, rank)
+        if not any(f[0].suffix.lower() == '.pdf' for f in have):
+            pdf_rows = [(folder, files) for folder, files in own_current
+                        if any(_same(drawing_id(f[0].name), did) and f[0].suffix.lower() == '.pdf' for f in files)]
+            if pdf_rows:
+                first_rank = min(rank(folder) for folder, files in pdf_rows)
+                extra = [f for folder, files in pdf_rows if rank(folder) == first_rank
+                         for f in files if _same(drawing_id(f[0].name), did) and f not in have]
+                if have:
+                    native = _newest_revision_pdf(have)
+                    supplied_pdf = _newest_revision_pdf([f for f in extra if f[0].suffix.lower() == '.pdf'])
+                    native_rev = revision_from_name(native[0].name)
+                    pdf_rev = revision_from_name(supplied_pdf[0].name)
+                    if (native_rev and pdf_rev and native_rev != pdf_rev
+                            and rank(supplied_pdf[0].parent) > rank(native[0].parent)
+                            and later(pdf_rev, native_rev) is False):
+                        conflict = (f"{did}: cannot fill the missing PDF for revision {native_rev} "
+                                    f"with older revision {pdf_rev} from {supplied_pdf[0]}; "
+                                    "confirm the matching issued drawing before pricing.")
+                        if conflict not in manifest['conflicts']:
+                            manifest['conflicts'].append(conflict)
+                groups[did] = list(have) + extra
+                note_recovered(did, extra)
+        sheet_ids = sheets_of(did, (drawing_id(f[0].name) for folder, files in own_current for f in files))
+        for sheet in sheet_ids:
+            if sheet not in groups:
+                groups[sheet] = own_files(sheet)
+                note_recovered(sheet, groups[sheet])
+        if sheet_ids:
+            groups.setdefault(did, [])  # Follow the assembly's numbered sheets.
 
     def recover_pdf(did: str) -> None:
         have = groups.get(did, [])
@@ -799,6 +934,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         if a in done:
             continue
         done.add(a)
+        recover_own(a)
         recover_pdf(a)
         # A subassembly outside the root's filename family may be issued only
         # as numbered sheets. Gather those sheets before asking for its BOM.
@@ -860,6 +996,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             parent_of.setdefault(x, a)
             if a not in parents_of.setdefault(x, []):
                 parents_of[x].append(a)
+            recover_own(x)
             if x not in groups:
                 if in_family(x, drawing):
                     if wider is None:
@@ -1045,7 +1182,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         manifest["question"] = ("Which copy is the issued one? " + "; ".join(manifest["conflicts"][:3]))
     else:
         proved = (best["carries_number"] and best["revision_from"] == "drawing" and not best["archive"]
-                  and not best.get("ga_pdf_elsewhere"))
+                  and not best.get("ga_pdf_from_archive"))
         # IDENTITY AND COMPLETENESS ARE TWO FACTS (10 Nov 2026 review): a GA proved by its own
         # title block with made parts missing is not a verified PACK. "verified" needs both.
         manifest["identity"] = "verified" if proved else "named"
@@ -1086,7 +1223,7 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                 + ", ".join(manifest["unread_assemblies"]))
         # A bought item still to be priced keeps the pack provisional too: its cost is a catalogue
         # match or a labelled allowance, not yet a fact.
-        manifest["status"] = ("verified" if proved and manifest["complete"]
+        manifest["status"] = ("verified" if proved and not manifest.get('ga_pdf_source', {}).get('archive') and manifest["complete"]
                               and not manifest["bought_in_unmatched"] else "provisional")
         if proved and not manifest["complete"]:
             manifest["assumptions"].append(
@@ -1103,6 +1240,11 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
             manifest["question"] = ("Pruned pack requires review: referenced assemblies have no "
                 "readable own or embedded drawing pages, so their dependencies are unproved: "
                 + ", ".join(manifest["unread_assemblies"]))
+        if manifest.get("left_out_other_products") and manifest["missing"]:
+            manifest["price_ok"] = False
+            manifest["question"] = ("Pruned pack requires review: unresolved drawing references mean "
+                "the selected product's dependency tree is not proved complete: "
+                + ", ".join(manifest["missing"]))
         if not best["carries_number"]:
             manifest["assumptions"].append("the GA was matched by its file name; its own text was not read")
         if best["revision_from"] == "file name":
@@ -1399,6 +1541,32 @@ def folders_now(drawing: str, design_only: bool = False):
     return rows, said, LiveLibraryLookup(library_areas(design_only=design_only))
 
 
+def prototype_customers() -> set:
+    """The customers whose jobs may be supplemented from Prototype. A SETTING, not a name in
+    the logic (JG, 21 Nov 2026: "the design folder should contain everything. we only pull in
+    from prototype for tti and other bespoke prototype jobs going fwd"): the engine decides
+    nothing on a customer's name, so who is on this list is the estimating office's to change."""
+    named = os.getenv("SDI_PACK_PROTOTYPE_CUSTOMERS", "TTI")
+    return {x.strip().casefold() for x in re.split(r"[,;|]+", named) if x.strip()}
+
+
+def prototype_allowed(client: str, drawing: str) -> bool:
+    """Prototype supplements Design for TTI or an explicitly opted-in bespoke job.
+
+    The opt-in is exact drawing number or job number, never inferred from the brief
+    or a substring. Unnamed/non-TTI customers remain Design-only by default.
+    """
+    if str(client or '').strip().casefold() in prototype_customers():
+        return True
+    allowed = {x.strip().upper() for x in re.split(r'[,;|\s]+', os.getenv('SDI_PACK_PROTOTYPE_JOBS', '')) if x.strip()}
+    return bool(allowed & {str(drawing or '').strip().upper(), job_number(drawing).upper()})
+
+
+def folders_for_customer_now(drawing: str, client: str):
+    """Shared routing policy for portal discovery and unattended Live Enquiry."""
+    return folders_now(drawing, design_only=not prototype_allowed(client, drawing))
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--drawing", required=True)
@@ -1421,8 +1589,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if getattr(args, "use_index", False):
             folders, source, lookup = folders_for(args.drawing, live=not args.no_live)
         else:
-            # The page's "Find drawing pack": the job's own folders, Design then Prototype, now.
-            folders, source, lookup = folders_now(args.drawing)
+            # Portal discovery: Design primary; Prototype only for opted-in jobs.
+            folders, source, lookup = folders_for_customer_now(args.drawing, args.client)
         m = resolve(args.drawing, folders, args.client, lookup=lookup)
         m["source"] = source
         if args.store and m["price_ok"]:
