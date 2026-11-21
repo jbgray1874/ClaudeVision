@@ -144,3 +144,23 @@ success. There is no fixed completion-time promise.
 This package retains its own briefs, requests, response evidence and available
 engine logs without automatic deletion. It is NOT an implementation or proof of
 SDI Live call/chat database retention, nor of Codex conversation backups.
+
+## Drawing rows with no drawing pack (JG ruling, 21 Nov 2026)
+
+A row that carries a drawing number is normally left to the drawing pricer. When that
+pricer found no drawings for the number, the row can be priced here from its description
+and pictures instead:
+
+    --no-pack-rows 113,115 --no-pack-ledger "<the drawing pricer's ledger.json>"
+
+- The proof that no pack exists is the drawing pricer's own ledger: the row's latest entry
+  must be `needs drawing`, and the drawing number recorded there must be the one the row
+  carries on this sheet. Anything else is reported and not priced. Nothing is searched here.
+- The brief sent with the job says NO DRAWING PACK, names the drawing number, and asks for
+  that to be stated in the estimate and its review notes. The filed
+  `price-for-writeback.json` carries `no_drawing_pack`, the drawing number, the evidence and
+  "reprice from the drawings when they are supplied".
+- If the plan was already filed, each such row is added as one file under
+  `plan-amendments/` on both roots. `plan.json` is never rewritten, and the row is kept on
+  every later resume whether or not the option is given again.
+- These rows are not proof rows. They wait for the approved proof like every other row.

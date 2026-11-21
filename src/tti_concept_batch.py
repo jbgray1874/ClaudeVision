@@ -23,7 +23,7 @@ import urllib.request
 import uuid
 import zipfile
 
-from tti_concept_inputs import canonical, read_plan, sha, units
+from tti_concept_inputs import canonical, no_pack_rulings, read_plan, reread_options, sha, units
 from tti_concept_writeback import money, write_cost, require_closed
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -182,20 +182,67 @@ def archive_result(api, archive, item, state, snapshot):
     q = record.get('requested_order_quantity',record.get('quantity'))
     if units(q) != item['quantity']: raise ValueError('engine record quantity differs from source')
     archive.put(base+'inventory.json',json_bytes(inventory))
-    archive.put(base+'price-for-writeback.json',json_bytes({'source_row':item['row'],'quantity':item['quantity'],
+    audit={'source_row':item['row'],'quantity':item['quantity'],
                 'unit_gbp':str(price),'run_id':state['run_id'],'classification':'PROVISIONAL CONCEPT - not a quote',
                 'source_quantity':item.get('source_quantity'),'quantity_assumed':bool(item.get('quantity_assumed')),
                 'quantity_assumption_reason':item.get('quantity_assumption_reason'),
                 'order_total_gbp':str(price*item['quantity']),'AiCost_basis':'GBP per unit, NOT order total',
-                'source_fingerprint':item['fingerprint']}))
+                'source_fingerprint':item['fingerprint']}
+    if item.get('no_pack'):
+        # Said in the filed price audit as well as in the brief the estimate was made from.
+        audit.update(classification='PROVISIONAL CONCEPT - NO DRAWING PACK FOUND, priced from the description and pictures - not a quote',
+                     no_drawing_pack=True,drawing_number_on_sheet=item['no_pack']['drawing'],
+                     no_drawing_pack_evidence=item['no_pack'].get('evidence'),
+                     reprice='from the drawings when they are supplied')
+    archive.put(base+'price-for-writeback.json',json_bytes(audit))
     return price
 
 
 def current_item(plan,item):
-    current,_ = read_plan(plan['workbook'],plan['sheet'],assume_missing_quantity_one=bool(item.get('quantity_assumed')))
+    current,_ = read_plan(plan['workbook'],plan['sheet'],**reread_options(item))
     row = next((r for r in current['rows'] if r['row'] == item['row']),None)
     if not row or row['fingerprint'] != item['fingerprint']: raise ValueError(f"Row {item['row']} changed since planning")
     return row
+
+
+AMENDMENTS='plan-amendments'
+
+
+def filed_amendments(archive):
+    """No-pack rows added to a filed plan. C and K must hold the same files, byte for byte."""
+    names=[sorted(p.name for p in (root/AMENDMENTS).glob('*.json')) if (root/AMENDMENTS).is_dir() else [] for root in archive.roots]
+    if names[0]!=names[1]: raise RuntimeError('C/K plan amendments disagree; reconcile them. No submission')
+    out=[]
+    for name in names[0]:
+        raw=[(root/AMENDMENTS/name).read_bytes() for root in archive.roots]
+        if raw[0]!=raw[1]: raise RuntimeError('C/K plan amendments disagree; reconcile them. No submission')
+        out.append(json.loads(raw[0]))
+    return out
+
+
+def with_amendments(archive, saved, offered=None):
+    """The filed plan plus its no-pack rows. plan.json itself is never rewritten.
+
+    The ONLY amendment there is: a row the filed plan excluded as a drawing row, now
+    eligible under an explicit no-pack ruling. A new one is filed on both roots before
+    it can be submitted, and is then kept on every later resume, option given or not.
+    """
+    rows={r['row']:r for r in saved['rows']}; added={}
+    def admissible(item):
+        return (rows.get(item.get('row'),{}).get('state')=='drawing row excluded' and bool(item.get('no_pack'))
+                and item.get('state')=='eligible')
+    for item in filed_amendments(archive):
+        if not admissible(item) or item['row'] in added:
+            raise RuntimeError('A filed plan amendment is not one no-pack ruling on an excluded drawing row. No submission')
+        added[item['row']]=item
+    for item in (offered or {}).get('rows',[]):
+        if item['row'] in added or not admissible(item): continue
+        archive.put(f"{AMENDMENTS}/no-pack-row-{item['row']:05d}.json",json_bytes(item))
+        archive.event('NO-PACK ROW ADDED TO PLAN',row=item['row'],drawing=item['no_pack']['drawing'],reference=item['reference'])
+        added[item['row']]=item
+    if not added: return saved
+    plan=dict(saved); plan['rows']=[added.get(r['row'],r) for r in saved['rows']]
+    return plan
 
 
 def prepare(archive, plan, pictures, item):
@@ -236,6 +283,7 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
         saved=read_json(original)
         if bool(saved.get('assume_missing_quantity_one')) != bool(plan.get('assume_missing_quantity_one')):
             raise RuntimeError('Quantity policy differs from the archived plan. Do not delete its history or start another full batch: reconcile the plan with the integrator first.')
+        saved=with_amendments(archive,saved,plan)
         for item in saved['rows']:
             if item['state']=='eligible':
                 row=current_item(plan,item)
@@ -355,6 +403,8 @@ def argument_parser():
     p.add_argument('--assume-missing-quantity-one','--blank-quantity-as-one',dest='assume_missing_quantity_one',action='store_true',help='Explicit user ruling: blank/zero/unreadable concept quantities are one; original values and assumptions retained')
     p.add_argument('--proof-rows',default='6,12',help='Exactly two distinct pilot rows: one image and one description-only. Default: 6,12')
     p.add_argument('--approve-proof',action='store_true',help='After human review, validate and approve the two archived proofs ONLY; never submits or writes AiCost')
+    p.add_argument('--no-pack-rows',help='Comma-separated DRAWING rows to price from their description and pictures because no drawing pack was found. Requires --no-pack-ledger')
+    p.add_argument('--no-pack-ledger',help="The drawing pricer's ledger. Each --no-pack-rows row must be recorded there as 'needs drawing' under the drawing number the row carries")
     p.add_argument('--stop-file',help='Stops further submissions, never cancels accepted jobs')
     return p
 
@@ -365,7 +415,16 @@ def main(argv=None):
     try: proof_rows=tuple(int(v.strip()) for v in a.proof_rows.split(','))
     except ValueError: p.error('--proof-rows must name two row numbers')
     if len(proof_rows)!=2 or len(set(proof_rows))!=2: p.error('--proof-rows must name two DISTINCT row numbers')
-    plan,pictures=read_plan(a.sheet,a.sheet_name,assume_missing_quantity_one=a.assume_missing_quantity_one)
+    no_pack=None
+    if a.no_pack_rows or a.no_pack_ledger:
+        if not (a.no_pack_rows and a.no_pack_ledger): p.error('--no-pack-rows and --no-pack-ledger go together')
+        try: named=[int(v.strip()) for v in a.no_pack_rows.split(',')]
+        except ValueError: p.error('--no-pack-rows must be row numbers')
+        no_pack,refused=no_pack_rulings(a.no_pack_ledger,named)
+        for n,why in refused: print(f'NO-PACK row {n} NOT accepted, so not priced: {why}',flush=True)
+    plan,pictures=read_plan(a.sheet,a.sheet_name,assume_missing_quantity_one=a.assume_missing_quantity_one,no_pack=no_pack)
+    if no_pack is not None:
+        print('No drawing pack, priced from description and pictures: rows '+str([r['row'] for r in plan['rows'] if r.get('no_pack')]),flush=True)
     if Path(a.plan_output).resolve()==Path(a.sheet).resolve(): raise ValueError('plan output cannot replace workbook')
     atomic(a.plan_output,json_bytes(plan))
     ready=[r for r in plan['rows'] if r['state']=='eligible']; held=[r['row'] for r in plan['rows'] if r['state'].startswith('held:')]

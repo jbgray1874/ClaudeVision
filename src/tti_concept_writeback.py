@@ -10,7 +10,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from decimal import Decimal, InvalidOperation
 
-from tti_concept_inputs import S, read_plan, sha
+from tti_concept_inputs import S, read_plan, reread_options, sha
 
 
 def money(value):
@@ -57,7 +57,7 @@ def write_cost(workbook, item, price, sheet='Milwaukee'):
     """
     path = Path(workbook); price = money(price)
     require_closed(path)
-    plan, _ = read_plan(path,sheet,assume_missing_quantity_one=bool(item.get('quantity_assumed')))
+    plan, _ = read_plan(path,sheet,**reread_options(item))
     row = next((r for r in plan['rows'] if r['row'] == item['row']), None)
     if not row or row['fingerprint'] != item['fingerprint'] or row['cost_cell'] != item['cost_cell']:
         raise ValueError('source row changed; no write-back')

@@ -9,7 +9,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
-from tti_concept_batch import read_json, json_bytes, now, sha, exclusive_claim, current_item
+from tti_concept_batch import read_json, json_bytes, now, sha, exclusive_claim, current_item, with_amendments
 from tti_concept_proof import same_bytes, same_json
 
 LIMIT = 100000
@@ -34,7 +34,8 @@ def history_snapshot(directory):
 def audit(archive, row, history_dir, clients):
     state_raw = same_bytes(archive, 'state.json')
     state = json.loads(state_raw)
-    plan = same_json(archive, 'plan.json')
+    # A no-pack row lives in a filed amendment, not in plan.json; it can be uncertain too.
+    plan = with_amendments(archive, same_json(archive, 'plan.json'))
     if state['workbook'] != plan['workbook']:
         raise ValueError('Ledger and plan workbook differ')
     items = [x for x in plan['rows'] if x['row'] == row and x['state'] == 'eligible']
