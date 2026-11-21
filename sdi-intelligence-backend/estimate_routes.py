@@ -1059,6 +1059,7 @@ def _note_gate(runner: "Runner", gate: Any, now: float) -> None:
 
 class ProgressRequest(BaseModel):
     runner_id: str
+    process: str = ""
     lines: List[str] = []
     compute: Optional[Dict[str, Any]] = None
 
@@ -2509,6 +2510,12 @@ def progress(run_id: str, req: ProgressRequest,
             raise HTTPException(409, "That run is claimed by a different runner.")
         if run.status != "running":
             raise HTTPException(409, f"That run is {run.status}, not running.")
+        # Renew the actual process identity throughout a long job, not just at
+        # claim time. Legacy progress requests can use the identity captured on
+        # THIS run's claim; never manufacture one from runner_id or last_seen.
+        process = req.process or run.claimed_by_process
+        if req.process and run.claimed_by_process and req.process != run.claimed_by_process:
+            raise HTTPException(409, "Progress process differs from the process that claimed this run.")
         for text in req.lines:
             run.line(text)
             _check_the_engine_was_told(run, text)
@@ -2523,6 +2530,8 @@ def progress(run_id: str, req: ProgressRequest,
         r = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
         r.last_seen = now
         r.run_id = run.run_id
+        if process:
+            r.processes[process] = now
         if not r.capabilities and run.runner_capabilities:
             r.capabilities = list(run.runner_capabilities)
         # ITS MACHINE BY NAME (JG, 10 Nov 2026): after a restart of this service a runner mid-job

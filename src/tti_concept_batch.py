@@ -327,7 +327,7 @@ def retry_writebacks(plan,archive,selected_rows=None,writer=write_cost):
 
 
 def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_file=None,
-              sleep=time.sleep,writer=write_cost,selected_rows=None,proof_rows=None):
+              sleep=time.sleep,writer=write_cost,selected_rows=None,proof_rows=None,proof_execution_build=None):
     """Resume known IDs. An uncertain POST is NEVER blindly retried.
 
     On an error, stop new submissions and retain already-started jobs; do not kill
@@ -373,7 +373,7 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
     needs_proof=proof_rows is not None and any(i['row'] not in proof_rows for i in items)
     if needs_proof:
         from tti_concept_proof import require_approved_proof
-        require_approved_proof(plan,archive,state,proof_rows,expected_build=expected)
+        require_approved_proof(plan,archive,state,proof_rows,expected_build=proof_execution_build or expected)
     archive.state(state)
     check_build(api.runners(),expected,at_once)
     recent=api.recent()
@@ -426,7 +426,7 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
                 for item in items:
                     if item['reference'] in state['entries']: continue
                     if needs_proof and item['row'] not in proof_rows:
-                        require_approved_proof(plan,archive,state,proof_rows,expected_build=expected)
+                        require_approved_proof(plan,archive,state,proof_rows,expected_build=proof_execution_build or expected)
                     row=current_item(plan,item)
                     if row['cost_before'] not in (None,''): raise RuntimeError('AiCost was filled outside this batch; no overwrite or reprice')
                     found=[r for r in api.recent() if matches(r,item)]
@@ -458,6 +458,24 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
     return 3 if waiting else 0
 
 
+def validate_health_only_proof_build(repo, old, expected, git=None):
+    """Explicit proof carry-forward ONLY for this reporting-only patch.
+
+    No ledger build is rewritten. Any other intervening source change refuses.
+    """
+    git = git or (lambda *args: subprocess.check_output(['git',*args],cwd=repo,text=True).strip())
+    if not re.fullmatch(r'[a-fA-F0-9]{7,40}',old): raise ValueError('proof execution build must be bare hash')
+    before=git('rev-parse',old+'^{commit}'); after=git('rev-parse',expected+'^{commit}')
+    if git('merge-base',before,after)!=before: raise ValueError('proof build is not an ancestor')
+    allowed={'tools/runner/sdi_estimate_runner.py','sdi-intelligence-backend/estimate_routes.py',
+             'src/tti_concept_batch.py','tests/test_busy_runner_process_health.py',
+             'tests/test_health_only_proof_carry_forward.py'}
+    changed=set(git('diff','--name-only',before,after).splitlines())
+    if not changed or changed-allowed: raise ValueError('Not a reporting-only release: proof carry-forward refused')
+    return {'proof_execution_build':before,'resume_build':after,'changed_paths':sorted(changed),
+            'basis':'Explicit operator carry-forward of unchanged pricing proofs after reporting-only integration'}
+
+
 def argument_parser():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--sheet',required=True,help='Tracker workbook path')
@@ -469,6 +487,7 @@ def argument_parser():
     p.add_argument('--shared-root',help='Explicit UNC folder on the K share, inside service allowed roots')
     p.add_argument('--server',default='http://localhost:8071')
     p.add_argument('--expected-build',help='Bare reviewed production commit; required for execution')
+    p.add_argument('--proof-execution-build',help='Explicit original proof build for a reviewed health-only release; strict changed-path/ancestor check, no ledger rewrite')
     p.add_argument('--at-once',type=int,choices=(1,2),default=2)
     p.add_argument('--rows',help='Optional comma-separated eligible rows for an initial proof; omit for the full plan')
     p.add_argument('--assume-missing-quantity-one','--blank-quantity-as-one',dest='assume_missing_quantity_one',action='store_true',help='Explicit user ruling: blank/zero/unreadable concept quantities are one; original values and assumptions retained')
@@ -476,7 +495,7 @@ def argument_parser():
     p.add_argument('--approve-proof',action='store_true',help='After human review, validate and approve the two archived proofs ONLY; never submits or writes AiCost')
     p.add_argument('--approval-basis',help='With --approve-proof only, when the two proofs have NOT been looked at: whose instruction the approval rests on. Filed in place of the statement that they were reviewed')
     p.add_argument('--no-pack-rows',help='Comma-separated DRAWING rows to price from their description and pictures because no drawing pack was found. Requires --no-pack-ledger')
-    p.add_argument('--no-pack-ledger',help="The drawing pricer's ledger. Each --no-pack-rows row must be recorded there as 'needs drawing' under the drawing number the row carries")
+    p.add_argument('--no-pack-ledger',help="The drawing pricer's ledger, or the status report of its pack check on THIS workbook. Each --no-pack-rows row must be recorded there as 'needs drawing' under the drawing number the row carries")
     p.add_argument('--stop-file',help='Stops further submissions, never cancels accepted jobs')
     return p
 
@@ -493,7 +512,7 @@ def main(argv=None):
         if not (a.no_pack_rows and a.no_pack_ledger): p.error('--no-pack-rows and --no-pack-ledger go together')
         try: named=[int(v.strip()) for v in a.no_pack_rows.split(',')]
         except ValueError: p.error('--no-pack-rows must be row numbers')
-        no_pack,refused=no_pack_rulings(a.no_pack_ledger,named)
+        no_pack,refused=no_pack_rulings(a.no_pack_ledger,named,sheet=a.sheet)
         for n,why in refused: print(f'NO-PACK row {n} NOT accepted, so not priced: {why}',flush=True)
     plan,pictures=read_plan(a.sheet,a.sheet_name,assume_missing_quantity_one=a.assume_missing_quantity_one,no_pack=no_pack)
     if no_pack is not None:
@@ -517,17 +536,20 @@ def main(argv=None):
     base=Path(os.getenv('SDI_STATE_DIR') or str(Path(os.getenv('PROGRAMDATA',str(Path.home())))/'SDI Intelligence'))
     key=sha(str(Path(a.sheet).resolve()).casefold().encode())[:20]
     archive=Archive(Path(a.local_root)/key,Path(a.shared_root)/key)
+    if a.proof_execution_build:
+        bridge=validate_health_only_proof_build(ROOT,a.proof_execution_build,a.expected_build)
+        archive.put('proof-build-carry-forward/'+bridge['resume_build']+'.json',json_bytes(bridge))
     if a.approve_proof:
         from tti_concept_proof import approve_proof
         # Review/approval writes only audit files, so it can happen while the
         # separately authorised nine drawing jobs hold the global batch claim.
-        approve_proof(archive,plan,proof_rows,expected_build=a.expected_build,basis=a.approval_basis)
+        approve_proof(archive,plan,proof_rows,expected_build=a.proof_execution_build or a.expected_build,basis=a.approval_basis)
         return 0
     with exclusive_claim(base/'tti'/'batch.lock'):
         if a.writeback_only:
             return retry_writebacks(plan,archive,None if not a.rows else [int(v.strip()) for v in a.rows.split(',')])
         return run_batch(plan,pictures,archive,Client(a.server,os.getenv('SDI_API_KEY','')),a.expected_build,a.at_once,
-                         stop_file=a.stop_file,selected_rows=None if not a.rows else [int(v.strip()) for v in a.rows.split(',')],proof_rows=proof_rows)
+                         stop_file=a.stop_file,selected_rows=None if not a.rows else [int(v.strip()) for v in a.rows.split(',')],proof_rows=proof_rows,proof_execution_build=a.proof_execution_build)
 
 
 if __name__=='__main__':

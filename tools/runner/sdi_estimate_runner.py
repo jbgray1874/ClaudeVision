@@ -895,7 +895,7 @@ def main() -> int:
             with _heartbeat_while_busy(requests, others, headers, runner_id, _process,
                                        _build):
                 _execute(requests, base, headers, job, engine_root, engine_python,
-                         runner_id, claimed_from={"service": server,
+                         runner_id, process_identity=_process, claimed_from={"service": server,
                                               "commit": _SERVICE_COMMIT.get(server, "")})
             worked = True
             consecutive = 0
@@ -1387,7 +1387,8 @@ def _say_once(current: Optional[str], kind: str, *lines: str) -> Optional[str]:
 
 def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
              engine_root: Path, engine_python: Path, runner_id: str,
-             claimed_from: Optional[Dict[str, str]] = None) -> None:
+             claimed_from: Optional[Dict[str, str]] = None,
+             process_identity: str = "") -> None:
     run_id = job["run_id"]
     dest = Path(job["output_path"])
     folder = Path(job["job_folder"])
@@ -1437,6 +1438,7 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
             try:
                 resp = requests.post(f"{base}/runner/{run_id}/progress",
                                      json={"runner_id": runner_id, "lines": batch,
+                                           "process": process_identity,
                                            "compute": compute_now()},
                                      headers=headers, timeout=20)
                 last_sent = time.time()

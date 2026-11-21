@@ -62,7 +62,7 @@ def reread_options(item):
     return options
 
 
-def no_pack_rulings(ledger_path, rows):
+def no_pack_rulings(ledger_path, rows, sheet=None):
     """JG ruling, 21 Nov 2026: a drawing row whose number found no pack is priced from its
     description and pictures. The proof that no pack was found is the drawing pricer's own
     ledger, never this tool's opinion: the row's latest entry must say 'needs drawing'.
@@ -71,8 +71,21 @@ def no_pack_rulings(ledger_path, rows):
     """
     ledger=json.loads(Path(ledger_path).read_text(encoding='utf-8'))
     if not isinstance(ledger,dict): raise ValueError('not a drawing pricer ledger')
+    entries=list(ledger.values())
+    if isinstance(ledger.get('rows'),list):
+        # THE PRICER'S OWN STATUS REPORT IS READ AS IT IS WRITTEN (21 Nov 2026). The pricer
+        # keeps "needs drawing" only in the report of the run that found it, never in its
+        # ledger, and rows move between copies of the tracker: the eleven rows first named
+        # for this came from another copy's row numbers and none was accepted. A report is
+        # proof for ONE workbook, the one it was made on, so it is refused for any other.
+        checked=str(ledger.get('sheet') or '')
+        if sheet is not None and (not checked or Path(checked).resolve()!=Path(sheet).resolve()):
+            return {},[(n,'the pack check was made on another workbook ('+(checked or 'none named')+')') for n in dict.fromkeys(rows)]
+        entries=[dict(e,drawing=str(e.get('drawing_cell') or e.get('drawing') or ''),
+                      updated=e.get('updated') or ledger.get('updated') or ledger.get('started'))
+                 for e in ledger['rows'] if isinstance(e,dict)]
     latest={}
-    for entry in ledger.values():
+    for entry in entries:
         if not isinstance(entry,dict) or isinstance(entry.get('row'),bool) or not isinstance(entry.get('row'),int): continue
         mine=latest.get(entry['row'])
         if mine is None or str(entry.get('updated') or '')>str(mine.get('updated') or ''): latest[entry['row']]=entry
