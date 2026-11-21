@@ -17,6 +17,7 @@ class LiveLibraryLookup:
         self._rows = {}
         self._selected = {}
         self._walked = {}
+        self.unreadable = []
 
     # ONE BOUNDED WALK PER AREA, NOT ONE PER DRAWING (20 Nov 2026). GA17 calls for four drawings
     # of four other jobs; each was a fresh walk of every non-job folder of the whole Design area,
@@ -51,7 +52,14 @@ class LiveLibraryLookup:
                             stat = entry.stat(follow_symlinks=False)
                             loose.append((path, stat.st_size, stat.st_mtime))
             except OSError as exc:
-                raise pr.PackCheckStalled(f'library area could not be read ({folder}: {type(exc).__name__})') from exc
+                # ONE UNREADABLE FOLDER IS NOT AN UNREADABLE AREA (21 Nov 2026). Row 139 was held
+                # because a service's temporary folder deep in the Design area
+                # (".ArchiveServiceTemp...", PermissionError) could not be listed. A folder below
+                # the area's root is skipped and recorded, so a drawing missed there is never
+                # taken as proof it does not exist; an unreadable root still stops the check.
+                if folder == Path(root):
+                    raise pr.PackCheckStalled(f'library area could not be read ({folder}: {type(exc).__name__})') from exc
+                self.unreadable.append(f'{folder} ({type(exc).__name__})')
         self._walked[key] = (jobs, loose)
         return jobs, loose
 
@@ -90,7 +98,8 @@ class LiveLibraryLookup:
                                   'scope': 'own numbered job plus non-job library containers; unrelated jobs excluded',
                                   'archives_included': self.include_archives,
                                   'files': [str(f[0]) for f in hits],
-                                  'sheet_files': [str(f[0]) for f in sheets]})
+                                  'sheet_files': [str(f[0]) for f in sheets],
+                                  'unreadable_folders': list(self.unreadable)})
             # Design wins as a set; do not mix a Prototype PDF with Design CAD.
             if hits or sheets:
                 self._selected[key] = (hits, sheets)
