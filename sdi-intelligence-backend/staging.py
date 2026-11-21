@@ -127,6 +127,10 @@ class StagingError(Exception):
     """Something the estimator can see and fix. The route turns it into a 400."""
 
 
+class StagingDependencyError(StagingError):
+    """Service capability missing, before any staged files change."""
+
+
 class StagingInUse(StagingError):
     """The staged folder is held open by another program — a run, SOLIDWORKS or Excel."""
 
@@ -389,6 +393,8 @@ def stage_brief_only(*, client: str, drawing: str, brief: str) -> Dict[str, Any]
     text = str(brief or "").strip()
     if not text:
         raise StagingError("A run with no drawings needs an enquiry brief to read.")
+    # Render/check the SERVICE dependency before touching any existing pack.
+    page_bytes = _brief_page_bytes(text)
     folder = job_folder_for(client, drawing)
     folder.mkdir(parents=True, exist_ok=True)
     # The job's own data survives a brief-only re-stage too (D-535): the estimator's answers,
@@ -402,7 +408,7 @@ def stage_brief_only(*, client: str, drawing: str, brief: str) -> Dict[str, Any]
                 continue
     try:
         replaced = _clear_folder(folder)
-        _render_brief_page(text, folder / BRIEF_PAGE_NAME)
+        (folder / BRIEF_PAGE_NAME).write_bytes(page_bytes)
     except PermissionError as exc:
         raise StagingInUse(
             f"The staged pack for {drawing} ({folder}) is still open in another program, so "
@@ -425,38 +431,17 @@ def stage_brief_only(*, client: str, drawing: str, brief: str) -> Dict[str, Any]
 
 
 def _render_brief_page(text: str, out: Path) -> None:
-    """The brief as one A4 page image (brief_page.draw). Drawn here where the service has
-    PyMuPDF; otherwise by the engine's Python, out of process (21 Nov 2026: the service's own
-    environment never listed PyMuPDF, and a description-only job ended in an HTTP 500)."""
-    import brief_page                                                # noqa: WPS433
-    body = "ENQUIRY BRIEF\n\n" + text
+    out.write_bytes(_brief_page_bytes(text))
+
+
+def _brief_page_bytes(text: str) -> bytes:
+    from brief_renderer import BriefRendererUnavailable, render_brief_png
     try:
-        brief_page.pymupdf_module()
-    except ImportError:
-        _render_brief_page_with_engine(body, out)
-        return
-    brief_page.draw(body, str(out))
-
-
-def _render_brief_page_with_engine(body: str, out: Path) -> None:
-    import subprocess                                                # noqa: WPS433
-    import tempfile                                                  # noqa: WPS433
-    engine = os.getenv("SDI_ENGINE_PYTHON") or str(
-        Path(__file__).resolve().parents[1] / ".venv" / "Scripts" / "python.exe")
-    if not Path(engine).is_file():
-        raise StagingError(
-            "The brief could not be made into a page: PyMuPDF is not installed for the service "
-            f"and the engine's Python was not found at {engine}. Install PyMuPDF in the "
-            "service's virtualenv (sdi-intelligence-backend\\requirements.txt) or set "
-            "SDI_ENGINE_PYTHON.")
-    with tempfile.TemporaryDirectory() as tmp:
-        src = Path(tmp) / "brief.txt"
-        src.write_text(body, encoding="utf-8")
-        done = subprocess.run([engine, "-B", str(Path(__file__).with_name("brief_page.py")),
-                               str(src), str(out)], capture_output=True, text=True, timeout=120)
-    if done.returncode != 0 or not Path(out).is_file():
-        raise StagingError("The brief could not be made into a page by the engine's Python: "
-                           + (done.stderr or done.stdout or "no page was written").strip()[-300:])
+        return render_brief_png(text)
+    except BriefRendererUnavailable as exc:
+        raise StagingDependencyError(str(exc)) from exc
+    except ValueError as exc:
+        raise StagingError(str(exc)) from exc
 
 
 def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:

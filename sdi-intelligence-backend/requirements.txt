@@ -31,6 +31,7 @@ pydantic>=2.9          # request models (estimate_routes.EstimateRequest)
 python-multipart>=0.0.9 # file upload on POST /api/estimate/override (estimator manual override)
 python-dotenv>=1.0,<2.0 # config.py reads .env
 requests>=2.31,<3.0    # hr_brighthr talks to BrightHR
+PyMuPDF>=1.24.3,<2.0   # brief_renderer: description-only staging in THIS service virtualenv
 
 # Optional. The database endpoints report "not configured" without it rather
 # than failing, so a machine that only needs the estimating page can skip it.
@@ -46,4 +47,3 @@ cryptography>=42.0     # encrypts the session store at rest (session_store.py)
 openpyxl>=3.1,<4.0      # morning_review.py reads the downloaded tracker (scheduled run)
 mcp==2.3.0              # voicecrm_connector.py: the ChatGPT / Claude connector (MCP server)
 PyJWT[crypto]>=2.8      # voicecrm_connector.py checks Entra access tokens
-PyMuPDF                 # staging.py: the page image of a brief-only job. Without it the engine's Python draws the page

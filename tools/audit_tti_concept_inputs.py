@@ -15,7 +15,7 @@ def main():
     p.add_argument('--workbook',required=True)
     p.add_argument('--output',required=True,help='New private verification folder, outside git')
     p.add_argument('--exercise-writeback',action='store_true')
-    p.add_argument('--assume-missing-quantity-one',action='store_true')
+    p.add_argument('--assume-missing-quantity-one','--blank-quantity-as-one',dest='assume_missing_quantity_one',action='store_true')
     a=p.parse_args(); source=Path(a.workbook).resolve(); out=Path(a.output).resolve()
     if out.exists(): raise SystemExit('Use a NEW verification folder; nothing overwritten')
     raw=source.read_bytes(); plan,pictures=read_plan(source,assume_missing_quantity_one=a.assume_missing_quantity_one)

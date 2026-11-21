@@ -185,6 +185,7 @@ def archive_result(api, archive, item, state, snapshot):
     archive.put(base+'price-for-writeback.json',json_bytes({'source_row':item['row'],'quantity':item['quantity'],
                 'unit_gbp':str(price),'run_id':state['run_id'],'classification':'PROVISIONAL CONCEPT - not a quote',
                 'source_quantity':item.get('source_quantity'),'quantity_assumed':bool(item.get('quantity_assumed')),
+                'quantity_assumption_reason':item.get('quantity_assumption_reason'),
                 'order_total_gbp':str(price*item['quantity']),'AiCost_basis':'GBP per unit, NOT order total',
                 'source_fingerprint':item['fingerprint']}))
     return price
@@ -213,47 +214,8 @@ def prepare(archive, plan, pictures, item):
     return body
 
 
-UNCERTAIN_MIN_AGE_S = 600
-
-
-def release_uncertain(archive, api, rows, min_age_s=UNCERTAIN_MIN_AGE_S, clock=None):
-    """Release a row left 'submitting' when the service REFUSED the request (21 Nov 2026).
-
-    Row 6's first POST met an HTTP 500 while the service was staging it, before any run existed;
-    the durable state had already said 'submitting', and a resume rightly refuses to send it
-    again on its own. An operator names the row, and it is released only when ALL of these hold:
-    the entry is 'submitting' with no run id; it is at least `min_age_s` old, so a slow
-    acceptance has had time to show; and the service holds NO run at all under the row's unique
-    reference. The release is journaled on both roots. Anything else stops: a run that exists is
-    collected by an ordinary resume, never sent twice."""
-    paths=[r/'state.json' for r in archive.roots]
-    states=[read_json(p) for p in paths if p.exists()]
-    if len(states)!=2 or states[0]!=states[1]:
-        raise RuntimeError('C/K ledgers missing or disagree: nothing released')
-    state=states[0]
-    current=(clock or (lambda: datetime.now(timezone.utc)))()
-    recent=api.recent()
-    for row in rows:
-        refs=[ref for ref,e in state['entries'].items() if e.get('row')==row]
-        if len(refs)!=1: raise RuntimeError(f'Row {row}: no single entry in the ledger; nothing released')
-        ref=refs[0]; entry=state['entries'][ref]
-        if entry.get('phase')!='submitting' or entry.get('run_id'):
-            raise RuntimeError(f"Row {row} is not an uncertain submission (phase {entry.get('phase')}); nothing released")
-        age=(current-datetime.fromisoformat(str(entry.get('at')))).total_seconds()
-        if age < min_age_s:
-            raise RuntimeError(f'Row {row}: submitted {int(age)} s ago; wait {int(min_age_s)} s before releasing')
-        held=[r.get('run_id') for r in recent if r.get('client')=='TTI' and r.get('drawing_number')==ref]
-        if held:
-            raise RuntimeError(f'Row {row}: the service holds run(s) {held} for {ref}; resume collects it, nothing released')
-        del state['entries'][ref]
-        archive.state(state)
-        archive.event('UNCERTAIN SUBMISSION RELEASED',row=row,reference=ref,age_seconds=int(age),
-                      why='operator release: the service holds no run under this reference')
-    return state
-
-
 def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_file=None,
-              sleep=time.sleep,writer=write_cost,selected_rows=None):
+              sleep=time.sleep,writer=write_cost,selected_rows=None,proof_rows=None):
     """Resume known IDs. An uncertain POST is NEVER blindly retried.
 
     On an error, stop new submissions and retain already-started jobs; do not kill
@@ -294,6 +256,12 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
         items=[r for r in items if r['row'] in selected_rows]
         if any(e.get('phase') not in ('done','held') and e.get('row') not in selected_rows for e in state['entries'].values()):
             raise RuntimeError('Uncollected runs outside selected rows: resume the full batch first')
+    # CLI always supplies its two proof rows. Existing library callers/tests may
+    # omit this optional contract; they are not the unattended command interface.
+    needs_proof=proof_rows is not None and any(i['row'] not in proof_rows for i in items)
+    if needs_proof:
+        from tti_concept_proof import require_approved_proof
+        require_approved_proof(plan,archive,state,proof_rows,expected_build=expected)
     archive.state(state)
     check_build(api.runners(),expected,at_once)
     recent=api.recent()
@@ -303,7 +271,7 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
            and not any(matches(r,i) for i in uncertain) for r in recent):
         raise RuntimeError('Other jobs are live; finish them first. Nothing submitted by this invocation.')
     # Include previously completed rows in the immutable plan, even though they now have AiCost.
-    archive.event('READY',eligible=len(items),held=sum(r['state'].startswith('held:') for r in plan['rows']),parallel=at_once)
+    archive.event('READY',eligible=len(items),remaining=sum(state['entries'].get(i['reference'],{}).get('phase')!='done' for i in items),held=sum(r['state'].startswith('held:') for r in plan['rows']),parallel=at_once)
     try:
         while True:
             pending=False; active=0
@@ -341,13 +309,15 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
                 check_build(api.runners(),expected,at_once)
                 for item in items:
                     if item['reference'] in state['entries']: continue
+                    if needs_proof and item['row'] not in proof_rows:
+                        require_approved_proof(plan,archive,state,proof_rows,expected_build=expected)
                     require_closed(plan['workbook'])
                     row=current_item(plan,item)
                     if row['cost_before'] not in (None,''): raise RuntimeError('AiCost was filled outside this batch; no overwrite or reprice')
                     found=[r for r in api.recent() if matches(r,item)]
                     if len(found)>1: raise RuntimeError('Multiple existing runs for concept reference; manual reconciliation needed')
                     body=prepare(archive,plan,pictures,item)
-                    entry={'row':item['row'],'phase':'submitting','at':now()}
+                    entry={'row':item['row'],'phase':'submitting','at':now(),'expected_build':expected}
                     state['entries'][item['reference']]=entry; archive.state(state)
                     if found:
                         entry.update(run_id=safe_id(found[0]['run_id']),phase='running')
@@ -370,7 +340,7 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
     return 0
 
 
-def main(argv=None):
+def argument_parser():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--sheet',required=True,help='Tracker workbook path')
     p.add_argument('--sheet-name',default='Milwaukee')
@@ -382,18 +352,27 @@ def main(argv=None):
     p.add_argument('--expected-build',help='Bare reviewed production commit; required for execution')
     p.add_argument('--at-once',type=int,choices=(1,2),default=2)
     p.add_argument('--rows',help='Optional comma-separated eligible rows for an initial proof; omit for the full plan')
-    p.add_argument('--assume-missing-quantity-one','--blank-quantity-as-one',dest='assume_missing_quantity_one',action='store_true',help='Explicit user ruling: blank/zero concept quantities are one; source Quantity cells stay unchanged')
+    p.add_argument('--assume-missing-quantity-one','--blank-quantity-as-one',dest='assume_missing_quantity_one',action='store_true',help='Explicit user ruling: blank/zero/unreadable concept quantities are one; original values and assumptions retained')
+    p.add_argument('--proof-rows',default='6,12',help='Exactly two distinct pilot rows: one image and one description-only. Default: 6,12')
+    p.add_argument('--approve-proof',action='store_true',help='After human review, validate and approve the two archived proofs ONLY; never submits or writes AiCost')
     p.add_argument('--stop-file',help='Stops further submissions, never cancels accepted jobs')
-    p.add_argument('--release-uncertain',help='Comma-separated rows left "submitting" by a request the service refused; released only when the service holds no run for them (see release_uncertain)')
-    a=p.parse_args(argv)
+    return p
+
+
+def main(argv=None):
+    p=argument_parser(); a=p.parse_args(argv)
+    if a.execute and a.approve_proof: p.error('--approve-proof cannot be combined with --execute')
+    try: proof_rows=tuple(int(v.strip()) for v in a.proof_rows.split(','))
+    except ValueError: p.error('--proof-rows must name two row numbers')
+    if len(proof_rows)!=2 or len(set(proof_rows))!=2: p.error('--proof-rows must name two DISTINCT row numbers')
     plan,pictures=read_plan(a.sheet,a.sheet_name,assume_missing_quantity_one=a.assume_missing_quantity_one)
     if Path(a.plan_output).resolve()==Path(a.sheet).resolve(): raise ValueError('plan output cannot replace workbook')
     atomic(a.plan_output,json_bytes(plan))
     ready=[r for r in plan['rows'] if r['state']=='eligible']; held=[r['row'] for r in plan['rows'] if r['state'].startswith('held:')]
     print(f'PLAN ONLY until --execute: {len(ready)} eligible ({sum(bool(r["images"]) for r in ready)} with pictures; {sum(not r["images"] for r in ready)} description-only); held {held}',flush=True)
     print('Quantity ONE assumed for rows: '+str([r['row'] for r in ready if r.get('quantity_assumed')]),flush=True)
-    if not a.execute: return 0
-    if not a.shared_root or not a.expected_build: p.error('--execute requires --shared-root and --expected-build')
+    if not a.execute and not a.approve_proof: return 0
+    if not a.shared_root or not a.expected_build: p.error('execution/approval requires --shared-root and --expected-build')
     if not a.shared_root.startswith('\\\\'): p.error('use the K share UNC path, not a mapped drive invisible to runners')
     if not Path(a.shared_root).parent.is_dir(): raise OSError('shared parent is unavailable; connect VPN first')
     # Load settings without logging any values. No service processes or .env files are changed.
@@ -406,11 +385,15 @@ def main(argv=None):
     base=Path(os.getenv('SDI_STATE_DIR') or str(Path(os.getenv('PROGRAMDATA',str(Path.home())))/'SDI Intelligence'))
     key=sha(str(Path(a.sheet).resolve()).casefold().encode())[:20]
     archive=Archive(Path(a.local_root)/key,Path(a.shared_root)/key)
+    if a.approve_proof:
+        from tti_concept_proof import approve_proof
+        # Review/approval writes only audit files, so it can happen while the
+        # separately authorised nine drawing jobs hold the global batch claim.
+        approve_proof(archive,plan,proof_rows,expected_build=a.expected_build)
+        return 0
     with exclusive_claim(base/'tti'/'batch.lock'):
-        if a.release_uncertain:
-            release_uncertain(archive,Client(a.server,os.getenv('SDI_API_KEY','')),[int(v.strip()) for v in a.release_uncertain.split(',')])
         return run_batch(plan,pictures,archive,Client(a.server,os.getenv('SDI_API_KEY','')),a.expected_build,a.at_once,
-                         stop_file=a.stop_file,selected_rows=None if not a.rows else [int(v.strip()) for v in a.rows.split(',')])
+                         stop_file=a.stop_file,selected_rows=None if not a.rows else [int(v.strip()) for v in a.rows.split(',')],proof_rows=proof_rows)
 
 
 if __name__=='__main__':

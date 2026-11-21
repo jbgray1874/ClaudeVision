@@ -56,6 +56,17 @@ Step "no runner on this machine is in the middle of a job" {
     }
 }
 
+Step "service description-only renderer (no jobs)" {
+    # The engine venv having PyMuPDF says nothing about the SERVICE venv.
+    # Check before push/restart; installing dependencies remains an explicit task.
+    $servicePython = Join-Path $root "sdi-intelligence-backend\.venv\Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath $servicePython)) {
+        Write-Host "  SERVICE Python is missing: $servicePython. Nothing restarted." -ForegroundColor Red
+        $global:LASTEXITCODE = 7
+        return
+    }
+    & $servicePython -B (Join-Path $root "tools\check_service_brief_renderer.py")
+}
 Step "push the portal branch" { git push origin HEAD }
 Step "fetch the laptop repository's main-2026" { git fetch origin main-2026 }
 Step "main-2026 moves forward only" { git merge-base --is-ancestor FETCH_HEAD HEAD }

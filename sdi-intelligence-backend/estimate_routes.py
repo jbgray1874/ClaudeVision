@@ -3687,6 +3687,9 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                                               brief=str(req.enquiry_brief or ""))
         else:
             staged = staging.stage(_sources, client=client, drawing=drawing)
+    except staging.StagingDependencyError as exc:
+        raise HTTPException(503, {"code": "brief_renderer_unavailable",
+                                  "accepted": False, "message": str(exc)})
     except staging.StagingInUse as exc:
         raise HTTPException(409, str(exc))
     except staging.StagingError as exc:

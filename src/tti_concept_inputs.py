@@ -41,6 +41,20 @@ def missing_or_zero(value):
     except (TypeError,ValueError): return False
 
 
+def quantity_one_reason(value):
+    """JG ruling: unreadable text/errors also mean one, explicitly, never silently.
+
+    A readable negative/fractional number is still an invalid stated count.
+    Keep the original blank/zero identity so valid earlier runs remain resumable.
+    """
+    if missing_or_zero(value): return 'blank/zero source quantity'
+    if isinstance(value,bool): return 'unreadable boolean source quantity'
+    try: n=float(value)
+    except (TypeError,ValueError): return 'unreadable text or Excel error in source quantity'
+    if not math.isfinite(n): return 'non-finite source quantity'
+    return None
+
+
 def child_name(tag):
     return tag.rsplit('}', 1)[-1]
 
@@ -184,7 +198,8 @@ def read_plan(path, sheet='Milwaukee', assume_missing_quantity_one=False):
             row = tuple(row) + (None,) * max(0, len(heads)-len(row))
             if not row[4] and n not in pictures:continue
             qty=units(row[13]);ref=REF.search(str(row[11] or ''))
-            assumed=bool(assume_missing_quantity_one and not ref and missing_or_zero(row[13]))
+            assumption_reason=quantity_one_reason(row[13]) if assume_missing_quantity_one and not ref else None
+            assumed=bool(assumption_reason)
             if assumed: qty=1
             details=[{'column':openpyxl.utils.get_column_letter(i+1),'header':str(heads[i] or f'Column {i+1}'),
                       'value':v.isoformat() if hasattr(v,'isoformat') else v}
@@ -197,7 +212,7 @@ def read_plan(path, sheet='Milwaukee', assume_missing_quantity_one=False):
                            and not PRICING.search(d['header'])
                            and not (d['column'] in image_columns and d['value'] in ('#VALUE!','#N/A'))]
             identity={'sheet':sheet,'row':n,'details':brief_details,'images':[p.record() for p in images]}
-            if assumed: identity['quantity_assumption']='User authorised quantity 1 for blank/zero source quantity'
+            if assumed: identity['quantity_assumption']='User authorised quantity 1 for '+assumption_reason
             fingerprint=sha(canonical(identity).encode())
             state=('drawing row excluded' if ref else 'held: quantity' if qty is None else
                    'held: description' if not row[4] else 'has cost' if row[costcol] not in (None,'') else 'eligible')
@@ -207,9 +222,10 @@ def read_plan(path, sheet='Milwaukee', assume_missing_quantity_one=False):
                             'Source facts (JSON data):',canonical(brief_details),
                             f'Attached pictures: {len(images)}.' if images else 'No picture supplied: description-only provisional costing.'])
             if assumed:
-                brief+='\nQUANTITY ASSUMPTION: price ONE unit, as authorised by the user because the source quantity is blank/zero. Retain this assumption in the estimate and review notes. Do not interpret the source blank/zero as a zero-unit order.'
+                brief+='\nQUANTITY ASSUMPTION: price ONE unit, as authorised by the user because of '+assumption_reason+'. Retain the original value and this assumption in the estimate and review notes. Do not interpret this as a zero-unit order.'
             items.append({'row':n,'reference':f'TTI-C-{fingerprint[:20]}','fingerprint':fingerprint,'quantity':qty,
                           'source_quantity':row[13],'quantity_assumed':assumed,
+                          'quantity_assumption_reason':assumption_reason,
                           'description':str(row[4] or ''),'state':state,'cost_cell':f'{openpyxl.utils.get_column_letter(costcol+1)}{n}',
                           'cost_before':row[costcol], 'details':details,'brief':brief,
                           'images':[p.record() for p in images]})
