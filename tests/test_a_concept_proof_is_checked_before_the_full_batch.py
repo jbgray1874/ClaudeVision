@@ -31,9 +31,9 @@ def _done(tmp_path, monkeypatch):
     path, plan, pics, archive, api = _fx.setup(tmp_path)
     assert _fx.run(plan, pics, archive, api) == 0
     key = batch.sha(str(Path(path).resolve()).casefold().encode())[:20]
-    for root, name in zip(archive.roots, ("C", "K")):
+    for root, name in zip(archive.roots, ("local", "shared")):
         shutil.copytree(root, tmp_path / name / key)          # the tool's own layout: <root>/<key>
-    return path, plan, tmp_path / "C", tmp_path / "K", key
+    return path, plan, tmp_path / "local", tmp_path / "shared", key
 
 
 def test_a_good_proof_passes(tmp_path, monkeypatch):
@@ -58,6 +58,6 @@ def test_a_row_never_run_fails(tmp_path, monkeypatch):
     path, plan, pics, archive, api = _fx.setup(tmp_path)
     assert _fx.run(plan, pics, archive, api, selected_rows=[3]) == 0
     key = batch.sha(str(Path(path).resolve()).casefold().encode())[:20]
-    for root, name in zip(archive.roots, ("C", "K")):
+    for root, name in zip(archive.roots, ("local", "shared")):
         shutil.copytree(root, tmp_path / name / key)
-    assert proof.check(path, tmp_path / "C", tmp_path / "K", [3, 4], out=lambda s: None) is False
+    assert proof.check(path, tmp_path / "local", tmp_path / "shared", [3, 4], out=lambda s: None) is False
