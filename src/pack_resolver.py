@@ -684,15 +684,31 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
                 if better(c, arch):
                     arch = c
             extra_ga = [f for f in arch["files"] if f[0].suffix.lower() == ".pdf"]
+            # WHAT THE CURRENT FOLDER SAYS OF ITSELF IS KEPT (21 Nov 2026). 12132-01-GA was priced
+            # from the archive's revision B while the current folder's own drawing is a later
+            # issue, and the pack was still called "verified": the archive's title block proved
+            # the number, and nothing remembered the PDF was not the current drawing. A PDF from
+            # another folder never verifies the pack, and a current file that NAMES a later
+            # revision makes the PDF a superseded one, said as a fact and not as "may be".
+            _own_rev = best["revision"] if best["revision_from"] == "file name" else ""
+            _superseded = bool(_own_rev) and later(_own_rev, arch["revision"]) is True
             best = dict(best, carries_number=arch["carries_number"], pdf_read=arch["pdf_read"],
                         references=arch["references"], revision=arch["revision"],
                         page_drawings=arch.get("page_drawings", {}),
-                        revision_from=arch["revision_from"])
-            manifest["assumptions"].append(
-                f"{best['folder']} holds no PDF of {drawing}; its PDF is taken from the "
-                f"{'archive ' if arch['archive'] else ''}folder "
-                f"{arch['folder']} (revision {arch['revision'] or '?'}). The SolidWorks drawing in the "
-                f"current folder may be a later revision: check it before this estimate is used")
+                        revision_from=arch["revision_from"], ga_pdf_elsewhere=True)
+            manifest["ga_pdf_source"] = {"folder": arch["folder"], "archive": bool(arch["archive"]),
+                                         "revision": arch["revision"], "current_revision": _own_rev,
+                                         "superseded": _superseded}
+            _said = (f"{best['folder']} holds no PDF of {drawing}; its PDF is taken from the "
+                     f"{'archive ' if arch['archive'] else ''}folder "
+                     f"{arch['folder']} (revision {arch['revision'] or '?'}). ")
+            manifest["assumptions"].append(_said + (
+                f"The current folder's own drawing is revision {_own_rev}, LATER than this PDF: the "
+                f"estimate is priced from a SUPERSEDED revision {arch['revision']} and must be checked "
+                f"against revision {_own_rev} before it is used"
+                if _superseded else
+                "The SolidWorks drawing in the "
+                "current folder may be a later revision: check it before this estimate is used"))
     for c in live:
         if c is best:
             continue
@@ -1028,7 +1044,8 @@ def resolve(drawing: str, folders: Sequence[FolderRow], client: str = "",
         manifest["price_ok"] = False
         manifest["question"] = ("Which copy is the issued one? " + "; ".join(manifest["conflicts"][:3]))
     else:
-        proved = best["carries_number"] and best["revision_from"] == "drawing" and not best["archive"]
+        proved = (best["carries_number"] and best["revision_from"] == "drawing" and not best["archive"]
+                  and not best.get("ga_pdf_elsewhere"))
         # IDENTITY AND COMPLETENESS ARE TWO FACTS (10 Nov 2026 review): a GA proved by its own
         # title block with made parts missing is not a verified PACK. "verified" needs both.
         manifest["identity"] = "verified" if proved else "named"

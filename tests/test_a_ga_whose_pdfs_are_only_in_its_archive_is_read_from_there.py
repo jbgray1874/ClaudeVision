@@ -19,12 +19,12 @@ import pack_resolver as pr  # noqa: E402
 GA = "50002-01-GA"
 
 
-def _job(tmp: Path, archive_pdfs: bool = True, current_pdf: bool = False):
+def _job(tmp: Path, archive_pdfs: bool = True, current_pdf: bool = False, current_drawing: str = "50002-01-GA.SLDDRW"):
     tech = tmp / "TTI" / "50002 - Display (Test 2026)" / "50002-Technical"
     arch = tech / "50002-Archive"
     tech.mkdir(parents=True)
     arch.mkdir()
-    cur = ["50002-01-GA.SLDDRW", "50002-01-GA.SLDASM", "50002-01-02A.SLDPRT", "50002-01-10M.SLDPRT"]
+    cur = [current_drawing, "50002-01-GA.SLDASM", "50002-01-02A.SLDPRT", "50002-01-10M.SLDPRT"]
     if current_pdf:
         cur.append("50002-01-GA_REV C.pdf")
     old = ["50002-01 GA_STAND_REV A.pdf", "50002-01 GA_STAND_REV B.pdf", "50002-01 GA_revA TEST 2026.dwg"]
@@ -116,3 +116,41 @@ def test_the_ga_from_another_ordinary_folder_of_the_job_when_the_main_folder_has
     rows.append((other, [(p, p.stat().st_size, 1_000_500)], False))
     m = pr.resolve(GA, rows, client="TTI", read_text=_read, area_rank=lambda f: 0)
     assert "50002-01 GA_STAND_REV B.pdf" in _ga_files(m)
+
+
+def test_a_pdf_from_the_archive_never_verifies_the_pack(tmp_path):
+    """21 Nov 2026: the archive's title block proved the number, and the pack was called
+    "verified" on a PDF that is not the current drawing."""
+    m = pr.resolve(GA, _job(tmp_path), client="TTI", read_text=_read, area_rank=lambda f: 0)
+    assert m["status"] == "provisional" and m["identity"] == "named"
+    assert m["ga_pdf_source"]["archive"] is True and m["ga_pdf_source"]["revision"] == "B"
+    assert m["price_ok"] is True, "it is still priced, as a provisional pack"
+
+
+def test_a_pdf_in_the_current_folder_can_still_verify_the_pack(tmp_path):
+    m = pr.resolve(GA, _job(tmp_path, current_pdf=True), client="TTI", read_text=_read,
+                   area_rank=lambda f: 0)
+    assert m["identity"] == "verified" and "ga_pdf_source" not in m
+
+
+def test_a_current_drawing_that_names_a_later_revision_makes_the_pdf_superseded(tmp_path):
+    m = pr.resolve(GA, _job(tmp_path, current_drawing="50002-01-GA_REV C.SLDDRW"), client="TTI",
+                   read_text=_read, area_rank=lambda f: 0)
+    src = m["ga_pdf_source"]
+    assert src["superseded"] is True and src["current_revision"] == "C" and src["revision"] == "B"
+    said = " ".join(m["assumptions"])
+    assert "SUPERSEDED revision B" in said and "revision C" in said and "may be a later revision" not in said
+    assert m["status"] == "provisional"
+
+
+def test_a_current_drawing_at_the_same_revision_is_not_called_superseded(tmp_path):
+    m = pr.resolve(GA, _job(tmp_path, current_drawing="50002-01-GA_REV B.SLDDRW"), client="TTI",
+                   read_text=_read, area_rank=lambda f: 0)
+    assert m["ga_pdf_source"]["superseded"] is False
+    assert "SUPERSEDED" not in " ".join(m["assumptions"])
+
+
+def test_a_current_drawing_that_names_no_revision_is_only_a_may_be(tmp_path):
+    m = pr.resolve(GA, _job(tmp_path), client="TTI", read_text=_read, area_rank=lambda f: 0)
+    assert m["ga_pdf_source"]["superseded"] is False and m["ga_pdf_source"]["current_revision"] == ""
+    assert "may be a later revision" in " ".join(m["assumptions"])
