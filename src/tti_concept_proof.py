@@ -56,14 +56,17 @@ def proof_evidence(plan,archive,state,proof_rows):
     for item in chosen:
         entry=state['entries'].get(item['reference'],{})
         rid=entry.get('run_id','')
-        if entry.get('phase')!='done' or not re.fullmatch(r'[0-9a-fA-F]{8,64}',rid):
-            raise ValueError(f"proof row {item['row']} is not complete and written")
+        if entry.get('phase') not in ('done','archived') or not re.fullmatch(r'[0-9a-fA-F]{8,64}',rid):
+            raise ValueError(f"proof row {item['row']} is not complete and archived")
         if not same_build(entry.get('expected_build'),entry.get('expected_build')):
             raise ValueError('proof has no recorded execution build; reconcile before approval')
         row=next((r for r in current['rows'] if r['row']==item['row']),None)
         if row is None or row['fingerprint']!=item['fingerprint']: raise ValueError('proof source row changed')
         price=money(entry['unit_gbp'])
-        if money(row['cost_before'])!=price: raise ValueError('proof AiCost does not match its unit price')
+        if row['cost_before'] in (None,''):
+            if entry['phase']=='done': raise ValueError('previously written proof AiCost is now missing')
+        elif money(row['cost_before'])!=price:
+            raise ValueError('proof AiCost does not match its unit price')
         base=item['reference']+'/'
         hashes={}
         def data(relative):
@@ -135,11 +138,17 @@ def require_approved_proof(plan,archive,state,proof_rows,expected_build=None):
         raise RuntimeError('PROOF NOT APPROVED: remaining concept rows will NOT start. '+str(exc)) from exc
 
 
-def approve_proof(archive,current_plan,proof_rows,expected_build=None):
+def approve_proof(archive,current_plan,proof_rows,expected_build=None,basis=None):
     """Explicit operator confirmation AFTER reviewing both actual estimates.
 
     Mechanical checks cannot judge a concept's dimensions, omissions or price
     plausibility. Never call --approve-proof automatically from the queue chain.
+
+    THE RECORD SAYS WHAT HAPPENED (JG, 21 Nov 2026: "no more one or two jobs ... all in one
+    queue"). When the owner instructs the rows to run on without looking at the two proofs
+    first, that is given as `basis` and filed in place of the statement that they were
+    reviewed. The mechanical checks are the same either way; only the claim differs, and a
+    review that did not happen is never recorded as one.
     """
     plan,state=context(archive,current_plan)
     evidence=proof_evidence(plan,archive,state,proof_rows)
@@ -152,6 +161,10 @@ def approve_proof(archive,current_plan,proof_rows,expected_build=None):
             'reviewed_by':os.getenv('USERNAME') or os.getenv('USER') or 'explicit operator',
             'reviewed_at':datetime.now(timezone.utc).isoformat(),
             'meaning':'Operator confirms reviewing image inclusion, assumptions, quantities, unit prices and outputs for BOTH proofs.'}
+    if basis is not None:
+        basis=' '.join(str(basis).split())
+        if len(basis)<40: raise ValueError('an approval that is not a review must say, in a full sentence, whose instruction it rests on')
+        report.update(meaning=basis,proofs_reviewed_by_a_person=False)
     if any((root/APPROVAL).exists() for root in archive.roots):
         return require_approved_proof(plan,archive,state,proof_rows,expected_build=expected_build)
     archive.put(APPROVAL,(canonical(report)+'\n').encode('utf-8'))

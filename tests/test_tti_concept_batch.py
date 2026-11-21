@@ -298,10 +298,11 @@ def test_mismatched_archive_ledgers_never_submit(tmp_path):
     assert not api.posts
 
 
-def test_closed_excel_required_before_submission(tmp_path):
+def test_open_excel_defers_writeback_not_submission(tmp_path):
     path,plan,pics,a,api=setup(tmp_path); (path.parent/('~$'+path.name)).touch()
-    with pytest.raises(RuntimeError,match='Excel'): run(plan,pics,a,api)
-    assert not api.posts
+    assert run(plan,pics,a,api)==3
+    assert len(api.posts)==2
+    assert all(e['phase']=='archived' for e in batch.read_json(a.roots[0]/'state.json')['entries'].values())
 
 
 def test_completed_but_manually_changed_cost_is_not_silently_done(tmp_path):

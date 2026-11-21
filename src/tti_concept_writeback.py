@@ -13,6 +13,10 @@ from decimal import Decimal, InvalidOperation
 from tti_concept_inputs import S, read_plan, reread_options, sha
 
 
+class WorkbookBusy(RuntimeError):
+    """The estimate is safe to retain; only its tracker update must wait."""
+
+
 def money(value):
     if isinstance(value, bool): raise ValueError('boolean is not a price')
     try: n = Decimal(str(value))
@@ -93,4 +97,4 @@ def write_cost(workbook, item, price, sheet='Milwaukee'):
 def require_closed(path):
     path=Path(path)
     if any((path.parent/name).exists() for name in ('~$'+path.name,'~$'+path.name[2:])):
-        raise RuntimeError('Excel owner file exists: close the tracker before pricing/write-back')
+        raise WorkbookBusy('Excel owner file exists: estimate can continue; AiCost write-back must wait')

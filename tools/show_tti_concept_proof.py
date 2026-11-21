@@ -28,6 +28,8 @@ def summary(archive, rows):
                     'quantity_assumed': bool(item.get('quantity_assumed')),
                     'pictures': len(item.get('images') or []), 'description': item.get('description') or '',
                     'held_reason': entry.get('why'),
+                    'AiCost_status': 'written' if entry.get('phase')=='done' else ('pending write-back' if entry.get('phase')=='archived' else 'not ready'),
+                    'writeback_reason': entry.get('writeback_reason'),
                     'results_folder': str(results), 'workbooks': books})
     return out
 
@@ -45,6 +47,8 @@ def main(argv=None):
         print('  description:', r['description'][:300])
         print(f"  pictures sent: {r['pictures']} | quantity: {r['quantity']}" + (' (ASSUMED 1: none on the sheet)' if r['quantity_assumed'] else ''))
         print('  unit price GBP:', r['unit_gbp'] if r['unit_gbp'] is not None else '-')
+        print('  AiCost:', r['AiCost_status'])
+        if r['writeback_reason']: print('  write-back:', r['writeback_reason'])
         if r['held_reason']: print('  why:', r['held_reason'])
         print('  open to review:', r['results_folder'])
         for b in r['workbooks']: print('    ', b)

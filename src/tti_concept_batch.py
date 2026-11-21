@@ -24,7 +24,7 @@ import uuid
 import zipfile
 
 from tti_concept_inputs import canonical, no_pack_rulings, read_plan, reread_options, sha, units
-from tti_concept_writeback import money, write_cost, require_closed
+from tti_concept_writeback import money, write_cost, WorkbookBusy
 
 ROOT = Path(__file__).resolve().parents[1]
 TERMINAL_FAILURE = {'error','failed','cancelled','abandoned','held','stopped'}
@@ -261,6 +261,71 @@ def prepare(archive, plan, pictures, item):
     return body
 
 
+def archived_price(archive,item,entry):
+    """Validate durable, mirrored outputs without contacting the estimator."""
+    from tti_concept_proof import same_json, same_bytes
+    base=item['reference']+'/results/'
+    audit=same_json(archive,base+'price-for-writeback.json')
+    price=money(entry['unit_gbp'])
+    if (audit.get('run_id')!=entry['run_id'] or audit.get('source_row')!=item['row']
+            or audit.get('source_fingerprint')!=item['fingerprint']
+            or units(audit.get('quantity'))!=item['quantity'] or money(audit.get('unit_gbp'))!=price):
+        raise ValueError('archived write-back price/identity mismatch')
+    records=0; books=0
+    for file in same_json(archive,base+'inventory.json'):
+        if file.get('not_copied'): continue
+        name=file.get('name','')
+        if not name or Path(name).name!=name or any(c in name for c in '/\\:'):
+            raise ValueError('unsafe archived output name')
+        raw=same_bytes(archive,base+name)
+        if sha(raw)!=file['sha256'] or len(raw)!=file['bytes']:
+            raise ValueError('archived output changed before write-back')
+        if name.lower().endswith('_record.json'):
+            record=json.loads(raw)
+            if units(record.get('requested_order_quantity',record.get('quantity')))!=item['quantity']:
+                raise ValueError('archived record quantity mismatch')
+            records+=1
+        if name.lower().endswith('.xlsx'): books+=1
+    if records!=1 or not books: raise ValueError('archived record/workbook missing')
+    return price
+
+
+def attempt_writeback(plan,archive,state,item,writer=write_cost):
+    entry=state['entries'][item['reference']]
+    price=archived_price(archive,item,entry)
+    try:
+        audit=writer(plan['workbook'],item,price,plan['sheet'])
+    except (WorkbookBusy,PermissionError) as exc:
+        # Only an unavailable tracker is deferrable. Archive failures and changed
+        # source rows/prices remain fatal; never label them Excel locks.
+        entry.update(phase='archived',writeback_pending=True,writeback_reason=str(exc))
+        archive.state(state)
+        archive.event('ESTIMATE SAVED - AiCost PENDING',row=item['row'],run_id=entry['run_id'],
+                      unit_gbp=str(price),reason=str(exc),note='Retained on C and K; retry write-back only, never reprice.')
+        return False
+    archive.put(item['reference']+'/writeback-'+uuid.uuid4().hex+'.json',json_bytes(audit))
+    entry.update(phase='done',finished=now(),writeback_pending=False)
+    entry.pop('writeback_reason',None)
+    archive.state(state)
+    archive.event('AiCost WRITTEN',row=item['row'],run_id=entry['run_id'],unit_gbp=str(price),classification='provisional concept')
+    return True
+
+
+def retry_writebacks(plan,archive,selected_rows=None,writer=write_cost):
+    """Local/shared files only. Cannot submit, poll, release or restart anything."""
+    from tti_concept_proof import context
+    saved,state=context(archive,plan)
+    saved=with_amendments(archive,saved)
+    items=[r for r in saved['rows'] if state['entries'].get(r['reference'],{}).get('phase')=='archived']
+    if selected_rows is not None:
+        if set(selected_rows)-{r['row'] for r in items}: raise ValueError('Select pending write-back rows only')
+        items=[r for r in items if r['row'] in selected_rows]
+    for item in items: attempt_writeback(saved,archive,state,item,writer)
+    pending=[i['row'] for i in items if state['entries'][i['reference']]['phase']=='archived']
+    archive.event('WRITE-BACK RETRY ENDED',pending_rows=pending,submissions=0)
+    return 3 if pending else 0
+
+
 def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_file=None,
               sleep=time.sleep,writer=write_cost,selected_rows=None,proof_rows=None):
     """Resume known IDs. An uncertain POST is NEVER blindly retried.
@@ -269,7 +334,6 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
     runners. A subsequent invocation can collect their results. Initial execution
     requires no other live service runs and ownership of the common batch claim.
     """
-    require_closed(plan['workbook'])
     state_paths=[r/'state.json' for r in archive.roots]
     states=[read_json(p) for p in state_paths if p.exists()]
     if len(states)==1 or (len(states)==2 and states[0] != states[1]):
@@ -302,7 +366,7 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
         if not selected_rows or selected_rows-{r['row'] for r in items}:
             raise ValueError('--rows must name eligible rows from this plan, never held/drawing rows')
         items=[r for r in items if r['row'] in selected_rows]
-        if any(e.get('phase') not in ('done','held') and e.get('row') not in selected_rows for e in state['entries'].values()):
+        if any(e.get('phase') not in ('done','archived','held') and e.get('row') not in selected_rows for e in state['entries'].values()):
             raise RuntimeError('Uncollected runs outside selected rows: resume the full batch first')
     # CLI always supplies its two proof rows. Existing library callers/tests may
     # omit this optional contract; they are not the unattended command interface.
@@ -320,6 +384,7 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
         raise RuntimeError('Other jobs are live; finish them first. Nothing submitted by this invocation.')
     # Include previously completed rows in the immutable plan, even though they now have AiCost.
     archive.event('READY',eligible=len(items),remaining=sum(state['entries'].get(i['reference'],{}).get('phase')!='done' for i in items),held=sum(r['state'].startswith('held:') for r in plan['rows']),parallel=at_once)
+    attempted_writebacks=set()
     try:
         while True:
             pending=False; active=0
@@ -328,12 +393,17 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
                 if entry.get('phase')=='done': continue
                 pending=True
                 if entry.get('phase')=='held': raise RuntimeError(f"Row {item['row']} held: {entry.get('why')}")
+                if entry.get('phase')=='archived':
+                    if item['reference'] not in attempted_writebacks:
+                        attempt_writeback(plan,archive,state,item,writer)
+                        attempted_writebacks.add(item['reference'])
+                    continue
                 if entry.get('phase')=='submitting':
                     # A crashed/timeout POST may have been accepted. Recover only a unique match.
                     found=[r for r in api.recent() if matches(r,item)]
                     if len(found)!=1: raise RuntimeError(f"Row {item['row']}: uncertain submission; reconcile manually, DO NOT resend")
                     entry.update(run_id=safe_id(found[0]['run_id']),phase='running'); archive.state(state)
-                if entry.get('phase') in ('running','archived'):
+                if entry.get('phase')=='running':
                     snapshot=api.status(entry['run_id'])
                     if not matches(snapshot,item): raise ValueError('service run identity changed')
                     archive.put(item['reference']+'/polls/'+uuid.uuid4().hex+'.json',json_bytes(status_evidence(snapshot)))
@@ -343,10 +413,8 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
                     if snapshot.get('status')=='done':
                         price=archive_result(api,archive,item,entry,snapshot)
                         entry.update(phase='archived',unit_gbp=str(price)); archive.state(state)
-                        audit=writer(plan['workbook'],item,price,plan['sheet'])
-                        archive.put(item['reference']+'/writeback-'+uuid.uuid4().hex+'.json',json_bytes(audit))
-                        entry.update(phase='done',finished=now()); archive.state(state)
-                        archive.event('AiCost WRITTEN',row=item['row'],run_id=entry['run_id'],unit_gbp=str(price),classification='provisional concept')
+                        attempt_writeback(plan,archive,state,item,writer)
+                        attempted_writebacks.add(item['reference'])
                     elif snapshot.get('status') in ('queued','running'): active+=1
                     else: raise RuntimeError('Unrecognised run status; no new submissions')
             if not pending: break
@@ -359,7 +427,6 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
                     if item['reference'] in state['entries']: continue
                     if needs_proof and item['row'] not in proof_rows:
                         require_approved_proof(plan,archive,state,proof_rows,expected_build=expected)
-                    require_closed(plan['workbook'])
                     row=current_item(plan,item)
                     if row['cost_before'] not in (None,''): raise RuntimeError('AiCost was filled outside this batch; no overwrite or reprice')
                     found=[r for r in api.recent() if matches(r,item)]
@@ -376,7 +443,7 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
                     archive.state(state); active+=1
                     archive.event('RUN ATTACHED',row=item['row'],run_id=entry['run_id'],images=len(item['images']))
                     if active>=at_once: break
-            if all(state['entries'].get(i['reference'],{}).get('phase')=='done' for i in items): break
+            if all(state['entries'].get(i['reference'],{}).get('phase') in ('done','archived') for i in items): break
             print(f'{now()} WAITING: {active} active; '+str(sum(e.get('phase')=='done' for e in state['entries'].values()))+f'/{len(items)} written. State saved on C and K.',flush=True)
             sleep(poll_seconds)
     except BaseException as exc:
@@ -384,8 +451,11 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
         try: archive.event('STOPPED',reason=type(exc).__name__,note='No automatic resubmission; see state and journals. Already-started jobs remain on runners.')
         except OSError: pass
         raise
-    archive.event('COMPLETE',written=len(items),note='Provisional concept prices; held rows remain blank. No estimate approved.')
-    return 0
+    waiting=[i['row'] for i in items if state['entries'][i['reference']]['phase']=='archived']
+    archive.event('ESTIMATES SAVED' if waiting else 'COMPLETE',written=len(items)-len(waiting),
+                  estimates_saved=len(items),pending_writeback_rows=waiting,
+                  note='Provisional estimates on C and K. Pending AiCost is not a pricing failure; retry --writeback-only. No estimate approved.')
+    return 3 if waiting else 0
 
 
 def argument_parser():
@@ -394,6 +464,7 @@ def argument_parser():
     p.add_argument('--sheet-name',default='Milwaukee')
     p.add_argument('--plan-output',required=True,help='Local JSON plan; --execute is separately required')
     p.add_argument('--execute',action='store_true')
+    p.add_argument('--writeback-only',action='store_true',help='Retry archived AiCost updates only. No API calls or submissions; exit 3 means tracker updates remain pending.')
     p.add_argument('--local-root',default=str(ROOT/'output'/'tti_concepts'))
     p.add_argument('--shared-root',help='Explicit UNC folder on the K share, inside service allowed roots')
     p.add_argument('--server',default='http://localhost:8071')
@@ -403,6 +474,7 @@ def argument_parser():
     p.add_argument('--assume-missing-quantity-one','--blank-quantity-as-one',dest='assume_missing_quantity_one',action='store_true',help='Explicit user ruling: blank/zero/unreadable concept quantities are one; original values and assumptions retained')
     p.add_argument('--proof-rows',default='6,12',help='Exactly two distinct pilot rows: one image and one description-only. Default: 6,12')
     p.add_argument('--approve-proof',action='store_true',help='After human review, validate and approve the two archived proofs ONLY; never submits or writes AiCost')
+    p.add_argument('--approval-basis',help='With --approve-proof only, when the two proofs have NOT been looked at: whose instruction the approval rests on. Filed in place of the statement that they were reviewed')
     p.add_argument('--no-pack-rows',help='Comma-separated DRAWING rows to price from their description and pictures because no drawing pack was found. Requires --no-pack-ledger')
     p.add_argument('--no-pack-ledger',help="The drawing pricer's ledger. Each --no-pack-rows row must be recorded there as 'needs drawing' under the drawing number the row carries")
     p.add_argument('--stop-file',help='Stops further submissions, never cancels accepted jobs')
@@ -411,7 +483,8 @@ def argument_parser():
 
 def main(argv=None):
     p=argument_parser(); a=p.parse_args(argv)
-    if a.execute and a.approve_proof: p.error('--approve-proof cannot be combined with --execute')
+    if sum((a.execute,a.approve_proof,a.writeback_only))>1: p.error('--execute, --approve-proof and --writeback-only are mutually exclusive')
+    if a.approval_basis and not a.approve_proof: p.error('--approval-basis belongs with --approve-proof')
     try: proof_rows=tuple(int(v.strip()) for v in a.proof_rows.split(','))
     except ValueError: p.error('--proof-rows must name two row numbers')
     if len(proof_rows)!=2 or len(set(proof_rows))!=2: p.error('--proof-rows must name two DISTINCT row numbers')
@@ -430,7 +503,7 @@ def main(argv=None):
     ready=[r for r in plan['rows'] if r['state']=='eligible']; held=[r['row'] for r in plan['rows'] if r['state'].startswith('held:')]
     print(f'PLAN ONLY until --execute: {len(ready)} eligible ({sum(bool(r["images"]) for r in ready)} with pictures; {sum(not r["images"] for r in ready)} description-only); held {held}',flush=True)
     print('Quantity ONE assumed for rows: '+str([r['row'] for r in ready if r.get('quantity_assumed')]),flush=True)
-    if not a.execute and not a.approve_proof: return 0
+    if not a.execute and not a.approve_proof and not a.writeback_only: return 0
     if not a.shared_root or not a.expected_build: p.error('execution/approval requires --shared-root and --expected-build')
     if not a.shared_root.startswith('\\\\'): p.error('use the K share UNC path, not a mapped drive invisible to runners')
     if not Path(a.shared_root).parent.is_dir(): raise OSError('shared parent is unavailable; connect VPN first')
@@ -448,9 +521,11 @@ def main(argv=None):
         from tti_concept_proof import approve_proof
         # Review/approval writes only audit files, so it can happen while the
         # separately authorised nine drawing jobs hold the global batch claim.
-        approve_proof(archive,plan,proof_rows,expected_build=a.expected_build)
+        approve_proof(archive,plan,proof_rows,expected_build=a.expected_build,basis=a.approval_basis)
         return 0
     with exclusive_claim(base/'tti'/'batch.lock'):
+        if a.writeback_only:
+            return retry_writebacks(plan,archive,None if not a.rows else [int(v.strip()) for v in a.rows.split(',')])
         return run_batch(plan,pictures,archive,Client(a.server,os.getenv('SDI_API_KEY','')),a.expected_build,a.at_once,
                          stop_file=a.stop_file,selected_rows=None if not a.rows else [int(v.strip()) for v in a.rows.split(',')],proof_rows=proof_rows)
 
