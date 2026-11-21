@@ -107,7 +107,8 @@ class ItSaysWhenOpenAIHasNoCreditTests(unittest.TestCase):
         self.assertIn("} elseif (-not $noCredit) {", BODY)            # never "Nothing obvious" while it is empty
 
     def test_a_voice_tool_working_afterwards_clears_it(self):
-        self.assertIn("'^rt tool .*: ok|^turn .* took'", BODY)
+        # 21 Nov 2026: SDI Live's log lines start with the date and time now; both are read
+        self.assertIn("'(^|\\d\\d:\\d\\d:\\d\\d )rt tool .*: ok|(^|\\d\\d:\\d\\d:\\d\\d )turn .* took'", BODY)
         self.assertIn("if ($last -lt $all.Count - 1)", BODY)          # no reversed range when the refusal is the last line
 
 

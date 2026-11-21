@@ -159,7 +159,7 @@ if (-not $files.Count) {
     for ($i = 0; $i -lt $all.Count; $i++) { if ($all[$i] -match 'no credits remaining|insufficient_quota|exceeded your current quota') { $last = $i } }
     if ($last -ge 0) {
         $worked = @()
-        if ($last -lt $all.Count - 1) { $worked = @($all[($last + 1)..($all.Count - 1)] | Where-Object { $_ -match '^rt tool .*: ok|^turn .* took' }) }
+        if ($last -lt $all.Count - 1) { $worked = @($all[($last + 1)..($all.Count - 1)] | Where-Object { $_ -match '(^|\d\d:\d\d:\d\d )rt tool .*: ok|(^|\d\d:\d\d:\d\d )turn .* took' }) }
         if (-not $worked.Count) { $noCredit = $true }
     }
     foreach ($h in $hits | Select-Object -Last 40) {
