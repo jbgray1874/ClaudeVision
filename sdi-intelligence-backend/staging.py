@@ -425,21 +425,38 @@ def stage_brief_only(*, client: str, drawing: str, brief: str) -> Dict[str, Any]
 
 
 def _render_brief_page(text: str, out: Path) -> None:
-    """The brief as one A4 page image. Shrinks the type until the text fits; a brief is
-    capped at a few thousand characters upstream, so it always does."""
-    import pymupdf                                                   # noqa: WPS433
+    """The brief as one A4 page image (brief_page.draw). Drawn here where the service has
+    PyMuPDF; otherwise by the engine's Python, out of process (21 Nov 2026: the service's own
+    environment never listed PyMuPDF, and a description-only job ended in an HTTP 500)."""
+    import brief_page                                                # noqa: WPS433
     body = "ENQUIRY BRIEF\n\n" + text
-    for size in (11.0, 9.5, 8.0, 6.5, 5.0):
-        doc = pymupdf.open()
-        try:
-            page = doc.new_page(width=595, height=842)
-            rc = page.insert_textbox(pymupdf.Rect(42, 42, 553, 800), body,
-                                     fontsize=size, fontname="helv")
-            if rc >= 0 or size == 5.0:                 # fits, or as small as it goes
-                page.get_pixmap(dpi=150).save(str(out))
-                return
-        finally:
-            doc.close()
+    try:
+        brief_page.pymupdf_module()
+    except ImportError:
+        _render_brief_page_with_engine(body, out)
+        return
+    brief_page.draw(body, str(out))
+
+
+def _render_brief_page_with_engine(body: str, out: Path) -> None:
+    import subprocess                                                # noqa: WPS433
+    import tempfile                                                  # noqa: WPS433
+    engine = os.getenv("SDI_ENGINE_PYTHON") or str(
+        Path(__file__).resolve().parents[1] / ".venv" / "Scripts" / "python.exe")
+    if not Path(engine).is_file():
+        raise StagingError(
+            "The brief could not be made into a page: PyMuPDF is not installed for the service "
+            f"and the engine's Python was not found at {engine}. Install PyMuPDF in the "
+            "service's virtualenv (sdi-intelligence-backend\\requirements.txt) or set "
+            "SDI_ENGINE_PYTHON.")
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "brief.txt"
+        src.write_text(body, encoding="utf-8")
+        done = subprocess.run([engine, "-B", str(Path(__file__).with_name("brief_page.py")),
+                               str(src), str(out)], capture_output=True, text=True, timeout=120)
+    if done.returncode != 0 or not Path(out).is_file():
+        raise StagingError("The brief could not be made into a page by the engine's Python: "
+                           + (done.stderr or done.stdout or "no page was written").strip()[-300:])
 
 
 def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:

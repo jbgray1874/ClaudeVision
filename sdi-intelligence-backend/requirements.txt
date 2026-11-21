@@ -46,3 +46,4 @@ cryptography>=42.0     # encrypts the session store at rest (session_store.py)
 openpyxl>=3.1,<4.0      # morning_review.py reads the downloaded tracker (scheduled run)
 mcp==2.3.0              # voicecrm_connector.py: the ChatGPT / Claude connector (MCP server)
 PyJWT[crypto]>=2.8      # voicecrm_connector.py checks Entra access tokens
+PyMuPDF                 # staging.py: the page image of a brief-only job. Without it the engine's Python draws the page
