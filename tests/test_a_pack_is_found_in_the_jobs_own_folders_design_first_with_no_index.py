@@ -184,7 +184,7 @@ def test_the_row_says_what_kinds_of_file_its_pack_holds():
     assert tp._formats(["a.PDF", "b.pdf", "c.SLDASM", "d.dxf", "e.dxf", "f.dxf"]) == {"dxf": 3, "pdf": 2, "sldasm": 1}
 
 
-# ── the AI runner: Design primary, TTI/explicit bespoke Prototype supplements ────────────
+# ── the AI runner: the same lookup, the Design area only ─────────────────────────────────
 def _ai_runner(tmp_path, monkeypatch, design=True, prototype=True):
     """A share with the client's folder under a customers folder, as the Design area is."""
     import live_enquiry_runner as ler
@@ -210,14 +210,12 @@ def test_the_ai_runner_finds_the_design_pack_from_the_job_number_with_no_index(t
     monkeypatch.setattr(pr, "resolve", _resolve)
     source.find(row)
     assert "12181-00-GA.SLDASM" in seen["names"] and "12181-01-01J.SLDPRT" in seen["names"]
-    assert any("Prototype" in f for f in seen["folders"]), "TTI's Prototype supplement was not offered"
+    assert not any("Prototype" in f for f in seen["folders"]), "the AI runner read the Prototype area"
     pr.forget_job_folders()
 
 
-def test_the_ai_runner_does_not_take_a_non_tti_pack_that_is_only_in_prototype(tmp_path, monkeypatch):
+def test_the_ai_runner_does_not_take_a_pack_that_is_only_in_prototype(tmp_path, monkeypatch):
     ler, source, row = _ai_runner(tmp_path, monkeypatch, design=False)
-    row.customer = 'Other customer'
-    monkeypatch.delenv('SDI_PACK_PROTOTYPE_JOBS', raising=False)
     monkeypatch.setattr(pr, "resolve", lambda *a, **k: pytest.fail("a Prototype pack was offered to the resolver"))
     assert source.find(row) is None, "the Live Enquiry folder's own reason must stand"
     pr.forget_job_folders()

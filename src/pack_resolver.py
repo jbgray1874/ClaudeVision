@@ -1563,7 +1563,8 @@ def prototype_allowed(client: str, drawing: str) -> bool:
 
 
 def folders_for_customer_now(drawing: str, client: str):
-    """Shared routing policy for portal discovery and unattended Live Enquiry."""
+    """The routing rule for the portal's pack finder. The Live Enquiry runner does not use
+    it: that runner reads Design only, for every customer."""
     return folders_now(drawing, design_only=not prototype_allowed(client, drawing))
 
 

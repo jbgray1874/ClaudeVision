@@ -39,10 +39,13 @@ def test_portal_cli_uses_customer_policy_without_index(monkeypatch, client, only
     assert calls == [('50042-01-GA', only)]
 
 
-@pytest.mark.parametrize('client,only', [('TTI', False), ('Other', True)])
-def test_live_enquiry_runner_uses_same_policy(tmp_path, monkeypatch, client, only):
+@pytest.mark.parametrize('client,jobs', [('TTI', ''), ('Other', ''), ('TTI', '50042'), ('Other', '50042-01-GA')])
+def test_live_enquiry_runner_reads_design_only_for_every_customer(tmp_path, monkeypatch, client, jobs):
+    """JG, 21 Nov 2026: "the live enquiry runner only takes from design". Neither a customer
+    on the Prototype list nor a job opted in changes that for this runner."""
     calls = []
-    monkeypatch.delenv('SDI_PACK_PROTOTYPE_JOBS', raising=False)
+    only = True
+    monkeypatch.setenv('SDI_PACK_PROTOTYPE_JOBS', jobs)
     monkeypatch.setattr(pr, 'folders_now', lambda drawing, design_only: (calls.append((drawing, design_only)) or ([], 'test', None)))
     monkeypatch.setattr(pr, 'folders_for', lambda *a, **k: pytest.fail('index used'))
     source = ler.DesignShare(tmp_path / 'does-not-exist')
@@ -55,7 +58,7 @@ def test_manual_pack_is_not_supplemented_from_conflicting_revision(tmp_path, mon
     supplied.mkdir()
     row = ler.EnquiryRow(row=3, customer='TTI', drawing='50042-01-GA')
     share = ler.Located('found', 'user pack', folder=supplied, files=[])
-    monkeypatch.setattr(pr, 'folders_for_customer_now', lambda *a: ([('fixture', [], False)], 'test', None))
+    monkeypatch.setattr(pr, 'folders_now', lambda *a, **k: ([('fixture', [], False)], 'test', None))
     monkeypatch.setattr(pr, 'resolve', lambda *a, **k: {
         'status': 'ambiguous', 'price_ok': False, 'question': 'revision B versus C', 'members': []})
     got = ler.DesignShare(tmp_path)._with_what_the_ga_calls_for(row, share)
