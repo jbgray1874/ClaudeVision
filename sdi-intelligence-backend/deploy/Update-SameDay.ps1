@@ -6,6 +6,8 @@
         cd C:\ClaudeVision
         git pull jbg claude/app-portal-main-2026
         .\sdi-intelligence-backend\deploy\Update-SameDay.ps1 -Branch claude/inspiring-planck-8juriz
+        .\sdi-intelligence-backend\deploy\Update-SameDay.ps1 -Branch claude/inspiring-planck-8juriz -Commit 847f6b7
+                                                       (exactly that commit; stops if it isn't on the branch)
 
     Without -Branch it takes main. The first time, a GitHub sign-in window
     may open: sign in as jbgray1874, the account the private repository
@@ -40,7 +42,10 @@ param(
     [string]$Repo = "https://jbgray1874@github.com/jbgray1874/sdi-sameday.git",
     # The laptop's own copy of the repository for this, used for nothing else
     # (C:\SameDayRepo belongs to Publish-SameDay-Code.ps1, which empties it).
-    [string]$Code = "C:\SameDayDeploy"
+    [string]$Code = "C:\SameDayDeploy",
+    # 21 Nov 2026 (review: "the release isn't pinned"): -Commit 847f6b7 deploys exactly that commit, which must be on
+    # -Branch, and stops before copying anything if it isn't. Without it, the branch's newest commit, as before.
+    [string]$Commit = ""
 )
 
 $ErrorActionPreference = "Continue"
@@ -138,8 +143,15 @@ if (Test-Path -LiteralPath $Code) {
     if ($LASTEXITCODE -ne 0) { Stop-Here "Could not clone sdi-sameday ($Branch). Sign in as jbgray1874 when asked." }
 }
 # This copy is never edited by hand: it is always exactly the branch.
-if ((RunGit @("checkout", "-q", "-B", $Branch, "origin/$Branch")) -ne 0) { Stop-Here "Could not check out $Branch." }
-if ((RunGit @("reset", "-q", "--hard", "origin/$Branch")) -ne 0) { Stop-Here "Could not match $Code to origin/$Branch." }
+$pin = "origin/$Branch"
+if ($Commit) {
+    if ($Commit -notmatch '^[0-9a-fA-F]{7,40}$') { Stop-Here "-Commit should be a commit number such as 847f6b7. Nothing was copied." }
+    if ((RunGit @("cat-file", "-e", "$Commit^{commit}")) -ne 0) { Stop-Here "Commit $Commit wasn't found after fetching $Branch. Nothing was copied." }
+    if ((RunGit @("merge-base", "--is-ancestor", $Commit, "origin/$Branch")) -ne 0) { Stop-Here "Commit $Commit isn't on $Branch. Nothing was copied." }
+    $pin = $Commit
+}
+if ((RunGit @("checkout", "-q", "-B", $Branch, $pin)) -ne 0) { Stop-Here "Could not check out $Branch at $pin." }
+if ((RunGit @("reset", "-q", "--hard", $pin)) -ne 0) { Stop-Here "Could not match $Code to $pin." }
 $commit = ((& git.exe -C $Code rev-parse --short HEAD) -join "").Trim()
 $auto = "$Code\SDI_Automation"
 if (-not (Test-Path -LiteralPath "$auto\brief_lite\lite_app.py")) { Stop-Here "The repository has no SDI_Automation\brief_lite\lite_app.py." }
