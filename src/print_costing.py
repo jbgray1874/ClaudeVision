@@ -420,6 +420,63 @@ def settle(original: Dict[str, Any], estimate: Any, order_qty: Any,
     return priced
 
 
+def rebase_applied_price(estimate: Dict[str, Any], order_qty: Any) -> Dict[str, Any]:
+    """Re-apportion one setup over the FINAL costed population, using the saved rate.
+
+    No workbook reload, catalogue lookup or new commercial assumption. This is
+    called after canonical quantity/alias reconciliation. Non-applied calculator
+    records (including a piece's own catalogue price) are left untouched.
+    """
+    import math
+    rec = estimate.get("print_calculator")
+    if not isinstance(rec, dict) or not rec.get("applied"):
+        return estimate
+    if estimate.get("cost_source") != SOURCE_KEY and estimate.get("source") != SOURCE_KEY:
+        raise ValueError("Applied print record has no matching calculator price provenance")
+    def finite(key, value, positive=False):
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"Print price cannot be reconciled: missing {key}") from None
+        if not math.isfinite(v) or (v <= 0 if positive else v < 0):
+            raise ValueError(f"Print price cannot be reconciled: invalid {key}")
+        return v
+    qty = finite("final quantity", estimate.get("quantity"), True)
+    order = finite("order quantity", order_qty, True)
+    run = finite("sheet rate", rec.get("run_cost_per_sheet_gbp"))
+    yield_ = finite("sheet yield", rec.get("parts_per_sheet"), True)
+    setup = finite("setup", rec.get("setup_gbp"))
+    factor = finite("scrap factor", 1 + float(rec["scrap"]))
+    variable = run / yield_ * factor
+    printed = qty * order
+    share = setup / printed
+    unit = variable + share
+    out = copy.deepcopy(estimate)
+    current = out["print_calculator"]
+    current.setdefault("quantity_before_canonical", rec.get("qty_per_unit"))
+    current.update(qty_per_unit=qty, order_qty=order, quantity_printed=printed,
+                   cost_per_part_gbp=variable, setup_share_gbp=share, total_gbp=unit,
+                   per_unit_gbp=round(unit * qty, 2), order_gbp=round(unit * printed, 2),
+                   quantity_basis="final canonical costed quantity", waste_included=True)
+    out.update(unit_cost_gbp=unit, unit_material_cost_gbp=unit,
+               unit_total_cost_gbp=unit, extended_total_cost_gbp=unit * qty)
+    mat = out.setdefault("material_estimate", {})
+    mat.update(unit_material_cost_gbp=unit, cost_per_part_gbp=unit,
+               extended_material_cost_gbp=unit * qty, waste_included=True)
+    # Do not leave the earlier setup share in the report's explanatory prose.
+    old_price = _gbp(rec.get("total_gbp"))
+    for question in out.get("manufacturing_questions") or []:
+        if isinstance(question, dict) and question.get("source") == "print_costing.settle":
+            question["assumption"] = str(question.get("assumption") or "").replace(old_price, _gbp(unit))
+    out["review_flags"] = [f for f in out.get("review_flags") or []
+                           if not str(f).startswith(("PROVISIONAL print price from", "Canonical print quantity:"))]
+    _flag(out, f"Canonical print quantity: {qty:g} per product x {order:g} products = "
+          f"{printed:g} printed; one {_gbp(setup)} setup, {_gbp(share)} share each. "
+          f"Provisional calculator charge {_gbp(unit * printed)} for the order; "
+          "the calculator's existing scrap setting is retained, not charged again.")
+    return out
+
+
 def records_from(part_estimates: Any) -> List[Dict[str, Any]]:
     """Every part's print calculator record, for the e-mail's calculator section."""
     return [dict(p["print_calculator"]) for p in (part_estimates or [])

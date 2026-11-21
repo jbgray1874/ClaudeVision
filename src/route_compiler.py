@@ -1764,6 +1764,7 @@ def build_part_graph(
         clean_part_number(_k)
         for _p in (parts or []) if isinstance(_p, Mapping)
         for _k in (list(_p.get("assembly_children") or [])
+                   + list(_p.get("native_assembly_children") or [])
                    + list(_p.get("assembly_fitted_items") or []))
     }
     _claimed_codes.discard("")
@@ -1784,6 +1785,9 @@ def build_part_graph(
             if isinstance(_e, Mapping):
                 _hierarchy_codes.add(clean_part_number(_e.get("part_number")))
     _hierarchy_codes.discard("")
+    # Native component names can exist only on an edge, not in the PDF part index.
+    # They still need aliasing before the graph mints a second node for them.
+    _hierarchy_codes.update(_claimed_codes)
     # The records, so the naming convention can be checked against what the two codes ARE
     # rather than only against how they are spelled. Both pools, because a code may be
     # known to one reader and not the other, and the pool that holds it is the pool that
@@ -2376,6 +2380,8 @@ def build_part_graph(
                 _held_above |= set((children.get(_hp) or {}).keys())
             for _c, _q in _bkids.items():
                 _c2 = _hand_of.get(_c, _c)
+                if _c2 == _hid:
+                    continue  # a derived hand never contains itself
                 # NOT TWICE (review of D-505): a shared item the hand's own parent already
                 # lists is counted there — the parent's table took it for both hands.
                 if _c2 == _c and _c in _held_above:
@@ -2484,8 +2490,12 @@ def build_part_graph(
         if not all(_is_hardware(_c) for _c in _bkids):
             continue
         for _c, _q in _bkids.items():
+            if _c == _hid:
+                continue  # the native base may already name this opposite hand
             children.setdefault(_hid, {})[_c] = _q
             parents.setdefault(_c, set()).add(_hid)
+        if not children.get(_hid):
+            continue
         _hand_hardware_base[_hid] = _bid
         print(f"   [graph] {_hid} is the other hand of {_bid} and carries its hardware too: "
               + ", ".join(f"{_c} x{_q:g}" for _c, _q in sorted(_bkids.items())), flush=True)
@@ -3338,6 +3348,10 @@ def build_part_graph(
         tree keeps the field where nothing stronger has spoken, which is what it is for.
         """
         record = records.get(child_id) or {}
+        _scope = clean_part_number(record.get("quantity_parent_scope"))
+        if (_scope and aliases.get(_scope, _scope) != parent_id
+                and source_of(record, "quantity") == record.get("quantity_parent_scope_source")):
+            return edge_qty  # a count per model parent is not a count per other BOM parent
         _own = number(record.get("quantity"), None)
         if _own is not None:
             qty_own[child_id] = _own
@@ -3520,6 +3534,10 @@ def build_part_graph(
         direct row goes, and the plate is left under the shelf alone, where the cascade
         already takes the model's count over the table's."""
         _rec = records.get(_child) or {}
+        _scope = clean_part_number(_rec.get("quantity_parent_scope"))
+        if (_scope and aliases.get(_scope, _scope) != _parent
+                and source_of(_rec, "quantity") == _rec.get("quantity_parent_scope_source")):
+            return _edge_q
         _split = _rec.get("quantity_by_parent")
         if isinstance(_split, Mapping) and _split \
                 and rank(str(_rec.get("quantity_by_parent_source") or "")) > _edge_substitution_rank:
@@ -3546,9 +3564,20 @@ def build_part_graph(
         if not _subs:
             continue
         for _c, _q in _rows:
-            if _c in _subs or number((children.get(_p) or {}).get(_c), None) != _q:
+            # An assembly can be listed exploded beside its containing assembly too.
+            # Remove that duplicate path only with an independent product-total match.
+            _rec = records.get(_c) or {}
+            _assembly_total_agrees = (
+                len(top_ids) == 1 and _p == top_ids[0]
+                and clean_part_number(_rec.get("quantity_total_per_unit_product")) == _p
+                and number(_rec.get("quantity_total_per_unit"), None) == _q
+                and rank(source_of(_rec, "quantity")) <= rank("solidworks_api"))
+            if ((_c in _subs and not _assembly_total_agrees)
+                    or number((children.get(_p) or {}).get(_c), None) != _q):
                 continue
             for _s in _subs:
+                if _s == _c:
+                    continue
                 _via = _count_through(_s, _c) * (number(children[_p].get(_s), 1.0) or 1.0)
                 if _via and abs(_via - _q) < 1e-9:
                     children[_p].pop(_c, None)
@@ -3767,6 +3796,33 @@ def build_part_graph(
             return own
         return _row_words.get(identity, "" if own.upper() in _HEADER_WORDS else own)
 
+    # Some supplier models put the opposite hand inside the base document. Where
+    # the product BOM explicitly purchases BOTH X-coded hands, corroborated by
+    # this product's native totals, neither purchase is free assembly overhead.
+    # Retain the model edges as quantity evidence; do not manufacture the supplier kit.
+    _purchased_peers: Set[str] = set()
+    from part_code_conventions import mirror_base, purchased_suffix
+    if len(top_ids) == 1:
+        _root = top_ids[0]
+        _root_counts: Dict[str, Set[float]] = {}
+        for (_owner, _sheet), _rows in _groups.items():
+            if _owner == _root:
+                for _c, _q in _rows:
+                    _root_counts.setdefault(_c, set()).add(_q)
+        for _hand in identities:
+            _base = clean_part_number(mirror_base(_hand))
+            if not _base or not purchased_suffix(_hand) or not purchased_suffix(_base):
+                continue
+            if set(children.get(_base) or {}) != {_hand} or children.get(_hand):
+                continue
+            if all(clean_part_number((records.get(c) or {}).get("quantity_total_per_unit_product")) == _root
+                   and _root_counts.get(c) == {number((records.get(c) or {}).get("quantity_total_per_unit"), None)}
+                   and number((records.get(c) or {}).get("quantity_total_per_unit"), 0) > 0
+                   and rank(source_of(records.get(c) or {}, "quantity")) <= rank("solidworks_api")
+                   and not bought_in_policy.looks_fabricated_for_identity(dict(records.get(c) or {}))
+                   for c in (_base, _hand)):
+                _purchased_peers.update((_base, _hand))
+
     nodes: List[PartNode] = []
     for identity in sorted(identities):
         record = records.get(identity) or {}
@@ -3816,7 +3872,8 @@ def build_part_graph(
             or "BOUGHT" in type_text
             or identity.startswith("BI-")
         )
-        kind = "assembly" if is_assembly else ("bought_in" if is_bought_in else "leaf")
+        kind = ("bought_in" if identity in _purchased_peers else
+                "assembly" if is_assembly else ("bought_in" if is_bought_in else "leaf"))
         nodes.append(PartNode(
             part_number=identity,
             description=_described(identity, record),
@@ -3840,6 +3897,7 @@ def build_part_graph(
                 # shelter sheet) from a model component name that duplicates a coded line
                 # (D-315).
                 "bom_stated": identity in _bom_owners,
+                "purchased_mirror_peer": identity in _purchased_peers,
                 "raw_aliases": sorted(
                     alias for alias, canonical in aliases.items()
                     if canonical == identity
@@ -4130,6 +4188,15 @@ def apply_canonical_evidence_to_parts(
                     "removed leaf-only operations that an assembly cannot incur ("
                     + ", ".join(_dropped) + "); they belong to the parts it is made from")
         elif node.kind == "bought_in":
+            if node.evidence.get("purchased_mirror_peer"):
+                part["is_sub_assembly"] = False
+                part["is_assembly_parent"] = False
+                part["is_bought_in"] = True
+                part["native_component_links"] = list(part.get("assembly_children") or [])
+                part["assembly_children"] = []
+                part.setdefault("review_flags", []).append(
+                    "Both purchased hands are listed in the product BOM and native totals. "
+                    "The supplier model's derivation link is not a free assembly: each hand needs its own purchase price.")
             roles = list(part.get("page_roles") or [])
             if "bought_in" not in {str(role).strip().lower() for role in roles}:
                 roles.append("bought_in")

@@ -3409,6 +3409,9 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                 # resolver refused — because an estimator had already corrected it — was
                 # still counted as applied, so the run reported work it did not do.
                 if _apply_field(part, "quantity", _q, _src):
+                    if _parent:
+                        part["quantity_parent_scope"] = _parent
+                        part["quantity_parent_scope_source"] = _src
                     flags.append(f"qty {_cur if _cur is not None else '-'} -> {_q} "
                                  f"{_basis}")
                     out["qty"] += 1

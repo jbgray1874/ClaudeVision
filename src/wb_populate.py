@@ -3279,6 +3279,13 @@ def canonicalise_part_estimates_for_workbook(
             })
     # THE SECTION SCHEDULE REACHED THE SHEET, OR THE RECORD SAYS WHERE IT DID NOT (D-576):
     # the hand-off audit writes its result for the invariant; it never stops the book.
+    # A setup apportioned before BOM roll-up cannot be multiplied by the new
+    # quantity. Reconcile the exact population that the sheet and reports share.
+    from print_costing import rebase_applied_price
+    _order_qty = (summary.get("assumed_job_quantity") or summary.get("order_quantity")
+                  or (summary.get("estimate_summary") or {}).get("assumed_job_quantity"))
+    for identity in order:
+        normalised[identity] = rebase_applied_price(normalised[identity], _order_qty)
     from section_coverage_contract import record_coverage
     return record_coverage(summary, [normalised[identity] for identity in order])
 
