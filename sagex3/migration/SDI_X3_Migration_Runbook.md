@@ -4835,3 +4835,15 @@ Keep this up to date with every setting we choose. **Never write the secret here
   2. a 3-row trial read of ACUX3 (`x3_api.py pull --env uat --limit 3`): proves the X3 user can open that folder;
   3. Live Orders → We are SDI (UAT) → Regenerate (first full pull, 30–60 min);
   4. for loading estimates into UAT: `x3_load.py setup` (once), then `mutations --env uat` (read-only), and send Claude the output.
+- **22 Nov, deployed on SDI-APP01** (09:49, backups `*.bak-20261122-094926`; four files; service restarted).
+- **First read of We are SDI: `503 no available server`** for endpoint X3ERPV12_ACUX3, on every retry. That answer comes from Sage's cloud, not from our request: nothing is serving the X3 API (X3 Services / GraphQL) for that endpoint.
+  - SDI Mig's endpoint answered normally on 20 Nov.
+  - Either We are SDI's services are down or asleep right now, or the X3 API isn't switched on for that folder. The Endpoints screen showed the "X3 Service" column blank on every row, SDIMIG included, so that column doesn't settle it.
+  - **Fixed in our code:**
+    - a pull now stops at the first "X3 isn't answering" and marks the rest "not tried" (it was waiting ~3 min per data set);
+    - Live Orders says "Sage X3 - We are SDI (UAT) - isn't answering … Nothing was read, so no new workbook" instead of a confusing missing-file error;
+    - **new `x3_api.py ping [--env uat]`**: one try per environment, GraphQL and REST status codes only, no data.
+  - **Next:**
+    1. `ping` both environments.
+    2. If SDI Mig is OK and We are SDI gives 503, ask whoever runs the site (Sage cloud / Acuity, James's call) to start or switch on the X3 Services (GraphQL API) for endpoint X3ERPV12_ACUX3.
+    3. If REST answers for ACUX3, it is a fallback for reading.

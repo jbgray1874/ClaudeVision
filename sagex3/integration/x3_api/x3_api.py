@@ -12,6 +12,7 @@ signed with that secret).
     python x3_api.py schema            # lists what the GraphQL API offers (works orders, stock, orders ...)
     python x3_api.py draft             # writes api_datasets.json for the pinned nodes (NODES) from the schema
     python x3_api.py pull --limit 3    # trial: 3 rows per data set to SDI_X3_samples, prints the column names
+    python x3_api.py ping [--env uat]  # is X3 answering for SDI Mig / We are SDI? status codes only (22 Nov)
     python x3_api.py columns [names]   # the column names each data set will produce (no call to X3)
     python x3_api.py pull [names]      # pulls the data sets in api_datasets.json to the exports folder
     python x3_api.py rest ITMMASTER ITMMASTER --count 5          # one REST query
@@ -62,8 +63,8 @@ RETRY_WAITS = (15, 45, 120)                       # back off on 5xx / connection
 # One site, one connected application: the endpoint picks the folder. Each environment's pulls go to their own
 # exports folder, so the two never mix. Read-only here; x3_load.py decides what may be written.
 ENVS = {
-    "mig": {"label": "SDI Mig (test)", "tag": "MIG", "endpoint": "X3ERPV12_SDIMIG"},
-    "uat": {"label": "We are SDI (UAT)", "tag": "UAT", "endpoint": "X3ERPV12_ACUX3"},
+    "mig": {"label": "SDI Mig (test)", "tag": "MIG", "endpoint": "X3ERPV12_SDIMIG", "folder": "SDIMIG"},
+    "uat": {"label": "We are SDI (UAT)", "tag": "UAT", "endpoint": "X3ERPV12_ACUX3", "folder": "ACUX3"},
 }
 
 
@@ -74,7 +75,7 @@ def exports_root(env=None):
 
 def for_env(c, env):
     """The settings with that environment's endpoint (this run only; the saved settings are not changed)."""
-    return c if env in (None, "") else dict(c, endpoint=ENVS[env]["endpoint"])
+    return c if env in (None, "") else dict(c, endpoint=ENVS[env]["endpoint"], folder=ENVS[env]["folder"])
 
 
 # ---------------------------------------------------------------- settings
@@ -327,6 +328,11 @@ def http(method, url, hdrs, body=None, timeout=60):
 
 
 # ---------------------------------------------------------------- GraphQL
+class X3Unavailable(SystemExit):
+    """X3 didn't answer at all for this endpoint (connection error / 5xx such as '503 no available server'), after the
+    retries. 22 Nov, We are SDI: every data set then waited ~3 minutes for the same answer - the pull now stops."""
+
+
 class GqlError(SystemExit):
     """X3 answered with GraphQL errors. Keeps X3's error list (with each error's path) and any partial data."""
     def __init__(self, msg, errors=None, data=None):
@@ -349,6 +355,9 @@ def gql(c, query, variables=None):
     try:
         out = json.loads(text)
     except ValueError:
+        if code == 0 or code >= 500:                         # no GraphQL answer at all: X3 isn't there for us
+            raise X3Unavailable(f"Sage X3 isn't answering for endpoint {c.get('endpoint')}: {code} "
+                                f"{redact(text)[:120].strip()}")
         raise SystemExit(f"GraphQL {code}: not JSON - {text[:300]}")
     if not isinstance(out, dict):
         raise SystemExit(f"GraphQL {code}: {text[:300]}")
@@ -685,8 +694,11 @@ def pull(a):
     if a.endpoint or (env and a.limit):
         day = day.with_name(day.name + "_" + (a.endpoint or c["endpoint"]))
     print(f"X3 endpoint: {c.get('endpoint')}", flush=True)
-    log = []
+    log, down = [], None
     for n in names:
+        if down:                                     # X3 isn't answering for this endpoint: don't wait again per set
+            log.append(dict(name=n, ok=False, error=f"not tried - {down}"))
+            continue
         if n not in sets:
             log.append(dict(name=n, ok=False, error="not a data set in api_datasets.json / the code"))
             print(f"{n}: FAILED - not a data set (api_datasets.json has no '{n}': run  draft --force  or delete the file)")
@@ -704,10 +716,15 @@ def pull(a):
                 print("   columns:", ", ".join(cols))
         except (SystemExit, Exception) as e:            # noqa: BLE001 - one data set failing never stops the
             err = f"{e.__class__.__name__}: {e}" if not isinstance(e, SystemExit) else str(e)   # rest (20 Nov)
-            log.append(dict(name=n, ok=False, error=err[:400]))
+            log.append(dict(name=n, ok=False, error=err[:400], unavailable=isinstance(e, X3Unavailable)))
             print(f"{n}: FAILED - {err[:400]}", flush=True)
+            if isinstance(e, X3Unavailable):
+                down = str(e)
+                print("Stopping: Sage X3 isn't answering for this environment, so the other data sets would only wait "
+                      "for the same answer.", flush=True)
     day.mkdir(parents=True, exist_ok=True)           # even when every data set failed (20 Nov)
-    entry = dict(at=dt.datetime.now().isoformat(timespec="seconds"), runs=log)
+    entry = dict(at=dt.datetime.now().isoformat(timespec="seconds"), endpoint=c.get("endpoint"), runs=log,
+                 unavailable=down)
     (day / "api_log.json").write_text(json.dumps(entry, indent=1))   # this pull (run_x3 reads it)
     with open(day / "api_log_history.jsonl", "a", encoding="utf-8") as f:   # every pull of the day, kept (20 Nov:
         f.write(json.dumps(entry) + "\n")                                # a later pull overwrote the routes note)
@@ -737,6 +754,21 @@ def columns_cmd(a):
     for n in a.names or [n for n in sets if not n.startswith("_")]:
         print(f"{n} ({'.'.join(sets[n]['path'])}):")
         print("   " + ", ".join(flat_names(sets[n]["fields"])))
+
+
+def ping(a):
+    """Is Sage X3 answering for each environment? GraphQL (what the portal uses) and REST, status codes only - no data
+    is printed. One try each, no retries (22 Nov: We are SDI answered '503 no available server')."""
+    c = load_conf()
+    for env in ([a.env] if a.env else sorted(ENVS)):
+        ce = for_env(c, env)
+        gcode, gtext = http("POST", ce["site"] + ce.get("graphql_path", GRAPHQL_PATHS[0]),
+                            headers(ce, endpoint_header=ce.get("endpoint_header", True)), {"query": "{ __typename }"}, 30)
+        rcode, rtext = http("GET", f"{ce['site']}/api1/x3/erp/{ce['folder']}/ITMMASTER?representation=ITMMASTER.$query"
+                                   f"&count=1", headers(ce, endpoint_header=False), None, 30)
+        ok = lambda code, text: "OK" if code == 200 and '"errors"' not in text else f"{code} {redact(text)[:90].strip()}"
+        print(f"{ENVS[env]['label']:<20} endpoint {ce['endpoint']:<17} GraphQL: {ok(gcode, gtext):<40} "
+              f"REST (folder {ce['folder']}): {ok(rcode, rtext)}")
 
 
 def rest_cmd(a):
@@ -770,6 +802,9 @@ def main(argv=None):
     p.add_argument("--env", choices=sorted(ENVS), help="a portal environment: mig = SDI Mig (test), uat = We are SDI "
                                                      "(UAT); its own exports folder")
     p.set_defaults(fn=pull)
+    pg = sp.add_parser("ping")
+    pg.add_argument("--env", choices=sorted(ENVS))
+    pg.set_defaults(fn=ping)
     cc = sp.add_parser("columns")
     cc.add_argument("names", nargs="*")
     cc.set_defaults(fn=columns_cmd)

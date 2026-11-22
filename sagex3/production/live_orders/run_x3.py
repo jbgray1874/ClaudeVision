@@ -169,6 +169,14 @@ def main(argv=None):
             code, out = run_streamed(cmd, a.pull_hours * 3600)
             status["pull"] = dict(cmd=" ".join(cmd[1:]), code=code, out=out)
             status["pull_failed"] = pull_failures(root / dt.date.today().isoformat(), out)
+            try:
+                lg = json.loads((root / dt.date.today().isoformat() / "api_log.json").read_text())
+            except (OSError, ValueError):
+                lg = {}
+            if lg.get("unavailable") and not any(r.get("ok") for r in lg.get("runs", [])):   # 22 Nov, We are SDI
+                raise SystemExit(f"Sage X3 - {ENVS[a.env]['label']} - isn't answering ({lg['unavailable'][-120:]}). "
+                                 "Nothing was read, so no new workbook. Try again later; if it keeps happening, that "
+                                 "environment's X3 services are down or not switched on for it.")
             if code not in (0, 1):                              # 1 = some data sets failed; carry on with the rest
                 raise SystemExit(f"pull failed ({code}): {out[-400:]}")
         src = Path(a.exports) if a.exports else newest_exports(root)
