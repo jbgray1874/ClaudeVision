@@ -55,6 +55,7 @@ import urllib.parse
 import time
 import uuid
 from dataclasses import dataclass, field
+from filing_recovery import may_recover as may_recover_filing
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -321,6 +322,7 @@ class Run:
     # a run that failed. Self-Running reads it and holds the job on its sheet instead of
     # queueing it again as "attempt 2": a stop means stop until somebody marks it Re-Run.
     stopped_by_hand: bool = False
+    lease_expired: bool = False          # filing-only recovery, never automatic re-execution
     # WHO GETS THIS ONE, decided when the job was queued and not when it finished. A person
     # saw the box, and what they left in it is what happens; empty means nobody, so an engine
     # test does not land in an estimator's inbox at two in the morning.
@@ -409,6 +411,7 @@ class Run:
             "submitted_scope": dict(self.submitted_scope),
             "job_type": self.job_type,
             "stopped_by_hand": self.stopped_by_hand,
+            "filing_recovery_allowed": may_recover_filing(self),
             "queued_at": self.queued_at, "started_at": self.started_at,
             "finished_at": self.finished_at,
             "seconds": round((self.finished_at or time.time()) - ref, 1),
@@ -556,10 +559,12 @@ def _expire_dead_claims() -> None:
     for run in _RUNS.values():
         if run.status == "running" and run.lease_until and run.lease_until < now:
             run.status = "error"
+            run.lease_expired = True
             run.error = (f"The runner ({run.runner or 'unknown'}) stopped responding "
                          f"{int(now - run.lease_until) + LEASE_SECONDS}s into the run. "
-                         f"Nothing was filed. If that machine went to sleep or lost the "
-                         f"network, start the runner again and re-run the job.")
+                         f"Nothing was filed by this service and no completion arrived. The "
+                         f"runner may hold a saved local result with its filing pending: check "
+                         f"that before resubmitting; do not re-run blindly.")
             run.line(run.error)
             run.finished_at = now
             r = _RUNNERS.get(run.runner)
@@ -1137,6 +1142,8 @@ class CompleteRequest(BaseModel):
     runner_id: str
     status: str                              # done | error
     error: str = ""
+    local_first_delivery: bool = False
+    recover_expired_run: bool = False
     lines: List[str] = []
     deliverables: List[Dict[str, str]] = []
     # THE ENGINE'S OWN ANSWER, so the page can put it beside the LLM's. Reported by the
@@ -2575,6 +2582,10 @@ def complete(run_id: str, req: CompleteRequest,
         if (req.status == "done" and run.status == "done" and run.finished_at
                 and run.deliverables):
             return {"ok": True, "already_recorded": True}
+        if req.local_first_delivery and (run.cancel_requested or run.stopped_by_hand or run.instruction_refused):
+            raise HTTPException(409, "Stopped or refused run: retained local files are not a successful completion.")
+        if req.recover_expired_run and not (req.local_first_delivery and may_recover_filing(run)):
+            raise HTTPException(409, "This run is not eligible for filing-only lease recovery.")
         for text in req.lines:
             run.line(text)
             _check_the_engine_was_told(run, text)

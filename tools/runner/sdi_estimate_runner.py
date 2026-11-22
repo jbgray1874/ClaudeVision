@@ -871,6 +871,12 @@ def main() -> int:
       # alive to the service and does no work, which is worse than being restarted.
       try:
         worked = False
+        # A durable local result is filed/reported before this slot claims new work.
+        # No engine launch or /api/estimate submission exists on this recovery path.
+        if not resume_deliveries(requests, servers, headers, runner_id, engine_root,
+                                 engine_python, process_identity=_process):
+            time.sleep(a.poll_seconds)
+            continue
         # A SECOND OR THIRD RUN ON THIS DESKTOP (D-731) is claimed only while the machine has
         # the room for it. Slot 1, the machine's own runner, is never held back.
         _ok, _measured = slot_may_claim(a.slot)
@@ -1597,6 +1603,46 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     extract_job = str(job.get("job_type") or "") in PACK_EXTRACT_KIND or pre_run
 
     tpl = workbook_template()
+    from runner_delivery import enabled as local_first_enabled
+    local_first = local_first_enabled() and not extract_job
+    local_delivery_root = None
+    template_receipt = {}
+    child_storage_env = {}
+    if local_first:
+        from runner_delivery import local_root, template_copy, pin_inputs, save, atomic
+        try:
+            if not re.fullmatch(r"[a-fA-F0-9]{8,64}", str(run_id)):
+                raise ValueError("invalid service run id")
+            local_delivery_root = local_root(engine_root, runner_id)
+            run_home = local_delivery_root / str(run_id)
+            if (run_home / 'delivery.json').exists():
+                say('[local-first] existing local result for this run ID; filing recovery only, never launch the engine twice.')
+                resume_deliveries(requests,[base.rsplit('/api/estimate',1)[0]],headers,runner_id,
+                                  engine_root,engine_python,process_identity=process_identity)
+                return
+            if (run_home / 'execution-started.json').exists():
+                _finish(requests,base,headers,run_id,runner_id,'error',
+                    'Local execution marker already exists for this ID. Reconcile saved output; no automatic engine rerun.',log)
+                return
+            pinned, template_receipt = template_copy(tpl, local_delivery_root / "templates",
+                max_age_hours=float(os.getenv("SDI_TEMPLATE_CACHE_MAX_HOURS", "24")))
+            tpl = str(pinned)
+            folder, pdf, inputs = pin_inputs(folder, pdf, run_home / "inputs")
+            save(run_home / "input-inventory.json", inputs)
+            save(run_home / "template-used.json", template_receipt)
+            if manual_wb is not None:
+                manual_raw = manual_wb.read_bytes()
+                manual_wb = run_home / "manual" / manual_wb.name
+                atomic(manual_wb, manual_raw)
+            child_storage_env = {"SDI_WB_TEMPLATE": tpl,
+                                 "SDI_WB_OUTPUT_DIR": str(run_home / "workbook")}
+            say(f"[local-first] validated template {template_receipt['sha256']}; "
+                f"{'last verified cache' if template_receipt['offline_cache'] else 'source verified'}; "
+                f"{len(inputs)} staged file(s) pinned locally. No rates substituted.")
+        except (OSError, ValueError, KeyError) as exc:
+            _finish(requests, base, headers, run_id, runner_id, "error",
+                    f"Local-first preflight refused before engine launch: {type(exc).__name__}: {exc}", log)
+            return
     if not extract_job and not Path(tpl).is_file():
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"The estimate workbook template is not readable from this runner: {tpl} — "
@@ -1609,6 +1655,10 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
     # WHEN THIS EXECUTION BEGAN. Everything collect() accepts must be at least this new, so a
     # failed run cannot file an earlier run's outputs and have them read as its own.
     _run_started_at = time.time()
+    if local_first:
+        save(run_home / 'execution-started.json', {'run_id':run_id,'runner_id':runner_id,
+             'started_at':_run_started_at,'drawing_number':job.get('drawing_number'),
+             'units':job.get('units'),'template_sha256':template_receipt['sha256']})
     cmd = engine_command(engine_root, engine_python, folder, int(job["units"]),
                          job["client"], pdf=pdf, manual_workbook=manual_wb,
                          quantity_breaks=[int(q) for q in (job.get("quantity_breaks") or [])],
@@ -1629,7 +1679,7 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         proc = subprocess.Popen(cmd, cwd=str(engine_root), stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                                 errors="replace", bufsize=1,
-                                env={**os.environ, "SDI_CLAIMED_BY_RUNNER": str(runner_id),
+                                env={**os.environ, **child_storage_env, "SDI_CLAIMED_BY_RUNNER": str(runner_id),
                                      "SDI_SERVICE_RUN_ID": str(run_id),
                                      # AND WHAT WAS SUBMITTED (D-604), so the book can say
                                      # whether what reached the engine is what was sent.
@@ -1688,8 +1738,16 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
         return
 
     try:
-        filed = collect(engine_root, dest, before, log, job.get("drawing_number", ""),
+        collection_dest = (local_delivery_root / str(run_id) / "files") if local_first else dest
+        filed = collect(engine_root, collection_dest, before, log, job.get("drawing_number", ""),
                         started_at=_run_started_at)
+        if local_first:
+            provenance = collection_dest / (_archive_segment(job.get('drawing_number')) + '_' + str(run_id) + '_storage_provenance.json')
+            save(provenance, {'schema':'sdi_local_first_provenance.v1','run_id':run_id,'runner_id':runner_id,
+                 'drawing_number':job.get('drawing_number'),'units':job.get('units'),
+                 'template':template_receipt,'input_inventory':inputs,'submitted_scope':job.get('submitted_scope'),
+                 'meaning':'Byte-verified local template and staged inputs. Commercial rates/estimate approval are not asserted.'})
+            filed.append({'name':provenance.name,'path':str(provenance)})
     except Exception as exc:                           # noqa: BLE001 — surface it
         _finish(requests, base, headers, run_id, runner_id, "error",
                 f"The estimate ran but could not be filed: {exc}", log)
@@ -1706,6 +1764,15 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                 + (", ".join(f["name"] for f in filed) or "Nothing")
                 + " was filed to the output folder — open the run log there for what the "
                   "engine did instead.", log, filed)
+        return
+
+    if local_first:
+        from runner_delivery import stage
+        file_parity(job, filed, engine_root, engine_python, log)  # optional, once; never during filing recovery
+        say("[local-first] estimate saved on C; shared filing/reporting pending. No re-estimate will be submitted.")
+        stage(local_delivery_root, job, runner_id, base, filed, log, _run_started_at, template_receipt)
+        resume_deliveries(requests, [base.rsplit('/api/estimate', 1)[0]], headers, runner_id,
+                          engine_root, engine_python, process_identity=process_identity)
         return
 
     file_a_copy(job, filed, log)          # D-617: and in the completed AI briefs area
@@ -2007,6 +2074,117 @@ def pack_extract_outputs(log: List[str]) -> List[Dict[str, str]]:
     return []
 
 
+def resume_deliveries(requests, servers, headers, runner_id, engine_root, engine_python,
+                      process_identity="") -> bool:
+    """Retry existing run IDs only. No claim, new job, engine or Excel on this path.
+
+    Pending output blocks this slot from claiming more work; other slots are not
+    changed. Cancellations, changed owners and conflicts retain local files for a
+    person, never overwrite a different estimate, and never resubmit the job.
+    """
+    from runner_delivery import local_root, pending, load, save, verify_local, publish, Conflict, acquire, release, enabled
+    try:
+        root = local_root(engine_root, runner_id)
+    except ValueError:
+        if not enabled(): return True
+        raise
+    all_filed = True
+    allowed = {s.rstrip('/') + '/api/estimate' for s in servers}
+    for manifest in pending(root):
+        try:
+            claim = acquire(manifest)
+        except FileExistsError:
+            all_filed = False
+            continue
+        state = load(manifest)
+        base = state['base']; run_id = state['run_id']; job = state['job']
+        try:
+            if state.get('phase') != 'pending': continue
+            if state['runner_id'] != runner_id or base not in allowed:
+                raise Conflict('pending delivery belongs to another runner or service')
+            local = verify_local(manifest, state)
+            response = requests.get(f'{base}/{run_id}', headers=headers, timeout=20)
+            response.raise_for_status(); live = response.json()
+            if (live.get('run_id') != run_id or live.get('runner') != runner_id
+                    or live.get('drawing_number') != job['drawing_number']
+                    or live.get('client') != job['client'] or live.get('units') != job['units']
+                    or live.get('output_path') != job['output_path']):
+                raise Conflict('service run identity/owner/quantity changed; local result retained')
+            if live.get('status') == 'done':
+                expected = state.get('completion')
+                wanted = {(f['name'], f['path']) for f in (expected or {}).get('deliverables', [])}
+                actual = {(f['name'], f['path']) for f in live.get('deliverables', [])}
+                if (not expected or wanted != actual or live.get('engine_price_gbp') != expected['unit_cost_gbp']
+                        or (live.get('quantity_prices') or []) != expected.get('quantity_prices', [])):
+                    raise Conflict('finished service run differs from this saved completion')
+                state.update(phase='reported', reported_at=time.time(), acknowledged_from_history=True)
+                save(manifest,state)
+                continue
+            recovering_expiry = live.get('status') == 'error' and live.get('filing_recovery_allowed') is True
+            if live.get('status') != 'running' and not recovering_expiry:
+                raise Conflict('service run is no longer running; reconcile this same ID, never reprice blindly')
+            if not recovering_expiry:
+                beat = requests.post(f'{base}/runner/{run_id}/progress', headers=headers, timeout=20,
+                    json={'runner_id':runner_id, 'process':process_identity,
+                          'lines':['[local-first] estimate safe on C; retrying shared filing only. No re-estimate.']})
+                beat.raise_for_status()
+                if beat.json().get('cancel'):
+                    raise Conflict('stop requested; local result retained and not published')
+            filed = publish(manifest,state)
+            if job.get('archive_root'):
+                if not state.get('archive_destination'):
+                    area = client_area(Path(job['archive_root']), str(job.get('client') or ''))
+                    archive = archive_folder(area / _archive_segment(job['drawing_number']),
+                        str(job.get('archive_stamp') or time.strftime('%Y-%m-%d %H-%M-%S')),
+                        job['units'])
+                    state['archive_destination'] = str(archive); save(manifest,state)
+                publish(manifest,state,state['archive_destination'])
+                if not state.get('completion'):
+                    state['log'].append(f"[archive] {len(filed)} of {len(filed)} file(s) also filed to {state['archive_destination']}")
+            # Check for a Stop that arrived during copying, before reporting success.
+            if not recovering_expiry:
+                final_beat = requests.post(f'{base}/runner/{run_id}/progress', headers=headers, timeout=20,
+                    json={'runner_id':runner_id,'process':process_identity,'lines':[]})
+                final_beat.raise_for_status()
+                if final_beat.json().get('cancel'):
+                    raise Conflict('stop requested during filing; no successful completion reported')
+            if not state.get('completion'):
+                state['completion'] = completion_payload(runner_id, 'done', '', state['log'], filed,
+                    job['drawing_number'], state['started_at'], price_files=local)
+            state['completion'].update(local_first_delivery=True,recover_expired_run=recovering_expiry)
+            save(manifest,state)
+            if post_completion(requests,base,headers,run_id,state['completion']):
+                state.update(phase='reported', reported_at=time.time()); save(manifest,state)
+                print(f'[local-first] {run_id}: C and shared copies verified; existing run completed. No rerun.')
+            else:
+                all_filed = False
+        except (Conflict, ValueError, KeyError) as exc:
+            state.update(phase='held', reason=f'{type(exc).__name__}: {exc}', held_at=time.time())
+            save(manifest,state)
+            print(f'[local-first] {run_id}: HELD locally for reconciliation; {exc}. No rerun.')
+        except Exception as exc:
+            # Includes requests connection errors and an unavailable/mid-copy SMB share.
+            # Do not let a filing outage increment the runner's unexpected-error kill count.
+            state.update(last_filing_error=type(exc).__name__, last_attempt_at=time.time())
+            save(manifest,state)
+            print(f'[local-first] {run_id}: shared filing/reporting pending ({type(exc).__name__}); '
+                  'estimate retained on C. Retrying files, not the engine.')
+            all_filed = False
+        finally:
+            release(claim)
+    return all_filed
+
+
+def completion_payload(runner_id, status, error, log, deliverables, drawing_number='',
+                       started_at=0.0, price_files=None):
+    prices = deliverables if price_files is None else price_files
+    price = _unit_cost_from_deliverables(prices, drawing_number, started_at, log)
+    quantities = _quantity_prices_from_deliverables(prices, drawing_number, started_at)
+    return {'runner_id':runner_id, 'status':status, 'error':error, 'lines':list(log),
+            'deliverables':deliverables,
+            'unit_cost_gbp':price, 'quantity_prices':quantities}
+
+
 def _finish(requests, base: str, headers: Dict[str, str], run_id: str, runner_id: str,
             status: str, error: str, log: List[str],
             deliverables: Optional[List[Dict[str, str]]] = None,
@@ -2014,29 +2192,27 @@ def _finish(requests, base: str, headers: Dict[str, str], run_id: str, runner_id
     if error:
         log.append(error)
         print(error)
-    body = {"runner_id": runner_id, "status": status, "error": error,
-            "lines": [], "deliverables": deliverables or [],
-            "unit_cost_gbp": _unit_cost_from_deliverables(deliverables or [], drawing_number,
-                                                          started_at, log),
-            # AND THE PRICE AT EVERY QUANTITY ASKED FOR (D-610), so the page shows 1, 5 and 10
-            # off, not one unit price for a run that priced three.
-            "quantity_prices": _quantity_prices_from_deliverables(deliverables or [], drawing_number,
-                                                                  started_at)}
+    body = completion_payload(runner_id,status,error,log,deliverables or [],drawing_number,started_at)
     # The whole log goes with the completion, so a run whose progress posts were
     # lost to a blip still arrives complete rather than half-reported.
     body["lines"] = log
+    post_completion(requests,base,headers,run_id,body)
+
+
+def post_completion(requests,base,headers,run_id,body):
+    """Idempotent service completion for an existing ID; never an estimate submission."""
     for attempt in range(4):
         try:
             requests.post(f"{base}/runner/{run_id}/complete", json=body,
                           headers=headers, timeout=30).raise_for_status()
-            print(f"--- reported {status}\n")
-            return
+            print(f"--- reported {body['status']}\n")
+            return True
         except Exception as exc:                       # noqa: BLE001
             if attempt == 3:
                 print(f"could not report the result to the server — {exc}", file=sys.stderr)
                 print("The estimate itself is filed; the page will show it as timed out.",
                       file=sys.stderr)
-                return
+                return False
             time.sleep(2 ** attempt)
 
 

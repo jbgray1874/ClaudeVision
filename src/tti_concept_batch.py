@@ -67,11 +67,22 @@ def exclusive_claim(path):
 
 
 class Archive:
-    def __init__(self, local, shared):
+    def __init__(self, local, shared, stop_file=None):
         self.roots = (Path(local),Path(shared))
         if self.roots[0].resolve() == self.roots[1].resolve(): raise ValueError('C and K archives must be distinct')
+        self.mirror = None
+        if os.getenv('SDI_ESTIMATE_LOCAL_FIRST','').strip().lower() in {'1','true','yes','on'}:
+            from durable_archive_mirror import Mirror
+            self.mirror = Mirror(*self.roots,stop_file=stop_file)
+
+    def sync_pending(self):
+        if self.mirror:
+            self.mirror.sync()
+            self.mirror.wait_online()
 
     def put(self, relative, data, immutable=True):
+        if self.mirror:
+            return self.mirror.put(relative,data,immutable)
         if Path(relative).is_absolute() or '..' in Path(relative).parts: raise ValueError('unsafe archive name')
         for root in self.roots:
             path = root/relative
@@ -92,8 +103,10 @@ class Archive:
 
 
 class Client:
-    def __init__(self, server, key=''):
+    def __init__(self, server, key='', shared_root=None, stop_file=None):
         self.server = server.rstrip('/'); self.key = key
+        self.shared_root=Path(shared_root) if shared_root else None
+        self.stop_file=Path(stop_file) if stop_file else None
         parsed = urllib.parse.urlsplit(self.server)
         if parsed.scheme not in ('http','https') or not parsed.netloc or parsed.username or parsed.query or parsed.fragment:
             raise ValueError('invalid service URL')
@@ -102,7 +115,23 @@ class Client:
         headers = {'Content-Type':'application/json'}
         if self.key: headers['X-SDI-Key'] = self.key
         req = urllib.request.Request(self.server+path,data=None if body is None else json_bytes(body),headers=headers,method=method)
-        with urllib.request.urlopen(req,timeout=60) as response: data = response.read()
+        attempts=0
+        while True:
+            try:
+                with urllib.request.urlopen(req,timeout=60) as response: data = response.read()
+                break
+            except (urllib.error.URLError, OSError) as exc:
+                local_first=os.getenv('SDI_ESTIMATE_LOCAL_FIRST','').strip().lower() in {'1','true','yes','on'}
+                if method!='GET' or not local_first: raise  # never retry an uncertain job submission
+                attempts+=1
+                if isinstance(exc,urllib.error.HTTPError):
+                    share_down=(self.shared_root is not None and not self.shared_root.parent.is_dir())
+                    temporary_file=(exc.code==404 and '/deliverables/' in path and share_down)
+                    if not temporary_file and not (exc.code in {500,502,503,504} and attempts<=3): raise
+                if self.stop_file and self.stop_file.exists():
+                    raise InterruptedError('stopped while collecting an existing run; no job resubmitted') from exc
+                print('GET RETRY: collecting an existing run only; no job submitted again.',flush=True)
+                time.sleep(15)
         return data if binary else json.loads(data)
 
     def recent(self): return self.request('GET','/api/estimate?limit=1000').get('runs',[])
@@ -388,6 +417,7 @@ def attempt_writeback(plan,archive,state,item,writer=write_cost):
 
 def retry_writebacks(plan,archive,selected_rows=None,writer=write_cost):
     """Local/shared files only. Cannot submit, poll, release or restart anything."""
+    archive.sync_pending()
     from tti_concept_proof import context
     saved,state=context(archive,plan)
     saved=with_attempts(state,with_amendments(archive,saved))
@@ -409,6 +439,7 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
     runners. A subsequent invocation can collect their results. Initial execution
     requires no other live service runs and ownership of the common batch claim.
     """
+    archive.sync_pending()
     state_paths=[r/'state.json' for r in archive.roots]
     states=[read_json(p) for p in state_paths if p.exists()]
     if len(states)==1 or (len(states)==2 and states[0] != states[1]):
@@ -637,17 +668,19 @@ def main(argv=None):
     if not a.execute and not a.approve_proof and not a.writeback_only and not a.retry_held: return 0
     if not a.shared_root or not a.expected_build: p.error('execution/approval requires --shared-root and --expected-build')
     if not a.shared_root.startswith('\\\\'): p.error('use the K share UNC path, not a mapped drive invisible to runners')
-    if not Path(a.shared_root).parent.is_dir(): raise OSError('shared parent is unavailable; connect VPN first')
     # Load settings without logging any values. No service processes or .env files are changed.
     from dotenv import load_dotenv
     load_dotenv(ROOT/'.env',override=False)
+    local_first=os.getenv('SDI_ESTIMATE_LOCAL_FIRST','').strip().lower() in {'1','true','yes','on'}
+    if not local_first and not Path(a.shared_root).parent.is_dir(): raise OSError('shared parent is unavailable; connect VPN first')
     expected=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     if not expected.startswith(a.expected_build): raise RuntimeError('checkout is not the requested build')
     if subprocess.check_output(['git','status','--porcelain','--untracked-files=no'],cwd=ROOT,text=True).strip():
         raise RuntimeError('tracked local edits: integrate and test before running')
     base=Path(os.getenv('SDI_STATE_DIR') or str(Path(os.getenv('PROGRAMDATA',str(Path.home())))/'SDI Intelligence'))
     key=sha(str(Path(a.sheet).resolve()).casefold().encode())[:20]
-    archive=Archive(Path(a.local_root)/key,Path(a.shared_root)/key)
+    archive=Archive(Path(a.local_root)/key,Path(a.shared_root)/key,stop_file=a.stop_file)
+    archive.sync_pending()
     if a.proof_execution_build:
         bridge=validate_health_only_proof_build(ROOT,a.proof_execution_build,a.expected_build,
             reviewed_paths=[x.strip() for x in (a.carry_forward_reviewed_paths or '').split(',') if x.strip()],
@@ -672,13 +705,15 @@ def main(argv=None):
             try: rows=[int(v.strip()) for v in a.retry_held.split(',')]
             except ValueError: p.error('--retry-held must be row numbers')
             retire_for_retry(archive,plan,rows,proof_rows=proof_rows,basis='Operator retry of held rows after the picture-reader settings were corrected')
-            return run_batch(plan,pictures,archive,Client(a.server,os.getenv('SDI_API_KEY','')),a.expected_build,a.at_once,
+            return run_batch(plan,pictures,archive,Client(a.server,os.getenv('SDI_API_KEY',''),archive.roots[1],a.stop_file),a.expected_build,a.at_once,
                              stop_file=a.stop_file,selected_rows=rows,proof_rows=proof_rows,proof_execution_build=a.proof_execution_build)
-        return run_batch(plan,pictures,archive,Client(a.server,os.getenv('SDI_API_KEY','')),a.expected_build,a.at_once,
+        return run_batch(plan,pictures,archive,Client(a.server,os.getenv('SDI_API_KEY',''),archive.roots[1],a.stop_file),a.expected_build,a.at_once,
                          stop_file=a.stop_file,selected_rows=None if not a.rows else [int(v.strip()) for v in a.rows.split(',')],proof_rows=proof_rows,proof_execution_build=a.proof_execution_build)
 
 
 if __name__=='__main__':
     try: sys.exit(main())
+    except InterruptedError as exc:
+        print('PAUSED: '+str(exc),file=sys.stderr,flush=True); sys.exit(2)
     except Exception as exc:
         print('STOP: '+str(exc),file=sys.stderr,flush=True); sys.exit(1)
