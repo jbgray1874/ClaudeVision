@@ -4881,3 +4881,18 @@ Keep this up to date with every setting we choose. **Never write the secret here
 - **First `--run` on James's PC: `Login failed for user 'SDI\james.gray'` on 10.0.0.200** (18456): his Windows login has no access on that server.
   - Use the server name SSMS connects to (`--server`), or the SQL login SSMS uses (`--login <user>`; the password is asked for, hidden, never stored).
   - Separately: `sql/src/test_conn.py` in the repo holds a SQL login's password in plain text (and in git history). Flagged to James: change that password. Not touched.
+- **Run on Access 22 Nov, the plain way (James's choice):** `sagex3/reports/customer_lines_plain.sql`, which is self-contained and read-only. Paste it into SSMS and press F5. It returns two grids, which are copied with headers into Excel, the same way as the earlier Access reports. The Results-to-File and `--run` routes stay in the repo but weren't used. Placeholders only in git.
+  - Result: 392 parts and 4,678 order lines (1 Jan 2025 – 22 Nov 2026). Grid 1 and grid 2 totals agree to the penny.
+  - **Findings that change how the margins can be read:**
+    - Booked **labour is zero on every 2026 works order**, and so are **rejects and scrap**. Cost is materials (+ subcontract) only, so the margin is a *material* margin and the scrap flag never triggers.
+    - A finished part's works order often carries only the final-assembly materials. 17 parts show a material margin over 90%, which isn't reliable.
+    - The two largest lines this year have no works orders: probably bought in, with their cost on purchase orders.
+    - About 44% of this year's product value has no cost in Access.
+  - **Data to check in Access (on the workbook's "Check these" tab):**
+    - one open line keyed at 10× the usual price;
+    - two lines at about 0.5% of the usual price;
+    - a few call-off (CO) lines carrying a price;
+    - one part whose price went from about £10 to about £38.
+  - Workbook built from the pasted grids by Claude: Read me (9 assumptions), Summary (SUMIFS formulas), By part, Order lines, Check these. It lives in the session scratchpad, **never in git** (customer data).
+  - Re-run on 31 Dec for the final record.
+  - **X3 lesson:** in X3, works orders need labour and scrap booked (time and production tracking) if this report is to give true margins after go-live. Noted on REP-24.
