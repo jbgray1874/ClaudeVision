@@ -1135,15 +1135,18 @@ def input_key(manifest: Optional[Dict[str, Any]], r: Dict[str, Any], body_brief:
     brief and the estimating mode. A result is reused, and a written cost trusted as current,
     only while every one is unchanged."""
     import hashlib
+    from batch_job_changes import fingerprint
     return {"pack": pack_key(manifest), "revision": (manifest or {}).get("revision"),
             "quantity": r.get("quantity"), "method": method, "client": client,
-            "brief": hashlib.sha1(str(body_brief).encode()).hexdigest()[:12]}
+            "brief": hashlib.sha1(str(body_brief).encode()).hexdigest()[:12],
+            **({'customer_changes': fingerprint(r['_customer_changes'])} if r.get('_customer_changes') else {})}
 
 
 def changed_inputs(before: Optional[Dict[str, Any]], now: Dict[str, Any]) -> List[str]:
     if not before:
-        return []
-    return [k for k in now if before.get(k) != now.get(k)]
+        return ['customer_changes'] if now.get('customer_changes') else []
+    keys = set(now) | ({'customer_changes'} if before.get('customer_changes') else set())
+    return sorted(k for k in keys if before.get(k) != now.get(k))
 
 
 def approval_of(item: Dict[str, Any], manifest: Optional[Dict[str, Any]]) -> str:
@@ -1284,6 +1287,10 @@ OUTCOME_NOT_KNOWN = "outcome not known"
 
 def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optional[Path] = None,
               sleep: Callable[[float], None] = time.sleep) -> Dict[str, Any]:
+    from batch_job_changes import load_changes, bind_changes
+    changes = load_changes(getattr(args, 'job_changes', ''), args.client)
+    if changes and (getattr(args, 'write_only', False) or getattr(args, 'take_up', [])):
+        raise ValueError('Job changes cannot be applied by write-only or take-up of an old result')
     sheet = Path(args.sheet)
     cols = {"drawing": args.col_drawing, "notes": args.col_notes, "thumbs": args.col_thumbs.split(","),
             "cost": args.col_cost, "qty": getattr(args, "col_qty", "") or ""}
@@ -1308,6 +1315,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         if _only - _have:
             print(f"[tti] drawing(s) {', '.join(sorted(_only - _have))} named in --drawings are on no "
                   f"job row of this sheet and are left out", flush=True)
+    bind_changes(data['rows'], changes)
     assign_run_keys(data["rows"])
     if data.get("cost_column") and data["cost_column"] != args.col_cost:
         print(f"[tti] {data.get('cost_column_said')}", flush=True)
@@ -1407,6 +1415,11 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
 
     def record(item: Dict[str, Any], r: Dict[str, Any], manifest: Optional[Dict[str, Any]]) -> None:
         """The row's line in the ledger: pack, run, workbook, cost, assumptions, write-back."""
+        if item.get('state') == 'done':
+            if item.get('resumed') or item.get('run_id') == (item.get('previous') or {}).get('run_id'):
+                item['result_origin'] = 'existing run collected; not proof of a new estimate'
+            else:
+                item.setdefault('result_origin', 'existing or shared run; freshness not established')
         e = ledger.setdefault(row_key(r), {})
         if e.get("run_id") and item.get("run_id") and e["run_id"] != item["run_id"]:
             # A ROW RUN AGAIN KEEPS ITS EARLIER RUN ON RECORD: nothing of it is overwritten.
@@ -1429,7 +1442,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                   "approval": approval_of(item, manifest),
                   "updated": datetime.now().isoformat(timespec="seconds")})
         item["approval"] = e["approval"]
-        for k in ("filed", "filed_error", "central", "central_ok"):
+        for k in ("filed", "filed_error", "central", "central_ok", "result_origin"):
             if k in item:
                 e[k] = item[k]
 
@@ -1597,10 +1610,11 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 continue
             if not (_prev.get("written") and str(_prev.get("unit_cost")) == str(_before)):
                 item.update(state="has a cost", why=f"{args.col_cost}{r['row']} already holds "
-                            f"{_before}; kept (--replace-costs to price and replace it)")
+                            f"{_before}; kept (--replace-costs allows write-back/reuse; --run-again requests a fresh finished-row estimate)")
                 save()
                 continue
             item.update(state="done", unit_cost=_prev.get("unit_cost"), run_id=_prev.get("run_id"),
+                        result_origin='existing run collected; not proof of a new estimate',
                         output=_prev.get("workbook"), written=_prev.get("written"),
                         why="priced and written by an earlier batch; not run again")
             item["approval"] = _prev.get("approval")
@@ -1714,6 +1728,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             save()
             continue
         body = {"client": args.client, "drawing_number": r["drawing"] or f"TTI-row{r['row']}",
+                **({'customer_changes': r['_customer_changes']} if r.get('_customer_changes') else {}),
                 "source": "tti",
                 "units": r["quantity"], "files": inputs, "deliverables": True,
                 "quantity_breaks": sorted(q for q in qtys_of.get(_rk(r), []) if q != r["quantity"]),
@@ -1749,6 +1764,17 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
             continue
         _wo = bool(getattr(args, "write_only", False))
         _moved = changed_inputs(_prev.get("inputs"), item["inputs"])
+        if 'customer_changes' in _moved and _prev.get('run_id'):
+            # A changed instruction never silently duplicates an existing/unknown run.
+            try:
+                previous_status = portal.status(_prev['run_id']) or {}
+            except Exception:
+                previous_status = {}
+            if previous_status.get('status') not in _ENDED:
+                item.update(state='held: changed instructions while prior outcome unresolved',
+                            why='Existing run must end and be reconciled before changed materials are submitted')
+                save()
+                continue
         if _wo and _moved and _prev.get("run_id"):
             # Written as that run's cost, and said: the pack or brief has moved since.
             item["outdated"] = _moved
@@ -1879,7 +1905,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 record(item, r, manifest)
                 save()
                 continue
-            item.update(state="running", run_id=started.get("run_id"))
+            item.update(state="running", run_id=started.get("run_id"), result_origin='new submission')
             _sent += 1
             if _again and _prev.get("run_id") and _prev["run_id"] != item["run_id"]:
                 item["run_again"] = (f"run again by request; the earlier run {_prev['run_id']} "
@@ -1909,6 +1935,10 @@ def _finish_body(item, r, manifest, st, *, args, sheet, data, writer, priced, ru
                  record, save) -> None:
     """One ended run: its cost, the tracker cell, the read-back, the copies, the ledger line."""
     if True:
+        if item.get('resumed') or item.get('run_id') == (item.get('previous') or {}).get('run_id'):
+            item['result_origin'] = 'existing run collected; not proof of a new estimate'
+        else:
+            item.setdefault('result_origin', 'existing or shared run; freshness not established')
         cost = unit_cost_of(st, r["quantity"])
         item.update(state=str(st.get("status")), unit_cost=cost, output=st.get("output_path") or st.get("output"),
                     quality=st.get("quality") or None, review=st.get("review") or None)
@@ -1987,7 +2017,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--drawings-only", action="store_true",
                     help="price only the rows that carry a drawing number; the rest are listed, not priced")
     ap.add_argument("--replace-costs", action="store_true",
-                    help="price and replace a cost already in the cost column; by default it is kept")
+                    help="allow overwriting the cost column; may reuse an existing finished run. "
+                         "Use --run-again for a fresh estimate of a finished row")
     ap.add_argument("--copy-to", default=os.getenv("SDI_TTI_COPY_TO") or DEFAULT_COPY_TO,
                     help="also copy each finished row's spreadsheets and GA PDF here; 'none' to stop")
     ap.add_argument("--central-sheet", default=os.getenv("SDI_TTI_CENTRAL_SHEET", ""),
@@ -1995,6 +2026,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--write-only", action="store_true",
                     help="write back the cost of runs already finished (to the cost column, the central "
                          "sheet and the conference folder); never start or wait for an estimate")
+    ap.add_argument('--job-changes', default='', metavar='JSON',
+                    help='explicit per-drawing material/gauge/finish decisions, filed by the service; never prices')
     ap.add_argument("--take-up", action="append", default=[], metavar="ROW=RUN",
                     help="the run that is a row's, e.g. 3=e2639e873262: it is followed or its result "
                          "used, and nothing is sent for that row. Refused when the run is for another "

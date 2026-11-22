@@ -3819,7 +3819,10 @@ def build_part_graph(
                    and _root_counts.get(c) == {number((records.get(c) or {}).get("quantity_total_per_unit"), None)}
                    and number((records.get(c) or {}).get("quantity_total_per_unit"), 0) > 0
                    and rank(source_of(records.get(c) or {}, "quantity")) <= rank("solidworks_api")
-                   and not bought_in_policy.looks_fabricated_for_identity(dict(records.get(c) or {}))
+                   # This classifies TWO retained purchases; it does not merge identities.
+                   # An inferred cutting op added by costing is not measured fabrication.
+                   # Keep the stronger make/buy guard: an actual flat still blocks this.
+                   and not bought_in_policy.has_fabrication_evidence(dict(records.get(c) or {}))
                    for c in (_base, _hand)):
                 _purchased_peers.update((_base, _hand))
 

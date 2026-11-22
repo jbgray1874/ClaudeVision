@@ -3486,7 +3486,8 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
         return {"result": {}, "applied_unit_cost": None, "matched_part_code": None}
 
     candidate_codes: List[str] = []
-    for code in [part_code, part_number, item_number]:
+    from purchase_evidence import lookup_codes as _purchase_codes
+    for code in [part_code, part_number, item_number, *_purchase_codes(part)]:
         code = str(code or "").strip()
         if not code:
             continue
@@ -13482,6 +13483,13 @@ def _estimate_part_costed(part: Dict[str, Any], job_quantity: Optional[int] = No
             extended_total_raw = float((extended_material_cost + total_labour_cost) * qty_multiplier)
             unit_total_raw = (extended_total_raw / quantity) if quantity else extended_total_raw
             costing_basis = f"computed_material_plus_labour_qty_break_x{qty_multiplier:.3f}"
+    # ONLY AN ARTICLE THE BOM NAMES IS A MISSING PURCHASE. A board with no gauge is also a
+    # bought-in candidate (nothing to cut) and already carries its own "confirm the gauge"
+    # ruling; a second question about a supplier price would be about a purchase it is not.
+    if bought_in_candidate and part.get("purchase_reference"):
+        from purchase_evidence import mark_missing_purchase
+        mark_missing_purchase(part, system_unit_cost)
+
     # ONE LINE, ONE SOURCE. A bought-in charged at its bought-in price had its material block
     # still carrying the config-rate fallback the geometry path wrote before it found nothing
     # to cut — and the AI Provenance tab reads the material block, so the Yiree screw's AI
@@ -13619,6 +13627,8 @@ def _estimate_part_costed(part: Dict[str, Any], job_quantity: Optional[int] = No
         "part_number": part.get("part_number"),
         "description": part.get("description"),
         "quantity": quantity,
+        **{k: part[k] for k in ('purchase_reference', 'price_chain_description',
+                                'purchase_price_missing') if k in part},
         # SDI Intelligence — surface material/thickness/blank dims at the top
         # level so xlsx_output Sheet Steel / Other Sheet Material sections can
         # find them (they read pe.get("normalized_material") directly).
@@ -16382,6 +16392,8 @@ def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
 def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     if summary is not None:
+        from purchase_evidence import stamp_bom_purchase_references
+        stamp_bom_purchase_references(parts, (summary.get('document_analysis') or {}).get('bom_rows'))
         from owned_route_evidence import stamp as _stamp_owned_routes
         _stamp_owned_routes(parts, summary)
         # THE SHEET'S BANDING STATEMENT, READ WHERE THE MONEY IS COMPUTED (D-514). The
