@@ -53,7 +53,7 @@ import re
 import statistics
 from pathlib import Path
 import time
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 GREEN, AMBER, RED, GREY = "green", "amber", "red", "grey"
 _ORDER = {GREY: 0, GREEN: 1, AMBER: 2, RED: 3}
@@ -249,20 +249,59 @@ def stage_of(log: Sequence[str]) -> Tuple[int, str]:
     return best, (STAGES[best][0] if best >= 0 else "")
 
 
+# A RUN IS PACED AGAINST RUNS OF ITS OWN KIND (JG, 22 Nov 2026: "our time estimates for a run
+# are way off, so we're always appearing to over run"). One "usual" for everything made a
+# thumbnail (typically 13 to 24 min) and a drawing pack (24 to 82 min) both read wrongly:
+# 243 runs of history gave one median of 34 min that was below most packs and above every
+# thumbnail. Each kind now has its own usual, and a run that ran past four times its kind's
+# median (an Excel prompt nobody saw) is kept out of the usual, so one stuck run cannot set it.
+KINDS = {"brief": "thumbnail / brief", "pack": "drawing pack", "extract": "extract"}
+HUNG_OVER = 4.0
+
+
+def run_kind(run: Mapping[str, Any]) -> str:
+    """brief (no drawing pack: a thumbnail or a written brief), pack, or extract."""
+    if not is_estimate(run):
+        return "extract"
+    if run.get("llm_only") or str(run.get("drawing_number") or "").upper().startswith("TTI-C-"):
+        return "brief"
+    return "pack"
+
+
+def _typical(values: Sequence[float]) -> List[float]:
+    """The values with the hung ones left out: past HUNG_OVER times the median of them all."""
+    if not values:
+        return []
+    cut = HUNG_OVER * statistics.median(values)
+    return [v for v in values if v <= cut]
+
+
+def _finished_of_kind(runs: Iterable[Mapping[str, Any]], since: float,
+                      kind: Optional[str]) -> List[Mapping[str, Any]]:
+    return [r for r in runs if is_estimate(r) and outcome(r) == "done"
+            and (r.get("finished_at") or 0) >= since
+            and (kind is None or run_kind(r) == kind)]
+
+
 def expected_seconds(runs: Iterable[Mapping[str, Any]], now: float,
-                     days: Optional[float] = None) -> Optional[float]:
-    """The median of the finished estimates in the history window, or None under three."""
+                     days: Optional[float] = None, kind: Optional[str] = None) -> Optional[float]:
+    """The median of the finished estimates of this kind (all kinds when none is given) in
+    the history window, hung runs left out, or None under three."""
     days = thresholds()["history_days"] if days is None else days
     since = now - days * 86400.0
-    durs = [d for r in runs if is_estimate(r) and outcome(r) == "done"
-            and (r.get("finished_at") or 0) >= since
-            for d in [_duration(r)] if d is not None]
+    durs = _typical([d for r in _finished_of_kind(runs, since, kind)
+                     for d in [_duration(r)] if d is not None])
     return statistics.median(durs) if len(durs) >= 3 else None
 
 
 def run_rag(run: Mapping[str, Any], now: float, expected_s: Optional[float],
-            th: Optional[Mapping[str, float]] = None) -> Tuple[str, str]:
-    """(colour, the reason in words) for one running run."""
+            th: Optional[Mapping[str, float]] = None,
+            window: Optional[Mapping[str, Any]] = None) -> Tuple[str, str]:
+    """(colour, the reason in words) for one running run.
+
+    With a window for the run's kind, "slow" starts past the kind's upper quarter (hi_s),
+    not its median: a quarter of ordinary runs take longer than the median, and calling each
+    of them an overrun was the alarm nobody believed. Without one, the median as before."""
     th = th or thresholds()
     log = [str(x) for x in (run.get("log") or [])]
     started = float(run.get("started_at") or now)
@@ -274,7 +313,14 @@ def run_rag(run: Mapping[str, Any], now: float, expected_s: Optional[float],
         return RED, "an error line in its log"
     if silent >= th["silent_after_s"]:
         return RED, f"log silent for {silent / 60:.0f} min"
-    if expected_s and elapsed > th["late_over"] * expected_s:
+    usual = ""
+    if window and window.get("hi_s"):
+        lo, hi = float(window.get("lo_s") or 0.0), float(window["hi_s"])
+        kind = KINDS.get(str(window.get("kind") or ""), "estimate")
+        usual = f"a {kind} usually takes {lo / 60:.0f} to {hi / 60:.0f} min"
+        if elapsed > th["late_over"] * hi:
+            return RED, f"{elapsed / 60:.0f} min in; {usual}"
+    elif expected_s and elapsed > th["late_over"] * expected_s:
         return RED, (f"{elapsed / 60:.0f} min in, expected about {expected_s / 60:.0f}")
     waiting = None
     for x in tail:
@@ -291,6 +337,10 @@ def run_rag(run: Mapping[str, Any], now: float, expected_s: Optional[float],
                   if since else "")
         return AMBER, (f"waiting for the desktop's SolidWorks{waited}"
                        + (f"; {held}" if held else ""))
+    if usual:
+        if elapsed > th["slow_over"] * float(window["hi_s"]):
+            return AMBER, f"slower than usual: {elapsed / 60:.0f} min in; {usual}"
+        return GREEN, f"on pace; {usual}"
     if expected_s and elapsed > th["slow_over"] * expected_s:
         return AMBER, f"slower than usual, expected about {expected_s / 60:.0f} min"
     if expected_s:
@@ -424,20 +474,35 @@ def net_duration(run: Mapping[str, Any]) -> Optional[float]:
 
 
 def predict_window(runs: Iterable[Mapping[str, Any]], now: float,
-                   days: Optional[float] = None) -> Optional[Dict[str, Any]]:
-    """{lo_s, mid_s, hi_s, n, basis}: the 25th, 50th and 75th percentile of the finished
-    estimates' net run times in the history window, or None with fewer than three."""
+                   days: Optional[float] = None, kind: Optional[str] = None
+                   ) -> Optional[Dict[str, Any]]:
+    """{lo_s, mid_s, hi_s, n, kind, basis}: the 25th, 50th and 75th percentile of the finished
+    estimates' net run times in the history window, of this kind when one is given, hung runs
+    left out, or None with fewer than three."""
     days = thresholds()["history_days"] if days is None else days
     since = now - days * 86400.0
-    nets = sorted(n for r in runs if is_estimate(r) and outcome(r) == "done"
-                  and (r.get("finished_at") or 0) >= since
-                  for n in [net_duration(r)] if n is not None)
+    nets = sorted(_typical([n for r in _finished_of_kind(runs, since, kind)
+                            for n in [net_duration(r)] if n is not None]))
     if len(nets) < 3:
         return None
+    what = KINDS.get(kind or "", "finished estimate")
     return {"lo_s": round(_pct(nets, 0.25), 1), "mid_s": round(_pct(nets, 0.5), 1),
-            "hi_s": round(_pct(nets, 0.75), 1), "n": len(nets),
-            "basis": f"25th-75th percentile of {len(nets)} finished estimates, net of "
-                     f"SolidWorks waits"}
+            "hi_s": round(_pct(nets, 0.75), 1), "n": len(nets), "kind": kind or "",
+            "basis": f"25th-75th percentile of {len(nets)} finished {what} runs, net of "
+                     f"SolidWorks waits, hung runs left out"}
+
+
+def window_for(runs: Sequence[Mapping[str, Any]], run: Mapping[str, Any], now: float,
+               days: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """The window for this run's own kind, else the pooled one while that kind has too little
+    history to go on (the pooled window then says which kind it stands in for)."""
+    kind = run_kind(run)
+    win = predict_window(runs, now, days, kind=kind)
+    if win is None:
+        win = predict_window(runs, now, days)
+        if win is not None:
+            win = {**win, "kind": kind, "basis": win["basis"] + f"; too few {KINDS.get(kind, kind)} runs yet"}
+    return win
 
 
 def eta(run: Mapping[str, Any], now: float, window: Optional[Mapping[str, Any]]
@@ -475,15 +540,22 @@ def eta_error(runs: Sequence[Mapping[str, Any]], now: float) -> Dict[str, Any]:
 
 def queue_etas(queue: Sequence[Mapping[str, Any]], live: Sequence[Mapping[str, Any]],
                now: float, max_runs: int, expected_s: Optional[float],
-               extract_s: Optional[float]) -> List[Dict[str, Any]]:
-    """When each queued job should start and finish: the soonest slot takes the next job."""
+               extract_s: Optional[float],
+               expected_for: Optional[Callable[[Mapping[str, Any]], Optional[float]]] = None
+               ) -> List[Dict[str, Any]]:
+    """When each queued job should start and finish: the soonest slot takes the next job.
+    With expected_for, each queued estimate waits its own kind's usual (a thumbnail behind a
+    drawing pack is not told it will take the pack's hour); else expected_s for all."""
     slots = max(1, int(max_runs or 1))
     free = sorted(max(now, float(x.get("eta_at") or (now + (expected_s or 0.0))))
                   for x in live)[:slots]
     free += [now] * (slots - len(free))
     out = []
     for q in queue:
-        dur = expected_s if is_estimate(q) else extract_s
+        if not is_estimate(q):
+            dur = extract_s
+        else:
+            dur = (expected_for(q) if expected_for else None) or expected_s
         if not dur:
             out.append({"run_id": q.get("run_id"), "start_at": None, "finish_at": None})
             continue
@@ -605,7 +677,33 @@ def quality(run: Mapping[str, Any]) -> Dict[str, Any]:
     return {"state": "complete", "label": "Estimate complete", "rag": GREEN}
 
 
-def _summary(r: Mapping[str, Any]) -> Dict[str, Any]:
+def display_identity(r: Mapping[str, Any], read_log: bool = True) -> Dict[str, Any]:
+    """Read-only presentation metadata; never resolve a pack or change a run's reference.
+
+    Older runs did not persist the submitted job title. Recover only the service's explicit
+    drop-off title and the TTI brief's source-row marker; absent metadata stays absent.
+    No disk/share reads, no prices, and no inference from a generated identifier.
+    With read_log False (the history table, which must read each console at most once)
+    only the explicit metadata is used and the console is not opened.
+    """
+    description = str(r.get("job_title") or r.get("description") or "").strip()[:240]
+    row = None
+    reference = str(r.get("drawing_number") or "")
+    for line in (r.get("log") or ()) if read_log else ():
+        text = str(line)
+        if r.get("source") == "tti":
+            match = re.fullmatch(r"\s*\| Workbook worksheet .+, source row ([1-9]\d*)\. Quantity: .+", text)
+            if match and row is None:
+                row = int(match.group(1))
+        if not description and reference and text.startswith("Drop-off  Review copy of this pack"):
+            # pack_dropoff.said places the sanitized title after the reference in the leaf.
+            match = re.search(re.escape(reference) + r"(?: v\d+)? - ([^\\\r\n]+)", text)
+            if match:
+                description = re.split(r"\. NOT SHOWN COMPLETE:|: source pack:", match.group(1), maxsplit=1)[0].strip()[:240]
+    return {"description": description, "source_row": row, "units": r.get("units")}
+
+
+def _summary(r: Mapping[str, Any], read_log: bool = True) -> Dict[str, Any]:
     return {"run_id": r.get("run_id"), "drawing_number": r.get("drawing_number"),
             "client": r.get("client"), "job_type": r.get("job_type") or "",
             "source": r.get("source") or "",
@@ -615,7 +713,8 @@ def _summary(r: Mapping[str, Any]) -> Dict[str, Any]:
             "seconds": (round(_duration(r), 1) if _duration(r) is not None else None),
             "wait_seconds": (round(_wait(r), 1) if _wait(r) is not None else None),
             "engine_price_gbp": r.get("engine_price_gbp"),
-            "error": str(r.get("error") or "")[:200]}
+            "price_validated": r.get("price_validated"),
+            "error": str(r.get("error") or "")[:200], **display_identity(r, read_log)}
 
 
 # ── COMPUTE (D-743) ─────────────────────────────────────────────────────────────────────
@@ -818,7 +917,7 @@ def history_view(runs: Sequence[Mapping[str, Any]], now: Optional[float] = None,
     rows = []
     for r in sorted(kept, key=lambda r: float(r.get("finished_at") or 0), reverse=True)[:table]:
         ev = ev_of(r)
-        rows.append({**_summary(r), "units": r.get("units"),
+        rows.append({**_summary(r, read_log=False), "units": r.get("units"),
                      "quantity_prices": list(r.get("quantity_prices") or [])[:8],
                      "evidence": ev["label"], "evidence_caution": ev["caution"],
                      "open_items": open_items(r), "quality": quality(r),
@@ -950,13 +1049,17 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
     live: List[Dict[str, Any]] = []
     for r in sorted((r for r in runs if outcome(r) == "running"),
                     key=lambda r: r.get("started_at") or now):
-        rag, why = run_rag(r, now, exp if is_estimate(r) else None, th)
+        kind = run_kind(r)
+        win_k = window_for(runs, r, now, th["history_days"]) if is_estimate(r) else None
+        exp_k = (expected_seconds(runs, now, th["history_days"], kind=kind) or exp) if is_estimate(r) else None
+        rag, why = run_rag(r, now, exp_k, th, window=win_k)
         idx, name = stage_of(r.get("log") or [])
         started = float(r.get("started_at") or now)
-        live.append({**_summary(r), "rag": rag, "rag_reason": why,
+        live.append({**_summary(r), "rag": rag, "rag_reason": why, "kind": kind,
                      "elapsed_s": round(now - started, 1),
-                     "expected_s": (round(exp, 1) if exp and is_estimate(r) else None),
-                     **eta(r, now, window),
+                     "expected_s": (round(exp_k, 1) if exp_k else None),
+                     "window": win_k,
+                     **eta(r, now, win_k),
                      "evidence": evidence(r),
                      "last_result": last_result(runs, r.get("drawing_number"), r.get("client")),
                      "sw_turn_at": r.get("sw_turn_at") or 0.0,
@@ -1009,8 +1112,15 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
 
     queued = sorted((r for r in runs if outcome(r) == "queued"),
                     key=lambda r: r.get("queued_at") or now)
+    # EACH QUEUED JOB WAITS ITS OWN KIND'S USUAL: a thumbnail behind a pack is not told it
+    # will take a pack's hour.
+    def _usual_for(q: Mapping[str, Any]) -> Optional[float]:
+        w_q = window_for(runs, q, now, th["history_days"])
+        return ((w_q or {}).get("mid_s")
+                or expected_seconds(runs, now, th["history_days"], kind=run_kind(q)))
     when = {q["run_id"]: q for q in queue_etas(queued, live, now, max_runs,
-                                               (window or {}).get("mid_s") or exp, extract_s)}
+                                               (window or {}).get("mid_s") or exp, extract_s,
+                                               expected_for=_usual_for)}
     queue = [{**_summary(r), "start_at": (when.get(r.get("run_id")) or {}).get("start_at"),
               "finish_at": (when.get(r.get("run_id")) or {}).get("finish_at")} for r in queued]
     recent = [{**_summary(r), "open_items": open_items(r), "quality": quality(r)} for r in sorted(
@@ -1029,6 +1139,7 @@ def snapshot(runs: Sequence[Mapping[str, Any]], runners: Sequence[Mapping[str, A
     return {"now": now, "service_commit": service_commit, "banner": banner,
             "banner_rag": banner_rag, "expected_s": (round(exp, 1) if exp else None),
             "window": window,
+            "windows": {k: predict_window(runs, now, th["history_days"], kind=k) for k in ("brief", "pack")},
             "thresholds": th, "stages": [s for s, _ in STAGES],
             "kpis": k, "series": series(runs, now),
             "live": live, "fleet": fleet, "queue": queue, "recent": recent,

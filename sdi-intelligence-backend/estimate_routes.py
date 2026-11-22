@@ -2237,9 +2237,9 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         if not run.job_type:
             try:
                 import estimate_wall as _ew
-                run.predicted = _ew.predict_window(
+                run.predicted = _ew.window_for(
                     [{**r.as_json(), "sw_waited_s": r.sw_waited_s} for r in _RUNS.values()
-                     if r.run_id != run.run_id], now) or {}
+                     if r.run_id != run.run_id], run.as_json(), now) or {}
             except Exception:                                        # noqa: BLE001
                 run.predicted = {}
         run.lease_until = now + LEASE_SECONDS

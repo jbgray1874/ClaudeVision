@@ -461,6 +461,70 @@
   header .sdi-dots{width:220px;height:220px;left:-60px;top:-110px}
   .brand .mark-word{height:30px;color:var(--ink);flex:none;margin-right:6px;padding-right:16px;
                     border-right:1px solid var(--line-hi)}
+
+  /* WALL READABILITY / 22 NOV: presentation only. Brand artwork and timing stay unchanged. */
+  :root{--ink-3:#a2a296}
+  .status-stack{display:flex;flex-direction:column;gap:6px;min-width:0;align-items:stretch}
+  .status-stack .banner{border-radius:7px;font-size:11px;padding:7px 12px;letter-spacing:.06em;
+    white-space:normal;line-height:1.3;justify-content:center;text-align:center}
+  .review-banner{cursor:pointer;color:var(--ink);font:inherit}
+  .review-banner:hover{border-color:var(--accent)}
+  .stale .status-stack::after{content:"STALE DATA · reconnecting";color:#ff9b9b;font:11px var(--mono);text-align:center}
+  button:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+  .kpis{grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+  .kpi .k,.kpi .s{white-space:normal;overflow:visible;text-overflow:clip}
+  .kpi .v{font-size:36px}.kpi .s{line-height:1.4}
+  .telemetry{grid-column:1/-1;padding:8px 12px}
+  .telemetry summary{cursor:pointer;color:var(--ink-2);font:11px var(--mono);letter-spacing:.08em}
+  .telemetry-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px}
+  .telemetry .kpi{background:var(--surface);border-radius:6px}.telemetry .v{font-size:25px}
+  .main{grid-template-columns:minmax(0,3.35fr) minmax(280px,1fr)}
+  .lane{gap:12px;padding:14px;overflow-y:auto;scrollbar-width:thin}
+  .lanehead{align-items:flex-start}.slotname{font-size:10px;letter-spacing:.12em;overflow-wrap:anywhere}
+  .lanehead .slotname{max-width:52%}.lanectl{flex-wrap:wrap;justify-content:flex-end}
+  .job{align-items:flex-start;gap:12px}.ring{width:68px;height:68px;margin-top:3px}
+  .ring svg{width:68px;height:68px}.ring .pct b{font-size:16px}.ring .pct span{font-size:8px}
+  .jobtext{flex:1}.dn{font-size:22px;line-height:1.2;white-space:normal;overflow:visible;
+    text-overflow:clip;overflow-wrap:anywhere;letter-spacing:-.02em}
+  .job-description{font-size:15px;line-height:1.4;margin-top:7px;color:var(--ink);overflow-wrap:anywhere}
+  .job-meta{font:11px var(--mono);line-height:1.6;color:var(--ink-2);margin-top:5px;overflow-wrap:anywhere}
+  .job-meta.muted{color:var(--ink-3)}.cl{white-space:normal;line-height:1.5}
+  .elapsed{font-size:30px;margin-top:12px}.elapsed small{display:block;margin:5px 0 0;line-height:1.5}
+  .why{line-height:1.5}.why b{color:var(--ink);font-size:14px}
+  .current-activity{padding:10px 11px;border:1px solid var(--line-hi);border-left:3px solid var(--accent);
+    border-radius:5px;background:rgba(246,217,70,.035)}
+  .pipe{margin-top:auto;gap:5px}.pipe div{font-size:9px;overflow-wrap:anywhere}
+  .lane-log{border-top:1px solid var(--line);padding-top:10px;flex:none}
+  .lane-log summary{font:11px var(--mono);color:var(--ink-2);cursor:pointer;letter-spacing:.08em}
+  .lane-log .termwrap{height:180px;margin-top:10px;flex:none}
+  .attention{background:linear-gradient(155deg,rgba(246,217,70,.045),transparent 45%),var(--panel)}
+  .attention h2{font:12px var(--mono);letter-spacing:.16em;margin:0;color:var(--accent)}
+  .attention-scope{font-size:12px;line-height:1.5;color:var(--ink-2);margin:0}
+  .attention-list{display:flex;flex-direction:column;gap:9px;overflow-y:auto;min-height:0;scrollbar-width:thin}
+  .attention-item{padding:10px;border:1px solid var(--line);border-left:2px solid var(--warn);border-radius:5px;background:var(--surface)}
+  .attention-item.red{border-left-color:var(--bad)}.attention-item summary{cursor:pointer;list-style:none}
+  .attention-item summary::-webkit-details-marker{display:none}
+  .attention-ref{display:block;font:14px var(--mono);font-weight:600;overflow-wrap:anywhere;color:var(--ink)}
+  .attention-item .job-description{font-size:12px;margin-top:4px}
+  .attention-status{font-size:12px;line-height:1.5;margin-top:7px;color:var(--warn)}
+  .attention-item.red .attention-status{color:#ff9393}.attention-detail{font-size:12px;line-height:1.6;margin-top:9px;color:var(--ink-2);overflow-wrap:anywhere}
+  .attention-foot{margin-top:auto;border-top:1px solid var(--line);padding-top:10px;font:10px var(--mono);line-height:1.6;color:var(--ink-3)}
+  .attention-foot button{margin-top:7px}.feed td{white-space:normal;overflow:visible;text-overflow:clip;vertical-align:top;line-height:1.5}
+  .feed td.d{overflow-wrap:anywhere}.feed td.o{min-width:130px}.feed .badge{white-space:normal;border-radius:6px;letter-spacing:.02em;font-size:10px}
+  .feed .job-description{font:12px var(--sans);margin-top:4px}.feed .job-meta{font-size:10px}
+  .feed td .oi{white-space:normal;overflow:visible;line-height:1.5}
+  .feed .stopjob{white-space:nowrap;font-size:9px;padding:4px 6px}
+  .queue .qrow{font-size:11px}.queue .qrow > span:nth-child(2){white-space:normal!important;overflow-wrap:anywhere}
+  @media(min-width:1201px) and (max-width:1700px){
+    header{gap:10px}.brand h1{font-size:13px;letter-spacing:.1em}.brand .sub{font-size:10px}
+    .clock{font-size:28px}.clockbox{gap:8px}.nav{gap:4px}.nav .fsbtn{font-size:9px;padding:6px}
+    .main{grid-template-columns:minmax(0,3fr) minmax(235px,1fr)}.dn{font-size:19px}
+    .job{gap:9px}.ring{width:54px;height:54px}.ring svg{width:54px;height:54px}.ring .pct b{font-size:13px}
+    .lane{padding:11px}.badge{font-size:10px;padding:4px 7px}.job-description{font-size:13px}
+  }
+  @media(max-width:1200px){.main{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .status-stack{max-width:600px}.telemetry-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.lane{min-height:340px}}
+  @media(prefers-reduced-motion:reduce){.radar::after,.banner.red,.term .cur::after{animation:none!important}}
 </style>
 </head>
 <body>
@@ -474,7 +538,10 @@
         <div class="sub">GRID CONTROL</div>
       </div>
     </div>
-    <div class="banner grey" id="banner"><span class="ico">○</span><span id="bannerText">Connecting…</span></div>
+    <div class="status-stack">
+      <div class="banner grey" id="banner"><span class="ico">○</span><span id="bannerText">Runners: connecting…</span></div>
+      <button class="banner grey review-banner" id="reviewBanner" type="button" title="Review the recent results; runner health is separate">Estimates: awaiting results</button>
+    </div>
     <div class="clockbox">
       <div class="link"><span class="live-dot" id="liveDot"></span><span id="linkText">connecting</span></div>
       <nav class="nav" aria-label="Sections">
@@ -776,6 +843,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
   c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const ICON = {green:"✓", amber:"▲", red:"✕", grey:"○"};
+const KIND_WORD = {brief: "thumbnail / brief", pack: "drawing pack", extract: "extract"};
 const WORD = {green:"On pace", amber:"Attention", red:"Action", grey:"Planned"};
 /* WHAT READ THE MODELS, AS A FACT (D-739): never a grade of the price. Only the Document
    Manager fallback, not yet validated, carries a caution. */
@@ -848,10 +916,6 @@ async function poll(){
 /* ── RENDER ─────────────────────────────────────────────── */
 function render(){
   const s = snap; if(!s) return;
-  const b = $("banner");
-  b.className = "banner " + s.banner_rag;
-  b.querySelector(".ico").textContent = ICON[s.banner_rag] || "○";
-  $("bannerText").textContent = s.banner || "";
   // EVERY RUNNING JOB ON THE GRID IS A RUN TILE (11 Nov 2026): this service's and the other
   // services', once each, so a job started anywhere shows the same on every Grid Control.
   const mine = new Set((s.live || []).map(r => r.run_id));
@@ -860,6 +924,7 @@ function render(){
   }));
   LIVE = s.live || [];
   wholeGrid(s);
+  renderStatus(s);
   renderKpis(s.kpis, s.expected_s);
   renderLanes(s);
   serviceHost = s.service_host || "";
@@ -981,7 +1046,7 @@ function wholeGrid(s){
 function waitWhy(){
   return GRID_FREE === 0 ? "waiting for a runner: all are working" : GRID_FREE == null ? "" : "a runner is free: starting";
 }
-function renderKpis(k, exp){
+function renderKpis(k, exp, s){
   const rate = k.success_rate_7d;
   const rateRag = rate == null ? "grey" : rate >= 90 ? "green" : rate >= 75 ? "amber" : "red";
   const rateWord = rate == null ? "no finished runs yet" : {green:"healthy", amber:"watch", red:"low"}[rateRag];
@@ -1001,9 +1066,79 @@ function renderKpis(k, exp){
      k.eta && k.eta.n ? `${k.eta.inside_pct}% inside their window · ${k.eta.n} runs`
                       : "measuring: needs finished runs given a window"],
   ];
-  $("kpis").innerHTML = tiles.map(([key, v, sub]) =>
-    `<div class="panel kpi"><div class="k">${esc(key)}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join("");
+  const review = attentionRows(s || snap || {}), recent = allRecent(s || snap || {});
+  const headline = [
+    ["Running · grid", `${k.running || 0}<small>/ ${k.max_runs || 1}</small>`, "active jobs / configured slots · runner availability shown separately"],
+    ["Submitted queue", `${k.queued_grid ?? k.queued ?? 0}`, "Service queues only; batch rows not yet submitted are not counted"],
+    ["Finished · local 24 h", `${k.done_24h || 0}`, "Execution finished; not a statement of estimate approval"],
+    ["Needs attention · recent", `${review.length}`, `of ${recent.length} visible results · unpriced, failed or requiring review`],
+  ];
+  const tile = ([key, v, sub]) => `<div class="panel kpi"><div class="k">${esc(key)}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+  const expanded = !!$("wallTelemetry")?.open;
+  $("kpis").innerHTML = headline.map(tile).join("")
+    + `<details class="panel telemetry" id="wallTelemetry"${expanded ? " open" : ""}><summary>TECHNICAL TELEMETRY · history / capacity / existing ETA measurements</summary><div class="telemetry-grid">${tiles.map(tile).join("")}</div></details>`;
 }
+
+// Presentation only: reference first, description and source row underneath. Never invent
+// a description, an AiCost write-back, an approval, or a batch backlog from service data.
+function jobMeta(r){
+  const bits = [];
+  if(r.source_row) bits.push("Row " + r.source_row);
+  if(r.units != null) bits.push("Qty " + r.units);
+  if(r.client) bits.push(r.client);
+  return bits.join(" · ");
+}
+function identityUnder(r){
+  return `<div class="job-description">${esc(r.description || "Description not recorded")}</div>`
+    + `<div class="job-meta">${esc(jobMeta(r))}</div>`;
+}
+function resultState(r){
+  if(r.outcome === "failed" || r.outcome === "stopped")
+    return {rag:r.outcome === "failed" ? "red" : "amber", label:r.outcome === "failed" ? "Run failed" : "Stopped", attention:true};
+  if(r.outcome !== "done") return {rag:"grey", label:"Not finished", attention:false};
+  if(!r.job_type && (r.price_validated === false || !(typeof r.engine_price_gbp === "number" && Number.isFinite(r.engine_price_gbp) && r.engine_price_gbp > 0)))
+    return {rag:"red", label:"Unpriced · no validated price reported", attention:true};
+  const q = qualityWord(r);
+  if(q && q.state === "complete") return {rag:"green", label:"No open items reported", attention:false};
+  if(r.job_type) return {rag:"grey", label:"Extract finished · not a price", attention:false};
+  if(q && q.state === "missing costs") return {rag:"red", label:"Missing costs · review required", attention:true};
+  return {rag:q?.rag || "amber", label:q?.label || "Not reviewed", attention:true};
+}
+function attentionRows(s){ return allRecent(s).filter(r => resultState(r).attention); }
+function renderStatus(s){
+  const fleet = (s.fleet || []).filter(f => !f.planned), online = fleet.filter(f => f.online);
+  const rag = !online.length || fleet.some(f => f.rag === "red") ? "red" : fleet.some(f => f.rag === "amber") ? "amber" : "green";
+  const b = $("banner"); b.className = "banner " + rag;
+  b.querySelector(".ico").textContent = ICON[rag];
+  $("bannerText").textContent = `Runners: ${rag === "green" ? "healthy" : "attention needed"} · ${online.length} online`;
+  b.title = "Runner check-ins, build and process health. Run timing and estimate quality are separate.";
+  const rows = attentionRows(s), recent = allRecent(s), failed = rows.filter(r => r.outcome === "failed").length;
+  const review = $("reviewBanner");
+  review.className = "banner review-banner " + (rows.length ? "amber" : "grey");
+  review.textContent = `Estimates: ${rows.length} need attention · ${failed} failed · recent ${recent.length}`;
+}
+function attentionPanel(s){
+  const recent = allRecent(s), rows = attentionRows(s);
+  return `<section class="panel lane attention" id="attentionPanel" tabindex="-1" aria-label="Estimates needing attention">
+    <div class="lanehead"><h2>NEEDS ATTENTION</h2>${badge(rows.length ? "amber" : "grey", rows.length + " recent")}</div>
+    <p class="attention-scope">Recent ${recent.length} visible results · not the full batch backlog. Expand a result for its review tally.</p>
+    <div class="attention-list">${rows.slice(0, 6).map(r => {
+      const q = resultState(r);
+      return `<details class="attention-item ${q.rag}" data-attention="${esc(r.run_id)}"><summary>
+        <span class="attention-ref">${esc(r.drawing_number || r.run_id)}</span>${identityUnder(r)}
+        <div class="attention-status">${esc((ICON[q.rag] || "○") + " " + q.label)} · details ▾</div></summary>
+        <div class="attention-detail">${openItems(r.open_items)}${r.engine_price_gbp > 0 ? `<div>Reported unit cost: £${Number(r.engine_price_gbp).toFixed(2)} · not quotation approval</div>` : ""}
+        <div>Run ${esc(r.run_id)}${r._label ? " · " + esc(r._label) : ""}. Open the estimate record for the full findings. No automatic retry.</div></div></details>`;
+    }).join("") || '<div class="empty">No attention items in the visible results. This does not certify older estimates.</div>'}</div>
+    <div class="attention-foot">${rows.length > 6 ? `${rows.length - 6} more in Recent / History.<br>` : ""}Disabled slots: ${Math.max(0, SLOTS - Math.max(s.kpis.max_runs || 1, (s.live || []).length))}. Timing logic unchanged.<br><button class="fsbtn" type="button" data-attention-history>HISTORY / ALL RESULTS ↗</button></div>
+  </section>`;
+}
+document.addEventListener("click", e => {
+  if(e.target.closest?.("#reviewBanner")){
+    const panel = $("attentionPanel") || $("recent"); panel?.scrollIntoView({block:"center"}); panel?.focus({preventScroll:true});
+  }
+  if(e.target.closest?.("[data-attention-history]")) show("history");
+});
 
 function ring(frac, rag){
   const R = 42, C = 2 * Math.PI * R, f = Math.max(0, Math.min(1, frac || 0));
@@ -1048,7 +1183,15 @@ function doingLine(d){
   const left = d.next_try_at ? Math.max(0, Math.round(d.next_try_at - Date.now() / 1000)) : null;
   const tail = left != null ? ` · next try in ${left} s` : "";
   const quiet = d.fresh ? "" : ` · <span style="color:var(--ink-3)">no new console line for ${fmtDur(d.silent_s)}: process alive, nothing reported</span>`;
-  return `<div class="why"><b>${d.waiting ? "Waiting: " : "Now: "}${esc(d.what)}</b>${d.detail ? " · " + esc(d.detail) : ""}${tail}${quiet}</div>`;
+  return `<div class="why current-activity"><b>${d.waiting ? "Waiting: " : "Now: "}${esc(d.what)}</b>${d.detail ? " · " + esc(d.detail) : ""}${tail}${quiet}</div>`;
+}
+function activityFor(r){
+  // A currently reported reader wait is not "pricing" merely because the pipeline
+  // previously reached pricing. Only the latest line may refine the existing stage.
+  const last = String((r.log_tail || []).filter(x => String(x).trim()).slice(-1)[0] || "");
+  if(/^\s*\[xai-wait\] still waiting for xAI on the concept image read:/i.test(last))
+    return {...r.doing, what:"AI image read · xAI", detail:"Reader request still in progress", waiting:true, next_try_at:null};
+  return r.doing;
 }
 // FINISHED IS NOT THE SAME AS COMPLETE (10 Nov 2026): a finished estimate says what its review
 // tally says, missing costs in red and provisional in amber.
@@ -1060,7 +1203,10 @@ function qualityWord(r){
 function renderLanes(s){
   const live = s.live || [], k = s.kpis, html = [];
   const restore = keepScroll(".lanes .term[data-run]");
-  for(let i = 0; i < SLOTS; i++){
+  const expandedLogs = new Set([...document.querySelectorAll("details.lane-log[open]")].map(x => x.dataset.run));
+  const expandedReviews = new Set([...document.querySelectorAll("details[data-attention][open]")].map(x => x.dataset.attention));
+  let attentionAdded = false;
+  for(let i = 0; i < Math.max(SLOTS, live.length, k.max_runs || 1); i++){
     const r = live[i];
     if(r){
       const exp = r.expected_s;
@@ -1076,11 +1222,12 @@ function renderLanes(s){
             <div class="pct"><b>${frac == null ? "—" : Math.round(frac * 100) + "%"}</b><span>OF USUAL</span></div></div>
           <div class="jobtext">
             <div class="dn">${esc(r.drawing_number || r.run_id)}</div>
-            <div class="cl">${esc(r.client || "")}${extract ? " · " + esc(r.job_type.replace("_", " ")) : ""}${src(r)}</div>
-            <div class="elapsed" data-elapsed><span>${fmtDur(r.elapsed_s)}</span><small>${exp ? "usual " + fmtDur(exp) : "no history yet"}</small></div>
+            ${identityUnder(r)}
+            <div class="job-meta muted" title="${esc(r.run_id)}">${extract ? esc(r.job_type.replace("_", " ")) : "Estimate"}${src(r)}</div>
+            <div class="elapsed" data-elapsed><span>${fmtDur(r.elapsed_s)}</span><small>elapsed · ${r.window && r.window.hi_s ? "usually " + fmtDur(r.window.lo_s) + "–" + fmtDur(r.window.hi_s) + " for a " + esc(KIND_WORD[r.kind] || "job") : exp ? "usual " + fmtDur(exp) : "no history yet"}</small></div>
           </div>
         </div>
-        ${doingLine(r.doing)}
+        ${doingLine(activityFor(r))}
         <div class="why">${esc(r.rag_reason || "")}${r.silent_s > 60 ? " · last log line " + fmtDur(r.silent_s) + " ago" : ""}</div>
         ${extract ? "" : `<div class="facts">
           <span>Finish <b>${r.eta_lo_at ? fmtClock(r.eta_lo_at) + "–" + fmtClock(r.eta_hi_at) : "—"}</b>${r.overdue_s > 0 ? ` <span style="color:var(--ink-2)">· past its window by ${fmtDur(r.overdue_s)}</span>` : r.eta_at ? ` <span style="color:var(--ink-3)">· likely ${fmtClock(r.eta_at)}</span>` : ` <span style="color:var(--ink-3)">· no history yet</span>`}</span>
@@ -1089,11 +1236,16 @@ function renderLanes(s){
         <div class="facts"><span>Models: ${evidenceChip(r.evidence)}</span></div>`}
         ${laneCompute(r.compute)}
         ${extract ? "" : `<div class="pipe">${stages}</div>`}
-        <div class="termwrap"><div class="term" data-run="${esc(r.run_id)}" title="Scroll to read back; ⤢ opens it large">${logLines(tail, true)}</div>
-          <button class="tx" type="button" data-log="${esc(r.run_id)}" title="Open this run's log large">⤢</button></div>
+        <details class="lane-log" data-run="${esc(r.run_id)}"${expandedLogs.has(String(r.run_id)) ? " open" : ""}><summary>VIEW TECHNICAL LOG · ${tail.length} lines</summary>
+          <div class="termwrap"><div class="term" data-run="${esc(r.run_id)}" title="Scroll to read back; ⤢ opens it large">${logLines(tail, true)}</div>
+          <button class="tx" type="button" data-log="${esc(r.run_id)}" title="Open this run's log large">⤢</button></div></details>
       </div>`);
     }else{
       const on = i < (k.max_runs || 1);
+      if(!on){
+        if(!attentionAdded){ html.push(attentionPanel(s)); attentionAdded = true; }
+        continue;
+      }
       /* D-753a: allowed is not staffed. A free slot needs an idle online runner; with every
          runner busy, a queued estimate waits, and the lane says so and how to add one. */
       const staffed = on && (i - live.length) < (k.free_runners == null ? 1 : k.free_runners);
@@ -1109,6 +1261,8 @@ function renderLanes(s){
     }
   }
   $("lanes").innerHTML = html.join("");
+  document.querySelectorAll("details[data-attention]").forEach(x => { x.open = expandedReviews.has(x.dataset.attention); });
+  $("lanes").style.gridTemplateColumns = innerWidth <= 1200 ? "1fr" : `repeat(${Math.min(3, Math.max(1, html.length))}, minmax(0,1fr))`;
   restore();
   renderLog();
 }
@@ -1444,11 +1598,11 @@ function renderRecent(rows){
   const icon = {done:"✓", failed:"✕", stopped:"■"};
   // Every run the service sends (12): the panel scrolls inside itself, nothing is cut off.
   $("recent").innerHTML = '<colgroup><col style="width:52px"><col style="width:27%"><col>'
-    + '<col style="width:96px"><col style="width:58px"><col style="width:66px"></colgroup>' + rows.map(r => `<tr>
+    + '<col style="width:142px"><col style="width:58px"><col style="width:66px"></colgroup>' + rows.map(r => `<tr>
       <td class="t">${r.finished_at ? fmtClock(r.finished_at) : ""}</td>
-      <td class="d">${esc(r.drawing_number)}</td>
+      <td class="d">${esc(r.drawing_number)}${identityUnder(r)}</td>
       <td class="c">${esc(r.client || "")}${r.job_type ? " · extract" : ""}${src(r)}${r._label ? " · on " + esc(r._label) : ""}${openItems(r.open_items)}</td>
-      <td class="o">${qualityWord(r) ? badge(r.quality.rag, r.quality.state === "complete" ? "Complete" : r.quality.state === "missing costs" ? "Missing costs" : r.quality.state === "provisional" ? "Provisional" : "Not reviewed") : `<span class="o-${r.outcome}">${icon[r.outcome] || "·"}</span> <span class="lbl">${word[r.outcome] || esc(r.outcome)}</span>`}</td>
+      <td class="o">${badge(resultState(r).rag, resultState(r).label)}${r.engine_price_gbp > 0 ? `<div class="job-meta">£${Number(r.engine_price_gbp).toFixed(2)} / unit</div>` : ""}</td>
       <td class="s">${fmtDur(r.seconds)}</td><td class="rr">${rerunBtn(r)}</td></tr>`).join("");
 }
 
@@ -1456,7 +1610,7 @@ function renderTicker(alerts){
   const t = $("ticker");
   if(!alerts.length){
     t.className = "run still";
-    t.textContent = "No alerts. Every run on pace and every runner checked in.";
+    t.textContent = "No operational alerts reported. Estimate review status is shown separately.";
   }else{
     t.className = "run";
     t.textContent = alerts.map(a => "▲ " + a).join("     ◆     ");
