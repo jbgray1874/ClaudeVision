@@ -1,6 +1,11 @@
 """Year-end product-line report for one customer, from customer_year_end.sql's output. Written 22 Nov 2026.
 
-    python customer_year_end_xlsx.py <customer_year_end.txt> <out.xlsx> --customer "<name>" [--target-margin 25]
+    python customer_year_end_xlsx.py --run --customer "<name>" --name "%<NAME>%" --prefix "<PFX>-%"
+        one command (22 Nov, James: SSMS Results-to-File "is very unorthodox"): runs customer_year_end.sql against
+        SDILive itself - read only, with your own Windows login, no password anywhere - and saves the workbook to your
+        Desktop. [--server 10.0.0.200] [--database SDILive] [--out <file.xlsx>]
+    python customer_year_end_xlsx.py <customer_year_end.txt> <out.xlsx> --customer "<name>"   (from an SSMS file)
+    [--target-margin 25]
 
 A record of every product line the customer bought from SDI this year (with last year beside it) before the move to
 Sage X3, and a first look at where manufacturing could cost less: margins, batch sizes, scrap, prices. Read-only
@@ -12,6 +17,7 @@ Tabs: Read me (period, accounts, ASSUMPTIONS), Summary, By part, Opportunities, 
 import argparse
 import collections
 import datetime as dt
+import os
 import re
 import statistics
 import sys
@@ -62,6 +68,41 @@ def num(v):
 def day(v):
     m = re.match(r"(\d{4})-(\d\d)-(\d\d)", str(v or ""))
     return dt.date(int(m[1]), int(m[2]), int(m[3])) if m else None
+
+
+def run_sql(server, database, name_like, part_like):
+    """Run customer_year_end.sql (beside this file) on SDILive and return its grids, as read() would from a file.
+    Windows authentication only; the SQL only reads (temp tables in tempdb). The two placeholders are filled in
+    memory - the file on disk keeps them."""
+    import pyodbc                                     # pip install pyodbc (and Microsoft's ODBC Driver 17/18)
+    sql = (Path(__file__).with_name("customer_year_end.sql")).read_text(encoding="utf-8")
+    q = lambda v: v.replace("'", "''")
+    sql, n1 = re.subn(r"DECLARE @name_like varchar\(60\) = '[^']*';", f"DECLARE @name_like varchar(60) = '{q(name_like)}';", sql)
+    sql, n2 = re.subn(r"DECLARE @part_like varchar\(30\) = '[^']*';", f"DECLARE @part_like varchar(30) = '{q(part_like)}';", sql)
+    if not (n1 and n2):
+        sys.exit("customer_year_end.sql has changed: can't find the @name_like / @part_like lines")
+    sql = re.sub(r"(?im)^\s*USE \w+;\s*$", "", sql)  # the database comes from the connection
+    drivers = [d for d in ("ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server", "SQL Server")
+               if d in pyodbc.drivers()]
+    if not drivers:
+        sys.exit("No SQL Server ODBC driver on this PC: install Microsoft's 'ODBC Driver 18 for SQL Server'")
+    conn = pyodbc.connect(f"DRIVER={{{drivers[0]}}};SERVER={server};DATABASE={database};Trusted_Connection=yes;"
+                          "TrustServerCertificate=yes;Encrypt=yes;ApplicationIntent=ReadOnly;", timeout=20,
+                          autocommit=True)
+    cur = conn.cursor()
+    cur.execute(sql)
+    grids = collections.defaultdict(list)
+    txt = lambda v: "" if v is None else (v.isoformat() if hasattr(v, "isoformat") else str(v))
+    while True:
+        if cur.description:
+            cols = [c[0] for c in cur.description]
+            for row in cur.fetchall():
+                rec = {c: txt(v) for c, v in zip(cols, row)}
+                grids[rec.get("grid", "")].append(rec)
+        if not cur.nextset():
+            break
+    conn.close()
+    return grids
 
 
 # ---------------------------------------------------------------- the analysis
@@ -440,14 +481,35 @@ def write(a, path, customer):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("txt")
-    ap.add_argument("out")
+    ap.add_argument("txt", nargs="?", help="an SSMS Results-to-File output (not needed with --run)")
+    ap.add_argument("out_pos", nargs="?", metavar="out")
+    ap.add_argument("--run", action="store_true", help="read SDILive directly (read only, Windows login)")
+    ap.add_argument("--name", help="with --run: the customer's name as in the sales ledger, e.g. %%NAME%%")
+    ap.add_argument("--prefix", default="", help="with --run: their part-code prefix, e.g. ABC-%%")
+    ap.add_argument("--server", default=os.environ.get("SDI_SQL_SERVER", "10.0.0.200"))
+    ap.add_argument("--database", default="SDILive")
+    ap.add_argument("--out", help="the workbook (default: your Desktop)")
     ap.add_argument("--customer", required=True, help="the name shown in the workbook (never stored in git)")
     ap.add_argument("--target-margin", type=float, default=25, help="percent (default 25)")
     a = ap.parse_args(argv)
-    g = read(a.txt)
+    safe = re.sub(r"[^\w-]+", "_", a.customer)
+    a.out = a.out or a.out_pos or str(Path.home() / "Desktop" / f"{safe}_product_lines_{dt.date.today():%Y-%m-%d}.xlsx")
+    if a.run:
+        if not a.name:
+            sys.exit("--run needs --name (the customer's name as in the sales ledger, e.g. %NAME%)")
+        print(f"Reading {a.database} on {a.server} (read only) - about a minute ...", flush=True)
+        g = run_sql(a.server, a.database, a.name, a.prefix)
+    elif a.txt:
+        g = read(a.txt)
+    else:
+        sys.exit("Give --run (read SDILive directly) or an SSMS output file")
+    chk = (g.get("CHECK") or [{}])[0]
+    print(f"Found: {chk.get('accounts_by_name', '?')} account(s) by name, {chk.get('other_accounts_by_part_code', '?')} "
+          f"more by part code, {chk.get('order_lines', '?')} order lines, {chk.get('parts', '?')} parts, "
+          f"{chk.get('works_orders', '?')} works orders")
     if not g.get("LINE"):
-        sys.exit(f"No LINE rows in {a.txt}: was it saved with Results to File, tab delimited? CHECK said: {g.get('CHECK')}")
+        sys.exit("No order lines found: check the name / prefix against the sales ledger (the CHECK line above)")
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     res = write(analyse(g, a.target_margin / 100), a.out, a.customer)
     print(f"{a.out}: {res['parts']} product lines (+{res['other']} carriage / other), "
           f"£{res['value']:,.0f} ordered this year, {res['flagged']} flagged, {res['opps']} opportunities listed")
