@@ -13483,12 +13483,22 @@ def _estimate_part_costed(part: Dict[str, Any], job_quantity: Optional[int] = No
             extended_total_raw = float((extended_material_cost + total_labour_cost) * qty_multiplier)
             unit_total_raw = (extended_total_raw / quantity) if quantity else extended_total_raw
             costing_basis = f"computed_material_plus_labour_qty_break_x{qty_multiplier:.3f}"
-    # ONLY AN ARTICLE THE BOM NAMES IS A MISSING PURCHASE. A board with no gauge is also a
-    # bought-in candidate (nothing to cut) and already carries its own "confirm the gauge"
-    # ruling; a second question about a supplier price would be about a purchase it is not.
-    if bought_in_candidate and part.get("purchase_reference"):
-        from purchase_evidence import mark_missing_purchase
-        mark_missing_purchase(part, system_unit_cost)
+    # A MISSING PURCHASE IS A PART THE PACK SAYS WE BUY. The BOM names its supplier article,
+    # or bought_in_policy rules it bought in from the pack's own evidence (a flag on the
+    # record, a bought-in page, a purchase-class code, a supplier's article number), with or
+    # without a supplier code (12713's charging modules and PSUs). A board with no gauge is
+    # also a bought-in candidate, because there is nothing to cut, but nothing in the pack
+    # says it is bought: it already carries its own "confirm the gauge" ruling, and a second
+    # question about a supplier price would be about a purchase it is not.
+    if bought_in_candidate and not part.get("assembly_children"):
+        try:
+            from bought_in_policy import is_bought_in as _pack_says_buy
+            _explicit_purchase = bool(part.get("purchase_reference")) or _pack_says_buy(part)
+        except Exception:                                            # noqa: BLE001
+            _explicit_purchase = bool(part.get("purchase_reference"))
+        if _explicit_purchase:
+            from purchase_evidence import mark_missing_purchase
+            mark_missing_purchase(part, system_unit_cost)
 
     # ONE LINE, ONE SOURCE. A bought-in charged at its bought-in price had its material block
     # still carrying the config-rate fallback the geometry path wrote before it found nothing
