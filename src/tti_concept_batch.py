@@ -276,6 +276,50 @@ def with_amendments(archive, saved, offered=None):
     return plan
 
 
+def with_attempts(state, plan):
+    """The plan's rows under their current attempt. A row retried after a hold is a NEW
+    attempt: its reference carries -R2, -R3 ..., so the service makes a new run instead of
+    handing back the failed one, and its records sit beside the old attempt's, never over them.
+    The base reference and the attempt number ride on the row for the audit."""
+    attempts=state.get('attempts') or {}
+    if not attempts: return plan
+    rows=[dict(r,base_reference=r['reference'],attempt=attempts[r['reference']],reference=f"{r['reference']}-R{attempts[r['reference']]}")
+          if r['reference'] in attempts else r for r in plan['rows']]
+    return dict(plan,rows=rows)
+
+
+def retire_for_retry(archive, plan, rows, proof_rows=None, basis=''):
+    """Queue named HELD rows for another attempt (JG, 22 Nov 2026: "we'll need to pick these
+    up at the end. Can we queue these up?"). Only a held row; never a proof row; the held
+    attempt and its run are kept in retired_attempts and in retries/, on both roots, and the
+    row's next attempt gets a new reference. Nothing is sent here."""
+    from tti_concept_proof import context
+    saved,state=context(archive,plan)
+    effective=with_attempts(state,with_amendments(archive,saved))
+    by_row={r['row']:r for r in effective['rows'] if r['state']=='eligible'}
+    queued=[]
+    for row in rows:
+        item=by_row.get(row)
+        if item is None: raise ValueError(f'Row {row} is not an eligible row of this plan')
+        if proof_rows and row in proof_rows: raise ValueError(f'Row {row} is a proof row; a proof is never retried in place')
+        entry=state['entries'].get(item['reference'])
+        if not entry or entry.get('phase')!='held': raise ValueError(f"Row {row} is not held (phase {entry.get('phase') if entry else 'not started'}); only a held row is retried")
+        n=(item.get('attempt') or 1)+1
+        base=item.get('base_reference') or item['reference']
+        record={'row':row,'base_reference':base,'retired_reference':item['reference'],'retired_run_id':entry.get('run_id'),
+                'retired_why':entry.get('why'),'attempt_retired':item.get('attempt') or 1,'next_attempt':n,
+                'next_reference':f'{base}-R{n}','at':now(),'basis':' '.join(str(basis).split()) or 'operator retry of a held row',
+                'reviewed_by':os.getenv('USERNAME') or os.getenv('USER') or 'explicit operator'}
+        archive.put(f'retries/row-{row:05d}-attempt-{n:02d}.json',json_bytes(record))
+        state.setdefault('retired_attempts',[]).append(dict(entry,reference=item['reference'],retired_at=now()))
+        del state['entries'][item['reference']]
+        state.setdefault('attempts',{})[base]=n
+        archive.state(state)
+        archive.event('HELD ROW QUEUED FOR RETRY',row=row,retired_run_id=entry.get('run_id'),next_reference=record['next_reference'],attempt=n)
+        queued.append(row)
+    return queued
+
+
 def prepare(archive, plan, pictures, item):
     base = item['reference']+'/inputs/'
     archive.put(base+'source-row.json',json_bytes(item))
@@ -346,7 +390,7 @@ def retry_writebacks(plan,archive,selected_rows=None,writer=write_cost):
     """Local/shared files only. Cannot submit, poll, release or restart anything."""
     from tti_concept_proof import context
     saved,state=context(archive,plan)
-    saved=with_amendments(archive,saved)
+    saved=with_attempts(state,with_amendments(archive,saved))
     items=[r for r in saved['rows'] if state['entries'].get(r['reference'],{}).get('phase')=='archived']
     if selected_rows is not None:
         if set(selected_rows)-{r['row'] for r in items}: raise ValueError('Select pending write-back rows only')
@@ -385,7 +429,7 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
                 entry=state['entries'].get(item['reference'],{})
                 if entry.get('phase')=='done' and (row['cost_before'] in (None,'') or money(row['cost_before'])!=money(entry['unit_gbp'])):
                     raise ValueError('A previously written AiCost changed; reconcile it, do not silently mark complete')
-        plan=saved
+        plan=with_attempts(state,saved)
     else:
         raw=Path(plan['workbook']).read_bytes()
         if sha(raw)!=plan['workbook_sha256']: raise ValueError('workbook changed before backup')
@@ -534,7 +578,7 @@ def validate_health_only_proof_build(repo, old, expected, git=None, reviewed_pat
          'basis':'Explicit operator carry-forward of unchanged pricing proofs after reporting-only integration'}
     if reviewed:
         out.update(reviewed_paths=sorted(reviewed),statement=' '.join(str(statement).split()),
-                   reviewed_by=os.getenv('USERNAME') or os.getenv('USER') or 'explicit operator',reviewed_at=now(),
+                   reviewed_by=os.getenv('USERNAME') or os.getenv('USER') or 'explicit operator',
                    basis='Explicit reviewed operator carry-forward: the named changes do not alter the proofs\' source, inputs or prices')
     return out
 
@@ -561,13 +605,14 @@ def argument_parser():
     p.add_argument('--approval-basis',help='With --approve-proof only, when the two proofs have NOT been looked at: whose instruction the approval rests on. Filed in place of the statement that they were reviewed')
     p.add_argument('--no-pack-rows',help='Comma-separated DRAWING rows to price from their description and pictures because no drawing pack was found. Requires --no-pack-ledger')
     p.add_argument('--no-pack-ledger',help="The drawing pricer's ledger, or the status report of its pack check on THIS workbook. Each --no-pack-rows row must be recorded there as 'needs drawing' under the drawing number the row carries")
+    p.add_argument('--retry-held',help='Comma-separated HELD rows to send again, each as a new numbered attempt; the held attempt and its run are kept. Runs those rows only')
     p.add_argument('--stop-file',help='Stops further submissions, never cancels accepted jobs')
     return p
 
 
 def main(argv=None):
     p=argument_parser(); a=p.parse_args(argv)
-    if sum((a.execute,a.approve_proof,a.writeback_only))>1: p.error('--execute, --approve-proof and --writeback-only are mutually exclusive')
+    if sum((a.execute,a.approve_proof,a.writeback_only,bool(a.retry_held)))>1: p.error('--execute, --approve-proof, --writeback-only and --retry-held are mutually exclusive')
     if a.approval_basis and not a.approve_proof: p.error('--approval-basis belongs with --approve-proof')
     if (a.carry_forward_reviewed_paths or a.carry_forward_statement) and not a.proof_execution_build:
         p.error('--carry-forward-reviewed-paths and --carry-forward-statement go with --proof-execution-build')
@@ -589,7 +634,7 @@ def main(argv=None):
     ready=[r for r in plan['rows'] if r['state']=='eligible']; held=[r['row'] for r in plan['rows'] if r['state'].startswith('held:')]
     print(f'PLAN ONLY until --execute: {len(ready)} eligible ({sum(bool(r["images"]) for r in ready)} with pictures; {sum(not r["images"] for r in ready)} description-only); held {held}',flush=True)
     print('Quantity ONE assumed for rows: '+str([r['row'] for r in ready if r.get('quantity_assumed')]),flush=True)
-    if not a.execute and not a.approve_proof and not a.writeback_only: return 0
+    if not a.execute and not a.approve_proof and not a.writeback_only and not a.retry_held: return 0
     if not a.shared_root or not a.expected_build: p.error('execution/approval requires --shared-root and --expected-build')
     if not a.shared_root.startswith('\\\\'): p.error('use the K share UNC path, not a mapped drive invisible to runners')
     if not Path(a.shared_root).parent.is_dir(): raise OSError('shared parent is unavailable; connect VPN first')
@@ -607,7 +652,12 @@ def main(argv=None):
         bridge=validate_health_only_proof_build(ROOT,a.proof_execution_build,a.expected_build,
             reviewed_paths=[x.strip() for x in (a.carry_forward_reviewed_paths or '').split(',') if x.strip()],
             statement=a.carry_forward_statement or '')
-        archive.put('proof-build-carry-forward/'+bridge['resume_build']+'.json',json_bytes(bridge))
+        # THE SAME DECISION FILES ONCE (reviewer, 21 Nov 2026): the approval call and the
+        # execute call both record it, and an immutable archive refuses a second copy that
+        # differs by so much as a timestamp. The content carries no clock, and the name
+        # carries its own digest, so the same decision is the same file every time and a
+        # different decision for the same build sits beside it, never over it.
+        archive.put('proof-build-carry-forward/'+bridge['resume_build']+'-'+sha(canonical(bridge).encode('utf-8'))[:12]+'.json',json_bytes(bridge))
     if a.approve_proof:
         from tti_concept_proof import approve_proof
         # Review/approval writes only audit files, so it can happen while the
@@ -617,6 +667,13 @@ def main(argv=None):
     with exclusive_claim(base/'tti'/'batch.lock'):
         if a.writeback_only:
             return retry_writebacks(plan,archive,None if not a.rows else [int(v.strip()) for v in a.rows.split(',')])
+        if a.retry_held:
+            if a.rows: p.error('--retry-held names its own rows; do not give --rows as well')
+            try: rows=[int(v.strip()) for v in a.retry_held.split(',')]
+            except ValueError: p.error('--retry-held must be row numbers')
+            retire_for_retry(archive,plan,rows,proof_rows=proof_rows,basis='Operator retry of held rows after the picture-reader settings were corrected')
+            return run_batch(plan,pictures,archive,Client(a.server,os.getenv('SDI_API_KEY','')),a.expected_build,a.at_once,
+                             stop_file=a.stop_file,selected_rows=rows,proof_rows=proof_rows,proof_execution_build=a.proof_execution_build)
         return run_batch(plan,pictures,archive,Client(a.server,os.getenv('SDI_API_KEY','')),a.expected_build,a.at_once,
                          stop_file=a.stop_file,selected_rows=None if not a.rows else [int(v.strip()) for v in a.rows.split(',')],proof_rows=proof_rows,proof_execution_build=a.proof_execution_build)
 

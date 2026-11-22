@@ -90,3 +90,15 @@ def test_the_options_go_together(tmp_path, capsys):
     with pytest.raises(SystemExit):
         batch.main(['--sheet', str(path), '--plan-output', str(tmp_path/'p.json'), '--carry-forward-statement', WHY])
     assert 'go with --proof-execution-build' in capsys.readouterr().err
+
+
+def test_the_same_carry_forward_decision_files_once_and_a_second_call_does_not_conflict(tmp_path, monkeypatch):
+    """The approval call and the execute call both archive the decision (reviewer, 21 Nov
+    2026): a clock in the file made the second one an archive conflict."""
+    archive = batch.Archive(tmp_path/'C', tmp_path/'K')
+    monkeypatch.setenv('USERNAME', 'somebody')
+    for _ in range(2):
+        bridge = batch.validate_health_only_proof_build(ROOT, 'a' * 7, 'b' * 7, git(WIDER), reviewed_paths=['src/vision_fallback.py'], statement=WHY)
+        archive.put('proof-build-carry-forward/' + bridge['resume_build'] + '-' + batch.sha(batch.canonical(bridge).encode('utf-8'))[:12] + '.json', batch.json_bytes(bridge))
+    files = sorted(p.name for p in (tmp_path/'C'/'proof-build-carry-forward').glob('*.json'))
+    assert len(files) == 1 and 'reviewed_at' not in json.loads((tmp_path/'C'/'proof-build-carry-forward'/files[0]).read_text())
