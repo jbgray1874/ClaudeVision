@@ -1730,6 +1730,11 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         body = {"client": args.client, "drawing_number": r["drawing"] or f"TTI-row{r['row']}",
                 **({'customer_changes': r['_customer_changes']} if r.get('_customer_changes') else {}),
                 "source": "tti",
+                # THE SHEET'S OWN DESCRIPTION AND ROW TRAVEL WITH THE JOB (22 Nov 2026), so the
+                # wall's card reads "12802-00-GA2 · PRINTED DISPLAY BOARDS · row 136", not
+                # "Description not recorded".
+                "job_title": str(r.get("description") or "").strip()[:240],
+                "source_row": int(r["row"]),
                 "units": r["quantity"], "files": inputs, "deliverables": True,
                 "quantity_breaks": sorted(q for q in qtys_of.get(_rk(r), []) if q != r["quantity"]),
                 "method": args.method if found else "llm",

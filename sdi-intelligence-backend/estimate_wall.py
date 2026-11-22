@@ -687,9 +687,12 @@ def display_identity(r: Mapping[str, Any], read_log: bool = True) -> Dict[str, A
     only the explicit metadata is used and the console is not opened.
     """
     description = str(r.get("job_title") or r.get("description") or "").strip()[:240]
-    row = None
+    row = int(r["source_row"]) if str(r.get("source_row") or "").isdigit() else None
     reference = str(r.get("drawing_number") or "")
-    for line in (r.get("log") or ()) if read_log else ():
+    # The console is opened only for what the run did not keep: a run that carries its own
+    # title and row (every run since 22 Nov 2026) costs nothing to identify.
+    want_log = read_log and (not description or (row is None and r.get("source") == "tti"))
+    for line in (r.get("log") or ()) if want_log else ():
         text = str(line)
         if r.get("source") == "tti":
             match = re.fullmatch(r"\s*\| Workbook worksheet .+, source row ([1-9]\d*)\. Quantity: .+", text)

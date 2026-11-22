@@ -331,6 +331,11 @@ class Run:
     email_result: Dict[str, Any] = field(default_factory=dict)
     # WHO ASKED (D-401): "" for the portal, else the partner site whose key queued the run.
     requested_by: str = ""
+    # WHAT THE JOB IS CALLED AND WHICH SHEET ROW IT CAME FROM (JG, 22 Nov 2026: "Description
+    # not recorded looks not great"). The request carried a job_title for the drop-off folder's
+    # name and the run never kept it, so every card on the wall said "not recorded".
+    job_title: str = ""
+    source_row: Optional[int] = None
     # WHERE IT CAME FROM, in words for Grid Control: see job_source().
     source: str = ""
     # WHAT THE RUNNER THAT CLAIMED IT SAID IT CAN DO (11 Nov 2026). Kept on the run, which
@@ -408,6 +413,7 @@ class Run:
             "email_to": list(self.email_to), "email_result": dict(self.email_result),
             "requested_by": self.requested_by,
             "source": self.source,
+            "job_title": self.job_title, "source_row": self.source_row,
             "submitted_scope": dict(self.submitted_scope),
             "job_type": self.job_type,
             "stopped_by_hand": self.stopped_by_hand,
@@ -894,6 +900,7 @@ class EstimateRequest(BaseModel):
     pack_manifest: Optional[Dict[str, Any]] = None
     # WHAT THE JOB IS CALLED, for the drop-off folder's name: "<drawing> - <title>".
     job_title: Optional[str] = None
+    source_row: Optional[int] = None         # the tracker row the job came from, for the wall
     output_root: Optional[str] = None
     deliverables: bool = True
     # THE MANUAL ESTIMATE, ATTACHED UP FRONT. Optional, and a path on the share rather than an
@@ -3887,7 +3894,9 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                   bom_routes_only=bool(req.bom_routes_only),
                   job_type="bom_routes" if req.bom_routes_only else "",
                   email_to=_email_to, email_quote=bool(req.email_quote),
-                  requested_by=_caller, source=job_source(req.source, _caller))
+                  requested_by=_caller, source=job_source(req.source, _caller),
+                  job_title=str(req.job_title or "").strip()[:240],
+                  source_row=(int(req.source_row) if req.source_row else None))
         # NOT QUEUED YET (D-607). A run in _RUNS can be claimed, and a runner polling between
         # here and the brief below would take a job whose brief was not yet filed and whose
         # scope was not yet recorded. It is queued once both are done.

@@ -358,7 +358,7 @@ def prepare(archive, plan, pictures, item):
         relative = base+f'{i+1:02d}-{pic.cell}-{pic.sha256[:12]}'+Path(pic.member).suffix.lower()
         archive.put(relative,pic.data)
         files.append(str(archive.roots[1]/relative))
-    body = {'client':'TTI','drawing_number':item['reference'],'job_title':item['description'][:180],
+    body = {'client':'TTI','drawing_number':item['reference'],'job_title':item['description'][:180],'source_row':item['row'],
             'units':item['quantity'],'quantity_breaks':[item['quantity']], 'files':files,
             'method':'llm','source':'tti','deliverables':True,'email_to':'','enquiry_brief':item['brief']}
     archive.put(base+'request.json',json_bytes(body))
