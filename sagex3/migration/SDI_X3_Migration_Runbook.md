@@ -4896,3 +4896,13 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - Workbook built from the pasted grids by Claude: Read me (9 assumptions), Summary (SUMIFS formulas), By part, Order lines, Check these. It lives in the session scratchpad, **never in git** (customer data).
   - Re-run on 31 Dec for the final record.
   - **X3 lesson:** in X3, works orders need labour and scrap booked (time and production tracking) if this report is to give true margins after go-live. Noted on REP-24.
+- **Sent to the account director, 22 Nov** (James, by email, with the workbook):
+  - **Email 1:** headline figures, improvement pointers (batch sizes, price spread, the Flags column) and the margin caveat. Two lines in it were wrong or unclear: "I've asked for them to be checked" (nobody had been asked yet) and "estimate labour from the routing times" (unexplained).
+  - **Email 2 (follow-up):** corrected both and asked four questions. **Waiting on his reply:**
+    1. Who enters this customer's orders, so the mis-keyed lines on "Check these" can be checked and corrected in Access by the person who owns them? We don't change live data.
+    2. The two largest lines have no works orders. Are they bought in, and who has the buy-in cost?
+    3. Who can confirm that CO lines are call-offs of stock already invoiced on the CH/OS line? (This is assumption 4 in the workbook.)
+    4. Does he need margins that include labour, or are material margins enough?
+       - If labour is wanted: estimate it from Access routing times × work-centre hourly rates, with Charlotte for the rates.
+       - Not started; a yes/no decision for him.
+  - **Lesson:** draft emails must not claim an action that hasn't happened, and must explain technical terms (routing = route) in plain words.
