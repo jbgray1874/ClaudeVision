@@ -9,7 +9,7 @@ Writes into <run_folder>/out:
     <part>_CHECKS.xlsx                                      the converter's own check workbook
 and <run_folder>/run.json - everything the page shows (no X3 product list in it).
 With --publish (the portal passes EST_SHARE): a READY run's three load files and the write-up are also saved in
-<publish>\<part>_<YYYY-MM-DD_HHMM>\ - K:\Operations\Reporting\SageEstimates, where they are loaded from (James,
+<publish>\<part>_<MIG|UAT>_<YYYY-MM-DD_HHMM>\ - K:\Operations\Reporting\SageEstimates, where they are loaded from (James,
 20 Nov) - with run.json, so the page's Saved estimates list can reopen it. A NOT READY run isn't saved there: its
 files mustn't be loaded. Nothing is ever overwritten.
 
@@ -28,29 +28,35 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "integration" / "x3_api"))
+from x3_api import ENVS, exports_root  # noqa: E402  (22 Nov: SDI Mig / We are SDI)
 
 
-def find_products(explicit=None):
-    for p in (explicit, os.environ.get("EST_PRODUCTS")):
+def find_products(explicit=None, env="mig"):
+    """The X3 product list of the environment the estimate is checked against (22 Nov): its newest products.json."""
+    for p in (explicit, os.environ.get("EST_PRODUCTS") if env == "mig" else None):
         if p and Path(p).is_file():
             return Path(p)
-    root = Path(os.environ.get("X3_EXPORT_DIR", Path.home() / "SDI_X3_exports"))
+    root = exports_root(env)
     cands = sorted(root.glob("*/products.json"), key=lambda p: p.stat().st_mtime) if root.exists() else []
     if not cands:
-        raise SystemExit(f"No X3 product list: no products.json under {root} (run a Live Orders Regenerate, which pulls "
-                         f"products daily) and EST_PRODUCTS isn't set")
+        raise SystemExit(f"No Sage X3 product list for {ENVS[env]['label']} yet: open Live Orders, choose "
+                         f"{ENVS[env]['label']} at the top and press Regenerate (it pulls the product list), then run "
+                         f"the estimate again")
     return cands[-1]
 
 
-def publish(out, names, folder, folder_user, code):
-    """Copy a READY run's files into <folder>\<part>_<date>_<time>\ (seconds added if that minute is taken)."""
+def publish(out, names, folder, folder_user, code, env="mig"):
+    """Copy a READY run's files into <folder>\<part>_<MIG|UAT>_<date>_<time>\ (seconds added if that minute is taken).
+    The environment is in the name (22 Nov), so files checked against one X3 are never loaded into the other by hand."""
     import est_workbook
     now = dt.datetime.now()
     base = Path(folder)
     base.mkdir(parents=True, exist_ok=True)
-    name = f"{est_workbook.stem_of(code)}_{now:%Y-%m-%d_%H%M}"
+    tag = ENVS[env]["tag"]
+    name = f"{est_workbook.stem_of(code)}_{tag}_{now:%Y-%m-%d_%H%M}"
     if (base / name).exists():
-        name = f"{est_workbook.stem_of(code)}_{now:%Y-%m-%d_%H%M%S}"
+        name = f"{est_workbook.stem_of(code)}_{tag}_{now:%Y-%m-%d_%H%M%S}"
     dest = base / name
     dest.mkdir()
     for n in names:
@@ -71,16 +77,17 @@ def main(argv=None):
     ap.add_argument("--by", default="")
     ap.add_argument("--publish", default="", help="folder to save READY runs in (network path)")
     ap.add_argument("--publish-user", default="", help="the same folder as people see it (K:\\...)")
+    ap.add_argument("--env", choices=sorted(ENVS), default="mig", help="mig = SDI Mig (test), uat = We are SDI (UAT)")
     a = ap.parse_args(argv)
     run = Path(a.run_folder)
     out = run / "out"
     info = dict(ok=False, started=dt.datetime.now().isoformat(timespec="seconds"), estimate=Path(a.estimate).name,
                 by=a.by, options=dict(parent=a.parent or "", category=a.category, sheet_material=a.sheet_material,
-                                      rev_in_code=a.rev_in_code))
+                                      rev_in_code=a.rev_in_code), env=dict(key=a.env, **ENVS[a.env]))
     try:
         import est_to_x3
         import est_workbook
-        products = find_products(a.products)
+        products = find_products(a.products, a.env)
         info["products"] = dict(file=str(products), as_at=dt.datetime.fromtimestamp(products.stat().st_mtime)
                                 .isoformat(timespec="minutes"))
         res = est_to_x3.build(a.estimate, out, products, a.parent or None, a.category, a.rev_in_code, a.sheet_material)
@@ -98,7 +105,8 @@ def main(argv=None):
                     ops_read=d["ops"])
         if a.publish and info["ready"]:
             try:
-                info["published"] = publish(out, [*d["load_files"], book.name], a.publish, a.publish_user, res["code"])
+                info["published"] = publish(out, [*d["load_files"], book.name], a.publish, a.publish_user, res["code"],
+                                            a.env)
             except OSError as e:                               # the run stands; the page says it wasn't saved
                 info["publish_error"] = f"Not saved to {a.publish_user or a.publish}: {e}"
     except (Exception, SystemExit) as e:                       # noqa: BLE001 - recorded for the page

@@ -9,6 +9,11 @@ The workbooks live in Production's folder (K:\\Operations\\Reporting\\LiveOrders
 SDI_Live_Orders_<date>_<time>.xlsx (to open and edit) + .json (the views), never overwritten - the folder IS the
 history. Regenerate pulls fresh data from Sage X3 (read-only), builds, saves a new pair and the views refresh.
 
+Environments (22 Nov, James: "SDI Mig / Stage choice ... We are SDI is the users' UAT"): every data endpoint takes
+?env=mig (SDI Mig, test - the default) or ?env=uat (We are SDI, UAT). Each has its own runs folder and X3 exports, and
+its workbooks are named SDI_Live_Orders_<MIG|UAT>_<date>_<time> in the same folder (untagged names from before 22 Nov
+are SDI Mig's). One Regenerate at a time across both, to be gentle on X3.
+
 Endpoints (X-SDI-Key on all but the dashboard page, which holds no data):
     GET  /api/live-orders/latest            the newest run's data (.json)
     GET  /api/live-orders/history           every run: when, counts, file names
@@ -55,9 +60,10 @@ HOME = Path(os.getenv("LIVE_ORDERS_HOME", r"C:\SDI_X3\repo\sagex3\production\liv
 ROUTES = os.getenv("LIVE_ORDERS_ROUTES", "")
 PYTHON = os.getenv("LIVE_ORDERS_PYTHON", sys.executable)
 DASHBOARD = Path(os.getenv("LIVE_ORDERS_DASHBOARD", str(Path(__file__).with_name("live_orders_dashboard.html"))))
-NAME = re.compile(r"^SDI_Live_Orders_[0-9_-]+$")          # only our own files can be asked for
+NAME = re.compile(r"^SDI_Live_Orders_(?:(MIG|UAT)_)?\d{4}-\d\d-\d\d_\d{4,6}$")   # only our own files can be asked for
+ENVS = {"mig": {"label": "SDI Mig (test)", "tag": "MIG"}, "uat": {"label": "We are SDI (UAT)", "tag": "UAT"}}
 
-_proc = {"p": None, "started": None}
+_proc = {"p": None, "started": None, "env": None}
 _lock = threading.Lock()
 _meta_cache = {}                                           # path -> (mtime, meta)
 
@@ -67,10 +73,31 @@ def _check_key(key):
         raise HTTPException(status_code=401, detail="Invalid or missing X-SDI-Key")
 
 
-def _runs_in_share():
+def _env(env):
+    if env not in ENVS:
+        raise HTTPException(status_code=400, detail="env is mig (SDI Mig) or uat (We are SDI)")
+    return env
+
+
+def _env_of(stem):
+    m = NAME.match(stem)
+    return None if not m else ("uat" if m.group(1) == "UAT" else "mig")
+
+
+def _when(stem):
+    return NAME.match(stem) and re.search(r"\d{4}-\d\d-\d\d_\d{4,6}$", stem).group(0)
+
+
+def _runs(env):
+    """SDI Mig keeps the original runs folder; We are SDI gets <folder>_UAT beside it."""
+    return RUNS if env == "mig" else RUNS.with_name(f"{RUNS.name}_{ENVS[env]['tag']}")
+
+
+def _runs_in_share(env="mig"):
     if not SHARE.exists():
         return []
-    return sorted((p for p in SHARE.glob("SDI_Live_Orders_*.json") if NAME.match(p.stem)), key=lambda p: p.name, reverse=True)
+    return sorted((p for p in SHARE.glob("SDI_Live_Orders_*.json") if _env_of(p.stem) == env),
+                  key=lambda p: _when(p.stem), reverse=True)
 
 
 def _meta(p):
@@ -86,11 +113,11 @@ def _meta(p):
     return meta
 
 
-def _latest():
-    share = _runs_in_share()
+def _latest(env="mig"):
+    share = _runs_in_share(env)
     if share:
         return share[0]
-    f = RUNS / "latest.json"
+    f = _runs(env) / "latest.json"
     return f if f.exists() else None
 
 
@@ -104,26 +131,26 @@ def _file(name, ext):
 
 
 @router.get("/latest")
-def latest(x_sdi_key: str | None = Header(default=None)):
+def latest(env: str = "mig", x_sdi_key: str | None = Header(default=None)):
     _check_key(x_sdi_key)
-    f = _latest()
+    f = _latest(_env(env))
     if not f:
-        raise HTTPException(status_code=404, detail="No Live Orders run yet - press Regenerate")
+        raise HTTPException(status_code=404, detail=f"No Live Orders run yet for {ENVS[env]['label']} - press Regenerate")
     return FileResponse(f, media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/history")
-def history(x_sdi_key: str | None = Header(default=None)):
+def history(env: str = "mig", x_sdi_key: str | None = Header(default=None)):
     _check_key(x_sdi_key)
     out = []
-    for p in _runs_in_share():
+    for p in _runs_in_share(_env(env)):
         m = _meta(p)
         x = p.with_suffix(".xlsx")
         out.append({"name": p.stem, "as_at": m.get("as_at"), "wos": m.get("wos"), "red": m.get("red"),
                     "amber": m.get("amber"), "green": m.get("green"), "overdue": m.get("overdue"),
                     "hours": m.get("hours"), "carried": m.get("carried"), "workbook": x.exists(),
-                    "path": f"{SHARE_USER}\\{x.name}"})
-    return {"folder": SHARE_USER, "runs": out}
+                    "path": f"{SHARE_USER}\\{x.name}", "env": env})
+    return {"folder": SHARE_USER, "env": env, "label": ENVS[env]["label"], "runs": out}
 
 
 @router.get("/run/{name}")
@@ -146,49 +173,57 @@ def _running():
 
 
 @router.post("/regenerate")
-def regenerate(full: bool = False, x_sdi_key: str | None = Header(default=None)):
-    """Pull from Sage X3 (read-only), build, save a new workbook + views. One at a time."""
+def regenerate(env: str = "mig", full: bool = False, x_sdi_key: str | None = Header(default=None)):
+    """Pull from Sage X3 (read-only), build, save a new workbook + views. One at a time, across both environments."""
     _check_key(x_sdi_key)
+    _env(env)
     with _lock:
         if _running():
-            raise HTTPException(status_code=409, detail=f"Already running since {_proc['started']}")
+            raise HTTPException(status_code=409, detail=f"Already generating {ENVS[_proc['env']]['label']} since "
+                                                        f"{_proc['started']} - one at a time, try again when it's done")
         script = HOME / "run_x3.py"
         if not script.exists():
             raise HTTPException(status_code=500, detail=f"run_x3.py not found in {HOME} (LIVE_ORDERS_HOME)")
-        RUNS.mkdir(parents=True, exist_ok=True)
-        cmd = [PYTHON, "-u", str(script), "--pull", "api", "--runs", str(RUNS), "--share", str(SHARE)]
+        runs = _runs(env)
+        runs.mkdir(parents=True, exist_ok=True)
+        cmd = [PYTHON, "-u", str(script), "--pull", "api", "--runs", str(runs), "--share", str(SHARE), "--env", env]
         if ROUTES and Path(ROUTES).is_file():     # optional: an old route load file. Default: routings from X3
             cmd += ["--routes", ROUTES]
         if full:
             cmd.append("--full")
-        log = open(RUNS / "regenerate.log", "w", encoding="utf-8")
+        log = open(runs / "regenerate.log", "w", encoding="utf-8")
         _proc["p"] = subprocess.Popen(cmd, cwd=str(HOME), stdout=log, stderr=subprocess.STDOUT,
                                       env=dict(os.environ, PYTHONIOENCODING="utf-8"))
         _proc["started"] = dt.datetime.now().isoformat(timespec="seconds")
-    return {"started": _proc["started"], "full": full}
+        _proc["env"] = env
+    return {"started": _proc["started"], "full": full, "env": env}
 
 
 @router.get("/regenerate")
-def regenerate_status(x_sdi_key: str | None = Header(default=None)):
+def regenerate_status(env: str = "mig", x_sdi_key: str | None = Header(default=None)):
     _check_key(x_sdi_key)
-    log = RUNS / "regenerate.log"
+    runs = _runs(_env(env))
+    mine = _running() and _proc["env"] == env
+    log = runs / "regenerate.log"
     tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-12:] if log.exists() else []
     st = {}
-    if (RUNS / "status.json").exists():
-        st = json.loads((RUNS / "status.json").read_text(encoding="utf-8"))
+    if (runs / "status.json").exists():
+        st = json.loads((runs / "status.json").read_text(encoding="utf-8"))
         st.pop("trace", None)
-    return {"running": _running(), "started": _proc["started"], "log": tail,
-            "last": {k: st.get(k) for k in ("ok", "finished", "error", "warning", "published", "carried_from",
-                                            "master_refreshed", "pull_failed")}}
+    return {"running": mine, "busy": ENVS[_proc["env"]]["label"] if _running() and not mine else None,
+            "started": _proc["started"] if _proc["env"] == env else st.get("started"), "log": tail, "env": env,
+            "last": {k: st.get(k) for k in ("ok", "started", "finished", "error", "warning", "published",
+                                            "carried_from", "master_refreshed", "pull_failed", "adapter")}}
 
 
 @router.get("/status")
-def status(x_sdi_key: str | None = Header(default=None)):
+def status(env: str = "mig", x_sdi_key: str | None = Header(default=None)):
     _check_key(x_sdi_key)
-    f = _latest()
+    f = _latest(_env(env))
     age = round((dt.datetime.now().timestamp() - f.stat().st_mtime) / 3600, 1) if f else None
-    return {"folder": SHARE_USER, "latest": f.name if f else None, "age_hours": age, "running": _running(),
-            "runs_saved": len(_runs_in_share()), "meta": _meta(f) if f else None}
+    return {"folder": SHARE_USER, "env": env, "latest": f.name if f else None, "age_hours": age,
+            "running": _running() and _proc["env"] == env, "runs_saved": len(_runs_in_share(env)),
+            "meta": _meta(f) if f else None}
 
 
 SHEET_EXT = (".xlsx", ".xlsm", ".xls")
@@ -205,18 +240,24 @@ def _sheet_file(name):
 
 
 @router.get("/files")
-def files(x_sdi_key: str | None = Header(default=None)):
+def files(env: str = "", x_sdi_key: str | None = Header(default=None)):
     """Every spreadsheet in Production's folder (20 Nov, James): the generated ones and any saved there by hand.
-    Excel's ~$ lock files are left out. The page sorts and filters."""
+    Excel's ~$ lock files are left out. The page sorts and filters. ?env= keeps that environment's generated ones
+    and the hand-saved ones (which carry no environment)."""
     _check_key(x_sdi_key)
+    if env:
+        _env(env)
     out = []
     if SHARE.exists():
         for p in SHARE.iterdir():
             if p.is_file() and p.suffix.lower() in SHEET_EXT and not p.name.startswith("~$"):
+                fe = _env_of(p.stem)
+                if env and fe and fe != env:
+                    continue
                 st = p.stat()
-                gen = bool(NAME.match(p.stem)) and p.with_suffix(".json").exists()
+                gen = bool(fe) and p.with_suffix(".json").exists()
                 out.append({"name": p.name, "stem": p.stem, "modified": dt.datetime.fromtimestamp(st.st_mtime)
-                            .isoformat(timespec="seconds"), "size": st.st_size, "generated": gen,
+                            .isoformat(timespec="seconds"), "size": st.st_size, "generated": gen, "env": fe,
                             "path": f"{SHARE_USER}\\{p.name}"})
     out.sort(key=lambda f: f["modified"], reverse=True)
     return {"folder": SHARE_USER, "files": out}

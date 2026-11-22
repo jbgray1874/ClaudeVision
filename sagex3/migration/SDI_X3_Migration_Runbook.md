@@ -4805,3 +4805,33 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - `/api/estimate-x3/x3/status` answers `{"setup":false, … "ready":false}`, so the server runs the new code; "not set up" is expected until the X3 write connection exists.
   - **Server script fixed:** if it can't ask (ISE: input redirected) it stops with "Run it in Windows PowerShell (the blue console), or add -Yes" instead of waiting for ever. `-Yes` answers "Apply these changes?" (read the preview first), but never the wrong-machine check.
   - The script's write tests of the two K: folders didn't run: the first READY estimate on the server ("✓ checked: 4 files in the folder") and the first server Regenerate prove them.
+
+#### 22 Nov – SDI Mig / We are SDI (UAT) switch on both pages; estimates load back into their own environment; "why is the sheet blank" report (James)
+- **James, 22 Nov:** "build the SDI Mig / Stage choice switch through the web pages. We also need to write the save-back of the estimate to the relevant environment … the Live Orders sheet was blank despite us having some data in Sage X3 … get it set up on We are SDI also so that the users can test, as that's their UAT."
+- **"We are SDI" = folder ACUX3, endpoint `X3ERPV12_ACUX3`**, on the same training site as SDI Mig. The 20 Nov note "leave alone" is superseded by James's instruction: it's the users' UAT. Reading it and creating estimates in it are both allowed. Production stays out of reach.
+- **One list of environments:** `x3_api.ENVS`, `mig` = SDI Mig (test), X3ERPV12_SDIMIG; `uat` = We are SDI (UAT), X3ERPV12_ACUX3. The connected application is site-wide, so the same read-only settings file works for both: the endpoint header picks the folder. Each environment has its own folders, so nothing mixes:
+  - X3 pulls: `X3_EXPORT_DIR` (SDI Mig, unchanged) and `X3_EXPORT_DIR_UAT` beside it;
+  - runs: `LIVE_ORDERS_RUNS` and `…_UAT`;
+  - workbooks in the same K: folder, named `SDI_Live_Orders_MIG_<date>_<time>` / `SDI_Live_Orders_UAT_…`. Untagged names from before 22 Nov count as SDI Mig. Production's notes carry forward only from the same environment's last workbook;
+  - saved estimates: `<part>_MIG_<date>_<time>` / `<part>_UAT_…`.
+- **Live Orders page:** a switch **SDI Mig (test) | We are SDI (UAT)** in the bar, and a badge "Sage X3: …" by the date. If the data loaded is from the other environment, the badge warns. Regenerate, the views, Workbooks and history all follow the switch. One Regenerate at a time across both; the other environment's page says "Busy: generating …".
+- **Estimate → X3 page:** the same switch, shared with Live Orders (remembered on the PC).
+  - The estimate is checked against **that environment's** X3 product list. For UAT that list arrives with its first Live Orders Regenerate; until then the page says so.
+  - The saved folder is tagged.
+  - **Load into Sage X3 writes back into the environment the run was checked against** (run.json `env`), whatever the switch shows now. The box says which.
+- **`x3_load.py`:** allowed endpoints are now SDIMIG and ACUX3, on the -trn site only (still in code), and still create-only. X3's API set-up is per folder, so each endpoint has its own schema: `mutations --env uat` → `x3_load_schema_X3ERPV12_ACUX3.json`. `status --env`.
+- **Blank sheet: the page now says why.**
+  - `x3_source.py` counts, per data set, the rows X3 sent, the rows kept, and why the rest were left out (e.g. "200 workOrderStatus=planned, 100 workOrderStatus=closed"). It also lists the status values X3 sent ("statuses from X3: …"), to check the filters against real values.
+  - The report travels in `status.json` (`adapter`) and in the run's JSON (`x3_report`). A **"What X3 sent"** link sits by the Done line. When no works orders come through, the panel opens by itself: "Sage X3 sent N works-order lines, but none are on the sheet - see left out", or "has no works orders: none were sent".
+  - Also: a status value that names the opposite ("notClosed", "unclosed") no longer counts as closed.
+  - **Why 20 Nov's sheet was blank:** not known yet. The next Regenerate shows it. Most likely SDI Mig really has no open firm works orders (SCRUM-167); otherwise their status values are caught by the closed / planned filters, and the report will show which.
+- **Tested** (fake X3 data, MOCK names, both environments):
+  - loader: 31 checks, including "a UAT run loads into X3ERPV12_ACUX3 only" and "UAT needs its own schema first";
+  - Live Orders in a browser: SDI Mig regenerate → 300 works orders, `…_MIG_…` saved ✓; switch → UAT regenerate with every WO planned / closed → empty sheet and the "⚠ No works orders on the sheet - why" panel; Workbooks list per environment;
+  - Estimate: the switch carried over (UAT) → READY → `<part>_UAT_…` folder ✓ → check → 3 CREATE → loaded into X3ERPV12_ACUX3 only; switch to SDI Mig → a separate check → 3 CREATE there; saved list "This environment / Both";
+  - no page errors; phone width OK.
+- **To switch UAT on (James):**
+  1. pull, robocopy, installer `--apply` and restart on SDI-APP01, in the blue PowerShell console, not ISE;
+  2. a 3-row trial read of ACUX3 (`x3_api.py pull --env uat --limit 3`): proves the X3 user can open that folder;
+  3. Live Orders → We are SDI (UAT) → Regenerate (first full pull, 30–60 min);
+  4. for loading estimates into UAT: `x3_load.py setup` (once), then `mutations --env uat` (read-only), and send Claude the output.

@@ -80,14 +80,17 @@ button{cursor:pointer}button:disabled{opacity:.55;cursor:wait}
 .mini i{display:block;height:100%}.notes{font-size:12px;color:var(--t)}.notes b{color:var(--muted);font-weight:600}
 .guide{max-width:1100px;line-height:1.55}.guide h3{font-size:14px;margin:16px 0 4px}.guide p,.guide li{font-size:13.5px}.guide ol,.guide ul{margin:4px 0 8px 20px;padding:0}
 table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-align:top}table.gt td:first-child{font-weight:700;white-space:nowrap}
+.envsw{display:inline-flex;border:1px solid rgba(255,255,255,.35);border-radius:99px;overflow:hidden}.envsw button{border:0;border-radius:0;background:transparent;color:#e9eae7;font-weight:700;padding:7px 12px}
+.envsw button.on{background:var(--y);color:#1c1c1c}.envb{display:inline-block;margin-left:8px;padding:1px 9px;border-radius:99px;background:var(--y);color:#1c1c1c;font-weight:800;font-size:12px}
+.envb.uat{background:#7fd39a}#x3rep pre{white-space:pre-wrap;font-size:12px;margin:6px 0 0;overflow-wrap:anywhere}#x3rep.warn{border-color:var(--a)}
 .pill{display:inline-block;padding:1px 7px;border-radius:99px;background:var(--soft);border:1px solid var(--line);font-size:11px;margin:1px 2px 1px 0}
 </style>
 </head>
 <body>
 <header><div class="w hd">
-  <div><div class="brand">we.are.sdi · Production</div><h1>Live Orders</h1><div class="sub"><span id="asat">No data loaded</span><span id="viewing"></span></div></div>
+  <div><div class="brand">we.are.sdi · Production</div><h1>Live Orders</h1><div class="sub"><span id="asat">No data loaded</span><span id="envb" class="envb hide"></span><span id="viewing"></span></div></div>
   <div class="bar" style="margin:0" id="filebar"><label class="sub" for="file">Data file</label><input type="file" id="file" accept=".json,application/json"></div>
-  <div class="bar hide" style="margin:0" id="portalbar"><span id="rstat"></span><button id="ugbtn" class="ghost" title="How to use Live Orders">📖 User guide</button><button id="wbbtn" class="ghost" title="Every Live Orders spreadsheet in Production's folder">📂 Workbooks</button><button id="regen" class="y" title="Pull fresh data from Sage X3, build, and save a new workbook">↻ Regenerate</button></div>
+  <div class="bar hide" style="margin:0" id="portalbar"><span class="envsw" id="envsw" title="Which Sage X3 environment to read"><button data-env="mig">SDI Mig (test)</button><button data-env="uat">We are SDI (UAT)</button></span><span id="rstat"></span><button id="ugbtn" class="ghost" title="How to use Live Orders">📖 User guide</button><button id="wbbtn" class="ghost" title="Every Live Orders spreadsheet in Production's folder">📂 Workbooks</button><button id="regen" class="y" title="Pull fresh data from Sage X3, build, and save a new workbook">↻ Regenerate</button></div>
 </div></header>
 <nav class="tabs hide" id="tabs"><div class="w">
   <button data-v="ov" class="on">Overview</button><button data-v="lo">Live Orders</button><button data-v="ld">Work-centre load</button>
@@ -97,6 +100,7 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
 <main class="w">
   <div id="drop"><b>Choose or drop a Live Orders data file</b><br><span class="muted">SDI_Live_Orders_&lt;date&gt;.json, written beside each workbook</span></div>
 
+  <div class="card hide" id="x3rep"><div class="bar" style="justify-content:space-between;margin:0"><h2 style="margin:0" id="x3rept">What Sage X3 sent</h2><a class="lk" id="x3repc">Close</a></div><div id="x3repb"></div></div>
   <section class="view on" id="v-ov">
     <div class="tiles" id="tiles"></div>
     <div class="grid3">
@@ -156,8 +160,10 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
     <h3>What it is</h3>
     <p>Production's Live Orders sheet, built from <b>Sage X3</b>: every open works order with its material status, the hours still to do in each work centre, the works orders to raise (WO Suggestions) and the exploded BOM of each order. It follows the same rules as the Access SupplyChain sheet - see <a class="lk" data-go="hw">How it works</a>. It <b>reads</b> Sage X3; it never changes anything in it.</p>
     <h3>1. Get today's Live Orders</h3>
-    <ol><li>Press <b>↻ Regenerate</b> (top right). It reads Sage X3 now; the progress shows next to the button. It takes a few minutes (the first run of a day can take longer, while products, BOMs and routes are refreshed).</li>
+    <ol><li><b>Choose the Sage X3 environment</b> (top left of the bar): <b>We are SDI (UAT)</b> - where you test - or <b>SDI Mig (test)</b>. The badge by the date says which one you're looking at. Each has its own workbooks, named <i>SDI_Live_Orders_UAT_…</i> or <i>…_MIG_…</i>, and your notes carry forward only within the same environment. The choice is remembered on this PC (and used by Estimate → X3 too).</li>
+      <li>Press <b>↻ Regenerate</b> (top right). It reads Sage X3 now; the progress shows next to the button. It takes a few minutes (the first run of a day can take longer, while products, BOMs and routes are refreshed).</li>
       <li>When it's done, the line by the button names the new workbook, e.g. <b>SDI_Live_Orders_2026-11-20_0815.xlsx</b>, with <b>Preview</b> and <b>Download</b>. The views below refresh by themselves.</li>
+      <li><b>What X3 sent</b> (by the Done line) lists, for each kind of data, how many rows Sage X3 sent, how many are on the sheet, and why the others were left out (closed, planned, nothing left to make). If no works orders come through, it opens by itself and says why - an empty Live Orders tab always has a reason.</li>
       <li>The workbook is saved in <b>K:\Operations\Reporting\LiveOrders</b>. Each run is a new file with the date and time in its name - nothing is ever overwritten, so anyone can run it at any time.</li></ol>
     <h3>2. The views</h3>
     <table class="gt"><tr><th>Tab</th><th>What it shows</th><th>For</th></tr>
@@ -262,7 +268,7 @@ function csv(name,head,rows){const q=v=>/[",\n]/.test(String(v??''))?`"${String(
 // ---------------------------------------------------------------- render
 function render(data){
   if(!data||!Array.isArray(data.wos)){alert('This file is not a Live Orders data file.');return}
-  D=data;const m=D.meta||{};
+  D=data;const m=D.meta||{};showEnv();x3Report(false);
   D.wos.forEach(w=>{w.F=(w.f||[]).map(x=>String(x).charAt(0));w.H=hrsOf(w);w.wk=w.due?monday(w.due):''});
   $('#drop').classList.add('hide');$('#tabs').classList.remove('hide');
   $('#asat').textContent=`as at ${m.as_at||''} · ${fmtN(D.wos.length)} works orders still to make`;
@@ -374,24 +380,44 @@ document.addEventListener('dragover',e=>e.preventDefault());document.addEventLis
 // Portal: opened as /api/live-orders/dashboard#key=<key>. The key (after #) never reaches the server; kept for this tab only.
 let sdiKey='';try{const m=location.hash.match(/key=([^&]+)/);if(m){sessionStorage.setItem('sdiKey',decodeURIComponent(m[1]));history.replaceState(null,'',location.pathname+location.search)}sdiKey=sessionStorage.getItem('sdiKey')||''}catch(e){}
 const onPortal=/\/api\/live-orders\/dashboard$/.test(location.pathname);
-const src=new URLSearchParams(location.search).get('data')||(onPortal?'/api/live-orders/latest':null);
+// The X3 environment (22 Nov): SDI Mig (test) or We are SDI (UAT, where the users test). Remembered on this PC.
+const ENVS={mig:'SDI Mig (test)',uat:'We are SDI (UAT)'};
+let ENV='mig';try{const e=localStorage.getItem('sdiX3Env');if(ENVS[e])ENV=e;const q=new URLSearchParams(location.search).get('env');if(ENVS[q])ENV=q}catch(e){}
+const U=p=>p+(p.includes('?')?'&':'?')+'env='+ENV;
+const src=new URLSearchParams(location.search).get('data')||(onPortal?U('/api/live-orders/latest'):null);
 const HD=()=>sdiKey?{'X-SDI-Key':sdiKey}:{};
-function load(url,name){return fetch(url,{headers:HD()}).then(r=>{if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}).then(d=>{cur=name||'';render(d);markCur()}).catch(e=>{$('#drop').classList.remove('hide');$('#drop').innerHTML=`<b>No Live Orders data yet</b><br><span class="muted">${esc(e.message)}${onPortal?' - press Regenerate':''}</span>`})}
+function load(url,name){return fetch(url,{headers:HD()}).then(r=>{if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}).then(d=>{cur=name||'';render(d);markCur()}).catch(e=>{D=null;$('#drop').classList.remove('hide');$('#drop').innerHTML=`<b>No Live Orders data yet for ${esc(ENVS[ENV])}</b><br><span class="muted">${esc(e.message)}${onPortal?' - press Regenerate':''}</span>`;showEnv()})}
+function showEnv(){$$('#envsw button').forEach(b=>b.classList.toggle('on',b.dataset.env===ENV));const b=$('#envb');if(!onPortal)return;
+  const de=D&&D.env&&D.env.key;b.classList.remove('hide');b.classList.toggle('uat',ENV==='uat');
+  b.textContent='Sage X3: '+ENVS[ENV]+(de&&de!==ENV?` - ⚠ this data is from ${ENVS[de]||de}`:'')}
+// What X3 sent and what was kept, per data set (22 Nov: "the sheet was blank despite us having some data in Sage X3").
+// Opens by itself when no works orders came through, so a blank sheet always says why.
+function x3Report(open,lines){lines=lines||(D&&D.x3_report)||[];if(!lines.length){if(!open)$('#x3rep').classList.add('hide');return}
+  const wl=lines.find(l=>/^(wo_products|works_orders) \(/.test(l))||'',m=wl.match(/(\d+) rows read, (\d+) kept/);
+  const none=!wl?'Sage X3 sent no works orders file.':m&&+m[2]===0?(+m[1]===0?`Sage X3 (${ENVS[ENV]}) has no works orders: none were sent.`:`Sage X3 sent ${m[1]} works-order lines, but none are on the sheet - see "left out" below.`):'';
+  $('#x3rep').classList.toggle('warn',!!none);$('#x3rept').textContent=none?'⚠ No works orders on the sheet - why':'What Sage X3 sent';
+  $('#x3repb').innerHTML=(none?`<p><b>${esc(none)}</b> The Live Orders tab lists works orders, so it stays empty until ${ENVS[ENV]} has open, firm works orders. WO Suggestions, Shortages and the rest still work from the other data.</p>`:'')+
+    `<p class="muted" style="margin:6px 0 0">Per data set: rows read from X3, rows kept, and why the others were left out (closed, planned, nothing left to make or deliver). "statuses from X3" are the values X3 sent, to check against the rules on How it works.</p><pre>${esc(lines.join('\n'))}</pre>`;
+  if(open||none)$('#x3rep').classList.remove('hide')}
+$('#x3repc').onclick=()=>$('#x3rep').classList.add('hide');
+$('#envsw').addEventListener('click',e=>{const b=e.target.closest('button[data-env]');if(!b||b.dataset.env===ENV)return;ENV=b.dataset.env;try{localStorage.setItem('sdiX3Env',ENV)}catch(x){}
+  D=null;cur='';hist=[];files=[];$('#x3rep').classList.add('hide');$('#rstat').textContent='';showEnv();
+  $('#asat').textContent='Loading '+ENVS[ENV]+'…';load(U('/api/live-orders/latest'),'');loadHistory().catch(()=>{});poll()});
 function markCur(){const latest=hist.length?hist[0].name:'';$$('#files tr[data-n]').forEach(tr=>tr.classList.toggle('cur',tr.dataset.n===(cur||latest)));
   $('#viewing').innerHTML=cur&&hist.length&&cur!==hist[0].name?`<span class="chip old">viewing ${esc(fmtWhen(cur))} · <a style="color:inherit;cursor:pointer;text-decoration:underline" data-latest="1">back to latest</a></span>`:(onPortal&&hist.length?'<span class="chip">latest</span>':'')}
-document.addEventListener('click',e=>{if(e.target.closest('[data-latest]'))load('/api/live-orders/latest','')});
+document.addEventListener('click',e=>{if(e.target.closest('[data-latest]'))load(U('/api/live-orders/latest'),'')});
 function fmtWhen(n){const m=String(n).match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})/);return m?`${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`:n}
-function loadHistory(){return fetch('/api/live-orders/history',{headers:HD()}).then(r=>r.json()).then(h=>{hist=h.runs||[];folder=h.folder||folder;
+function loadHistory(){return fetch(U('/api/live-orders/history'),{headers:HD()}).then(r=>r.json()).then(h=>{hist=h.runs||[];folder=h.folder||folder;
   if(D)trends();return loadFiles()})}
 // ---------------------------------------------------------------- Workbooks: every spreadsheet in Production's folder (20 Nov)
 let files=[],folder='',pvName='';
 const fsize=b=>b>1048576?(b/1048576).toFixed(1)+' MB':Math.max(1,Math.round(b/1024))+' KB';
 const fwhen=s=>{const m=String(s||'').match(/(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/);return m?`${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`:s};
-function loadFiles(){return fetch('/api/live-orders/files',{headers:HD()}).then(r=>r.json()).then(f=>{files=f.files||[];folder=f.folder||folder;renderFiles()})}
+function loadFiles(){return fetch(U('/api/live-orders/files'),{headers:HD()}).then(r=>r.json()).then(f=>{files=f.files||[];folder=f.folder||folder;renderFiles()})}
 function renderFiles(){const by=Object.fromEntries(hist.map(h=>[h.name,h]));const sort=$('#fsort').value,kind=$('#fkind').value,q=$('#fq2').value.trim().toLowerCase();
   let L=files.filter(f=>(!kind||(kind==='gen')===f.generated)&&(!q||f.name.toLowerCase().includes(q)));
   L.sort(sort==='name'?(a,b)=>a.name.localeCompare(b.name):sort==='old'?(a,b)=>a.modified<b.modified?-1:1:(a,b)=>a.modified<b.modified?1:-1);
-  $('#histnote').textContent=`Every Live Orders spreadsheet in ${folder} - ${files.length} file${files.length==1?'':'s'}, ${files.filter(f=>f.generated).length} generated by the portal. Each generation is saved with its date and time in the name, never overwritten.`;
+  $('#histnote').textContent=`Live Orders spreadsheets in ${folder} for ${ENVS[ENV]} - ${files.length} file${files.length==1?'':'s'}, ${files.filter(f=>f.generated).length} generated by the portal (named …_${ENV==='uat'?'UAT':'MIG'}_<date>_<time>; switch at the top to see the other environment's). Each generation is saved with its date and time in the name, never overwritten.`;
   $('#fcount').textContent=`${L.length} shown`;
   $('#files').innerHTML='<tr><th>File</th><th>Saved</th><th class="n">Size</th><th></th><th class="n">Works orders</th><th class="n">Red</th><th class="n">Amber</th><th class="n">Green</th><th class="n">Hours</th><th class="n">Notes carried</th><th></th></tr>'+
    L.map(f=>{const h=by[f.stem];return `<tr data-n="${esc(f.stem)}"><td><b>${esc(f.name)}</b>${hist.length&&f.stem===hist[0].name?' <span class="st GREEN">latest</span>':''}</td><td>${esc(fwhen(f.modified))}</td><td class="n">${fsize(f.size)}</td>
@@ -417,19 +443,22 @@ $('#files').addEventListener('click',e=>{const a=e.target.closest('a');if(!a)ret
   if(a.dataset.p){navigator.clipboard&&navigator.clipboard.writeText(a.dataset.p);a.textContent='Copied ✓';setTimeout(()=>a.textContent='Copy path',1500)}});
 $('#ugbtn').onclick=()=>{$('#tabs').classList.remove('hide');go('ug');window.scrollTo({top:0,behavior:'smooth'})};
 $('#wbbtn').onclick=()=>{$('#tabs').classList.remove('hide');$('#drop').classList.add('hide');go('wb');loadHistory().catch(()=>{})};
-function poll(){fetch('/api/live-orders/regenerate',{headers:HD()}).then(r=>r.json()).then(s=>{
+let pollEnv=null;
+function poll(){const pe=ENV;pollEnv=pe;fetch(U('/api/live-orders/regenerate'),{headers:HD()}).then(r=>r.json()).then(s=>{if(pe!==ENV)return;
   const last=(s.log||[]).filter(x=>x.trim()).slice(-1)[0]||'';
-  if(s.running){$('#regen').disabled=true;$('#rstat').textContent='Generating… '+last.slice(0,90);setTimeout(poll,4000);return}
+  if(s.running){$('#regen').disabled=true;$('#rstat').textContent=`Generating ${ENVS[ENV]}… `+last.slice(0,90);setTimeout(()=>{if(pollEnv===pe)poll()},4000);return}
+  if(s.busy){$('#regen').disabled=true;$('#rstat').textContent=`Busy: generating ${s.busy} - one at a time. Regenerate comes back when it's done.`;setTimeout(()=>{if(pollEnv===pe)poll()},8000);return}
   $('#regen').disabled=false;
   if(s.started){const ok=s.last&&s.last.ok,pub=ok&&s.last.published&&s.last.published.xlsx?String(s.last.published.xlsx).split(/[\\/]/).pop():'';
     if(ok)$('#rstat').innerHTML='Done '+esc((s.last.finished||'').replace('T',' '))+' - saved '+(pub?`<b>${esc(pub)}</b><a data-rpv="${esc(pub)}">Preview</a><a data-rdl="${esc(pub)}">Download</a> <span id="savechk"></span>`:'a new workbook')+(s.last.warning?' <span>('+esc(s.last.warning.slice(0,200))+')</span>':'');
+    if(ok&&s.last.adapter){const a=document.createElement('a');a.textContent='What X3 sent';a.dataset.rep='1';$('#rstat').appendChild(a);x3Report(false,s.last.adapter)}
     if(ok&&pub)loadFiles().then(()=>{const f=files.find(x=>x.name===pub),el=$('#savechk');if(el)el.textContent=f?`✓ in the folder (${fsize(f.size)}, checked ${new Date().toTimeString().slice(0,5)})`:'⚠ not found in the folder - tell James'}).catch(()=>{});   // read the folder back (James, 20 Nov: "see that they are saved down")
     else $('#rstat').textContent='Last run failed: '+((s.last&&s.last.error)||last).slice(0,400);
-    if(s.last&&s.last.ok)loadHistory().then(()=>load('/api/live-orders/latest',''))}}).catch(()=>{})}
-$('#rstat').addEventListener('click',e=>{const a=e.target.closest('a');if(!a)return;if(a.dataset.rpv){$('#tabs').classList.remove('hide');go('wb');preview(a.dataset.rpv)}if(a.dataset.rdl)dlFile(a.dataset.rdl)});
-$('#regen').addEventListener('click',()=>{if(!confirm('Pull fresh data from Sage X3 and save a new Live Orders workbook?'))return;
-  fetch('/api/live-orders/regenerate',{method:'POST',headers:HD()}).then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(()=>{$('#rstat').textContent='Starting…';setTimeout(poll,1500)}).catch(e=>{$('#rstat').textContent='Could not start: '+e.message})});
-if(onPortal){$('#filebar').classList.add('hide');$('#portalbar').classList.remove('hide');$('#drop').classList.add('hide');$('#tabs').classList.remove('hide');loadHistory().catch(()=>{});poll()}
+    if(s.last&&s.last.ok)loadHistory().then(()=>load(U('/api/live-orders/latest'),''))}}).catch(()=>{})}
+$('#rstat').addEventListener('click',e=>{const a=e.target.closest('a');if(!a)return;if(a.dataset.rep){x3Report(true);$('#x3rep').scrollIntoView({behavior:'smooth'});return}if(a.dataset.rpv){$('#tabs').classList.remove('hide');go('wb');preview(a.dataset.rpv)}if(a.dataset.rdl)dlFile(a.dataset.rdl)});
+$('#regen').addEventListener('click',()=>{if(!confirm(`Pull fresh data from Sage X3 - ${ENVS[ENV]} - and save a new Live Orders workbook?`))return;
+  fetch(U('/api/live-orders/regenerate'),{method:'POST',headers:HD()}).then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(()=>{$('#rstat').textContent='Starting…';setTimeout(poll,1500)}).catch(e=>{$('#rstat').textContent='Could not start: '+e.message})});
+if(onPortal){showEnv();$('#filebar').classList.add('hide');$('#portalbar').classList.remove('hide');$('#drop').classList.add('hide');$('#tabs').classList.remove('hide');loadHistory().catch(()=>{});poll()}
 else{$('nav.tabs [data-v="wb"]').classList.add('hide')}
 try{const t=sessionStorage.getItem('loTab');if(t&&(onPortal||t!=='wb'))go(t)}catch(e){}
 try{matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(D){const t=document.querySelector('nav.tabs button.on');render(D);if(t)go(t.dataset.v)}})}catch(e){}

@@ -12,6 +12,7 @@ names x3_ui.py and x3_api.py write). Column names are matched through x3_columns
 PROVISIONAL until the first real exports: --check shows anything it couldn't find.
 """
 import argparse
+import collections
 import csv
 import datetime as dt
 import json
@@ -133,7 +134,18 @@ def column_for(cols, names):
     return None
 
 
-def convert(rows, spec):
+def _contains(value, word):
+    """'closed' in 'closed' / 'Closed' / 'isClosed', but not in 'notClosed' / 'unclosed' (22 Nov: never drop an open
+    line because its status names the opposite)."""
+    v = str(value or "").strip().lower()
+    return word in v and not re.match(r"^(not|un|non)[_ -]?" + re.escape(word), v)
+
+
+def convert(rows, spec, why=None, seen=None):
+    """why / seen (Counters, optional): why each row was left out, and the status values X3 sent - for the report
+    (22 Nov, James: "the sheet was blank despite us having some data in Sage X3")."""
+    why = why if why is not None else collections.Counter()
+    seen = seen if seen is not None else collections.Counter()
     cols = list(dict.fromkeys(k for r in rows[:200] for k in r))
     used, missing = {}, []
     for field, rule in spec["fields"].items():
@@ -156,9 +168,17 @@ def convert(rows, spec):
     dropc = {column_for(cols, [k]): [str(v).lower() for v in vals] for k, vals in spec.get("drop_if_contains", {}).items()}
     dropc = {k: v for k, v in dropc.items() if k}
     for r in rows:
-        if any(str(r.get(k, "")).strip().lower() in v for k, v in drop.items()):
-            continue                                       # e.g. a closed PO line
-        if any(w in str(r.get(k, "")).lower() for k, ws in dropc.items() for w in ws):
+        for k in list(drop) + [k for k in dropc if k not in drop]:
+            seen[f"{k}={str(r.get(k, '')).strip() or '(blank)'}"] += 1
+        hit = next((f"{k}={str(r.get(k, '')).strip()}" for k, v in drop.items()
+                    if str(r.get(k, "")).strip().lower() in v), None)
+        if hit:
+            why[hit] += 1
+            continue                                       # e.g. a closed PO line, a planned works order
+        hit = next((f"{k}={str(r.get(k, '')).strip()}" for k, ws in dropc.items() for w in ws if _contains(r.get(k), w)),
+                   None)
+        if hit:
+            why[hit] += 1
             continue                                       # a closed works order / sales-order line
         rec = {}
         for field, (kind, src, minus) in used.items():
@@ -170,8 +190,11 @@ def convert(rows, spec):
                     v = num_txt(float(v) - float(num_txt(r.get(minus)) or 0))
                 rec[field] = v
         if any(str(rec.get(f, "")) not in ok for f, ok in keep.items() if f in rec):
+            why["not in keep"] += 1
             continue
-        if any(_num(rec.get(f)) <= 0 for f in spec.get("drop_if_not_positive", []) if f in rec):
+        bad = next((f for f in spec.get("drop_if_not_positive", []) if f in rec and _num(rec.get(f)) <= 0), None)
+        if bad:
+            why[f"{bad} 0 or less"] += 1
             continue                                       # nothing left to deliver / receive (as Access's views)
         out.append(rec)
     return out, used, missing
@@ -199,16 +222,23 @@ def to_extract(folder, out_path, conf_path=HERE / "x3_columns.json", check=False
         if spec.get("instead_of"):
             used_instead.add(spec["instead_of"])
         rows = read_rows(f)
-        recs, used, missing = convert(rows, spec)
+        why, seen = collections.Counter(), collections.Counter()
+        recs, used, missing = convert(rows, spec, why, seen)
+        n0 = len(recs)
         if spec["grid"] == "WOR":
             recs = [r for r in recs if r.get("works_order")]
         if spec["grid"] == "SOH" or spec["grid"] == "POH":
             qf = "QTY" if spec["grid"] == "SOH" else "QTYUOM"
             recs = [r for r in recs if r.get("ITMREF") and (r.get(qf) == "" or float(r.get(qf) or 0) > 0)]
+        if n0 > len(recs):
+            why["no order number / product / quantity"] += n0 - len(recs)
         cols = GRIDS[spec["grid"]]
         for r in recs:
             lines.append("\t".join([spec["grid"]] + [str(r.get(c, "")).replace("\t", " ") for c in cols[1:]]))
-        report.append(f"{name} ({f.name}): {len(rows)} rows read, {len(recs)} kept -> {spec['grid']}")
+        report.append(f"{name} ({f.name}): {len(rows)} rows read, {len(recs)} kept -> {spec['grid']}"
+                      + (f"; left out: {', '.join(f'{n} {w}' for w, n in why.most_common(6))}" if why else ""))
+        if seen:                                           # the status values X3 sent, to check the filters against
+            report.append(f"    statuses from X3: {', '.join(f'{k} ({n})' for k, n in seen.most_common(8))}")
         if check:
             for field, (kind, src, minus) in used.items():
                 report.append(f"    {field:<14} <- {src if src else '** NOT FOUND **'}" + (f"  minus {minus}" if minus else ""))

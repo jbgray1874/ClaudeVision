@@ -11,7 +11,9 @@ list (products.json from the daily X3 pull). Every run is kept. Nothing is writt
 
 Endpoints (X-SDI-Key on all but the page, which holds no data):
     GET  /api/estimate-x3/page                 the page (shown in the portal's frame)
-    POST /api/estimate-x3/run?name=&parent=&category=&sheet_material=&rev_in_code=   body = the estimate file
+    POST /api/estimate-x3/run?name=&parent=&category=&sheet_material=&rev_in_code=&env=   body = the estimate file
+         env = mig (SDI Mig, test; default) or uat (We are SDI, the users' UAT; 22 Nov): which X3's product list it is
+         checked against, the MIG / UAT tag on its saved folder, and where "Load into Sage X3" writes it back
     GET  /api/estimate-x3/runs                 every run: when, file, part, READY / NOT READY, counts, X3 load
     GET  /api/estimate-x3/run/{id}             one run (run.json)
     GET  /api/estimate-x3/run/{id}/file/{name} one output file
@@ -69,6 +71,7 @@ PREVIEW = Path(os.getenv("EST_PREVIEW", str(HOME.parent / "production" / "live_o
 RUN_ID = re.compile(r"^\d{8}-\d{6}(-\d+)?_[\w.\- ]{1,80}$")
 FILE = re.compile(r"^[\w.\- ]{1,120}\.(txt|xlsx)$")
 SAVED = re.compile(r"^[\w][\w.\-]{0,99}$")
+ENVS = {"mig": {"label": "SDI Mig (test)", "tag": "MIG"}, "uat": {"label": "We are SDI (UAT)", "tag": "UAT"}}
 MAX_BYTES = 20 * 1024 * 1024
 # the load files are data rows only (; separated, code page 850): these headings go on top in a preview
 TXT_HEAD = {"ZSDIITM": ["Category", "Product", "Description", "Description 2", "Description 3", "Stock unit",
@@ -117,9 +120,11 @@ def page():
 
 @router.post("/run")
 async def run(request: Request, name: str, parent: str = "", category: str = "FGML", sheet_material: str = "CR4",
-              rev_in_code: bool = False, x_sdi_key: str | None = Header(default=None)):
+              rev_in_code: bool = False, env: str = "mig", x_sdi_key: str | None = Header(default=None)):
     """The estimate file is the request body (the page sends it as is). Runs the converter, returns run.json."""
     _check_key(x_sdi_key)
+    if env not in ENVS:
+        raise HTTPException(status_code=400, detail="env is mig (SDI Mig) or uat (We are SDI)")
     base = Path(name).name
     if not re.search(r"\.(xls|xlsx|xlsm)$", base, re.I):
         raise HTTPException(status_code=400, detail="An estimate is an .xls or .xlsx file")
@@ -143,7 +148,7 @@ async def run(request: Request, name: str, parent: str = "", category: str = "FG
     est = d / "in" / re.sub(r"[^\w.\- ]+", "_", base)
     est.write_bytes(body)
     cmd = [PYTHON, str(script), str(est), str(d), "--category", category, "--sheet-material", sheet_material,
-           "--by", request.client.host if request.client else ""]
+           "--by", request.client.host if request.client else "", "--env", env]
     if SHARE:                                       # READY runs are saved there for loading (James, 20 Nov)
         cmd += ["--publish", SHARE, "--publish-user", SHARE_USER]
     if parent:
@@ -176,7 +181,7 @@ def runs(x_sdi_key: str | None = Header(default=None)):
                         "ok": j.get("ok"), "ready": j.get("ready"), "new": j.get("new"), "bom": j.get("bom"),
                         "ops": j.get("ops"), "stop": j.get("stop"), "warn": j.get("warn"), "error": j.get("error"),
                         "saved": (j.get("published") or {}).get("folder"),
-                        "by": j.get("by"), "x3": _x3_summary(d)})
+                        "by": j.get("by"), "x3": _x3_summary(d), "env": (j.get("env") or {}).get("key") or "mig"})
     return {"folder": str(RUNS), "saved_to": SHARE_USER if SHARE else "", "runs": out}
 
 
@@ -300,10 +305,11 @@ def saved(x_sdi_key: str | None = Header(default=None)):
                 run = {}
                 if (d / "run.json").exists():
                     run = json.loads((d / "run.json").read_text(encoding="utf-8"))
-                m = re.match(r"^(.*)_(\d{4})-(\d\d)-(\d\d)_(\d\d)(\d\d)(\d\d)?$", d.name)
-                when = run.get("started") or (f"{m[2]}-{m[3]}-{m[4]}T{m[5]}:{m[6]}:{m[7] or '00'}" if m else
+                m = re.match(r"^(.*?)(?:_(MIG|UAT))?_(\d{4})-(\d\d)-(\d\d)_(\d\d)(\d\d)(\d\d)?$", d.name)
+                when = run.get("started") or (f"{m[3]}-{m[4]}-{m[5]}T{m[6]}:{m[7]}:{m[8] or '00'}" if m else
                                              dt.datetime.fromtimestamp(d.stat().st_mtime).isoformat(timespec="seconds"))
-                out.append({"folder": d.name, "path": f"{SHARE_USER}\\{d.name}", "when": when,
+                env = (run.get("env") or {}).get("key") or ("uat" if m and m[2] == "UAT" else "mig")
+                out.append({"folder": d.name, "path": f"{SHARE_USER}\\{d.name}", "when": when, "env": env,
                             "code": run.get("code") or (m[1] if m else d.name), "estimate": run.get("estimate"),
                             "ready": run.get("ready"), "bom": run.get("bom"), "ops": run.get("ops"), "by": run.get("by"),
                             "has_run": bool(run), "files": files, "x3": _x3_summary(d)})
@@ -318,7 +324,9 @@ def saved_one(folder: str, x_sdi_key: str | None = Header(default=None)):
     """A saved folder, shown again on the page: its run.json if it has one (saved from 20 Nov night), else just its files."""
     _check_key(x_sdi_key)
     d = _saved_dir(folder)
-    j = {"ok": True, "saved_only": True, "code": folder.rsplit("_", 2)[0]}
+    m = re.match(r"^(.*?)(?:_(MIG|UAT))?_\d{4}-\d\d-\d\d_\d{4,6}$", folder)
+    j = {"ok": True, "saved_only": True, "code": m[1] if m else folder,
+         "env": {"key": "uat" if m and m[2] == "UAT" else "mig"}}
     if (d / "run.json").exists():
         j = json.loads((d / "run.json").read_text(encoding="utf-8"))
     j.pop("trace", None)
@@ -371,11 +379,13 @@ def _x3(args, timeout=180):
 
 
 @router.get("/x3/status")
-def x3_status(x_sdi_key: str | None = Header(default=None)):
+def x3_status(env: str = "mig", x_sdi_key: str | None = Header(default=None)):
     _check_key(x_sdi_key)
+    if env not in ENVS:
+        raise HTTPException(status_code=400, detail="env is mig (SDI Mig) or uat (We are SDI)")
     if not X3_LOAD.exists():
         return {"setup": False, "ready": False, "problem": f"x3_load.py not found: {X3_LOAD}"}
-    return _x3(["status"], 60)
+    return _x3(["status", "--env", env], 60)
 
 
 def _target(kind, ref):

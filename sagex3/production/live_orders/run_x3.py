@@ -11,12 +11,16 @@
   5. copies the .json to <runs>\\latest.json and writes <runs>\\status.json - what the portal serves
 
 Runs go to %USERPROFILE%\\SDI_X3_runs\\<date time> (or --runs / LIVE_ORDERS_RUNS). Read-only towards X3.
+--env mig (SDI Mig, test; the default) or uat (We are SDI, the users' UAT; 22 Nov): which X3 environment is read. Each
+has its own exports folder (x3_api.exports_root) and its workbooks are named SDI_Live_Orders_<MIG|UAT>_<date>_<time>,
+so the two never mix; Production's notes carry forward only from the same environment's last workbook.
 Schedule it in Windows Task Scheduler (see README). Exit code 0 = built, 1 = failed (status.json says why).
 """
 import argparse
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -27,6 +31,8 @@ from pathlib import Path
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 INTEGRATION = HERE.parent.parent / "integration"
+sys.path.insert(0, str(INTEGRATION / "x3_api"))
+from x3_api import ENVS, exports_root  # noqa: E402  (the X3 environments: one list for the whole chain)
 EXPORTS = Path(os.environ.get("X3_EXPORT_DIR", Path.home() / "SDI_X3_exports"))
 RUNS = Path(os.environ.get("LIVE_ORDERS_RUNS", Path.home() / "SDI_X3_runs"))
 # Production's folder: the workbooks they open, view and edit (James, 20 Nov). Use the network path - a scheduled
@@ -38,24 +44,36 @@ TRANSACTIONS = ["works_orders", "wo_products", "wo_materials", "stock", "so_line
 MASTER = ["products", "boms", "routes"]                                                               # once a day
 
 
-def newest_workbook(folder):
-    """The latest generated workbook - the one Production work in. By the time in its name, not the file date, so
-    opening an old one from the history doesn't make it 'newest'. Excel's ~$ lock files are ignored."""
+BOOK = re.compile(r"^SDI_Live_Orders_(?:(MIG|UAT)_)?(\d{4}-\d\d-\d\d_\d{4,6})$")
+
+
+def book_env(stem):
+    """mig / uat from a workbook name; names from before 22 Nov carry no tag and are SDI Mig's."""
+    m = BOOK.match(stem)
+    return None if not m else ("uat" if m[1] == "UAT" else "mig")
+
+
+def newest_workbook(folder, env="mig"):
+    """The latest generated workbook of this environment - the one Production work in. By the time in its name, not
+    the file date, so opening an old one from the history doesn't make it 'newest'. Excel's ~$ lock files ignored."""
     if not folder or not Path(folder).exists():
         return None
-    books = sorted(p for p in Path(folder).glob("SDI_Live_Orders_*.xlsx") if not p.name.startswith("~$"))
+    books = [p for p in Path(folder).glob("SDI_Live_Orders_*.xlsx") if not p.name.startswith("~$")
+             and book_env(p.stem) == env]
+    books.sort(key=lambda p: BOOK.match(p.stem)[2])
     return books[-1] if books else None
 
 
-def publish(files, folder):
-    """Save this run into Production's folder as a new pair - SDI_Live_Orders_<date>_<time>.xlsx (to open and edit)
-    and .json (the portal's views). Nothing is ever overwritten: that folder is the history (James, 20 Nov)."""
+def publish(files, folder, env="mig"):
+    """Save this run into Production's folder as a new pair - SDI_Live_Orders_<MIG|UAT>_<date>_<time>.xlsx (to open
+    and edit) and .json (the portal's views). Nothing is ever overwritten: that folder is the history (James, 20 Nov)."""
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     now = dt.datetime.now()
-    stem = f"SDI_Live_Orders_{now:%Y-%m-%d_%H%M}"
+    tag = ENVS[env]["tag"]
+    stem = f"SDI_Live_Orders_{tag}_{now:%Y-%m-%d_%H%M}"
     if any(folder.glob(stem + ".*")):
-        stem = f"SDI_Live_Orders_{now:%Y-%m-%d_%H%M%S}"
+        stem = f"SDI_Live_Orders_{tag}_{now:%Y-%m-%d_%H%M%S}"
     out = {}
     for f in files:
         dst = folder / (stem + f.suffix)
@@ -96,12 +114,13 @@ def pull_failures(day, out):
     return msgs
 
 
-def master_file(name, src, max_hours):
+def master_file(name, src, max_hours, root=None):
     """products / boms: from this pull if there, else the newest earlier pull - fresh enough if under max_hours."""
     here = next((src / f"{name}{e}" for e in (".json", ".csv") if (src / f"{name}{e}").exists()), None)
     if here:
         return here, True
-    cands = sorted(EXPORTS.glob(f"*/{name}.json")) + sorted(EXPORTS.glob(f"*/{name}.csv"))
+    root = root or EXPORTS
+    cands = sorted(root.glob(f"*/{name}.json")) + sorted(root.glob(f"*/{name}.csv"))
     if not cands:
         return None, False
     f = max(cands, key=lambda p: p.stat().st_mtime)
@@ -130,31 +149,34 @@ def main(argv=None):
     ap.add_argument("--full", action="store_true", help="re-pull products / BOMs / routings now as well")
     ap.add_argument("--pull-hours", type=float, default=4, help="stop the pull after this long (default 4 h)")
     ap.add_argument("--share", default=SHARE, help="Production's workbook folder (LIVE_ORDERS_SHARE); '' = don't publish")
+    ap.add_argument("--env", choices=sorted(ENVS), default="mig", help="mig = SDI Mig (test), uat = We are SDI (UAT)")
     a = ap.parse_args(argv)
 
     runs = Path(a.runs)
     runs.mkdir(parents=True, exist_ok=True)
-    status = dict(ok=False, started=dt.datetime.now().isoformat(timespec="seconds"))
+    root = exports_root(a.env)                              # this environment's pulls only
+    env_info = dict(key=a.env, **ENVS[a.env])
+    status = dict(ok=False, started=dt.datetime.now().isoformat(timespec="seconds"), env=env_info)
     try:
         if a.pull:
             script = INTEGRATION / ("x3_api/x3_api.py" if a.pull == "api" else "x3_ui/x3_ui.py")
             cmd = [sys.executable, str(script), "pull" if a.pull == "api" else "export"]
             if a.pull == "api":                         # transactions every run; products / BOMs once a day
-                today = EXPORTS / dt.date.today().isoformat()
-                stale = [m for m in MASTER if a.full or not master_file(m, today, a.master_hours)[1]]
-                cmd += TRANSACTIONS + stale
+                today = root / dt.date.today().isoformat()
+                stale = [m for m in MASTER if a.full or not master_file(m, today, a.master_hours, root)[1]]
+                cmd += TRANSACTIONS + stale + ["--env", a.env]
                 status["master_refreshed"] = stale
             code, out = run_streamed(cmd, a.pull_hours * 3600)
             status["pull"] = dict(cmd=" ".join(cmd[1:]), code=code, out=out)
-            status["pull_failed"] = pull_failures(EXPORTS / dt.date.today().isoformat(), out)
+            status["pull_failed"] = pull_failures(root / dt.date.today().isoformat(), out)
             if code not in (0, 1):                              # 1 = some data sets failed; carry on with the rest
                 raise SystemExit(f"pull failed ({code}): {out[-400:]}")
-        src = Path(a.exports) if a.exports else newest_exports(EXPORTS)
+        src = Path(a.exports) if a.exports else newest_exports(root)
         out = runs / dt.datetime.now().strftime("%Y-%m-%d_%H%M")
         out.mkdir(parents=True, exist_ok=True)
         for k in ("products", "boms", "routes"):                # master data: this pull, else the newest earlier one
             if not getattr(a, k):
-                f, _ = master_file(k, src, a.master_hours)
+                f, _ = master_file(k, src, a.master_hours, root)
                 if not f:
                     why = "; ".join(status.get("pull_failed") or [])
                     raise SystemExit(f"No {k} from Sage X3" + (f" - the pull said: {why}" if why else
@@ -166,19 +188,25 @@ def main(argv=None):
         status["exports"] = str(src)
         status["adapter"] = to_extract(src, extract)
         if not a.carry:                                   # Production's notes: from the workbook they last edited
-            last = newest_workbook(a.share) if a.share else None
+            last = newest_workbook(a.share, a.env) if a.share else None
             a.carry = str(last) if last else None
         status["carried_from"] = a.carry
         from build_live_orders import build
         res = build(extract, out, a.products, a.boms, a.routes, None, 14, a.costs, a.carry)
         j = next(out / f for f in res["files"] if f.endswith(".json"))
+        data = json.loads(j.read_text(encoding="utf-8"))
+        data["env"] = env_info                            # which X3 environment this came from (shown on the page)
+        data["x3_report"] = status["adapter"]             # what X3 sent and what was kept (22 Nov)
+        j.write_text(json.dumps(data, default=str), encoding="utf-8")
         shutil.copyfile(j, runs / "latest.json")
         if a.share:
-            status["published"] = publish([out / f for f in res["files"] if f.endswith((".xlsx", ".json"))], a.share)
+            status["published"] = publish([out / f for f in res["files"] if f.endswith((".xlsx", ".json"))], a.share,
+                                          a.env)
         status.update(ok=True, run=str(out), json=str(j), meta=res["meta"])
         if status.get("pull_failed"):                     # built, but on some of yesterday's data - say so
             status["warning"] = "note from the pull: " + "; ".join(status["pull_failed"])
-        old = sorted(p for p in runs.iterdir() if p.is_dir())[:-a.keep] if a.keep else []
+        old = sorted(p for p in runs.iterdir() if p.is_dir() and re.fullmatch(r"\d{4}-\d\d-\d\d_\d{4}", p.name))
+        old = old[:-a.keep] if a.keep else []
         for p in old:
             shutil.rmtree(p, ignore_errors=True)
     except (Exception, SystemExit) as e:                          # noqa: BLE001 - recorded for the portal

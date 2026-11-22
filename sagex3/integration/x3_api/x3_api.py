@@ -58,6 +58,24 @@ PAUSE = 1.0                                       # seconds between pages: keep 
 PAGE = 50                                         # rows per request (200 x 159 fields knocked X3 Services over, 20 Nov)
 RETRY_WAITS = (15, 45, 120)                       # back off on 5xx / connection errors, then give that data set up
 
+# The X3 environments the portal offers (James, 22 Nov: "SDI Mig / Stage choice ... We are SDI is the users' UAT").
+# One site, one connected application: the endpoint picks the folder. Each environment's pulls go to their own
+# exports folder, so the two never mix. Read-only here; x3_load.py decides what may be written.
+ENVS = {
+    "mig": {"label": "SDI Mig (test)", "tag": "MIG", "endpoint": "X3ERPV12_SDIMIG"},
+    "uat": {"label": "We are SDI (UAT)", "tag": "UAT", "endpoint": "X3ERPV12_ACUX3"},
+}
+
+
+def exports_root(env=None):
+    """SDI Mig keeps the original exports folder; any other environment gets <folder>_<TAG> beside it."""
+    return EXPORTS if env in (None, "", "mig") else EXPORTS.with_name(f"{EXPORTS.name}_{ENVS[env]['tag']}")
+
+
+def for_env(c, env):
+    """The settings with that environment's endpoint (this run only; the saved settings are not changed)."""
+    return c if env in (None, "") else dict(c, endpoint=ENVS[env]["endpoint"])
+
 
 # ---------------------------------------------------------------- settings
 def load_conf():
@@ -658,11 +676,15 @@ def pull(a):
         if not a.limit:
             sys.exit("--endpoint is only for trials (with --limit): another folder's data never goes to the exports")
         c = dict(c, endpoint=a.endpoint)               # this run only; the saved settings are not changed
+    env = getattr(a, "env", None)
+    if env:                                          # a portal environment (SDI Mig / We are SDI): its own exports
+        c = for_env(c, env)
     names = a.names or [n for n, d in sets.items() if not n.startswith("_") and d.get("enabled")]
     # a trial (--limit) goes to SDI_X3_samples, never the exports folder run_x3.py reads
-    day = (EXPORTS.parent / "SDI_X3_samples" if a.limit else EXPORTS) / dt.date.today().isoformat()
-    if a.endpoint:
-        day = day.with_name(day.name + "_" + a.endpoint)
+    day = (EXPORTS.parent / "SDI_X3_samples" if a.limit else exports_root(env)) / dt.date.today().isoformat()
+    if a.endpoint or (env and a.limit):
+        day = day.with_name(day.name + "_" + (a.endpoint or c["endpoint"]))
+    print(f"X3 endpoint: {c.get('endpoint')}", flush=True)
     log = []
     for n in names:
         if n not in sets:
@@ -745,6 +767,8 @@ def main(argv=None):
     p.add_argument("names", nargs="*")
     p.add_argument("--limit", type=int, default=0, help="trial: only this many rows per data set, to SDI_X3_samples")
     p.add_argument("--endpoint", help="trial only: read another X3 folder's endpoint (e.g. X3ERPV12_SEED) for column names")
+    p.add_argument("--env", choices=sorted(ENVS), help="a portal environment: mig = SDI Mig (test), uat = We are SDI "
+                                                     "(UAT); its own exports folder")
     p.set_defaults(fn=pull)
     cc = sp.add_parser("columns")
     cc.add_argument("names", nargs="*")

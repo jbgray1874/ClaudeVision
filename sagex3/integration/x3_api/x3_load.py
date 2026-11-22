@@ -1,18 +1,20 @@
-"""Load an Estimate -> X3 run into Sage X3: CREATE-ONLY, and ONLY into the test company (SDI Mig). Written 20 Nov 2026.
+"""Load an Estimate -> X3 run into Sage X3: CREATE-ONLY, and ONLY into the test environments. Written 20 Nov 2026.
+22 Nov: a run goes back into the environment it was checked against - SDI Mig (test) or We are SDI (the users' UAT).
 
 James, 20 Nov: "We also need to be able to save estimates to Sage X3, not just load up files." This is the write half
 of Estimate -> X3. It sends the same product, BOM and route as the run's three load files (run.json holds their rows),
 through X3's GraphQL API as create mutations, in the order X3 needs: product -> BOM -> route.
 
     python x3_load.py setup                    # the WRITE connected application -> x3_load.json (private, never in git)
-    python x3_load.py mutations                # read-only: what X3 lets us create for product / BOM / routing, and how
+    python x3_load.py mutations [--env uat]    # read-only: what X3 lets us create for product / BOM / routing, and how
                                                # each load-file field maps onto X3's create input; saves the schema
     python x3_load.py status [--json]          # set up? which X3? what can be created? (no call to X3)
     python x3_load.py plan <run_folder> [--json]                      # dry run: what would be created, what exists
     python x3_load.py load <run_folder> --apply --confirm <part> [--by NAME] [--json]   # creates what doesn't exist
 
 Safety, in the code (not settings):
-  * TEST ONLY: refuses any site but the training site (sdi-displays-trn) and any endpoint but X3ERPV12_SDIMIG.
+  * TEST ONLY: refuses any site but the training site (sdi-displays-trn) and any endpoint but X3ERPV12_SDIMIG (SDI
+    Mig) and X3ERPV12_ACUX3 (We are SDI, UAT).
     Production live data is never changed (James: "under any circumstances"). Live needs a code change and sign-off.
   * CREATE ONLY: the only mutation this file can send is `create`. No update, no delete. Before each create it reads X3
     (live) and skips the record if X3 already has it (a product with that code; any BOM or route for that part) -
@@ -45,11 +47,14 @@ import x3_api  # noqa: E402  (token, http, read-only gql for the existence check
 
 CONF = Path(os.environ.get("X3_LOAD_CONFIG", Path.home() / ".sdi" / "x3_load.json"))
 READ_CONF = x3_api.CONF                                  # the read-only Live Orders settings (for `mutations` only)
-SCHEMA = CONF.parent / "x3_load_schema.json"
+SCHEMA = CONF.parent / "x3_load_schema.json"           # SDI Mig's (the first one); other endpoints: schema_file()
 HISTORY = Path(os.environ.get("X3_LOAD_HISTORY", CONF.parent / "x3_load_history.jsonl"))
 
 TEST_SITE = re.compile(r"^https://[\w-]*-trn\.[\w.-]*sagex3\.com$", re.I)   # the training site only
-TEST_ENDPOINTS = {"X3ERPV12_SDIMIG"}                                        # SDI Mig only
+# SDI Mig (test) and, from 22 Nov, We are SDI (the users' UAT; James: "write the save-back of the estimate to the
+# relevant environment ... set up on We are SDI also so that the users can test, as that's their UAT"). Both on the
+# training site. Never production.
+TEST_ENDPOINTS = {x3_api.ENVS["mig"]["endpoint"], x3_api.ENVS["uat"]["endpoint"]}
 
 # the load files' columns (est_to_x3.py ITM_H2 / BOM_HEAD / ROU_H2) - run.json holds the rows in this order
 ITM = ["TCLCOD", "ITMREF", "ITMDES1", "ITMDES2", "ITMDES3", "STU", "PUU", "PUUSTUCOE", "SAU", "SAUSTUCOE", "WEU",
@@ -147,13 +152,24 @@ def load_conf(path=CONF):
 
 
 def guard(c):
-    """Test company only - in code, so no settings file can point it at live."""
+    """Test environments only (SDI Mig, We are SDI UAT) - in code, so no settings file can point it at live."""
     site, ep = c.get("site", ""), c.get("endpoint", "")
     if not TEST_SITE.match(site) or ep not in TEST_ENDPOINTS:
-        raise SystemExit(f"Refused: loads go only to the test company (the -trn site, endpoint "
+        raise SystemExit(f"Refused: loads go only to the test environments (the -trn site, endpoints "
                          f"{', '.join(sorted(TEST_ENDPOINTS))}). These settings point at {site} / {ep}. "
                          "Production live data is never changed from here.")
     return c
+
+
+def schema_file(endpoint):
+    """X3's API set-up is per folder, so each endpoint's schema is read and kept on its own."""
+    return SCHEMA if endpoint in (None, "", x3_api.ENVS["mig"]["endpoint"]) else CONF.parent / f"x3_load_schema_{endpoint}.json"
+
+
+def run_env(run):
+    """The X3 environment a run was checked against (run.json, 22 Nov); runs from before then are SDI Mig's."""
+    k = (run.get("env") or {}).get("key") or "mig"
+    return k if k in x3_api.ENVS else "mig"
 
 
 def setup(_):
@@ -309,15 +325,17 @@ def _ret_fields(types, tname):
 def mutations(a):
     """Read-only: introspect X3, save the schema, print what can be created and how our fields map."""
     c = load_conf() if CONF.exists() else x3_api.load_conf()
+    c = x3_api.for_env(c, a.env)
     sch = x3_api.gql(c, INTROSPECT)                     # a query - the read-only client sends it
-    SCHEMA.parent.mkdir(parents=True, exist_ok=True)
-    SCHEMA.write_text(json.dumps({"as_at": dt.datetime.now().isoformat(timespec="seconds"), "site": c.get("site"),
-                                  "endpoint": c.get("endpoint"), "schema": sch}))
+    f = schema_file(c.get("endpoint"))
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"as_at": dt.datetime.now().isoformat(timespec="seconds"), "site": c.get("site"),
+                             "endpoint": c.get("endpoint"), "schema": sch}))
     res = resolve(sch)
     if a.json:
         print(json.dumps(res, indent=1))
         return
-    print(f"X3 schema saved: {SCHEMA}")
+    print(f"X3 endpoint: {c.get('endpoint')} - schema saved: {f}")
     print(f"Create mutations X3 offers: {len(res['creates'])}" + ("" if res["has_mutations"] else
           "  - NONE: X3's GraphQL has no create for us yet (see the runbook: X3 Builder -> API operations)"))
     for n in res["creates"]:
@@ -340,10 +358,11 @@ def mutations(a):
     print("\nSend Claude this output (no secret in it).")
 
 
-def load_schema():
-    if not SCHEMA.exists():
+def load_schema(endpoint=None):
+    f = schema_file(endpoint)
+    if not f.exists():
         return None
-    return json.loads(SCHEMA.read_text())
+    return json.loads(f.read_text())
 
 
 # ---------------------------------------------------------------- values
@@ -441,15 +460,19 @@ def plan(run_dir, c=None):
     if not run.get("ok") or not run.get("ready"):
         stop("This run isn't READY TO LOAD: fix the STOP checks and run the estimate again.")
         return out
+    env = run_env(run)
+    out["env"] = dict(key=env, **x3_api.ENVS[env])
     try:
-        c = c or guard(load_conf())
+        c = c or guard(x3_api.for_env(load_conf(), env))     # the environment the estimate was checked against
     except SystemExit as e:
         stop(str(e))
         return out
-    out["target"] = {"site": c["site"], "endpoint": c["endpoint"], "user": c.get("user")}
-    sch = load_schema()
+    out["target"] = {"site": c["site"], "endpoint": c["endpoint"], "user": c.get("user"),
+                     "label": x3_api.ENVS[env]["label"]}
+    sch = load_schema(c["endpoint"])
     if not sch:
-        stop("X3's schema hasn't been read yet: run  python x3_load.py mutations  once (read-only).")
+        stop(f"X3's API hasn't been read yet for {x3_api.ENVS[env]['label']}: run  python x3_load.py mutations "
+             f"--env {env}  once (read-only).")
         return out
     out["schema_as_at"] = sch.get("as_at")
     res = resolve(sch["schema"])
@@ -528,8 +551,10 @@ def load(run_dir, confirm, by=""):
     if confirm != run.get("code"):
         log["error"] = f"Not loaded: type the part code ({run.get('code')}) to confirm"
         return _save_log(run_dir, run, log)
+    env = run_env(run)
+    log["env"] = dict(key=env, **x3_api.ENVS[env])
     try:
-        c = guard(load_conf())
+        c = guard(x3_api.for_env(load_conf(), env))           # back into the environment it was checked against
     except SystemExit as e:
         log["error"] = f"Not loaded: {e}"
         return _save_log(run_dir, run, log)
@@ -538,7 +563,7 @@ def load(run_dir, confirm, by=""):
     if not p["ok"]:
         log["error"] = "Not loaded: " + " | ".join(p["stops"])
         return _save_log(run_dir, run, log)
-    res = resolve(load_schema()["schema"])
+    res = resolve(load_schema(c["endpoint"])["schema"])
     for rec in p["records"]:
         if rec["action"] != "create":
             log["results"].append({"what": rec["what"], "action": rec["action"], "why": rec["why"]})
@@ -583,17 +608,19 @@ def _save_log(run_dir, run, log):
     return log
 
 
-def status():
-    out = {"setup": CONF.exists(), "config": str(CONF), "schema": None, "test_only": sorted(TEST_ENDPOINTS)}
+def status(env="mig"):
+    ep = x3_api.ENVS[env]["endpoint"]
+    out = {"setup": CONF.exists(), "config": str(CONF), "schema": None, "test_only": sorted(TEST_ENDPOINTS),
+           "env": dict(key=env, **x3_api.ENVS[env])}
     if CONF.exists():
         try:
-            c = json.loads(CONF.read_text())
+            c = x3_api.for_env(json.loads(CONF.read_text()), env)
             out.update(site=c.get("site"), endpoint=c.get("endpoint"), user=c.get("user"))
             guard(c)
             out["target_ok"] = True
         except (SystemExit, ValueError) as e:
             out["target_ok"], out["problem"] = False, str(e)
-    sch = load_schema()
+    sch = load_schema(ep)
     if sch:
         res = resolve(sch["schema"])
         out["schema"] = sch.get("as_at")
@@ -610,8 +637,10 @@ def main(argv=None):
     sub.add_parser("setup")
     m = sub.add_parser("mutations")
     m.add_argument("--json", action="store_true")
+    m.add_argument("--env", choices=sorted(x3_api.ENVS), default="mig", help="mig = SDI Mig, uat = We are SDI")
     s = sub.add_parser("status")
     s.add_argument("--json", action="store_true")
+    s.add_argument("--env", choices=sorted(x3_api.ENVS), default="mig")
     p = sub.add_parser("plan")
     p.add_argument("run_folder")
     p.add_argument("--json", action="store_true")
@@ -627,7 +656,7 @@ def main(argv=None):
     if a.cmd == "mutations":
         return mutations(a)
     if a.cmd == "status":
-        st = status()
+        st = status(a.env)
         print(json.dumps(st, indent=1) if a.json else "\n".join(f"{k}: {v}" for k, v in st.items()))
         return 0
     if a.cmd == "plan" or (a.cmd == "load" and not a.apply):
