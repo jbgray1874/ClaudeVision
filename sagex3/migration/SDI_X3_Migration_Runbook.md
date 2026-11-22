@@ -4875,3 +4875,9 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - margin is a contribution figure;
   - carriage etc. kept separate.
 - Tested on MOCK data (25 parts, 215 lines, 208 works orders); rendered with LibreOffice. Not yet run on Access. The output never goes in git (customer data).
+- **Registered with the other Access → X3 reports (REP-00..23, section 20.3) under SCRUM-212:**
+  - **REP-24** (SCRUM-336): this customer year-end report. X3 version after go-live: the same report from X3 sales order lines, works orders with actual costs, and standard costs once loaded (API app or request), proved against Access first, as REP-22.
+  - **REP-25** (SCRUM-337): Ian Knight's customer parts history (20 Nov). Its `COR_PRICE_PER` price column is to be checked: `…_PER` is usually the "per" quantity; align with the vw_SOH_V2 price rule.
+- **First `--run` on James's PC: `Login failed for user 'SDI\james.gray'` on 10.0.0.200** (18456): his Windows login has no access on that server.
+  - Use the server name SSMS connects to (`--server`), or the SQL login SSMS uses (`--login <user>`; the password is asked for, hidden, never stored).
+  - Separately: `sql/src/test_conn.py` in the repo holds a SQL login's password in plain text (and in git history). Flagged to James: change that password. Not touched.
