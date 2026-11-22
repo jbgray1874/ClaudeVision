@@ -4847,3 +4847,6 @@ Keep this up to date with every setting we choose. **Never write the secret here
     1. `ping` both environments.
     2. If SDI Mig is OK and We are SDI gives 503, ask whoever runs the site (Sage cloud / Acuity, James's call) to start or switch on the X3 Services (GraphQL API) for endpoint X3ERPV12_ACUX3.
     3. If REST answers for ACUX3, it is a fallback for reading.
+- **22 Nov, `ping` from James's PC: BOTH environments, BOTH APIs answer `503 no available server`.** SDI Mig and We are SDI, GraphQL and REST alike. So the whole training site's X3 back end isn't answering: Sage's side is down, in maintenance or asleep (a Sunday). It is not our set-up and not specific to We are SDI.
+  - Check: does the X3 sign-in at https://sdi-displays-trn.uk.sagex3.com work in a browser? If not, report "training site down" to whoever looks after the site (James's call; a site outage, not an API question).
+  - Re-run `ping` later. Both GraphQL OK means Regenerate can run: SDI Mig first (its "What X3 sent" explains 20 Nov's blank sheet), then We are SDI.
