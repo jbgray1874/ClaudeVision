@@ -4853,3 +4853,25 @@ Keep this up to date with every setting we choose. **Never write the secret here
 - **22 Nov, James: "Sage is down at the weekends … we will need to be able to do work / testing on weekends."** A note to Marc was drafted in chat: is the training site shut down at weekends on purpose, can it stay up (users' UAT in We are SDI, migration work, and the cut-over itself, 31 Dec to 4 Jan, crosses a weekend), and if not always, which weekends with how much notice.
   - **James: don't mention the API work to Marc.** He wasn't happy about the connection to their environment, because it takes from his dev team's work. Our own tooling stays out of anything sent to Acuity.
   - Resume Monday 23 Nov: `ping`, then Regenerate SDI Mig, then We are SDI. The server already has the early-stop fix (robocopy 22 Nov).
+
+#### 22 Nov – Year-end product-line report for one key customer (account director's request; `sagex3/reports/customer_year_end.sql` + `customer_year_end_xlsx.py`)
+- **Asked:** a year-end record of every product line one customer buys, from Access, before the move to Sage, to review quantities and find cost-effective manufacturing improvements and margin. He's away, so James asked for it to be prepared on assumptions, which are stated when it goes back to him.
+- **`customer_year_end.sql`** (READ ONLY; placeholders in git: the customer's name and part-code prefix are set in SSMS only):
+  - accounts whose name matches, plus that customer's part-code prefix ordered through any other account;
+  - every order line since 1 Jan last year (price = discounted price per its 'per' quantity, else the original, as vw_SOH_V2);
+  - the works orders for those parts, completed since 1 Jan last year plus open ones, with booked material / labour / subcontract cost;
+  - each part's Access standard cost;
+  - Results to File, tab delimited.
+- **`customer_year_end_xlsx.py --customer "<name>"`** (the name appears only in the workbook). Tabs:
+  - Read me: period, accounts, **8 stated assumptions**;
+  - Summary: this year to date against last year, margin bands, top 15 by value with a chart;
+  - By part: units, value, prices, works orders, batch sizes, scrap, cost per unit and its basis, margin, flags;
+  - Opportunities: margin under 25% or a loss, batch size, scrap / rejects, price below the usual price, high-labour volume lines; ranked by a rough yearly £, stated as estimates;
+  - Order lines, Works orders, Accounts.
+- **Key assumptions:**
+  - calendar year to date, re-run on 31 Dec for the final record;
+  - values as ordered, ex VAT, no invoices;
+  - cost = booked works-order cost ÷ good quantity, else last year's, else standard cost; no overheads unless booked;
+  - margin is a contribution figure;
+  - carriage etc. kept separate.
+- Tested on MOCK data (25 parts, 215 lines, 208 works orders); rendered with LibreOffice. Not yet run on Access. The output never goes in git (customer data).
