@@ -70,7 +70,7 @@ def day(v):
     return dt.date(int(m[1]), int(m[2]), int(m[3])) if m else None
 
 
-def run_sql(server, database, name_like, part_like):
+def run_sql(server, database, name_like, part_like, login=""):
     """Run customer_year_end.sql (beside this file) on SDILive and return its grids, as read() would from a file.
     Windows authentication only; the SQL only reads (temp tables in tempdb). The two placeholders are filled in
     memory - the file on disk keeps them."""
@@ -86,7 +86,12 @@ def run_sql(server, database, name_like, part_like):
                if d in pyodbc.drivers()]
     if not drivers:
         sys.exit("No SQL Server ODBC driver on this PC: install Microsoft's 'ODBC Driver 18 for SQL Server'")
-    conn = pyodbc.connect(f"DRIVER={{{drivers[0]}}};SERVER={server};DATABASE={database};Trusted_Connection=yes;"
+    if login:                                         # a SQL Server login, as SSMS's "SQL Server Authentication":
+        import getpass                                # the password is typed (hidden), used once, never stored
+        auth = f"UID={login};PWD={{{getpass.getpass(f'Password for {login} on {server} (hidden): ').replace('}', '}}')}}};"
+    else:
+        auth = "Trusted_Connection=yes;"              # Windows login, as SSMS's "Windows Authentication"
+    conn = pyodbc.connect(f"DRIVER={{{drivers[0]}}};SERVER={server};DATABASE={database};{auth}"
                           "TrustServerCertificate=yes;Encrypt=yes;ApplicationIntent=ReadOnly;", timeout=20,
                           autocommit=True)
     cur = conn.cursor()
@@ -488,6 +493,8 @@ def main(argv=None):
     ap.add_argument("--prefix", default="", help="with --run: their part-code prefix, e.g. ABC-%%")
     ap.add_argument("--server", default=os.environ.get("SDI_SQL_SERVER", "10.0.0.200"))
     ap.add_argument("--database", default="SDILive")
+    ap.add_argument("--login", default="", help="a SQL Server login (as SSMS 'SQL Server Authentication'); the "
+                                                  "password is asked for, hidden. Default: your Windows login")
     ap.add_argument("--out", help="the workbook (default: your Desktop)")
     ap.add_argument("--customer", required=True, help="the name shown in the workbook (never stored in git)")
     ap.add_argument("--target-margin", type=float, default=25, help="percent (default 25)")
@@ -498,7 +505,7 @@ def main(argv=None):
         if not a.name:
             sys.exit("--run needs --name (the customer's name as in the sales ledger, e.g. %NAME%)")
         print(f"Reading {a.database} on {a.server} (read only) - about a minute ...", flush=True)
-        g = run_sql(a.server, a.database, a.name, a.prefix)
+        g = run_sql(a.server, a.database, a.name, a.prefix, a.login)
     elif a.txt:
         g = read(a.txt)
     else:
