@@ -306,9 +306,12 @@
           font-family:var(--mono);font-size:12px;color:var(--ink-2);overflow:hidden;white-space:nowrap;
           position:sticky;bottom:0;z-index:5;background:var(--bg);padding:0 18px}
   .ticker .tag{color:var(--accent);letter-spacing:.2em;font-size:10.5px;flex:none}
-  .ticker .run{display:inline-block;padding-left:100%;animation:tick 38s linear infinite}
+  .ticker .run{display:inline-flex;width:max-content;animation:tick 38s linear infinite}
+  .ticker-copy{display:inline-block;flex:none;min-width:var(--ticker-copy-width,600px);padding-right:56px}
   .ticker .run.still{padding-left:0;animation:none}
-  @keyframes tick{to{transform:translateX(-100%)}}
+  .ticker:hover .run,.ticker:focus-within .run{animation-play-state:paused}
+  .ticker:focus-visible{outline:1px solid var(--accent);outline-offset:-2px}
+  @keyframes tick{to{transform:translateX(-50%)}}
   .ticker .foot{margin-left:auto;flex:none;color:var(--ink-3);font-size:10.5px;padding-left:12px}
 
   .tip{position:fixed;z-index:9;pointer-events:none;background:#0d151e;border:1px solid var(--line-hi);
@@ -474,10 +477,13 @@
   .kpis{grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
   .kpi .k,.kpi .s{white-space:normal;overflow:visible;text-overflow:clip}
   .kpi .v{font-size:36px}.kpi .s{line-height:1.4}
-  .telemetry{grid-column:1/-1;padding:8px 12px}
-  .telemetry summary{cursor:pointer;color:var(--ink-2);font:11px var(--mono);letter-spacing:.08em}
-  .telemetry-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px}
-  .telemetry .kpi{background:var(--surface);border-radius:6px}.telemetry .v{font-size:25px}
+  /* The original eight metrics stay visible on the wall; no collapsed telemetry row. */
+  #kpis.kpis{grid-template-columns:repeat(8,minmax(0,1fr));gap:10px}
+  #kpis .kpi{padding:12px;min-width:0}
+  #kpis .kpi .k{font-size:10px;letter-spacing:.12em;min-height:2.7em}
+  #kpis .kpi .v{font-size:clamp(22px,1.85vw,36px);letter-spacing:-.04em;white-space:nowrap}
+  #kpis .kpi .v small{font-size:.5em;letter-spacing:0}
+  #kpis .kpi .s{font-size:11px;line-height:1.4}
   .main{grid-template-columns:minmax(0,3.35fr) minmax(280px,1fr)}
   .lane{gap:12px;padding:14px;overflow-y:auto;scrollbar-width:thin}
   .lanehead{align-items:flex-start}.slotname{font-size:10px;letter-spacing:.12em;overflow-wrap:anywhere}
@@ -523,8 +529,12 @@
     .lane{padding:11px}.badge{font-size:10px;padding:4px 7px}.job-description{font-size:13px}
   }
   @media(max-width:1200px){.main{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
-    .status-stack{max-width:600px}.telemetry-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.lane{min-height:340px}}
+    #kpis.kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
+    .status-stack{max-width:600px}.lane{min-height:340px}}
+  @media(max-width:640px){#kpis.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
   @media(prefers-reduced-motion:reduce){.radar::after,.banner.red,.term .cur::after{animation:none!important}}
+  @media(prefers-reduced-motion:reduce){.ticker .run{animation:none!important;transform:none!important}
+    .ticker-copy[aria-hidden="true"]{display:none}}
 </style>
 </head>
 <body>
@@ -820,7 +830,7 @@
     </div>
   </section>
 </div>
-<div class="ticker"><span class="tag">ALERTS</span><span style="overflow:hidden;flex:1"><span class="run still" id="ticker">—</span></span>
+<div class="ticker" tabindex="0" aria-label="Live operational alerts and estimate review notices"><span class="tag">ALERTS</span><span style="overflow:hidden;flex:1;min-width:0"><span class="run still" id="ticker" role="status" aria-live="polite">—</span></span>
   <span class="foot" id="foot"></span></div>
 <div class="tip" id="tip"></div>
 <div class="modal" id="filesModal" hidden role="dialog" aria-label="Files in the drawing pack">
@@ -1054,29 +1064,20 @@ function renderKpis(k, exp, s){
     `<i class="${i < k.running ? "on" : i < k.max_runs ? "" : "off"}"></i>`).join("");
   const tiles = [
     ["Runs today", `${k.runs_today}`, `✓ ${k.done_today} done · ✕ ${k.failed_today} failed · ${k.extracts_today} extracts`],
-    ["Completed · 24 h", `${k.done_24h}`, "estimates finished in the last day"],
+    ["Completed · 24 h", `${k.done_24h}`, "Execution finished in the last day; not estimate approval"],
     ["Success · 7 days", rate == null ? "—" : `${rate}<small>%</small>`,
      `${badge(rateRag, rateWord)} <span style="margin-left:6px">${k.judged_7d} finished</span>`],
     ["Median run · 7 days", fmtDur(k.median_s_7d), `fastest ${fmtDur(k.fastest_s_7d)}`],
     ["90th pct · 7 days", fmtDur(k.p90_s_7d), "9 in 10 estimates finish inside this"],
-    ["Queue", `${k.queued}`, `average wait ${fmtDur(k.mean_wait_s_7d)}, last 7 days`],
+    ["Queue", `${k.queued_grid ?? k.queued ?? 0}`, "Submitted service queues; batch rows not yet submitted are not counted"],
     ["Capacity", `${k.running}<small>/ ${k.max_runs}</small>`,
      `${k.utilisation_pct}% of slots busy<div class="slots">${slots}</div>`],
     ["ETA error", k.eta && k.eta.n ? "±" + fmtDur(k.eta.median_abs_error_s) : "—",
      k.eta && k.eta.n ? `${k.eta.inside_pct}% inside their window · ${k.eta.n} runs`
                       : "measuring: needs finished runs given a window"],
   ];
-  const review = attentionRows(s || snap || {}), recent = allRecent(s || snap || {});
-  const headline = [
-    ["Running · grid", `${k.running || 0}<small>/ ${k.max_runs || 1}</small>`, "active jobs / configured slots · runner availability shown separately"],
-    ["Submitted queue", `${k.queued_grid ?? k.queued ?? 0}`, "Service queues only; batch rows not yet submitted are not counted"],
-    ["Finished · local 24 h", `${k.done_24h || 0}`, "Execution finished; not a statement of estimate approval"],
-    ["Needs attention · recent", `${review.length}`, `of ${recent.length} visible results · unpriced, failed or requiring review`],
-  ];
   const tile = ([key, v, sub]) => `<div class="panel kpi"><div class="k">${esc(key)}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
-  const expanded = !!$("wallTelemetry")?.open;
-  $("kpis").innerHTML = headline.map(tile).join("")
-    + `<details class="panel telemetry" id="wallTelemetry"${expanded ? " open" : ""}><summary>TECHNICAL TELEMETRY · history / capacity / existing ETA measurements</summary><div class="telemetry-grid">${tiles.map(tile).join("")}</div></details>`;
+  $("kpis").innerHTML = tiles.map(tile).join("");
 }
 
 // Presentation only: reference first, description and source row underneath. Never invent
@@ -1608,13 +1609,25 @@ function renderRecent(rows){
 
 function renderTicker(alerts){
   const t = $("ticker");
-  if(!alerts.length){
-    t.className = "run still";
-    t.textContent = "No operational alerts reported. Estimate review status is shown separately.";
-  }else{
-    t.className = "run";
-    t.textContent = alerts.map(a => "▲ " + a).join("     ◆     ");
+  const review = attentionRows(snap || {}), recent = allRecent(snap || {});
+  let message = alerts.length ? alerts.map(a => "▲ OPERATIONAL: " + a).join("     ◆     ")
+    : "No operational alerts reported. Estimate review status is shown separately.";
+  if(review.length) message += `     ◆     ESTIMATE REVIEW: ${review.length} of ${recent.length} recent results need attention; see Needs attention.`;
+  // Keep the same elements and animation across polling. Duplicate copies make a
+  // seamless loop; the second is visual only, so screen readers hear it once.
+  if(t.dataset.message !== message){
+    t.replaceChildren();
+    for(let i = 0; i < 2; i++){
+      const copy = document.createElement("span");
+      copy.className = "ticker-copy";
+      if(i) copy.setAttribute("aria-hidden", "true");
+      copy.textContent = message;
+      t.appendChild(copy);
+    }
+    t.dataset.message = message;
   }
+  t.style.setProperty("--ticker-copy-width", Math.ceil(t.parentElement.clientWidth) + "px");
+  t.className = "run";
 }
 
 /* ── THE SECOND HAND: clocks and run timers tick between reads ── */
