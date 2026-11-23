@@ -33,12 +33,32 @@ TERMINAL_FAILURE = {'error','failed','cancelled','abandoned','held','stopped'}
 def now(): return datetime.now(timezone.utc).isoformat()
 
 
+def winsafe(path, windows=None):
+    r"""The path, in Windows' extended-length form when it needs it, else as given.
+
+    Windows refuses a path over about 260 characters unless it is written \\?\C:\... or
+    \\?\UNC\server\share\.... Row 29's second attempt filed its unpriced covering e-mail
+    264 characters deep on K and the whole queue stopped on FileNotFoundError (23 Nov 2026).
+    The archive now writes and reads long paths in that form; short paths, relative paths
+    and every path off Windows are untouched. 240 leaves room for the ~20 characters the
+    atomic write's temporary name adds beside the target."""
+    windows = (os.name == 'nt') if windows is None else windows
+    s = str(path)
+    if not windows or len(s) < 240 or s.startswith('\\\\?\\'):
+        return s
+    if s.startswith('\\\\'):
+        return '\\\\?\\UNC' + s[1:]
+    if len(s) > 2 and s[1] == ':' and s[2] == '\\':
+        return '\\\\?\\' + s
+    return s
+
+
 def atomic(path, data):
-    path = Path(path); path.parent.mkdir(parents=True,exist_ok=True)
-    fd,tmp = tempfile.mkstemp(prefix=path.name+'.',suffix='.tmp',dir=path.parent)
+    path = Path(path); Path(winsafe(path.parent)).mkdir(parents=True,exist_ok=True)
+    fd,tmp = tempfile.mkstemp(prefix=path.name+'.',suffix='.tmp',dir=winsafe(path.parent))
     try:
         with os.fdopen(fd,'wb') as out: out.write(data); out.flush(); os.fsync(out.fileno())
-        os.replace(tmp,path)
+        os.replace(tmp,winsafe(path))
     finally:
         if os.path.exists(tmp): os.unlink(tmp)
 
@@ -86,10 +106,11 @@ class Archive:
         if Path(relative).is_absolute() or '..' in Path(relative).parts: raise ValueError('unsafe archive name')
         for root in self.roots:
             path = root/relative
-            if immutable and path.exists():
-                if path.read_bytes() != data: raise ValueError(f'archive conflict: {path}')
+            target = Path(winsafe(path))                 # the same file, long-path safe
+            if immutable and target.exists():
+                if target.read_bytes() != data: raise ValueError(f'archive conflict: {path}')
             else: atomic(path,data)
-            if sha(path.read_bytes()) != sha(data): raise OSError('archive verification failed')
+            if sha(target.read_bytes()) != sha(data): raise OSError('archive verification failed')
 
     def event(self, kind, **details):
         event = {'at':now(),'event':kind,**details}
