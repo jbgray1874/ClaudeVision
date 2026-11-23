@@ -8,6 +8,22 @@ priced estimate.
 
 ## What it does
 
+### TTI drawing rows and explicit brief fallback
+
+The drawing pricer holds a row carrying a drawing reference when no resolved pack is
+available. `--drawings-only` requires a resolved pack, not merely a nonblank drawing cell.
+`--allow-drawing-reference-fallback` explicitly permits the legacy labelled brief-only
+route for a drawing-reference row; it is off by default and never overrides
+`--drawings-only`. Prefer `tti_concept_batch.py` for authorised no-pack concepts because
+it reads Excel in-cell pictures. A live lookup failure is not proof that Design has no
+drawings. The report's `pack_lookup` preserves the direct lookup's observations.
+This guard does not approve or reprice existing results, and changes no concept-batch code.
+
+`python -B tools/diagnose_tti_four_packs.py --output <report.json>` records the four
+disputed references' live Design/Prototype discovery without staging, CAD applications,
+service calls, workbook updates or estimate submissions. Run it from a review checkout
+with share access. Discovery errors remain errors, not missing-pack conclusions.
+
 - Extracts text and geometry from engineering drawings (PDFs + flat DXFs)
 - Identifies parts, materials, thickness, dimensions, holes, folds, finishes and BOM lines
 - Assigns manufacturing routes that **follow the material family** (metal / board / tube / bought-in)

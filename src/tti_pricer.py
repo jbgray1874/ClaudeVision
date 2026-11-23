@@ -24,7 +24,9 @@ is allowed to read, and the copy is the record of exactly which drawings were pr
 
 TWO KINDS OF ESTIMATE, SAID ON EACH ROW.
     drawings found   a full estimate (or the mode chosen with --method), the usual detailed workbook
-    none found       an LLM estimate from the description, the notes and the thumbnails, labelled so
+    none found       a row with a drawing reference is held by default. An explicitly authorised
+                     --allow-drawing-reference-fallback permits a labelled brief estimate instead.
+                     Rows without a drawing reference retain their brief-estimate route.
 Both are filed exactly as any other run, in the usual estimating folders, client TTI. A run that
 fails leaves column P as it was and says why in the status file.
 
@@ -838,6 +840,18 @@ def unit_cost_of(st: Dict[str, Any], qty: int) -> Optional[float]:
 # every row, whatever the index holds, and handed to the resolver with the rest. Where the
 # Design area cannot be read the row is held: a Prototype pack is never accepted unlooked.
 _DIRECT: List[bool] = []           # non-empty: packs come from the job's own folders, no index
+_PACK_LOOKUP_NOTES: Dict[str, str] = {}  # Preserve negative discovery evidence, not just successes.
+
+
+def drawing_pack_required(drawing: str, manifest: Any, args: Any) -> bool:
+    """A named drawing is not permission to substitute a brief for its unresolved pack.
+
+    The dedicated concept batch handles the authorised no-pack fallbacks. This guard
+    neither submits nor changes a completed result and --drawings-only always wins.
+    """
+    return bool(drawing and not manifest and
+                (getattr(args, 'drawings_only', False) or
+                 not getattr(args, 'allow_drawing_reference_fallback', False)))
 
 
 def design_root() -> Optional[Path]:
@@ -870,6 +884,7 @@ def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
         # is listed first and Prototype after it, both now, and the resolver's own rules choose:
         # Design where it holds the drawing, Prototype only where a Design that was read does not.
         rows, said, design_rows = pr.rows_for_job_now(drawing, job_areas())
+        _PACK_LOOKUP_NOTES[drawing] = said
         if not rows:
             return {}, None
         # Design first is stated here, not left to a setting: a folder listed from the first
@@ -891,6 +906,7 @@ def pack_for(drawing: str, listings: List[Tuple[str, List[Path]]], client: str
         # re-listed now, and shared-library parts found anywhere: the page's and Self-Running's way.
         rows, _src, lookup = pr.folders_for(drawing, index_path=_LOOKUP_INDEX[0] if _LOOKUP_INDEX else None)
         now_rows, looked, _d = pr.rows_for_job_now(drawing, job_areas()[:1])
+        _PACK_LOOKUP_NOTES[drawing] = looked
         if now_rows:
             listed = {os.path.normcase(str(r[0])) for r in now_rows}
             rows = [r for r in rows if os.path.normcase(str(r[0])) not in listed] + now_rows
@@ -1322,6 +1338,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         args.col_cost = data["cost_column"]
     design, proto = batch_roots()
     _FILES.clear()
+    _PACK_LOOKUP_NOTES.clear()
     _MTIME.clear()
     _SIZE.clear()
     if not args.dry_run and not design.is_dir() and not proto.is_dir():
@@ -1542,6 +1559,7 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
                 "files": len(found.get("files") or []) if found else 0,
                 "formats": _formats(found.get("files") or []) if found else None,
                 "thumbnails": len(r["pictures"]), "cost_before": r["cost_before"], "state": "planned",
+                "pack_lookup": _PACK_LOOKUP_NOTES.get(r.get("drawing") or "", ""),
                 "previous": {k: (ledger.get(row_key(r)) or {}).get(k)
                              for k in ("run_id", "state", "unit_cost", "written", "approval")}
                 if ledger.get(row_key(r)) else None,
@@ -1581,10 +1599,14 @@ def run_batch(args: argparse.Namespace, portal: Any = None, status_path: Optiona
         # A DRAWING PACK OR NOTHING (JG, 11 Nov 2026): "price drawing-pack rows only — no
         # thumbnail-only estimates". A number that found no drawings needs one; a job folder
         # with no resolved GA needs a person to name the pack.
-        if getattr(args, "drawings_only", False) and not manifest:
+        if drawing_pack_required(r.get("drawing") or "", manifest, args):
             item.update(state="needs drawing" if not found else "needs decision",
-                        why=("no drawings found for this number" if not found else
-                             "only a job folder matched; no GA pack resolved, so it is not priced"))
+                        kind="not priced (drawing pack unresolved)",
+                        why=("no resolved drawing pack; no brief-only substitution was authorised. "
+                             "Check the live Design lookup and the exact drawing/revision. "
+                             "A deliberate fallback belongs in the concept queue or requires "
+                             "--allow-drawing-reference-fallback (never with --drawings-only). "
+                             + str(item.get("pack_lookup") or "")))
             save()
             continue
         # A COST ALREADY IN THE CELL STAYS unless replacing is asked for.
@@ -2020,7 +2042,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--col-thumbs", default="I,J")
     ap.add_argument("--col-cost", default="P")
     ap.add_argument("--drawings-only", action="store_true",
-                    help="price only the rows that carry a drawing number; the rest are listed, not priced")
+                    help="require a resolved drawing pack; missing/unchecked packs and rows without drawing numbers are listed, not priced")
+    ap.add_argument("--allow-drawing-reference-fallback", action="store_true",
+                    help="explicitly authorise a labelled brief-only estimate when a row's drawing pack cannot be resolved; --drawings-only still refuses it. Prefer the concept batch for in-cell pictures.")
     ap.add_argument("--replace-costs", action="store_true",
                     help="allow overwriting the cost column; may reuse an existing finished run. "
                          "Use --run-again for a fresh estimate of a finished row")

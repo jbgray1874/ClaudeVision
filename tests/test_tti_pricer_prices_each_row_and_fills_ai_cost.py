@@ -80,6 +80,9 @@ def _args(sheet: Path, **kw) -> Namespace:
     # name (--use-index). The default route, each job's own folders with no index, has its own
     # tests in test_a_pack_is_found_in_the_jobs_own_folders_design_first_with_no_index.py.
     a.use_index = True
+    # This suite deliberately exercises the legacy brief fallback as well as packs.
+    # A drawing-reference fallback now requires explicit operator authorisation.
+    a.allow_drawing_reference_fallback = True
     for k, v in kw.items():
         setattr(a, k, v)
     return a
