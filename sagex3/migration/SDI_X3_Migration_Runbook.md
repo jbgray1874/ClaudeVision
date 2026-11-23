@@ -4955,3 +4955,9 @@ Keep this up to date with every setting we choose. **Never write the secret here
     - works orders sent;
     - stock by site.
   - Writes `SDI_X3_inventory_<date>_<time>.xlsx` to Downloads (Summary, Checks, one tab per data set). It holds business data: not for git or email. Tested against a fake X3 (two environments, a failed data set, X3 not answering).
+- **Live Orders page fix (James, testing the switch to We are SDI):** with no data yet for We are SDI, the header stayed on "Loading We are SDI (UAT)…" and the tiles still showed SDI Mig's figures (892 WO suggestions, 110 no BOM / route).
+  - **Now:** switching environment clears the figures at once. If there's no data, the header says "No Live Orders data yet for We are SDI (UAT)" and the box says "It hasn't been generated in this environment yet – press Regenerate", instead of "404 Not Found".
+  - User guide, How it works and Workbooks stay available.
+  - Tested in a browser: SDI Mig with data → We are SDI with none → back to SDI Mig.
+  - Deploy with the next pull / robocopy / installer `--apply`; no restart.
+- **We are SDI Regenerate started about 12:30.** X3 sent 98 works-order lines (`wo_products: 98 rows`).

@@ -36,7 +36,9 @@ nav.tabs button.on{background:var(--ink);color:#fff}nav.tabs button:hover:not(.o
 :root[data-theme="dark"] nav.tabs button.on{background:var(--y);color:#1c1c1c}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) nav.tabs button.on{background:var(--y);color:#1c1c1c}}
 main{padding:18px 0 48px}
-.view{display:none;animation:fade .25s ease}.view.on{display:block}@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+.view{display:none;animation:fade .25s ease}.view.on{display:block}
+/* 23 Nov: no data for this environment = no figures from the last one (James: the tiles showed SDI Mig's 892 under We are SDI) */
+body.nodata #v-ov,body.nodata #v-lo,body.nodata #v-ld,body.nodata #v-sh,body.nodata #v-sg,body.nodata #v-cu,body.nodata #v-tr,body.nodata #x3rep{display:none!important}@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:var(--sh);position:relative;overflow:hidden}
 .tile b{display:block;font-size:30px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums}.tile span{color:var(--muted);font-size:12px}
@@ -268,7 +270,7 @@ function csv(name,head,rows){const q=v=>/[",\n]/.test(String(v??''))?`"${String(
 // ---------------------------------------------------------------- render
 function render(data){
   if(!data||!Array.isArray(data.wos)){alert('This file is not a Live Orders data file.');return}
-  D=data;const m=D.meta||{};showEnv();x3Report(false);
+  D=data;document.body.classList.remove('nodata');const m=D.meta||{};showEnv();x3Report(false);
   D.wos.forEach(w=>{w.F=(w.f||[]).map(x=>String(x).charAt(0));w.H=hrsOf(w);w.wk=w.due?monday(w.due):''});
   $('#drop').classList.add('hide');$('#tabs').classList.remove('hide');
   $('#asat').textContent=`as at ${m.as_at||''} · ${fmtN(D.wos.length)} works orders still to make`;
@@ -386,7 +388,9 @@ let ENV='mig';try{const e=localStorage.getItem('sdiX3Env');if(ENVS[e])ENV=e;cons
 const U=p=>p+(p.includes('?')?'&':'?')+'env='+ENV;
 const src=new URLSearchParams(location.search).get('data')||(onPortal?U('/api/live-orders/latest'):null);
 const HD=()=>sdiKey?{'X-SDI-Key':sdiKey}:{};
-function load(url,name){return fetch(url,{headers:HD()}).then(r=>{if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}).then(d=>{cur=name||'';render(d);markCur()}).catch(e=>{D=null;$('#drop').classList.remove('hide');$('#drop').innerHTML=`<b>No Live Orders data yet for ${esc(ENVS[ENV])}</b><br><span class="muted">${esc(e.message)}${onPortal?' - press Regenerate':''}</span>`;showEnv()})}
+function load(url,name){return fetch(url,{headers:HD()}).then(r=>{if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}).then(d=>{cur=name||'';render(d);markCur()}).catch(e=>{D=null;document.body.classList.add('nodata');const none=/^404/.test(e.message);
+  $('#asat').textContent=`No Live Orders data yet for ${ENVS[ENV]}`;
+  $('#drop').classList.remove('hide');$('#drop').innerHTML=`<b>No Live Orders data yet for ${esc(ENVS[ENV])}</b><br><span class="muted">${none?"It hasn't been generated in this environment yet":esc(e.message)}${onPortal?' - press Regenerate':''}</span>`;showEnv()})}
 function showEnv(){$$('#envsw button').forEach(b=>b.classList.toggle('on',b.dataset.env===ENV));const b=$('#envb');if(!onPortal)return;
   const de=D&&D.env&&D.env.key;b.classList.remove('hide');b.classList.toggle('uat',ENV==='uat');
   b.textContent='Sage X3: '+ENVS[ENV]+(de&&de!==ENV?` - ⚠ this data is from ${ENVS[de]||de}`:'')}
@@ -401,7 +405,7 @@ function x3Report(open,lines){lines=lines||(D&&D.x3_report)||[];if(!lines.length
   if(open||none)$('#x3rep').classList.remove('hide')}
 $('#x3repc').onclick=()=>$('#x3rep').classList.add('hide');
 $('#envsw').addEventListener('click',e=>{const b=e.target.closest('button[data-env]');if(!b||b.dataset.env===ENV)return;ENV=b.dataset.env;try{localStorage.setItem('sdiX3Env',ENV)}catch(x){}
-  D=null;cur='';hist=[];files=[];$('#x3rep').classList.add('hide');$('#rstat').textContent='';showEnv();
+  D=null;cur='';hist=[];files=[];document.body.classList.add('nodata');$('#x3rep').classList.add('hide');$('#rstat').textContent='';showEnv();
   $('#asat').textContent='Loading '+ENVS[ENV]+'…';load(U('/api/live-orders/latest'),'');loadHistory().catch(()=>{});poll()});
 function markCur(){const latest=hist.length?hist[0].name:'';$$('#files tr[data-n]').forEach(tr=>tr.classList.toggle('cur',tr.dataset.n===(cur||latest)));
   $('#viewing').innerHTML=cur&&hist.length&&cur!==hist[0].name?`<span class="chip old">viewing ${esc(fmtWhen(cur))} · <a style="color:inherit;cursor:pointer;text-decoration:underline" data-latest="1">back to latest</a></span>`:(onPortal&&hist.length?'<span class="chip">latest</span>':'')}
