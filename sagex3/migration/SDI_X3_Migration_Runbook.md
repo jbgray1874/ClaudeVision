@@ -4942,3 +4942,16 @@ Keep this up to date with every setting we choose. **Never write the secret here
 - **Faster reading:** `x3_api.py` now reads 200 rows a request (was 50) with a 0.3 s pause (was 1 s). Both can be changed without code, through the `X3_PAGE` and `X3_PAUSE` environment variables.
   - The 20 Nov overload was 200 rows × 159 fields; our field lists are now about 10–15 fields.
   - To prove before We are SDI's first run: a one-request trial of 200 rows.
+- **Is the data in Sage? Ethan says works, purchase and sales orders are in Sage,** but SDI Mig sent no works orders and no stock. A trial read of We are SDI sent 98 works-order lines and full pages of stock and BOMs. So either Ethan's data is in We are SDI, or SDI Mig's isn't visible to our connection's user or site.
+- **New `x3_api/x3_inventory.py` (read only, same lean fields and paging as the Live Orders pull):** for SDI Mig and We are SDI side by side, it reads every data set Live Orders uses, plus works-order headers and operations and work centres. For each it reports:
+  - rows, and identical rows repeated;
+  - repeated keys (to tell our read doubling a line from two genuine lines);
+  - status values;
+  - date ranges, with the most common date;
+  - errors.
+  - Specific checks:
+    - sales order lines with the same order, part and quantity;
+    - how many lines share the most common requested delivery date (SDI Mig showed 06/11/26 on every WO Suggestions line);
+    - works orders sent;
+    - stock by site.
+  - Writes `SDI_X3_inventory_<date>_<time>.xlsx` to Downloads (Summary, Checks, one tab per data set). It holds business data: not for git or email. Tested against a fake X3 (two environments, a failed data set, X3 not answering).
