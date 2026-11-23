@@ -33,18 +33,20 @@ TERMINAL_FAILURE = {'error','failed','cancelled','abandoned','held','stopped'}
 def now(): return datetime.now(timezone.utc).isoformat()
 
 
-def winsafe(path, windows=None):
+def winsafe(path, windows=None, reserve=0):
     r"""The path, in Windows' extended-length form when it needs it, else as given.
 
     Windows refuses a path over about 260 characters unless it is written \\?\C:\... or
     \\?\UNC\server\share\.... Row 29's second attempt filed its unpriced covering e-mail
     264 characters deep on K and the whole queue stopped on FileNotFoundError (23 Nov 2026).
-    The archive now writes and reads long paths in that form; short paths, relative paths
-    and every path off Windows are untouched. 240 leaves room for the ~20 characters the
-    atomic write's temporary name adds beside the target."""
+    `reserve` is how many characters will be created INSIDE this path: the first fix
+    converted only a path that was itself long, and the queue stopped again at 10:32 on the
+    same file, because the folder was 184 characters and it was the temporary file's name
+    added inside it that passed the limit. Short paths with room to spare, relative paths
+    and every path off Windows are untouched."""
     windows = (os.name == 'nt') if windows is None else windows
     s = str(path)
-    if not windows or len(s) < 240 or s.startswith('\\\\?\\'):
+    if not windows or len(s) + reserve < 248 or s.startswith('\\\\?\\'):
         return s
     if s.startswith('\\\\'):
         return '\\\\?\\UNC' + s[1:]
@@ -54,8 +56,12 @@ def winsafe(path, windows=None):
 
 
 def atomic(path, data):
-    path = Path(path); Path(winsafe(path.parent)).mkdir(parents=True,exist_ok=True)
-    fd,tmp = tempfile.mkstemp(prefix=path.name+'.',suffix='.tmp',dir=winsafe(path.parent))
+    path = Path(path)
+    # The temporary name beside the target is "<name>.<8 random>.tmp": the folder must be
+    # safe for that full length, not merely for itself.
+    dirp = winsafe(path.parent, reserve=len(path.name) + 14)
+    Path(dirp).mkdir(parents=True,exist_ok=True)
+    fd,tmp = tempfile.mkstemp(prefix=path.name+'.',suffix='.tmp',dir=dirp)
     try:
         with os.fdopen(fd,'wb') as out: out.write(data); out.flush(); os.fsync(out.fileno())
         os.replace(tmp,winsafe(path))

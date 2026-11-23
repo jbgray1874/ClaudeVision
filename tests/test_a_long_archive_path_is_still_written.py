@@ -29,24 +29,35 @@ def test_a_long_unc_or_drive_path_takes_the_extended_form_and_short_ones_do_not(
     assert b.winsafe(unc, windows=False) == unc
 
 
+def test_a_folder_safe_by_itself_converts_when_what_goes_inside_it_would_not_fit():
+    # Row 29 at 10:32: the unpriced folder was 184 characters, under the limit, and the
+    # covering e-mail's temporary name inside it passed 260. The reservation converts it.
+    folder = "\\\\sdi-dc01\\shareddata$\\" + "x" * 160
+    assert len(folder) < 248
+    assert b.winsafe(folder, windows=True) == folder
+    assert b.winsafe(folder, windows=True, reserve=95).startswith("\\\\?\\UNC\\")
+    assert b.winsafe(folder, windows=False, reserve=95) == folder
+
+
 def test_atomic_goes_through_the_safe_form_for_the_folder_and_the_target(tmp_path, monkeypatch):
-    crossed = []
-    def spy(p, windows=None):
-        crossed.append(str(p))
+    crossed = {}
+    def spy(p, windows=None, reserve=0):
+        crossed[str(p)] = reserve
         return str(p)
     monkeypatch.setattr(b, "winsafe", spy)
     b.atomic(tmp_path / "deep" / "f.json", b"x")
     assert (tmp_path / "deep" / "f.json").read_bytes() == b"x"
-    assert str(tmp_path / "deep") in crossed          # the folder it makes and writes in
+    # The folder is converted with room reserved for the temporary name created inside it.
+    assert crossed[str(tmp_path / "deep")] >= len("f.json") + 12
     assert str(tmp_path / "deep" / "f.json") in crossed   # the target it renames onto
 
 
 def test_the_archive_reads_its_verification_through_the_safe_form(tmp_path, monkeypatch):
     crossed = []
     real = b.winsafe
-    def spy(p, windows=None):
+    def spy(p, windows=None, reserve=0):
         crossed.append(str(p))
-        return real(p, windows)
+        return real(p, windows, reserve)
     monkeypatch.setattr(b, "winsafe", spy)
     arc = b.Archive(tmp_path / "c", tmp_path / "k")
     name = "TTI-C-" + "8484cc0233aa3f2f2cff-R2/unpriced/4a1540d19e54/" + "e" * 80 + ".html"
