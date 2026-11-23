@@ -55,8 +55,11 @@ DATASETS = HERE / "api_datasets.json"
 EXPORTS = Path(os.environ.get("X3_EXPORT_DIR", Path.home() / "SDI_X3_exports"))
 GRAPHQL_PATHS = ["/xtrem/api", "/api", "/xtrem/graphql", "/graphql"]
 MUTATION = re.compile(r"(^|[}\s])mutation\b\s*\w*\s*[({]", re.I)
-PAUSE = 1.0                                       # seconds between pages: keep it gentle
-PAGE = 50                                         # rows per request (200 x 159 fields knocked X3 Services over, 20 Nov)
+# 23 Nov: 50 rows a request + 1 s pause took 45 min for SDI Mig's first run of the day (about 28,000 rows, mostly
+# products / BOMs / routes). The 20 Nov overload was 200 rows x 159 fields with linked records; the LEAN field lists
+# below are ~10-15 fields, so 200 a request is far lighter than that. Both can be set without a code change.
+PAUSE = float(os.environ.get("X3_PAUSE", 0.3))    # seconds between pages
+PAGE = int(os.environ.get("X3_PAGE", 200))        # rows per request
 RETRY_WAITS = (15, 45, 120)                       # back off on 5xx / connection errors, then give that data set up
 
 # The X3 environments the portal offers (James, 22 Nov: "SDI Mig / Stage choice ... We are SDI is the users' UAT").

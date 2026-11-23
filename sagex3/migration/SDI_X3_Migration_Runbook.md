@@ -4926,3 +4926,19 @@ Keep this up to date with every setting we choose. **Never write the secret here
   2. On the server: run the installer with `--apply`.
   - No service restart is needed for pages. Don't restart while a Regenerate is running.
 - **Emails to users:** Live Orders and Estimate → X3 write-ups drafted for Dave first, each telling him to hold off until James has tested. Then Dave, James Ryan, Simon, Charlotte, Matt, Liz and Rachael Smith once testing is done. Estimating comes next.
+- **SDI Mig Regenerate, 23 Nov 10:58–11:44 (about 45 min): works end to end.**
+  - Saved `SDI_Live_Orders_MIG_2026-11-23_1144.xlsx`, ✓ in the folder (82 KB).
+  - **What X3 sent, by data set:**
+
+    | Data set | From X3 | Notes |
+    |---|---|---|
+    | wo_products | **0 rows** | |
+    | stock | **0 rows** | |
+    | so_lines | 2,625 rows | all `lineStatus=pending`; customer order ref and currency not in our field list (minor, to add) |
+    | po_lines | 483 rows | all `isClosed=False` |
+
+  - **So the empty sheet is the data, not Live Orders.** SDI Mig has no works orders and no stock loaded. Live Orders fills once works orders and stock are migrated into SDI Mig (SCRUM-167). The SO and PO lines are all open, so filtering them at X3 would save little here.
+  - **Most of the 45 minutes was the once-a-day master data** (products, BOMs, routes), about 25,000 rows at 50 rows a request plus a 1 s pause. Later runs the same day read only the transactions.
+- **Faster reading:** `x3_api.py` now reads 200 rows a request (was 50) with a 0.3 s pause (was 1 s). Both can be changed without code, through the `X3_PAGE` and `X3_PAUSE` environment variables.
+  - The 20 Nov overload was 200 rows × 159 fields; our field lists are now about 10–15 fields.
+  - To prove before We are SDI's first run: a one-request trial of 200 rows.
