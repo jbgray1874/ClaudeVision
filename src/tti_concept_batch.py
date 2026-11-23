@@ -209,7 +209,12 @@ def checked_price(snapshot,item):
 def archive_unpriced(api,archive,item,entry,snapshot,why):
     if not matches(snapshot,item): raise ValueError('unpriced run identity differs')
     base=item['reference']+'/unpriced/'+safe_id(entry['run_id'])+'/'
-    archive.put(base+'status.json',json_bytes(status_evidence(snapshot)))
+    evidence=status_evidence(snapshot)
+    # As in archive_result: a snapshot acquires log lines (a service restart adds its restored
+    # note), so refiling the same run's evidence after a crash is a new version, not a
+    # conflict. Row 29, 23 Nov 2026: the 08:40 crash left status.json half filed, and the
+    # resume was refused with "archive conflict" on its own evidence.
+    archive.put(base+'status-'+sha(json_bytes(evidence))[:16]+'.json',json_bytes(evidence))
     inventory=[]
     for d in snapshot.get('deliverables') or []:
         name=str(d.get('name') or '')
