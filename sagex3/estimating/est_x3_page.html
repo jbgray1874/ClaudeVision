@@ -155,7 +155,7 @@ const HD=()=>key?{'X-SDI-Key':key}:{};
 const API='/api/estimate-x3';let FILE=null,R=null,tab='ex';
 // The X3 environment (22 Nov): SDI Mig (test) or We are SDI (the users' UAT). Shared with the Live Orders page.
 const ENVS={mig:'SDI Mig (test)',uat:'We are SDI (UAT)'};let ENV='mig';
-try{const e=localStorage.getItem('sdiX3Env');if(ENVS[e])ENV=e}catch(e){}
+try{const e=localStorage.getItem('sdiX3Env');if(ENVS[e])ENV=e;const q=new URLSearchParams(location.search).get('env');if(ENVS[q]){ENV=q;localStorage.setItem('sdiX3Env',q)}}catch(e){}   // ?env=uat in a link picks the environment (23 Nov)
 const envOf=j=>((j&&j.env&&j.env.key)||'mig');
 const etag=e=>`<span class="etag ${e==='uat'?'uat':''}" title="${esc(ENVS[e||'mig'])}">${(e||'mig')==='uat'?'UAT':'MIG'}</span>`;
 function showEnv(){$$('#envsw button').forEach(b=>b.classList.toggle('on',b.dataset.env===ENV));

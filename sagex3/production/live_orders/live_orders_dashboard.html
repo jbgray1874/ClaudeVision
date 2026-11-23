@@ -156,13 +156,13 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
     </div></section>
 
   <section class="view" id="v-ug"><div class="card guide">
-    <h2>User guide</h2><p class="note">Live Orders in the SDI Intelligence portal - for Production, Purchasing and Customer Services. Written 20 Nov 2026.</p>
+    <h2>User guide</h2><p class="note">Live Orders in the SDI Intelligence portal - for Production, Purchasing and Customer Services. Written 20 Nov 2026, updated 23 Nov.</p>
     <h3>What it is</h3>
     <p>Production's Live Orders sheet, built from <b>Sage X3</b>: every open works order with its material status, the hours still to do in each work centre, the works orders to raise (WO Suggestions) and the exploded BOM of each order. It follows the same rules as the Access SupplyChain sheet - see <a class="lk" data-go="hw">How it works</a>. It <b>reads</b> Sage X3; it never changes anything in it.</p>
     <h3>1. Get today's Live Orders</h3>
     <ol><li><b>Choose the Sage X3 environment</b> (top left of the bar): <b>We are SDI (UAT)</b> - where you test - or <b>SDI Mig (test)</b>. The badge by the date says which one you're looking at. Each has its own workbooks, named <i>SDI_Live_Orders_UAT_…</i> or <i>…_MIG_…</i>, and your notes carry forward only within the same environment. The choice is remembered on this PC (and used by Estimate → X3 too).</li>
-      <li>Press <b>↻ Regenerate</b> (top right). It reads Sage X3 now; the progress shows next to the button. It takes a few minutes (the first run of a day can take longer, while products, BOMs and routes are refreshed).</li>
-      <li>When it's done, the line by the button names the new workbook, e.g. <b>SDI_Live_Orders_2026-11-20_0815.xlsx</b>, with <b>Preview</b> and <b>Download</b>. The views below refresh by themselves.</li>
+      <li>Press <b>↻ Regenerate</b> (top right). It reads Sage X3 now; the progress shows next to the button. It takes a few minutes (the first run of a day can take longer, while products, BOMs and routes are refreshed; the very first run in an environment can take 30-60 minutes). <b>Use the page as normal while it runs</b> - it runs on the server, so the tabs, User guide, Workbooks or closing the page don't stop it. Only one Regenerate runs at a time, across both environments: if someone else's is running, the button says <i>Busy</i> and comes back when it's done.</li>
+      <li>When it's done, the line by the button names the new workbook, e.g. <b>SDI_Live_Orders_UAT_2026-11-23_0815.xlsx</b> (UAT = We are SDI, MIG = SDI Mig), with <b>Preview</b> and <b>Download</b>. The views below refresh by themselves.</li>
       <li><b>What X3 sent</b> (by the Done line) lists, for each kind of data, how many rows Sage X3 sent, how many are on the sheet, and why the others were left out (closed, planned, nothing left to make). If no works orders come through, it opens by itself and says why - an empty Live Orders tab always has a reason.</li>
       <li>The workbook is saved in <b>K:\Operations\Reporting\LiveOrders</b>. Each run is a new file with the date and time in its name - nothing is ever overwritten, so anyone can run it at any time.</li></ol>
     <h3>2. The views</h3>
@@ -382,7 +382,7 @@ let sdiKey='';try{const m=location.hash.match(/key=([^&]+)/);if(m){sessionStorag
 const onPortal=/\/api\/live-orders\/dashboard$/.test(location.pathname);
 // The X3 environment (22 Nov): SDI Mig (test) or We are SDI (UAT, where the users test). Remembered on this PC.
 const ENVS={mig:'SDI Mig (test)',uat:'We are SDI (UAT)'};
-let ENV='mig';try{const e=localStorage.getItem('sdiX3Env');if(ENVS[e])ENV=e;const q=new URLSearchParams(location.search).get('env');if(ENVS[q])ENV=q}catch(e){}
+let ENV='mig';try{const e=localStorage.getItem('sdiX3Env');if(ENVS[e])ENV=e;const q=new URLSearchParams(location.search).get('env');if(ENVS[q]){ENV=q;localStorage.setItem('sdiX3Env',q)}}catch(e){}
 const U=p=>p+(p.includes('?')?'&':'?')+'env='+ENV;
 const src=new URLSearchParams(location.search).get('data')||(onPortal?U('/api/live-orders/latest'):null);
 const HD=()=>sdiKey?{'X-SDI-Key':sdiKey}:{};
@@ -461,6 +461,8 @@ $('#regen').addEventListener('click',()=>{if(!confirm(`Pull fresh data from Sage
 if(onPortal){showEnv();$('#filebar').classList.add('hide');$('#portalbar').classList.remove('hide');$('#drop').classList.add('hide');$('#tabs').classList.remove('hide');loadHistory().catch(()=>{});poll()}
 else{$('nav.tabs [data-v="wb"]').classList.add('hide')}
 try{const t=sessionStorage.getItem('loTab');if(t&&(onPortal||t!=='wb'))go(t)}catch(e){}
+// A link can open one view directly, e.g. …/dashboard?view=ug for the user guide (23 Nov: linked from the email to users).
+try{const v=new URLSearchParams(location.search).get('view');if(v&&$('#v-'+v)&&(onPortal||v!=='wb'))go(v)}catch(e){}
 try{matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{if(D){const t=document.querySelector('nav.tabs button.on');render(D);if(t)go(t.dataset.v)}})}catch(e){}
 if(window.LIVE_ORDERS_DATA)render(window.LIVE_ORDERS_DATA);
 else if(src)load(src,'');

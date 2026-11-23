@@ -4906,3 +4906,22 @@ Keep this up to date with every setting we choose. **Never write the secret here
        - If labour is wanted: estimate it from Access routing times × work-centre hourly rates, with Charlotte for the rates.
        - Not started; a yes/no decision for him.
   - **Lesson:** draft emails must not claim an action that hasn't happened, and must explain technical terms (routing = route) in plain words.
+
+#### 23 Nov – Sage X3 back up; Live Orders tested on both environments; links for the users' email
+- **`ping` from James's PC, 23 Nov:** SDI Mig and We are SDI both answer **GraphQL: OK**, so We are SDI needs no extra set-up. The connected application covers the whole site.
+  - REST returns 404 "Endpoint not found" on both. The REST URL uses the folder name where Sage expects its endpoint name. The portal doesn't use REST (it's a backup way of reading), so this is noted, not fixed.
+- **20 Nov's blank SDI Mig sheet explained by its own numbers:** 0 works orders but 892 WO suggestions, 110 of them with no BOM or route. So SDI Mig has sales orders, BOMs and routes but no open works orders. Today's Regenerate on SDI Mig is running; its "What X3 sent" will say whether X3 sent no works orders or only planned ones.
+- **Links for the users' email (not yet on the server: deploy after testing, with the guide changes):**
+  - `…/api/live-orders/dashboard?view=ug` opens the user guide directly.
+  - `?env=uat` on Live Orders or Estimate → X3 picks We are SDI and remembers it on that PC.
+  - Both were tested in a browser.
+- **User guide updates:**
+  - Use the page as normal while Regenerate runs; it runs on the server. (James asked whether clicking would interrupt it.)
+  - One Regenerate at a time across both environments ("Busy").
+  - The first run in an environment takes 30–60 minutes.
+  - The example workbook name now includes UAT/MIG.
+- **Deploy, once both environments are tested:**
+  1. On James's PC: `git pull`, then robocopy the repo to the server.
+  2. On the server: run the installer with `--apply`.
+  - No service restart is needed for pages. Don't restart while a Regenerate is running.
+- **Email to users:** Dave first, telling him to hold off until James has tested. Then Dave, James Ryan, Simon, Charlotte, Matt, Liz and Rachael Smith once testing is done. Estimating comes next.
