@@ -4914,6 +4914,7 @@ Keep this up to date with every setting we choose. **Never write the secret here
 - **Links for the users' email (not yet on the server: deploy after testing, with the guide changes):**
   - `…/api/live-orders/dashboard?view=ug` opens the user guide directly.
   - `?env=uat` on Live Orders or Estimate → X3 picks We are SDI and remembers it on that PC.
+  - `…/api/estimate-x3/page?view=guide` opens the Estimate → X3 user guide directly.
   - Both were tested in a browser.
 - **User guide updates:**
   - Use the page as normal while Regenerate runs; it runs on the server. (James asked whether clicking would interrupt it.)
@@ -4924,4 +4925,4 @@ Keep this up to date with every setting we choose. **Never write the secret here
   1. On James's PC: `git pull`, then robocopy the repo to the server.
   2. On the server: run the installer with `--apply`.
   - No service restart is needed for pages. Don't restart while a Regenerate is running.
-- **Email to users:** Dave first, telling him to hold off until James has tested. Then Dave, James Ryan, Simon, Charlotte, Matt, Liz and Rachael Smith once testing is done. Estimating comes next.
+- **Emails to users:** Live Orders and Estimate → X3 write-ups drafted for Dave first, each telling him to hold off until James has tested. Then Dave, James Ryan, Simon, Charlotte, Matt, Liz and Rachael Smith once testing is done. Estimating comes next.

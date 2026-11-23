@@ -216,6 +216,7 @@ $('#dl').addEventListener('click',e=>{const p=e.target.closest('a[data-pv]');if(
   const a=e.target.closest('a[data-f]');if(a)dlUrl(a.dataset.f,a.dataset.n)});
 $('#order').addEventListener('click',e=>{const a=e.target.closest('a[data-cp]');if(!a)return;navigator.clipboard&&navigator.clipboard.writeText(a.dataset.cp);a.textContent='Copied ✓';setTimeout(()=>a.textContent='Copy path',1500)});
 $('#ugbtn').onclick=()=>{const g=$('#guide');g.open=true;g.scrollIntoView({behavior:'smooth',block:'start'})};
+try{if(new URLSearchParams(location.search).get('view')==='guide')$('#ugbtn').onclick()}catch(e){}   // …/page?view=guide opens the user guide (23 Nov: linked from the email to users)
 $('#tabs').addEventListener('click',e=>{const b=e.target.closest('button[data-t]');if(!b)return;tab=b.dataset.t;$$('#tabs button').forEach(x=>x.classList.toggle('on',x===b));render()});
 
 function tbl(head,rows,cls=[]){return `<table><thead><tr>${head.map((h,i)=>`<th class="${cls[i]||''}">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`}
