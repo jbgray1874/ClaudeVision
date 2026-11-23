@@ -191,6 +191,25 @@ def check_build(runners, expected, required=2):
             raise RuntimeError('Runner build/health mismatch: '+str(r.get('runner_id')))
 
 
+def settled_check_build(api, expected, required=2, wait_s=300, sleep=time.sleep):
+    """check_build, giving a runner mid-restart time to check back in.
+
+    The main runner's process was replaced at 12:13:49 (23 Nov 2026) while a job ran; the
+    next submission's check saw the new process before its first check-in and the whole
+    queue stopped on "Runner build/health mismatch", with the runner healthy on the right
+    build half a minute later. A runner that legitimately restarts gets up to wait_s to
+    come back; a real mismatch, a wrong build or local edits is still refused, with the
+    same words, when the wait runs out. Nothing is submitted while waiting."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            return check_build(api.runners(), expected, required)
+        except RuntimeError as exc:
+            if time.monotonic() >= deadline: raise
+            print(f'{now()} RUNNER NOT SETTLED: {exc}; waiting for it to check back in',flush=True)
+            sleep(20)
+
+
 class UnpricedResult(ValueError):
     """Identified completed run, but no usable price. Never means zero."""
 
@@ -513,7 +532,7 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
         from tti_concept_proof import require_approved_proof
         require_approved_proof(plan,archive,state,proof_rows,expected_build=proof_execution_build or expected)
     archive.state(state)
-    check_build(api.runners(),expected,at_once)
+    settled_check_build(api,expected,at_once,sleep=sleep)
     recent=api.recent()
     owned={s.get('run_id') for s in state['entries'].values() if s.get('run_id')}
     uncertain = [i for i in items if state['entries'].get(i['reference'],{}).get('phase') == 'submitting']
@@ -573,7 +592,7 @@ def run_batch(plan,pictures,archive,api,expected,at_once=2,poll_seconds=20,stop_
                 archive.event('STOP REQUESTED',note='No new submissions. Existing runs are not cancelled; resume to collect.')
                 return 2
             if active < at_once:
-                check_build(api.runners(),expected,at_once)
+                settled_check_build(api,expected,at_once,sleep=sleep)
                 for item in items:
                     if item['reference'] in state['entries']: continue
                     if needs_proof and item['row'] not in proof_rows:
