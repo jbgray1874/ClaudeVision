@@ -4961,3 +4961,10 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - Tested in a browser: SDI Mig with data → We are SDI with none → back to SDI Mig.
   - Deploy with the next pull / robocopy / installer `--apply`; no restart.
 - **We are SDI Regenerate started about 12:30.** X3 sent 98 works-order lines (`wo_products: 98 rows`).
+
+#### 24 Nov – monday.com: decision on how it would connect
+- **James: monday.com and Sage X3 don't talk to each other directly.** Any link goes through our own code, which already reads X3 through the connected application. Third-party X3 ↔ monday sync tools (Stacksync, Alumio and so on) are not used.
+- **Shape, if it goes ahead:** a small job on SDI-APP01 reads X3 with the existing code and writes chosen data to monday through monday's API. Claude agents use monday's official connector.
+  - Writing into X3 from monday would follow the estimate loader's rules: create only, test environments only, until signed off.
+- **Not started.** First: what monday would be used for (sales pipeline / CRM, production or project tracking, customer-facing), and whether SDI has an account.
+  - monday.com is mainly a work-management platform; it also sells a CRM product.
