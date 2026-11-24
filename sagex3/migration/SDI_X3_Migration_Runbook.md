@@ -4968,3 +4968,23 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - Writing into X3 from monday would follow the estimate loader's rules: create only, test environments only, until signed off.
 - **Not started.** First: what monday would be used for (sales pipeline / CRM, production or project tracking, customer-facing), and whether SDI has an account.
   - monday.com is mainly a work-management platform; it also sells a CRM product.
+
+#### 23–24 Nov – Live Orders and Estimate → X3 on We are SDI: first real run, test steps, users' emails
+- **Live Orders, We are SDI Regenerate, 23 Nov 12:30–12:39.**
+  - **First run of the day, about 10 minutes** (with the 200-row reading). SDI Mig's first run that morning took 45 minutes at 50 rows; its second run took a few minutes.
+  - **First real Live Orders:** 20 works orders to make (20 top level), 396 hours. 17 red, 3 amber, 0 green, 0 overdue. 92 WO suggestions, 14 with no BOM or route.
+  - Saved `SDI_Live_Orders_UAT_2026-11-23_1239.xlsx` ✓ in the folder.
+  - **To check before users rely on it: 17 of 20 red and none green.** X3 has stock in We are SDI (the trial read over 200 rows). Stock arrives keyed `product._id`; if that isn't the part code, every component shows 0 stock.
+    - Test 5 of James's steps: one red works order's component against X3 stock.
+    - Also pending: James to paste What X3 sent.
+- **Test steps written for James** (We are SDI only, for now):
+  - **Live Orders (12 steps):** deploy, badge, What X3 sent, Overview, 2 works orders against X3, the red/stock check, work-centre load, shortages, WO suggestions, notes carry-forward over a second Regenerate, switching environments, the guide link.
+  - **Estimate → X3 (11 steps):** READY / NOT READY, the write-up, the saved `_UAT_` folder, Saved estimates, a deliberate mistake, both layouts, an import by hand into We are SDI, Load box "not set up", the guide link.
+- **Users' handover emails drafted for We are SDI:**
+  - Live Orders: to Dave, James Ryan, Simon, Charlotte, Matt, Liz and Rachael Smith. It covers what it is, that this is test data and Access stays live until go-live, the links, step by step by role, and notes. To send after James's tests.
+  - Estimate → X3: to Dave and the estimators. It says not to import into X3 themselves yet (send James the folder name), and lists the common STOPs.
+- **24 Nov: James sent the Estimate → X3 email to Dave before testing it himself, for exposure.** Nothing can be broken: the page only reads X3, a run only adds a new folder in SageEstimates, and Load into Sage X3 isn't switched on. Dave's findings come back to James.
+- **Estimate loader setup on SDI-APP01 (23 Nov) didn't complete.**
+  - Python's typed questions didn't work in the consoles used: ISE holds the questions back, and in the remote-desktop console answers only moved on after Ctrl+C.
+  - **Next:** setup takes the client ID and user on the command line and the secret from the clipboard, with no questions. Then `mutations --env mig` and `--env uat`.
+  - The second connected application (create rights) is still to be confirmed as created.
