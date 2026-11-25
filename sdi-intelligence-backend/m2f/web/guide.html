@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monday2Friday User Guide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800&family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0d0d0f;--surface:#17171b;--surface-2:#1d1d22;--line:#2a2a31;--line-soft:#202026;--ink:#f3f2ee;--ink-dim:#a3a3aa;--ink-faint:#6b6b73;--accent:#ffd400;--r:4px;--disp:'Archivo',sans-serif;--body:'Hanken Grotesk',sans-serif}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15.5px;line-height:1.65;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent)}
+  .wrap{max-width:860px;margin:0 auto;padding:28px 20px 80px}
+  .top{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:22px}
+  .top .sp{flex:1}
+  .crumb{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  .btn{font-family:var(--disp);font-weight:700;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;border:1px solid var(--line);color:var(--ink);border-radius:var(--r);padding:8px 13px;text-decoration:none}
+  h1{font-family:var(--disp);font-weight:800;font-size:32px;letter-spacing:-.02em;line-height:1.1;margin-bottom:8px}
+  h2{font-family:var(--disp);font-weight:700;font-size:20px;margin:34px 0 8px}
+  h3{font-size:15.5px;margin:16px 0 4px}
+  p{margin:8px 0} .lead{color:var(--ink-dim);font-size:16.5px}
+  ul,ol{margin:8px 0 8px 22px} li{margin:5px 0}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin:10px 0}
+  th{text-align:left;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);padding:8px 10px;border-bottom:1px solid var(--line)}
+  td{padding:9px 10px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px 18px;margin:12px 0}
+  .toc{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 4px}
+  .toc a{font-size:12.5px;border:1px solid var(--line);border-radius:14px;padding:4px 10px;text-decoration:none;color:var(--ink-dim)}
+  .tip{border-left:3px solid var(--accent);padding:4px 0 4px 12px;color:var(--ink-dim);margin:12px 0}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><span class="crumb">Monday2Friday / User guide</span><span class="sp"></span><a class="btn" href="/m2f">Open Monday2Friday</a><a class="btn" href="/m2f/architecture">Architecture</a></div>
+  <h1>Using Monday2Friday</h1>
+  <p class="lead">Monday2Friday is the account and delivery workspace in SDI Intelligence. During the pilot it reads the account tracker, so the figures are the tracker's figures and you keep updating the tracker as normal. What you add here (freezes, reasons, variations, answers) is saved in Monday2Friday.</p>
+  <div class="toc"><a href="#start">Getting in</a><a href="#screens">The screens</a><a href="#week">Your week</a><a href="#review">Weekly review</a><a href="#variations">Variations</a><a href="#questions">Questions for Kayleigh</a><a href="#settings">Settings</a><a href="#test">Testing the pilot</a><a href="#faq">Questions and fixes</a></div>
+
+  <h2 id="start">Getting in</h2>
+  <ol>
+    <li>On the SDI network, open the SDI Intelligence portal and click <b>Monday2Friday</b>, or go straight to <a href="/m2f">sdi-intelligence.sdi.local:8071/m2f</a>.</li>
+    <li>Sign in with your SDI Microsoft account if asked. Freezes, notes, variations and answers are recorded under your name automatically.</li>
+    <li>The <b>As of</b> month at the top sets "this month" for every screen. It starts at the current month; change it to look back or ahead.</li>
+  </ol>
+
+  <h2 id="screens">The screens</h2>
+  <table><thead><tr><th>Screen</th><th>For</th><th>What it shows</th></tr></thead><tbody>
+    <tr><td><b>Director dashboard</b></td><td>Kayleigh</td><td>This month, next month and the full year, split by status; forecast by account with Boots as a group; projects with forecast at risk this month or next, with their next step</td></tr>
+    <tr><td><b>Weekly review</b></td><td>Kayleigh, AMs</td><td>The forecast compared with the last freeze: what moved, by how much, why and who acts next, plus open variations</td></tr>
+    <tr><td><b>Variations</b></td><td>AMs, PMs</td><td>Changes to agreed scope with sell, margin, CPA impact, approval and PO status</td></tr>
+    <tr><td><b>Accounts</b></td><td>Kayleigh</td><td>Every account with its owner, live projects and forecast; brand contacts and next steps</td></tr>
+    <tr><td><b>AM workspace</b></td><td>Each AM</td><td>Your forecast, what moved on your projects, what's at risk, your live projects</td></tr>
+    <tr><td><b>PM overview</b></td><td>Each PM</td><td>Your live projects, at-risk and billing-soon first, with stage, next step and PO</td></tr>
+    <tr><td><b>All projects</b></td><td>Everyone</td><td>Search every project by name, PO or next step; filter by account; include hidden rows if you need them</td></tr>
+    <tr><td><b>Questions for Kayleigh</b></td><td>Kayleigh</td><td>Decisions needed before the tracker moves into the system, each with what the tracker shows</td></tr>
+  </tbody></table>
+  <p>Click any project, anywhere, to open its panel: its details, forecast month by month with the status and the tracker cell it came from, anything the import flagged, its variations, and every other column the tracker holds for it.</p>
+  <h3>Status colours</h3>
+  <p><span class="dot" style="background:#5fd08a"></span>Invoiced · <span class="dot" style="background:#6db3ff"></span>Confirmed · <span class="dot" style="background:#ff9d42"></span>TBC · <span class="dot" style="background:#ff5d5d"></span>Risk · <span class="dot" style="background:#7d7d86"></span>Unclassified</p>
+  <p>These come from the colour of the cell in the tracker and the legend at the top of each tab. Unclassified means the cell's colour isn't on that tab's legend, which is one of the questions for Kayleigh. Once she confirms the mapping, Confirmed shows as PO received and TBC as Awaiting PO.</p>
+
+  <h2 id="week">Your week</h2>
+  <div class="card"><b>Monday, Kayleigh:</b> open Weekly review and freeze the forecast (for example "Forecast freeze 1 Dec"). That's the baseline for the week.</div>
+  <div class="card"><b>During the week, AMs and PMs:</b> keep the tracker up to date as now. Log any change to agreed scope in Variations as it comes up.</div>
+  <div class="card"><b>Before the review, AMs:</b> open your AM workspace. Anything that moved on your projects since the freeze is listed; add the reason and next action on Weekly review.</div>
+  <div class="card"><b>Review, Kayleigh:</b> Weekly review shows the change in this month, next month and the year, each movement with its reason and owner, and open variations. Needs a decision on the dashboard shows what's at risk.</div>
+
+  <h2 id="review">Weekly review in detail</h2>
+  <ul>
+    <li><b>Freeze forecast now</b> takes a copy of every project's monthly forecast and status. Give it a name you'll recognise. You can freeze as often as you like; pick which freeze to compare with from the list.</li>
+    <li>Each movement is described in plain words, for example "£20,000 moved from Mar 2027 to Apr 2027", "£500 added in May 2027" or "Mar 2027 TBC to Confirmed".</li>
+    <li>Type the <b>reason</b>, the <b>next action</b> and the <b>owner</b>, then <b>Save</b> on that row. They stay attached to that freeze.</li>
+    <li>A project deleted from the tracker after the freeze still shows, marked "no longer in the tracker", so nothing disappears silently.</li>
+  </ul>
+
+  <h2 id="variations">Variations</h2>
+  <p>Log every change to an agreed scope: additional artwork, extra install nights, an extra prototype. Pick the project from the list (start typing its name) so the variation is linked to it and shows on the project's panel. Fill in what you know; sell, margin and PO can be added later with <b>Edit</b>.</p>
+  <table><thead><tr><th>Approval status</th><th>Means</th></tr></thead><tbody>
+    <tr><td>To price</td><td>The AM needs costs before it can go to the client</td></tr>
+    <tr><td>Awaiting PO</td><td>Priced and agreed; chasing the client's PO</td></tr>
+    <tr><td>Decision needed</td><td>Someone has to decide: the client, Kayleigh or the PM</td></tr>
+    <tr><td>Approved / Rejected</td><td>Closed; drops off the weekly review</td></tr>
+  </tbody></table>
+
+  <h2 id="questions">Questions for Kayleigh</h2>
+  <p>Before the tracker moves fully into the system, a few things need an owner's decision: what the colours mean, which hidden rows are still live, who owns each account, which budget is right, and some values that sit outside the tracker's own totals. Each question shows what the tracker contains so it can be answered without opening the spreadsheet. Pick an option where there is one, add any notes, and save. The badge in the menu counts the questions still open.</p>
+
+  <h2 id="settings">Settings and data</h2>
+  <ul>
+    <li><b>Tracker:</b> which file Monday2Friday is reading and when it was last saved. The tracker on the shared drive is re-read automatically whenever it's saved. To test a copy, choose it and click <b>Load this tracker</b>.</li>
+    <li><b>Does it match the tracker?</b> Each monthly total on the tracker's Forcasting Total sheet next to Monday2Friday's figure. "Matches" means to the penny; any difference is explained in the notes.</li>
+    <li><b>Account owners:</b> type the AM for each account. A Boots division inherits the Boots owner unless you set its own. This is what drives the AM workspace.</li>
+    <li><b>People:</b> join different spellings of the same person (for example "KT" and a full name), and set each person's deputy for holiday cover.</li>
+  </ul>
+
+  <h2 id="test">Testing the pilot</h2>
+  <ol>
+    <li>Check the dashboard's this-month figure against the tracker's Forcasting Total for the same month.</li>
+    <li>Open three projects you know well and check the forecast month by month and the status colours.</li>
+    <li>AMs: once owners are set, check your workspace lists the projects you'd expect, and nothing you wouldn't.</li>
+    <li>PMs: check your overview lists your live jobs.</li>
+    <li>Freeze the forecast, change a figure in a copy of the tracker, load it, and check Weekly review describes the change correctly.</li>
+    <li>Log a real variation from this week.</li>
+    <li>Tell James what's wrong, missing or in the wrong place, with the screen and the project name.</li>
+  </ol>
+
+  <h2 id="faq">Questions and fixes</h2>
+  <h3>A number doesn't match the tracker</h3>
+  <p>Check Settings and data first. The dashboard includes rows hidden in the tracker, as the tracker's totals do. Amounts typed as text (for example "£500.00" typed with the pound sign) are counted by Monday2Friday but ignored by Excel's totals, and are listed under Questions for Kayleigh.</p>
+  <h3>My changes in the tracker aren't showing</h3>
+  <p>Save the workbook. Monday2Friday re-reads it the next time a screen loads after the save. If someone is testing with an uploaded copy, the newer of the two files is used.</p>
+  <h3>The AM workspace is empty</h3>
+  <p>Account owners haven't been set yet. They're set in Settings and data once Kayleigh has confirmed who owns what.</p>
+  <h3>It says my sign-in has expired</h3>
+  <p>Sessions last a working day. Click <b>Sign in</b> and you'll come back to the screen you were on.</p>
+  <h3>What isn't here yet</h3>
+  <p>Project CPA plans, Debbie's Finance queue, team capacity, QBR packs, holiday cover, the morning WhatsApp brief and meeting follow-up. <b>Coming next</b> in the menu lists what each one is waiting for.</p>
+</div>
+</body>
+</html>

@@ -703,6 +703,38 @@
       "app_url": "voice-crm.html"
     },
     {
+      "id": "monday2friday",
+      "name": "SDI Monday2Friday",
+      "status": "Pilot · reading the account tracker",
+      "cls": "c-prog",
+      "category": "Co-worker agents",
+      "surface": "intranet",
+      "desc": "Kayleigh’s account and delivery workspace: forecast by month and status, the weekly review against a forecast freeze, variations, and AM and PM workspaces.",
+      "detail": "Built from Kayleigh’s 12-screen workspace mock-up and the Boots account tracker. During the pilot the tracker stays the source of truth: Monday2Friday re-reads it whenever it is saved, dates every forecast cell from the tab’s own FY headers, classifies it from the tab’s colour legend, and reconciles every monthly total against the tracker’s Forcasting Total sheet. Anything it cannot read with certainty is flagged, never guessed, and the decisions only the account director can make are collected under <b>Questions for Kayleigh</b>. Freezes, movement notes, variations, answers and account owners are kept in a pilot store and carry over when the tracker moves into SDILive.",
+      "inputs": [
+        "Boots account tracker (.xlsx on the file share)",
+        "Forecast freezes, variations and answers entered in the app",
+        "Sage X3 POs, orders and invoices (phase 2)"
+      ],
+      "outputs": [
+        "Director dashboard and weekly review",
+        "AM workspace and PM overview",
+        "Variations register",
+        "Open questions for the account director"
+      ],
+      "tech": [
+        "FastAPI router (m2f_routes.py)",
+        "openpyxl",
+        "SQLite pilot store, SDILive m2f schema next",
+        "Microsoft Entra sign-in"
+      ],
+      "phase": "Pilot · phase 1 screens built, awaiting Kayleigh’s answers before the move into SDILive",
+      "invoke": "Open Monday2Friday from the button below. The user guide and the architecture are linked from its header.",
+      "link": "/m2f",
+      "linkLabel": "Open Monday2Friday ↗",
+      "app_url": "/m2f"
+    },
+    {
       "id": "chatbots",
       "name": "SDI ChatBot Intelligence",
       "status": "Planned",

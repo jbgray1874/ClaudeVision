@@ -190,3 +190,7 @@ chatgptdropoff/*/
 # Actual-record TTI replays (20 Nov 2026): customer records, never committed. Set
 # SDI_TTI_AUDIT_FIXTURES to their folder to run tests/test_actual_tti_quantity_and_pack_regressions.py.
 tests/fixtures/tti_quantity_pack_audit/
+
+# Monday2Friday pilot store and uploaded tracker copies: customer data, never committed.
+m2f_data/
+*.sqlite
