@@ -3221,6 +3221,63 @@ def _mirror_base_of(part: Mapping[str, Any]) -> str:
             or str(part.get("mirror_of") or "").strip())
 
 
+_HAND_WORD = re.compile(r"(?<![A-Z0-9])(LEFT(?:\s+HAND(?:ED)?)?|RIGHT(?:\s+HAND(?:ED)?)?|L/H|R/H|LH|RH)"
+                        r"(?![A-Z0-9])", re.I)
+
+
+def _hand_and_kind(description: Any) -> Tuple[str, str]:
+    """('L' or 'R', the description with its hand taken out), or ('', '') when the
+    description names no hand, or more than one."""
+    text = re.sub(r"\s+", " ", str(description or "")).strip().upper()
+    found = _HAND_WORD.findall(text)
+    if len(found) != 1:
+        return "", ""
+    side = "L" if found[0].startswith("L") else "R"
+    return side, re.sub(r"\s+", " ", _HAND_WORD.sub("<HAND>", text)).strip()
+
+
+def _measured_here(part: Mapping[str, Any]) -> bool:
+    from source_precedence import rank as _rank
+    ng = part.get("normalized_geometry") or {}
+    return _rank(str(ng.get("geometry_source") or part.get("geometry_source") or "")) >= _rank("dxf")
+
+
+def stamp_handed_descriptions(parts: List[Dict[str, Any]]) -> int:
+    """Pair "LH <thing>" with "RH <thing>" when only one hand was measured.
+
+    12517-00-GA's RH SHELF SYSTEM BRACKET 1 and 2 carry codes with no hand marker and sheets
+    with no mirror note, beside LH brackets with DXFs. A pair named by its description is a
+    mirror pair: the unmeasured hand takes the measured hand's flat, gauge and material through
+    apply_mirror_geometry, which ranks it below any reading of its own, and the part says so.
+    One opposite-hand match only; anything ambiguous is left as it was.
+    """
+    if not isinstance(parts, list):
+        return 0
+    by_kind: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for part in parts:
+        if isinstance(part, dict):
+            side, kind = _hand_and_kind(part.get("description"))
+            if side:
+                by_kind.setdefault((side, kind), []).append(part)
+    n = 0
+    for (side, kind), hands in by_kind.items():
+        others = by_kind.get(("R" if side == "L" else "L", kind)) or []
+        measured = [o for o in others if _measured_here(o)]
+        if len(hands) != 1 or len(others) != 1 or len(measured) != 1:
+            continue
+        part, base = hands[0], measured[0]
+        if part.get("mirror_of") or _mirror_base_of(part) or _measured_here(part):
+            continue
+        part["mirror_of"] = str(base.get("part_number"))   # precedence: direct-write ok — names the hand this part pairs with; the geometry still goes through the resolver
+        part.setdefault("review_flags", []).append(
+            f"MIRROR IMAGE, BY JUDGEMENT: \"{part.get('description')}\" is the opposite hand of "
+            f"{base.get('part_number')} \"{base.get('description')}\", which has a measured flat. "
+            f"A mirrored part develops the same flat, so its blank, cut, gauge and material are "
+            f"taken from that hand.")
+        n += 1
+    return n
+
+
 def stamp_mirror_notes(parts: List[Dict[str, Any]], summary: Any) -> int:
     """Stamp `mirror_of` on a part whose own sheet says it is the opposite hand of another
     drawing in the job. Returns parts stamped.
@@ -3231,8 +3288,10 @@ def stamp_mirror_notes(parts: List[Dict[str, Any]], summary: Any) -> int:
     that says "refer to drawing X for nutsert positions" names no hand and stamps nothing.
     """
     pages = (summary or {}).get("pages") if isinstance(summary, dict) else None
-    if not pages or not isinstance(parts, list):
+    if not isinstance(parts, list):
         return 0
+    if not pages:
+        return stamp_handed_descriptions(parts)
     try:
         from part_index import _bom_table_pages
         bom_pages, owned = _bom_table_pages(summary)
@@ -3285,7 +3344,7 @@ def stamp_mirror_notes(parts: List[Dict[str, Any]], summary: Any) -> int:
                 break
             if part.get("mirror_of"):
                 break
-    return n
+    return n + stamp_handed_descriptions(parts)
 
 
 def _mupdf_page_text(page: Mapping[str, Any], docs: Dict[str, Any]) -> str:
@@ -4729,7 +4788,12 @@ def _drop_duplicate_files(paths: Sequence[Path]) -> List[Path]:
     """
     import hashlib
 
-    seen: Dict[str, Path] = {}
+    # TWO PART NUMBERS ARE TWO PARTS, HOWEVER ALIKE THEIR FILES (12517-00-GA). A right-hand
+    # bracket whose flat is its left hand's outline is often saved as the very same bytes
+    # under the RH number. Deduplicated on content alone, "12517-06-07M MS T3.0mm" vanished
+    # behind "12517-06-06M MS T3.0mm" and the RH bracket was sized off a PDF at 384 x 260
+    # beside its 384 x 100.2 flat. A copy is the same content under the same part.
+    seen: Dict[Tuple[str, str], Path] = {}
     out: List[Path] = []
     for path in paths:
         try:
@@ -4737,9 +4801,10 @@ def _drop_duplicate_files(paths: Sequence[Path]) -> List[Path]:
         except OSError:
             out.append(path)          # unreadable here; let the reader report it properly
             continue
-        if digest in seen:
-            continue                  # byte-identical to one already taken
-        seen[digest] = path
+        key = (digest, _own_number_key(part_number_from_dxf_path(Path(path)) or ""))
+        if key in seen:
+            continue                  # byte-identical copy of a file this part already has
+        seen[key] = path
         out.append(path)
     return out
 
