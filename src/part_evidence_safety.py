@@ -1,8 +1,9 @@
-"""Owned evidence guard, before pricing and again at firm-release validation.
+"""Owned evidence, before pricing: withdraw what is not a reading, state every judgement.
 
 No job/customer exceptions, prices, quantities, CAD launches or network requests.
-Withdraw only an identified unsupported reading. Never substitute another part's
-size or silently choose a drawing identity/supply-scope decision for a person.
+Withdraw only an identified unsupported reading (a date read as a size, a screw's 10mm
+handed to every plate). Where the pack leaves a gap, take the sensible judgement, price
+it, and say on the part what was assumed and why. Nothing here blocks a price.
 """
 import re
 import math
@@ -46,12 +47,12 @@ def _measured_geometry(part):
             or str(part.get('blank_length_mm_source') or '') in _MEASURED)
 
 
-def _issue(part, name, message, **evidence):
+def _issue(part, name, message, assumption=None, **evidence):
     issues = part.setdefault('evidence_safety_issues', {})
     issues.setdefault(name, dict(message=message, **evidence))
     sp.raise_manufacturing_question(part, message,
-        'Existing working estimate only; this reading is not established.',
-        'Confirm from this part\'s own drawing/model, or give an evidenced estimator ruling.',
+        assumption or 'Priced on the reading stated here: a judgement, not a measurement.',
+        'Confirm or correct it from the part\'s own drawing or model.',
         'part_evidence_safety')
 
 
@@ -81,6 +82,7 @@ def prepare(summary):
     # a similar number. Multi-sheet drawings may legitimately do this: flag, don't
     # delete sheets or merge/rename parts. Assembly BOM pages are not detail pages.
     duplicates = {}
+    twins = {}
     listed = {_key(p.get('part_number')):p for p in parts if isinstance(p,dict)}
     def description_key(p):
         return re.sub(r'\s+', ' ', str(p.get('description') or '').strip().upper())
@@ -101,23 +103,13 @@ def prepare(summary):
                        and description_key(source) and description_key(p)==description_key(source)]
             if len(bodies) > 1 and unbound:
                 duplicates[pn] = sorted(p['page_number'] for p in detail)
-                for code in unbound:
-                    _issue(listed[code], 'unresolved_detail_identity',
-                        f"{listed[code].get('part_number')}: no own detail sheet is bound; "
-                        f"{pn} appears on different sheets with the same description. "
-                        'Confirm the drawing identity; no automatic alias was applied.',
-                        candidate=pn, pages=duplicates[pn])
+                twins[pn] = unbound
 
     for part in parts:
         if not isinstance(part, dict):
             continue
         pn = _key(part.get('part_number'))
         sheets = owned.get(pn, [])
-        if pn in duplicates:
-            _issue(part, 'duplicate_detail_identity',
-                f"{part.get('part_number')}: different detail sheets carry the same drawing "
-                'identity; confirm which geometry belongs to each listed component.',
-                pages=duplicates[pn])
 
         # Repair the old saved-record signature too. A freshly built part no longer
         # receives this figure at all (part_index.document_gauge_to_hand_down).
@@ -192,11 +184,62 @@ def prepare(summary):
                         if q.get('source') != 'weld_symbols.weld_rate_gap_question'
                         or process['process'] in str(q.get('issue') or '')]
                     break
+    for pn, codes in twins.items():
+        _bind_twins(listed[pn], [listed[c] for c in codes], duplicates[pn])
     return parts
 
 
+def _bind_twins(source, twins, pages):
+    """One number printed on two detail sheets, and a listed twin with no sheet of its own.
+
+    The usual cause is a drawing office copying a sheet and not renumbering it (12517: the
+    acrylic bracket 05-05A on pages 25 and 38, while 07-05A, 60 off, had no sheet). The
+    judgement: each twin takes the first duplicate sheet after the page that lists it, and
+    the same material and gauge as the part it was copied from; its size is its own model's
+    where it has one. It is priced, and the line says so.
+    """
+    spare = list(pages)
+    for twin in twins:
+        if twin.get('bound_detail_sheet'):
+            spare = [p for p in spare if p != twin['bound_detail_sheet'].get('page')]
+            continue
+        listing = [int(p) for p in twin.get('pages') or [] if str(p).isdigit()]
+        after = [p for p in spare if listing and p > max(listing)]
+        if len(spare) < 2 and not after:
+            break
+        sheet = min(after) if after else max(spare)
+        spare.remove(sheet)
+        if sheet not in (twin.get('pages') or []):
+            twin['pages'] = list(twin.get('pages') or []) + [sheet]
+        taken = []
+        for field, label in (('normalized_material', 'material'),
+                             ('normalized_thickness_mm', 'gauge')):
+            if twin.get(field) in (None, '') and source.get(field) not in (None, ''):
+                sp.apply_field(twin, field, source.get(field), 'inference')
+                taken.append(f"{label} {source.get(field)}")
+        bbox = (twin.get('normalized_geometry') or {}).get('bbox_mm') or []
+        sizes = sorted((float(v) for v in bbox if _num(v)), reverse=True)[:2]
+        if len(sizes) == 2 and not _num(twin.get('blank_length_mm')):
+            sp.apply_field(twin, 'blank_length_mm', sizes[0], 'inference')
+            sp.apply_field(twin, 'blank_width_mm', sizes[1], 'inference')
+            taken.append(f"blank {sizes[0]:g} x {sizes[1]:g} from its own model's outline")
+        twin['bound_detail_sheet'] = dict(page=sheet, twin_of=source.get('part_number'))
+        why = (f"{twin.get('part_number')} has no drawing of its own; {source.get('part_number')}'s "
+               f"number is printed on pages {', '.join(str(p) for p in pages)}. Page {sheet} is taken "
+               f"as {twin.get('part_number')}'s sheet (the first after the page that lists it)"
+               + (f", priced with {source.get('part_number')}'s " + '; '.join(taken) if taken else '')
+               + '.')
+        _issue(twin, 'twin_detail_sheet', why,
+               assumption=f"Page {sheet} is {twin.get('part_number')}'s drawing, misnumbered.",
+               candidate=source.get('part_number'), pages=pages, sheet=sheet)
+        _issue(source, 'twin_detail_sheet',
+               f"{source.get('part_number')} is printed on pages {', '.join(str(p) for p in pages)}; "
+               f"page {sheet} is taken as {twin.get('part_number')}'s drawing, the rest as this part's.",
+               assumption='One sheet was copied and not renumbered.', pages=pages, sheet=sheet)
+
+
 def unresolved(summary):
-    """Unresolved evidence blocks firm release, not the useful working estimate."""
+    """Every judgement this pass took, with its reason. Stated; never a block."""
     out = []
     for part in _parts(summary):
         for issue, finding in (part.get('evidence_safety_issues') or {}).items():

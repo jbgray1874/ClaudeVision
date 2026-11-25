@@ -5475,7 +5475,10 @@ def check_part_evidence_safety(summary: Any) -> List[Dict[str, Any]]:
     from part_evidence_safety import unresolved
     if not isinstance(summary, Mapping):
         return []
-    return [_violation("part_evidence_unresolved", BLOCKING, finding["message"],
+    # A JUDGEMENT IS STATED, NOT A BLOCK (25 Nov 2026). Estimating prices inference and
+    # judgement every day; what it needs is the reason on the line. These findings say what
+    # was assumed and why, and the number stands.
+    return [_violation("part_evidence_unresolved", WARNING, finding["message"],
                        part_number=finding["part"], issue=finding["issue"])
             for finding in unresolved(summary)]
 

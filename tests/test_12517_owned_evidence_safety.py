@@ -126,12 +126,16 @@ def test_real_measured_2026mm_blank_is_untouched():
     assert p['normalized_geometry']['bounding_box_flat_mm']['length']==before['bounding_box_flat_mm']['length']
     assert p['normalized_geometry']['bounding_box_flat_mm']['width']==before['bounding_box_flat_mm']['width']
 
-def test_duplicate_acrylic_sheet_is_not_automatically_renamed():
+def test_duplicate_acrylic_sheet_is_bound_to_its_twin_by_judgement_and_says_why():
     from part_evidence_safety import prepare
     s=pack(); prepare(s)
     a=part(s,'12517-05-05A'); b=part(s,'12517-07-05A')
-    assert a['evidence_safety_issues']['duplicate_detail_identity']['pages']==[25,38]
-    assert b['part_number']=='12517-07-05A' and b['quantity']==5
+    assert b['part_number']=='12517-07-05A' and b['quantity']==5       # identity and count kept
+    assert b['bound_detail_sheet']==dict(page=38, twin_of='12517-05-05A')
+    assert 38 in b['pages'] and b['normalized_material']=='ACRYLIC'
+    assert (b['blank_length_mm'], b['blank_width_mm'])==(270.0, 50.0)
+    assert 'Page 38' in b['evidence_safety_issues']['twin_detail_sheet']['message']
+    assert a['evidence_safety_issues']['twin_detail_sheet']['pages']==[25,38]
 
 def test_context_column_is_asked_not_silently_zeroed_or_removed():
     from part_evidence_safety import prepare, unresolved
@@ -140,12 +144,12 @@ def test_context_column_is_asked_not_silently_zeroed_or_removed():
     assert p['evidence_safety_issues']['context_supply_scope']
     assert any(x['part']=='Store Column' and x['issue']=='context_supply_scope' for x in unresolved(s))
 
-def test_unresolved_evidence_blocks_firm_release():
+def test_judgements_are_stated_and_never_block_the_price():
     from part_evidence_safety import prepare
     from invariants import check_part_evidence_safety
     s=pack(); prepare(s)
     findings=check_part_evidence_safety(s)
-    assert findings and all(x['severity']=='blocking' for x in findings)
+    assert findings and all(x['severity']=='warning' for x in findings)
 
 def test_no_questions_on_unrelated_pack():
     from part_evidence_safety import prepare, unresolved
