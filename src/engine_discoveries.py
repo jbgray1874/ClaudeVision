@@ -97,6 +97,10 @@ _ESTIMATOR = {
     # Stock, weld process, coating or bonding scope priced as an allowance and put to a
     # person (D-598r): a TIG rate, a coated surface, separate bonding stages.
     "owned_route_scope_unresolved",
+    # A part with no gauge of its own, a flat size read only off a PDF, one detail number
+    # drawn twice, or a building item such as a store column (12517): the pack cannot say,
+    # so a person settles it with the drawing open.
+    "part_evidence_unresolved",
 }
 
 # The union, so any caller still asking only "is this the engine's fault" gets the answer it

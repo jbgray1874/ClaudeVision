@@ -66,6 +66,19 @@ DOCTYPE = {
     ".sldasm": SW_ASM,
     ".slddrw": SW_DRW,
 }
+
+
+def configure_console_stream(stream):
+    """Logging cannot turn a successfully read model into a failed model.
+
+    Keep the caller's encoding (runner pipes may use an OEM code page), escaping
+    characters it cannot print. The extract JSON remains UTF-8, without loss.
+    """
+    if stream is not None and hasattr(stream, "reconfigure"):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, OSError, ValueError):
+            pass
 # OpenDoc6 options: silent (1) + read-only (2).
 OPEN_OPTS = 1 | 2
 
@@ -2301,6 +2314,8 @@ def explain_no_files(root: str) -> str:
 
 
 def main():
+    configure_console_stream(sys.stdout)
+    configure_console_stream(sys.stderr)
     if len(sys.argv) < 2:
         print("Usage: python sw_native_analyse.py <file_or_folder> [--out <json path>] [--no-flatten]")
         sys.exit(2)
@@ -2576,4 +2591,6 @@ def _sw_version_string(session: Any) -> str:
 
 
 if __name__ == "__main__":
+    configure_console_stream(sys.stdout)
+    configure_console_stream(sys.stderr)
     main()

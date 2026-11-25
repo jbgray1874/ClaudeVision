@@ -5471,7 +5471,17 @@ def check_owned_route_scope_is_ruled(summary: Any) -> List[Dict[str, Any]]:
                for f in not_evaluated(summary)])
 
 
+def check_part_evidence_safety(summary: Any) -> List[Dict[str, Any]]:
+    from part_evidence_safety import unresolved
+    if not isinstance(summary, Mapping):
+        return []
+    return [_violation("part_evidence_unresolved", BLOCKING, finding["message"],
+                       part_number=finding["part"], issue=finding["issue"])
+            for finding in unresolved(summary)]
+
+
 CHECKS = (
+    check_part_evidence_safety,
     check_owned_specifications_survive,
     check_owned_route_scope_is_ruled,
     check_a_banded_board_buys_its_edging,

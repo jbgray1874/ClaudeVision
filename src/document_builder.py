@@ -299,7 +299,7 @@ def _build_normalized_geometry(part: Dict[str, Any]) -> Dict[str, Any]:
     # a genuine estimate and still applies, scaled by bend count and thickness. It is
     # recorded so an estimated blank is never mistaken for a measured one.
     _measured_flat = bool(
-        part.get("flat_pattern_detected")
+        part.get("flat_pattern_measured")
         or part.get("dxf_augmented")
         or part.get("native_flat_pattern")
         or "dxf" in str(part.get("geometry_source") or "").lower()
@@ -307,7 +307,10 @@ def _build_normalized_geometry(part: Dict[str, Any]) -> Dict[str, Any]:
     )
     blank_allowance_mm = 0.0
     blank_basis = "measured_flat_pattern" if _measured_flat else "no_bends_formed_equals_blank"
-    if length is not None and width is not None and not _measured_flat and bend_count > 0:
+    _printed_flat = bool(part.get("flat_pattern_detected") and not _measured_flat)
+    if _printed_flat:
+        blank_basis = "pdf_flat_pattern_candidates"
+    if length is not None and width is not None and not _measured_flat and not _printed_flat and bend_count > 0:
         # Scale bend/blank allowance with bend count and thickness rather than fixed +20mm.
         thickness_for_allowance = thickness if thickness is not None else 1.5
         bend_radius = max(1.0, thickness_for_allowance)

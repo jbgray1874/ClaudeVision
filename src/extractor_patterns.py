@@ -268,6 +268,14 @@ def weld_process_stated(text: Any) -> Optional[Dict[str, Any]]:
     if not vocab or not patterns:
         return None
     words = "|".join(sorted((re.escape(str(w).upper()) for w in vocab), key=len, reverse=True))
+    # A process beside a joint symbol overrides the border's "unless stated"
+    # default. Restrict this to a whole annotation line, not MAGNET or a parts list.
+    for line in str(text or "").splitlines():
+        own = re.fullmatch(r"\s*(?:\d+(?:\.\d+)?\s+)?(" + words + r")\s*", line, re.I)
+        if own:
+            word = own.group(1).upper()
+            return {"process": str(vocab.get(word) or word), "word": word,
+                    "statement": line.strip(), "default": False}
     for pat in patterns:
         try:
             m = re.search(str(pat).replace("{proc}", words), squashed)
@@ -1158,7 +1166,31 @@ def _extract_revision_update_thicknesses(text: str) -> List[str]:
     return updates
 
 
+def dimension_text_without_border(text: str) -> str:
+    """Drawing figures only: dates and specification/footer numbers are not sizes.
+
+    Do not blacklist a year-sized *dimension*: an explicit 2026 x 400 mm blank
+    remains valid. Remove dates by their shape and the named border sections.
+    """
+    text = str(text or "")
+    parts = re.split(r"\b(?:GENERAL\s+TOLERANCES|FINISH\s+SPECIFICATIONS?|"
+                     r"WELD\s+SPECIFICATION|TIMBER\s+PRODUCTS)\s*:", text,
+                     maxsplit=1, flags=re.I)
+    # Cut the border only where the drawing's figures come before it. A page whose
+    # text lists its border notes first would otherwise lose every real dimension.
+    if len(parts) == 2:
+        figures = re.sub(r"\b\d{1,4}\s*[/:.\-]\s*\d{1,4}(?:\s*[/.\-]\s*\d{1,4})?\b", " ", parts[0])
+        if len(re.findall(r"\d+(?:\.\d+)?", figures)) >= 2:
+            text = parts[0]
+    text = re.sub(r"\b(?:19|20)\d{2}[/.\-]\d{1,2}[/.\-]\d{1,2}\b", " ", text)
+    text = re.sub(r"\b\d{1,2}[/.\-]\d{1,2}[/.\-](?:19|20)\d{2}\b", " ", text)
+    text = re.sub(r"(?:©|\(C\))\s*(?:19|20)\d{2}\b", " ", text, flags=re.I)
+    text = re.sub(r"\b\d+(?:\.\d+)?\s*(?:GRIT|MICRONS?|KG|G)\b", " ", text, flags=re.I)
+    return text
+
+
 def _infer_flat_pattern_dimensions(text: str) -> List[float]:
+    text = dimension_text_without_border(text)
     upper = normalize_text(text).upper()
     if "FLAT PATTERN" not in upper:
         return []
@@ -1695,6 +1727,7 @@ def _is_a_feature_callout(text: str, start: int, end: int) -> bool:
 
 
 def classify_dimensions(text: str) -> Dict[str, Any]:
+    text = dimension_text_without_border(text)
     text = normalize_text(text)
     if "GENERAL TOLERANCES" in text.upper():
         tolerance_noise_values = {"0.5", "1.0", "1.5", "2.0", "120", "1000", "2000", "4000"}

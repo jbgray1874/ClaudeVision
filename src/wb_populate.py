@@ -2348,15 +2348,17 @@ def weld_process_note(wb_op: Any, parts: Any, records_by_pn: Mapping[str, Any]) 
     if str(wb_op or "") != arc_row:
         return ""
     found: Dict[str, bool] = {}
+    labels = set()
     for pn in (parts or ()):
         rec = records_by_pn.get(str(pn or "").strip().upper()) if records_by_pn else None
         stated = (rec or {}).get("weld_process_stated") if isinstance(rec, Mapping) else None
         if isinstance(stated, Mapping) and stated.get("process"):
             proc = str(stated["process"]).upper()
             found[proc] = found.get(proc, False) or bool(stated.get("default"))
+            labels.add("MAG" if str(stated.get("word") or "").upper() == "MAG" else proc)
     if not found:
         return ""
-    procs = "/".join(sorted(found))
+    procs = "/".join(sorted(labels))
     _srcs = {str(((records_by_pn.get(str(pn or "").strip().upper()) or {})
                   .get("weld_process_stated") or {}).get("source") or "")
              for pn in (parts or ())} if records_by_pn else set()

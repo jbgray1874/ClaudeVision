@@ -2803,6 +2803,10 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
     and by tools/replay_saved_job.py, so a replay exercises exactly what a run does."""
     if not isinstance(summary, dict) or not isinstance(summary.get("manufacturing_writeup"), dict):
         return
+    # Owned evidence before costing; also used by the offline saved-record replay.
+    # This pass never changes BOM identities or quantities and makes no external call.
+    from part_evidence_safety import prepare as _prepare_part_evidence
+    _prepare_part_evidence(summary)
     # THE SHEET THAT DRAWS A PART HANDS DOWN ITS MATERIAL BEFORE ANYTHING IS COSTED (D-433).
     # D-426 ran in the summary sections, after estimate_document: on 8188-08's 17:37 book the
     # report said 014 and 015 took ACRYLIC from their sheet while the sheet costed both as

@@ -333,6 +333,7 @@ SOURCE_RANK: Dict[str, int] = {
     "llm_assisted": 41,
     "llm_extract": 40,
     "llm_full_extract": 40,
+    "document_gauge": 20,
     "inference": 20,
     "geometry_inference": 20,
     "fold_geometry": 20,
@@ -573,6 +574,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "dxf_flat_pattern":       "the DXF flat pattern",
     "mirror_of_measured":     "the measured opposite hand",
     "drawing_deterministic":  "the drawing",
+    "document_gauge":         "the pack's common gauge (inherited, not a part-local reading)",
     "title_block":            "the title block",
     "dxf_filename":           "the DXF filename the drawing office typed",
     # THE TWO BOM READERS, now that they are ranked. Both name the parts table, because that is

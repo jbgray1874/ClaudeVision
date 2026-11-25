@@ -189,6 +189,21 @@ def document_gauge_to_hand_down(summary: Dict[str, Any]) -> Any:
             continue
     if len(gauges) > 1:
         return None
+    # A multi-part manufacturing pack has no implicit common gauge. On 12517 the
+    # only unit-bearing "10mm" was a screw's BOM identity, not a plate callout.
+    # Preserve the legacy single-sheet fallback; a multi-part pack must explicitly
+    # state that one gauge applies to all of its made parts.
+    owners = set()
+    for page in summary.get("pages") or []:
+        tb = (page.get("page_analysis") or {}).get("title_block") or {}
+        owners.update(str(x).strip().upper() for x in tb.get("drawing_numbers") or [] if x)
+    if len(owners) > 1:
+        text = "\n".join(str(p.get("pdfplumber_text") or "")
+                         for p in summary.get("pages") or [])
+        if not re.search(r"\bALL\s+(?:MADE\s+)?(?:PARTS|PANELS|SHEET\s+METAL)\s+"
+                         r"(?:ARE\s+|TO\s+BE\s+)?\d+(?:\.\d+)?\s*MM\s*(?:THICK|THK)",
+                         text, re.I):
+            return None
     return (doc.get("primary_fields") or {}).get("thickness_mm")
 
 
@@ -820,9 +835,9 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
                 and document_primary_thickness is not None
                 and not _is_bought_in(part)):
             apply_field(part, "normalized_thickness_mm", document_primary_thickness,
-                        "drawing_deterministic")
-            if not part.get("thicknesses_mm"):
-                part["thicknesses_mm"] = [str(document_primary_thickness)]
+                        "document_gauge")
+            # An inherited figure never enters the list of this part's own readings.
+            part["thickness_inherited_from"] = "document_level"
         part["confidence"] = {
             key: round(sum(values) / len(values), 2) if values else 0.0
             for key, values in part.get("confidence", {}).items()
