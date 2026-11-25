@@ -196,6 +196,7 @@
     <nav class="nav">
       <div class="grp">Overview</div>
       <a class="active" data-view="dashboard"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>Dashboard</a>
+      <a class="m2f-link" href="/m2f"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg>Monday2Friday</a>
       <div class="grp">AI Services</div>
       <div id="aisvc-nav"></div>
       <div class="grp">Operate</div>
@@ -246,6 +247,16 @@
       <div class="panel reveal" style="margin-bottom:28px;border-left:2px solid var(--accent)">
         <h3>About SDI Intelligence</h3>
         <p><b>SDI Intelligence</b> is the operational hub for artificial intelligence across SDI Displays — a single place that brings together our AI tools, system integrations and business intelligence in service of one goal: designing and making better brand experiences, faster. From the AI estimating engine that reads engineering drawings and produces costed estimates automatically, to the co-worker agents supporting each part of the business, to a live view of our AI programme roadmap and a continuous scan of the wider AI marketplace, the portal turns emerging technology into practical advantage on the shop floor and in the studio. It connects to our core systems — estimating, production, HR and finance — and grows as each capability moves from pilot to production. Built around our belief that <i>Experiences are Designed &amp; Made</i>, SDI Intelligence is how we put the best of AI to work for our clients and our people.</p>
+      </div>
+
+      <div class="panel reveal" style="margin-bottom:28px">
+        <h3>Monday2Friday · account and delivery workspace</h3>
+        <p>Forecast, weekly review, variations and the AM and PM workspaces, built from the account tracker. Pilot: the tracker stays the source of truth while the team tests.</p>
+        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+          <a class="run m2f-link" style="display:inline-block;text-decoration:none" href="/m2f">Open Monday2Friday →</a>
+          <a class="run" style="display:inline-block;text-decoration:none;background:transparent;color:var(--ink);border:1px solid var(--line)" href="/m2f/guide">User guide</a>
+          <a class="run" style="display:inline-block;text-decoration:none;background:transparent;color:var(--ink);border:1px solid var(--line)" href="/m2f/architecture">Architecture</a>
+        </div>
       </div>
 
       <div class="grid2" style="margin-bottom:28px">
@@ -2041,6 +2052,10 @@
   const API_BASE = "";   // same-origin
   const API_KEY  = "2ff633ca8aeb4c54bfe4e2af56e82a48c791a47b05ba412d90d60558235f532c";   // set ONLY if your backend has SDI_API_KEY; leave blank for local
   function _hdr(){ return API_KEY ? {"X-SDI-Key": API_KEY} : {}; }
+  // Monday2Friday is same-origin: hand it the key through localStorage, never the URL.
+  document.querySelectorAll('.m2f-link').forEach(a => a.addEventListener('click', () => {
+    try { if (API_KEY) localStorage.setItem('sdi_api_key', API_KEY); } catch (e) {}
+  }));
   async function _get(p){ const r=await fetch(API_BASE+p,{headers:_hdr()}); if(!r.ok) throw new Error(r.status+" "+(await r.text()).slice(0,160)); return r.json(); }
   function _sz(b){ if(b==null)return""; const u=["B","KB","MB","GB"];let i=0,n=b;while(n>=1024&&i<3){n/=1024;i++;} return n.toFixed(n<10&&i>0?1:0)+u[i]; }
   async function filesInit(){

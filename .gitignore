@@ -27,3 +27,8 @@ output/
 *.xlsx
 
 *.sql
+
+# Secrets and Monday2Friday pilot data
+.env
+m2f_data/
+*.sqlite

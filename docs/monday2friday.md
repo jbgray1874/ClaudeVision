@@ -7,14 +7,35 @@ review (held outside the repo: they contain client data).
 
 ## What is built so far
 
+The pilot app runs at `/m2f` on the SDI Intelligence service, with its user
+guide at `/m2f/guide` and architecture at `/m2f/architecture` (buttons on the
+app's header and on the portal dashboard). During the pilot the tracker stays
+the source of truth: the app re-reads it whenever it is saved, and keeps
+freezes, movement notes, variations, answers and owners in a small SQLite
+pilot store.
+
 | Piece | File | What it does |
 | --- | --- | --- |
+| Web app | `sdi-intelligence-backend/m2f/web/index.html` | Director dashboard, weekly review, variations, accounts, AM workspace, PM overview, projects, questions for Kayleigh, settings |
+| Guide and architecture | `sdi-intelligence-backend/m2f/web/guide.html`, `architecture.html` | User guide and architecture pages |
+| API | `sdi-intelligence-backend/m2f_routes.py` | `/api/m2f/*` behind the `X-SDI-Key` gate; mounted in `app.py` |
+| Workspace | `sdi-intelligence-backend/m2f/service.py` | Builds every view from the tracker; pilot store for freezes, notes, variations, answers, owners |
 | Tracker importer | `sdi-intelligence-backend/m2f/tracker_import.py` | Reads the tracker workbook into projects, dated forecast lines, accounts, brands and people, with an issue for anything it cannot read with certainty |
 | Database schema | `sdi-intelligence-backend/m2f/schema_m2f.sql` | `m2f` schema on SDILive: people, accounts, projects, forecast lines, freezes, budgets, variations, activities, plus import staging |
 | Staging loader | `sdi-intelligence-backend/m2f/db_load.py` | Writes an import batch, its rows and its issues to the staging tables |
 | Tests | `sdi-intelligence-backend/tests/test_m2f_*.py` | Synthetic workbook fixture; set `M2F_TRACKER` to also check a real tracker |
 
-## Running it
+## Deploying the pilot
+
+1. Pull this branch into the backend folder (laptop or server).
+2. Add `M2F_TRACKER_PATH` (UNC path to the tracker) and `M2F_DATA_DIR` to `.env`
+   (see `config.example.env`).
+3. Restart the service: `Restart-Service SDIIntelligence` (admin PowerShell),
+   or `python app.py` on a laptop.
+4. Open `http://sdi-intelligence.sdi.local:8071/m2f` (server) or
+   `http://localhost:8071/m2f` (laptop) and check Settings and data.
+
+## Running the pieces directly
 
 ```
 cd sdi-intelligence-backend
@@ -68,10 +89,10 @@ permanent IDs are issued by the database on promotion from staging.
 
 ## Next
 
-1. Promotion from staging to live tables once the decisions are recorded.
-2. API router (`m2f_routes.py`) behind the existing `X-SDI-Key` gate, with
-   write methods enabled deliberately (the backend currently allows GET only).
-3. Director dashboard, AM workspace and PM overview in the portal.
-4. Forecast freeze and the weekly review; variations register.
-5. Phase 2: Sage X3 reads (PO, sales order, invoice status) and Debbie's
-   Finance queue.
+1. Kayleigh answers the open questions in the app (Questions for Kayleigh).
+2. Promotion from staging into the SDILive `m2f` schema, carrying the pilot
+   store across; people then update Monday2Friday instead of the tracker.
+3. Budget against forecast, project CPA templates, holiday cover.
+4. Phase 2: Sage X3 reads (PO, sales order, invoice status), Debbie's Finance
+   queue, team capacity with BrightHR leave.
+5. Phase 3: Sage X3 writes with confirmation, WhatsApp brief, meeting notes.

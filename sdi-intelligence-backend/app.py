@@ -36,7 +36,7 @@ app = FastAPI(title="SDI Intelligence — Backend", version="0.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.ALLOWED_ORIGINS,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "PUT", "PATCH"],
     allow_headers=["X-SDI-Key", "Content-Type"],
 )
 
@@ -160,6 +160,10 @@ def home():
 # ── HR pipeline (BrightHR -> InVentry) ──
 from hr_routes import router as hr_router
 app.include_router(hr_router)
+
+# ── Monday2Friday (account and delivery workspace) ──
+from m2f_routes import router as m2f_router
+app.include_router(m2f_router)
 
 
 if __name__ == "__main__":
