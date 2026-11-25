@@ -4983,11 +4983,23 @@ def _safe_thickness_and_stage(part: Dict[str, Any]) -> Tuple[Optional[float], st
 
     _dfn = str(part.get("dxf_source_file") or part.get("geometry_source_path") or "")
     if _dfn:
-        _tm = re.search(r"[_\-\s](\d+\.?\d*)\s*mm", _dfn, re.IGNORECASE)
-        if _tm:
-            _tv = _safe_float(_tm.group(1))
-            if _tv and 0.3 <= _tv <= _max_t_for_part and _ok(_tv):
-                return _tv, "dxf_filename"
+        # ONE READER OF A DXF NAME (12517-00-GA). This step had its own pattern, which needed
+        # a separator straight before the number, so "12517-05-01M MS T2.0mm RevB.DXF" never
+        # matched. The 2.0 the merge had already read from that same name was then refused
+        # below as tolerance-table noise, and every flat in the pack went to the sheet with
+        # no gauge. The merge's reader is the one that names the file's gauge everywhere else.
+        _tv = None
+        try:
+            from pathlib import PureWindowsPath as _PWP
+            from drawing_job_merge import thickness_mm_from_dxf_filename as _thk_from_name
+            _tv = _thk_from_name(Path(_PWP(_dfn).name))
+        except Exception:                                            # noqa: BLE001
+            _tv = None
+        if _tv is None:
+            _tm = re.search(r"[_\-\s](\d+\.?\d*)\s*mm", _dfn, re.IGNORECASE)
+            _tv = _safe_float(_tm.group(1)) if _tm else None
+        if _tv and 0.3 <= _tv <= _max_t_for_part and _ok(_tv):
+            return _tv, "dxf_filename"
 
     # Already-normalised thickness — skip tolerance-table noise when DXF exists.
     # A REFUSED FIGURE IS RE-JUDGED, NEVER RESURRECTED SILENTLY (SCRUM-180). _unset below
@@ -5001,7 +5013,11 @@ def _safe_thickness_and_stage(part: Dict[str, Any]) -> Tuple[Optional[float], st
         v = _safe_float(raw)
         _max_t = _max_t_for_part
         if v and 0.4 <= v <= _max_t and not (1900 <= v <= 2100) and _ok(v):
-            if round(v, 1) not in _TOLERANCE_TABLE_SEQUENCE or not _dfn:
+            # A gauge the resolver took from the cut file's name or the model is a reading
+            # of this part, not the border's tolerance table, whatever its value.
+            _src_t = str(part.get("thickness_source") or "").lower()
+            _owned_t = _src_t.startswith(("dxf", "solidworks", "native"))
+            if round(v, 1) not in _TOLERANCE_TABLE_SEQUENCE or not _dfn or _owned_t:
                 if not part.get("normalized_thickness_mm"):
                     part["normalized_thickness_mm"] = v   # precedence: direct-write ok — restores the value the resolver already arbitrated; the refusal only parked it
                     part.pop("thickness_rejected_mm", None)
