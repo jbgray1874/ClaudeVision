@@ -221,7 +221,7 @@ function qRender(){const n=Q.length,ck=Q.filter(q=>q.run).length,rd=Q.filter(isR
   $('#qwrap').classList.toggle('hide',!n);$('#qclear').classList.toggle('hide',!n||BUSY);
   $('#queue').innerHTML=n?'<tr><th>Estimate</th><th>Part</th><th>Pre-check</th><th class="n">BOM lines</th><th class="n">Route ops</th><th>Sage X3</th><th></th></tr>'+Q.map(q=>{const j=q.run;
     const st=q.state==='checking'?'<span class="qst c"><span class="spin"></span> checking…</span>':q.state==='wait'?'<span class="qst w">to check</span>':q.err?`<span class="qst no" title="${esc(q.err)}">couldn't run</span>`:
-      !j.ok?`<span class="qst no" title="${esc(j.error||'')}">couldn't convert</span>`:j.ready?'<span class="qst ok">READY</span>':`<span class="qst no">NOT READY · ${j.stop} STOP</span>`;
+      !j.ok?`<span class="qst no" title="${esc(j.error||'')}">couldn't convert</span>`:j.ready?'<span class="qst ok">READY</span>':`<span class="qst no" title="Open it with 👁 View - the Checks tab lists what to fix">NOT READY · ${j.stop} to fix</span>`;
     const x3=q.loading?'<span class="qst c"><span class="spin"></span> publishing…</span>':inX3(q)?'<span class="qst x3">IN SAGE X3</span>':q.load&&!q.load.ok?`<span class="qst no" title="${esc(q.load.error||'')}">not loaded</span>`:q.note?`<span class="muted">${esc(q.note)}</span>`:'';
     return `<tr data-q="${q.id}" class="${R&&j&&R.id===j.id?'sel':''}"><td class="fn" title="${esc(q.name)}"><b>${esc(q.name)}</b><br><span class="muted">${(q.size/1024).toFixed(0)} KB${j?' · '+etag(envOf(j)):''}</span></td><td><b>${esc(j&&j.code||'')}</b>${j&&j.ok?`<br><span class="muted">${j.existing?'already in X3':'new part'}</span>`:''}</td><td>${st}</td><td class="n">${j&&j.ok?j.bom:''}</td><td class="n">${j&&j.ok?j.ops:''}</td><td>${x3}</td>
       <td class="qa2">${j&&j.ok?'<a data-view="1">👁 View</a>':''}${q.state!=='checking'&&!BUSY?'<a class="rm" data-rm="1" title="Take it off the list (runs already done stay under Earlier runs)">✕</a>':''}</td></tr>`}).join(''):'';
@@ -284,9 +284,9 @@ function show(j){R=j;$('#result').classList.remove('hide');markHist();$('#x3box'
     ['#tiles','#dl','#order','#view'].forEach(s=>$(s).innerHTML='');$('#tabs').classList.add('hide');return}
   $('#tabs').classList.remove('hide');
   const ok=j.ready;$('#banner').className='banner '+(ok?'ok':'no');
-  $('#banner').innerHTML=`<b>${ok?'READY TO LOAD':'NOT READY'}</b><span>${esc(j.code)} · ${esc(j.estimate)} · ${ok?'every line checked against Sage X3':`${j.stop} STOP check${j.stop==1?'':'s'} to fix in the estimate, then run it again`}</span>${etag(envOf(j))}${j.saved_folder?`<span class="tag m">opened from ${esc(j.saved_path)}</span>`:''}`;
+  $('#banner').innerHTML=`<b>${ok?'READY TO LOAD':'NOT READY'}</b><span>${esc(j.code)} · ${esc(j.estimate)} · ${ok?'every line checked against Sage X3':`${j.stop} thing${j.stop==1?'':'s'} to fix in the estimate - see the Checks tab (the STOP lines) - then pre-check it again`}</span>${etag(envOf(j))}${j.saved_folder?`<span class="tag m">opened from ${esc(j.saved_path)}</span>`:''}`;
   const ex=j.existing;
-  $('#tiles').innerHTML=[[j.code,ex?'already in Sage X3':'new part'],[j.bom,'BOM lines'],[j.ops,'route operations'],[j.stop,'STOP'],[j.warn,'WARN'],
+  $('#tiles').innerHTML=[[j.code,ex?'already in Sage X3':'new part'],[j.bom,'BOM lines'],[j.ops,'route operations'],[j.stop,'to fix (STOP)'],[j.warn,'WARN'],
     [when(j.products&&j.products.as_at),'X3 product list as at']].map(t=>`<div class="tile"><b>${esc(t[0])}</b><span>${t[1]}</span></div>`).join('');
   const B=base(j),f=n=>`${B}/file/${enc(n)}`,pv=n=>`${B}/preview/${enc(n)}`;
   const loads=(j.load_files||[]).slice().sort((a,b)=>rank(a)-rank(b));
@@ -454,7 +454,7 @@ function loadHist(){return fetch(`${API}/runs`,{headers:HD()}).then(r=>r.json())
   if(!L.length&&!sessionStorage.getItem('estGuideSeen')){$('#guide').open=true;try{sessionStorage.setItem('estGuideSeen','1')}catch(e){}}   // first use: the guide opens by itself, once
   if(h.saved_to!==undefined)$('#savedto').textContent=h.saved_to||'(not saved to a folder)';
   $('#histnote').textContent=L.length?`${L.length} run${L.length==1?'':'s'} kept. Click one to see it again.`:'No runs yet.';
-  $('#hist').innerHTML=L.length?'<tr><th>When</th><th>Part</th><th>Estimate</th><th>Result</th></tr>'+L.map(r=>`<tr data-id="${esc(r.id)}"><td>${esc(when(r.when))}</td><td><b>${esc(r.code||'')}</b> ${etag(r.env)}</td><td>${esc(r.estimate||'')}</td><td>${!r.ok?'<span class="lv STOP">ERROR</span>':r.ready?'<span class="lv INFO" style="background:var(--gb);color:var(--g)">READY</span>':`<span class="lv STOP">${r.stop} STOP</span>`}${r.x3&&r.x3.ok?' <span class="tag g">IN X3</span>':''}</td></tr>`).join(''):'';markHist()}).catch(()=>{})}
+  $('#hist').innerHTML=L.length?'<tr><th>When</th><th>Part</th><th>Estimate</th><th>Result</th></tr>'+L.map(r=>`<tr data-id="${esc(r.id)}"><td>${esc(when(r.when))}</td><td><b>${esc(r.code||'')}</b> ${etag(r.env)}</td><td>${esc(r.estimate||'')}</td><td>${!r.ok?'<span class="lv STOP">ERROR</span>':r.ready?'<span class="lv INFO" style="background:var(--gb);color:var(--g)">READY</span>':`<span class="lv STOP" title="NOT READY: open it and see the Checks tab">NOT READY · ${r.stop} to fix</span>`}${r.x3&&r.x3.ok?' <span class="tag g">IN X3</span>':''}</td></tr>`).join(''):'';markHist()}).catch(()=>{})}
 function markHist(){$$('#hist tr[data-id]').forEach(t=>t.classList.toggle('cur',!!R&&t.dataset.id===R.id))}
 $('#hist').addEventListener('click',e=>{const t=e.target.closest('tr[data-id]');if(!t)return;
   fetch(`${API}/run/${encodeURIComponent(t.dataset.id)}`,{headers:HD()}).then(r=>r.json()).then(j=>{show(j);$('#result').scrollIntoView({behavior:'smooth'})})});
