@@ -38,7 +38,7 @@ nav.tabs button.on{background:var(--ink);color:#fff}nav.tabs button:hover:not(.o
 main{padding:18px 0 48px}
 .view{display:none;animation:fade .25s ease}.view.on{display:block}
 /* 23 Nov: no data for this environment = no figures from the last one (James: the tiles showed SDI Mig's 892 under We are SDI) */
-body.nodata #v-ov,body.nodata #v-lo,body.nodata #v-ld,body.nodata #v-sh,body.nodata #v-sg,body.nodata #v-cu,body.nodata #v-tr,body.nodata #x3rep{display:none!important}@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+body.nodata #v-ov,body.nodata #v-lo,body.nodata #v-ld,body.nodata #v-sh,body.nodata #v-po,body.nodata #v-sg,body.nodata #v-cu,body.nodata #v-tr,body.nodata #x3rep{display:none!important}@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:var(--sh);position:relative;overflow:hidden}
 .tile b{display:block;font-size:30px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums}.tile span{color:var(--muted);font-size:12px}
@@ -109,7 +109,7 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
 </div></header>
 <nav class="tabs hide" id="tabs"><div class="w">
   <button data-v="ov" class="on">Overview</button><button data-v="lo">Live Orders</button><button data-v="ld">Work-centre load</button>
-  <button data-v="sh">Shortages</button><button data-v="sg">WO Suggestions</button><button data-v="cu">Customers</button>
+  <button data-v="sh">Shortages</button><button data-v="po">PO Suggestions</button><button data-v="sg">WO Suggestions</button><button data-v="cu">Customers</button>
   <button data-v="tr">Trends</button><button data-v="ug">User guide</button><button data-v="hw">How it works</button><button data-v="wb">Workbooks</button>
 </div></nav>
 <main class="w">
@@ -154,6 +154,13 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
     <div class="bar"><select id="sonly"><option value="1">Short only</option><option value="">All bought-in components</option></select><input id="sq" placeholder="Search component" size="24"><button id="csv2">Export CSV</button><span class="muted" id="scount"></span></div>
     <div class="tbl" id="t2"></div></div></section>
 
+  <section class="view" id="v-po"><div class="card">
+    <h2>PO Suggestions</h2><p class="note">Purchasing's list: bought-in parts the open works orders are short of - how many to order, when they're needed, when to order by (the usual lead time on the part's Sage X3 purchase orders), and who it was bought from last. <b>Nothing is sent to Sage X3</b> - raise the orders in X3 as now. The quantities are the same as Shortages.</p>
+    <div class="bar"><select id="pst"><option value="now">Order now (and late)</option><option value="week">Now and this week</option><option value="">All</option></select>
+      <select id="pco"><option value="">Orders and call-offs</option><option value="0">Orders only</option><option value="1">Call-offs only</option></select>
+      <input id="pq" placeholder="Search part, description or supplier" size="30"><button id="csv3">Export CSV</button><span class="muted" id="pcount"></span></div>
+    <div class="tbl" id="t7"></div></div></section>
+
   <section class="view" id="v-sg"><div class="card">
     <h2>WO Suggestions</h2><p class="note">Sales-order lines for made parts that no works order or stock covers. Red = no BOM or no route. Lines due over 60 days ago are left out for Customer Services to close.</p>
     <div class="tbl" id="t4"></div></div></section>
@@ -190,6 +197,7 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
       <tr><td>Live Orders</td><td>One line per works order, as Production's sheet. Filter by status, shop, week or level; search by part, WO, SO, account or any note. <b>Click a line</b> for why it's red or amber and its exploded BOM (stock, on order, next PO date). <b>Click a yellow ✎ cell</b> to type a note. Export CSV.</td><td>Production</td></tr>
       <tr><td>Work-centre load</td><td>Hours still to do per work centre, by the week each order is due. Darker = busier.</td><td>Production</td></tr>
       <tr><td>Shortages</td><td>Every bought-in component the open works orders need, against stock, on order and on works orders - what's short and which orders it holds up.</td><td>Purchasing</td></tr>
+      <tr><td>PO Suggestions</td><td>Bought-in parts to order: how many, when they're needed, when to order by, and who they were bought from last, at what price. Read-only - you raise the order in Sage X3. See below.</td><td>Purchasing</td></tr>
       <tr><td>WO Suggestions</td><td>Sales-order lines for made parts that no works order or stock covers. Red = no BOM or no route.</td><td>Production, Customer Services</td></tr>
       <tr><td>Customers</td><td>Works orders, red count, overdue and hours by account. Click an account to see its orders.</td><td>Customer Services</td></tr>
       <tr><td>Trends</td><td>Red / amber / green and hours across every saved run.</td><td>Managers</td></tr>
@@ -197,6 +205,14 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
     <h3>Red, amber, green - and the shop letters</h3>
     <p><b>Material status:</b> <span class="st GREEN">GREEN</span> all material in stock · <span class="st AMBER">AMBER</span> covered by a PO or works order due in time, or a call-off material · <span class="st RED">RED</span> short with nothing due in time, or no BOM. Click the line to see which material and why.</p>
     <p><b>Shops:</b> <span class="shop" style="color:var(--m)">M</span> Metal · <span class="shop" style="color:var(--j)">J</span> Joinery · <span class="shop" style="color:var(--ac)">A</span> Acrylics - from the work centres on the part's route. <b>Level:</b> Top = the works order for the sales order; Sub = a sub-assembly made for it.</p>
+    <h3>PO Suggestions - what Purchasing should order</h3>
+    <ol><li>Open the <b>PO Suggestions</b> tab. It starts on <b>Order now (and late)</b>; choose <b>All</b> to see everything coming up.</li>
+      <li>Each line is a bought-in part the open works orders are short of. <b>To order</b> = what all the open works orders need, less what's in stock, on open purchase orders and on works orders - the same figure as Shortages.</li>
+      <li><b>Needed by</b> is the due date of the first works order the stock and open orders can't cover. <b>Order by</b> = needed by less the part's usual lead time - worked out from its purchase orders in Sage X3 (order date to expected receipt). A lead time marked * is an assumed 14 days: the part has no purchase orders in X3 yet.</li>
+      <li><b>Status:</b> <span class="st RED">Late</span> the works order needing it is already due · <span class="st RED">Order now</span> the order-by date has come · <span class="st AMBER">This week</span> order within 7 days · <span class="st GREEN">Later</span>. Parts marked <b>call-off</b> (sheet, powder, packing, pallets, wire, carriage) are called off against an agreement rather than ordered per job.</li>
+      <li><b>Last supplier</b>, <b>last price</b> and <b>last ordered</b> come from the part's most recent purchase order in Sage X3 - a starting point, not a rule.</li>
+      <li><b>Raise the order in Sage X3 as now.</b> Nothing on this page is sent to X3. At the next Regenerate the new order counts as on order, and the line drops off or shrinks. <b>Export CSV</b> gives you the list to work from.</li></ol>
+    <p class="note">Check before ordering: minimum order quantities, pack sizes and price breaks aren't in the suggestion yet, and a sub-assembly made in house can already be on a works order.</p>
     <h3>3. Production's notes - type them here</h3>
     <ol><li>On <b>Live Orders</b>, the yellow <b>✎</b> columns are yours: <b>Comments</b>, <b>Prog</b>, <b>Tube req</b>, <b>Material</b> (blank for your own material notes - the reason a line is red or amber is in the drop-down when you click the line) and <b>Notes</b>.</li>
       <li><b>Click a cell</b>, type, and press <b>Enter</b> to save (<b>Shift+Enter</b> for a new line, <b>Esc</b> to cancel). Clicking away also saves. The first time, it asks your name - once per PC.</li>
@@ -300,7 +316,7 @@ function render(data){
   $('#asat').textContent=`as at ${m.as_at||''} · ${fmtN(D.wos.length)} works orders still to make`;
   const tiles=[[m.wos??D.wos.length,'works orders to make','y',m.top!=null?`${fmtN(m.top)} top level`:''],[m.red,'red: short, nothing due in time','r'],
     [m.amber,'amber: covered by PO / WO','a'],[m.green,'green: material in stock','g'],[m.overdue,'overdue','r'],
-    [m.hours,'hours still to do','y'],[m.suggestions,'WO suggestions','',m.sug_red!=null?`${fmtN(m.sug_red)} with no BOM / route`:''],[(m.no_bom||0)+(m.no_route||0),'no BOM / no route','r']];
+    [m.hours,'hours still to do','y'],[m.suggestions,'WO suggestions','',m.sug_red!=null?`${fmtN(m.sug_red)} with no BOM / route`:''],[(m.no_bom||0)+(m.no_route||0),'no BOM / no route','r']].concat(m.po_sug!=null?[[m.po_now,'POs to raise now','r',`${fmtN(m.po_sug)} parts to order in all`]]:[]);
   $('#tiles').innerHTML=tiles.map((t,i)=>`<div class="tile ${t[2]}"><b id="k${i}">0</b><span>${t[1]}</span>${t[3]?`<small>${t[3]}</small>`:''}</div>`).join('');
   tiles.forEach((t,i)=>countUp($('#k'+i),Number(t[0]||0)));
   donut($('#donut'),[['RED',m.red||0,css('--r')],['AMBER',m.amber||0,css('--a')],['GREEN',m.green||0,css('--g')]]);
@@ -331,7 +347,7 @@ function render(data){
   $('#soon').innerHTML=soon.length?`<div class="tbl"><table><tr><th>Due</th><th>WO</th><th>Part</th><th>Status</th><th>Why</th></tr>`+soon.map(w=>`<tr><td>${dd(w.due)}</td><td>${esc(w.wo)}</td><td>${esc(w.p)}</td><td><span class="st ${esc(w.st)}">${esc(w.st)}</span></td><td class="wrap">${esc(w.mt)}</td></tr>`).join('')+'</table></div>':'<p class="muted">Nothing amber or red due in the next 14 days.</p>';
   // filters
   $('#fwk').innerHTML='<option value="">All weeks</option><option value="od">Overdue</option>'+[...new Set(D.wos.map(w=>w.wk).filter(Boolean))].sort().map(k=>`<option value="${k}">w/c ${dd(k)}</option>`).join('');
-  table();loadView();shortView();sugView();custView();trends();howView()}
+  table();loadView();shortView();poView();sugView();custView();trends();howView()}
 
 function howView(){const L=D.logic||[];$('#hwlive').innerHTML=D.live?`<b>Live data.</b> ${esc(D.live)}`:'<span class="muted">This data file is from before the logic was added - press Regenerate.</span>';
   $('#t6').innerHTML=L.length?`<table><thead><tr><th>What</th><th>The rule</th><th>Access SupplyChain / Production's sheet</th><th>Where it comes from in Sage X3</th><th>Reconciled to Access (16 Nov)</th></tr></thead><tbody>`+
@@ -402,6 +418,21 @@ $('#sonly').onchange=shortView;$('#sq').oninput=shortView;
 $('#csv2').onclick=()=>csv(`Shortages_${today}.csv`,['Component','Description','Short','Needed','Stock','On PO','Next PO','On WO','WOs','First WO due','Works orders'],
   shortRows().map(a=>[a.c,a.d,Math.round(a.short*100)/100,Math.round(a.need*100)/100,a.stock,a.po,a.due,a.wo,a.n,a.first,[...a.ws].join(' ')]));
 
+// PO Suggestions (26 Nov, James: "suggest them for people to raise") - built by po_suggestions.py; read-only
+const PST={LATE:['Late','RED'],NOW:['Order now','RED'],WEEK:['This week','AMBER'],LATER:['Later','GREEN'],NODATE:['No date','']};
+function poRows(){const st=$('#pst').value,co=$('#pco').value,q=$('#pq').value.trim().toLowerCase();
+  return (D.pos||[]).filter(x=>(!st||(st==='now'?['LATE','NOW'].includes(x.status):['LATE','NOW','WEEK'].includes(x.status)))&&(!co||String(+!!x.call_off)===co)&&
+    (!q||[x.part,x.des,x.supplier].some(v=>String(v||'').toLowerCase().includes(q))))}
+function poView(){if(!D.pos){$('#t7').innerHTML='<p class="muted" style="padding:10px">This data file is from before PO Suggestions were added - press Regenerate.</p>';$('#pcount').textContent='';return}
+  const R=poRows();$('#pcount').textContent=`${fmtN(R.length)} of ${fmtN(D.pos.length)} parts`;
+  const money=(v,c)=>v==null?'':`${fmtN(v,2)}${c&&c!=='GBP'?' '+esc(c):''}`;
+  $('#t7').innerHTML=R.length?`<table><thead><tr><th>Status</th><th>Order by</th><th>Needed by</th><th>Part</th><th>Description</th><th class="n">To order</th><th>Unit</th><th>Last supplier</th><th class="n">Last price</th><th class="n">Est. value</th><th class="n">Lead (days)</th><th>Last ordered</th><th class="n">In stock</th><th class="n">On PO</th><th>Next PO</th><th>Works orders</th></tr></thead><tbody>`+
+    R.map(x=>{const s=PST[x.status]||['',''];return `<tr><td><span class="st ${s[1]}" title="${esc(x.label)}">${s[0]}</span>${x.call_off?' <span class="pill" title="Called off against an agreement rather than ordered per job">call-off</span>':''}</td><td style="${x.order_by&&x.order_by<=today?'color:var(--r);font-weight:700':''}">${dd(x.order_by)}</td><td>${dd(x.needed_by)}</td><td><b>${esc(x.part)}</b></td><td class="wrap">${esc(x.des)}</td><td class="n"><b>${fmtN(x.short,2)}</b></td><td>${esc(x.unit)}</td><td>${esc(x.supplier)||'<span class="muted">none in X3</span>'}</td><td class="n">${x.price!=null?money(x.price,x.cur)+(x.pu?` <span class="muted">/${esc(x.pu)}</span>`:''):''}</td><td class="n">${money(x.value,x.cur)}</td><td class="n" title="${esc(x.lead_from)}">${x.lead}${/assumed/.test(x.lead_from)?'<span class="muted">*</span>':''}</td><td>${dd(x.last_order)}</td><td class="n">${fmtN(x.stock,2)}</td><td class="n">${fmtN(x.on_po,2)}</td><td>${dd(x.next_po)}</td><td class="wrap">${x.wos.slice(0,5).map(w=>`<span class="pill">${esc(w)}</span>`).join('')}${x.wos.length>5?` <span class="muted">+${x.wos.length-5}</span>`:''}</td></tr>`}).join('')+
+    '</tbody></table><p class="note" style="padding:8px 8px 0">* Lead time assumed 14 days - this part has no purchase orders in Sage X3 yet. Hover a lead time to see where it came from. Est. value = to order × last price, only where the purchase and stock units match.</p>'
+    :'<p class="muted" style="padding:10px">Nothing to order for this filter - stock, open POs and works orders cover it.</p>'}
+['#pst','#pco'].forEach(x=>$(x).onchange=poView);$('#pq').oninput=poView;
+$('#csv3').onclick=()=>csv(`PO_Suggestions_${today}.csv`,['Status','Order by','Needed by','Part','Description','To order','Unit','Call-off','Last supplier','Last price','Currency','Per','Est. value','Lead time (days)','Lead time from','Last ordered','In stock','On PO','Next PO','Needed (all WOs)','Works orders'],
+  poRows().map(x=>[x.label,x.order_by,x.needed_by,x.part,x.des,x.short,x.unit,x.call_off?'Yes':'',x.supplier,x.price,x.cur,x.pu,x.value,x.lead,x.lead_from,x.last_order,x.stock,x.on_po,x.next_po,x.need,x.wos.join(' ')]));
 function sugView(){const S=D.sug||[];
   $('#t4').innerHTML=S.length?`<table><thead><tr><th>Part</th><th>Description</th><th>Sales order</th><th class="n">To make</th><th>Suggested start</th><th>SO due</th><th>BOM</th><th>Route</th><th>Shops</th><th>Account</th></tr></thead><tbody>`+
     S.map(s=>{const bad=!(s[5]&&s[6]);return `<tr style="${bad?'background:var(--rb)':''}"><td><b>${esc(s[0])}</b></td><td class="wrap">${esc(s[1])}</td><td>${esc(s[2])}</td><td class="n">${fmtN(s[3],0)}</td><td style="${s[8]&&s[8]<today?'color:var(--r);font-weight:700':''}">${dd(s[8])}</td><td>${dd(s[4])}</td><td>${s[5]?'✓':'<b style="color:var(--r)">No</b>'}</td><td>${s[6]?'✓':'<b style="color:var(--r)">No</b>'}</td><td>${dots(s[9])}</td><td>${esc(s[7])}</td></tr>`}).join('')+'</tbody></table>':'<p class="muted" style="padding:10px">No suggestions - every sales-order line for a made part is covered.</p>'}

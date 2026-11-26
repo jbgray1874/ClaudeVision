@@ -107,9 +107,11 @@ def read_products(path):
             ITMREF=["ITMREF", "code", "product.code", "Product"], TCLCOD=["TCLCOD", "productCategory.code", "productCategory", "Category"],
             ITMDES1=["ITMDES1", "localizedDescription1", "description1", "description", "Description"],
             ITMDES2=["ITMDES2", "localizedDescription2", "description2"],
-            ITMDES3=["ITMDES3", "localizedDescription3", "description3"]).items()}
+            ITMDES3=["ITMDES3", "localizedDescription3", "description3"],
+            STU=["STU", "stockUnit.code", "stockUnit"]).items()}
         g = lambda r, k: str(r.get(c[k]) or "").strip() if c[k] else ""
-        return {g(r, "ITMREF"): dict(cat=g(r, "TCLCOD"), des=g(r, "ITMDES1"), des2=g(r, "ITMDES2"), des3=g(r, "ITMDES3"))
+        return {g(r, "ITMREF"): dict(cat=g(r, "TCLCOD"), des=g(r, "ITMDES1"), des2=g(r, "ITMDES2"), des3=g(r, "ITMDES3"),
+                                     unit=g(r, "STU"))
                 for r in rows if g(r, "ITMREF")}
     ws = load_workbook(path, read_only=True)["Data with Headings"]
     rows = ws.iter_rows(values_only=True)
@@ -256,7 +258,8 @@ def read_carry(path):
     return out
 
 
-def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, lead_days=14, costs_path=None, carry=None):
+def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, lead_days=14, costs_path=None, carry=None,
+          po_lines=None):
     grids, as_at = read_extract(extract)
     prods, boms, routes, wcnames = read_products(products_path), read_boms(boms_path), read_routes(routes_path), read_work_centres()
     today = day(as_at[:10]) or dt.date.today()
@@ -429,6 +432,16 @@ def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, le
     for w in wos:
         w["explode"] = explode(w["code"], w["bal"], 1, {w["code"]})
 
+    # PO Suggestions (26 Nov): what Purchasing should order, by when, from whom last time - read-only. The supplier,
+    # price and lead time come from X3's PO lines, open and closed (po_lines: the pull's file), else the open ones.
+    from po_suggestions import history, suggest
+    if po_lines:
+        from x3_source import read_rows
+        hist = history(read_rows(po_lines))
+    else:
+        hist = history(grids["POH"])
+    po_sug = suggest(wos, stock, pos, on_wo, prods, hist, today, CALL_OFF)
+
     compare = compare_dave(dave, wos) if dave else None
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -439,15 +452,16 @@ def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, le
                 no_route=sum(not w["has_route"] for w in wos), suggestions=len(sug),
                 sug_red=sum(not (s["bom"] and s["route"]) for s in sug), stale_so=len(stale),
                 overdue=sum(1 for w in wos if w["due"] and w["due"] < today),
-                hours=round(sum(sum(w["hours"].values()) for w in wos), 1))
+                hours=round(sum(sum(w["hours"].values()) for w in wos), 1),
+                po_sug=len(po_sug), po_now=sum(s["status"] in ("LATE", "NOW") for s in po_sug))
     name = f"SDI_Live_Orders_{stamp[:10]}"
     # Production's notes: a workbook to read them from, or already merged with the portal's (run_x3, 25 Nov)
     carried = carry if isinstance(carry, dict) else (read_carry(carry) if carry else {})
     for w in wos:
         w["carry"] = carried.get(w["wo"], {})
     meta["carried"] = sum(1 for w in wos if w["carry"])
-    write_xlsx(out / f"{name}.xlsx", meta, wos, wc_cols, wcnames, load, sug, checks, compare)
-    write_html(out / f"{name}.html", meta, wos, wc_cols, wcnames, load, sug, compare)
+    write_xlsx(out / f"{name}.xlsx", meta, wos, wc_cols, wcnames, load, sug, checks, compare, po_sug)
+    write_html(out / f"{name}.html", meta, wos, wc_cols, wcnames, load, sug, compare, po_sug)
     return dict(meta=meta, files=[f"{name}.xlsx", f"{name}.html", f"{name}.json"], compare=compare and compare["summary"], wos=wos, wcnames=wcnames)
 
 
@@ -504,10 +518,11 @@ def wc_label(wc, wcnames):
     return "/".join(wcnames.get(wc, [])) or wc
 
 
-def write_xlsx(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare):
+def write_xlsx(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, po_sug=None):
     """Production's workbook (live_orders_xlsx.py, 20 Nov). The older plain writer is kept below as write_xlsx_plain."""
     import live_orders_xlsx
-    live_orders_xlsx.write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_label, drawing_of, STALE_DAYS)
+    live_orders_xlsx.write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_label, drawing_of, STALE_DAYS,
+                           po_sug or [])
 
 
 def write_xlsx_plain(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare):
@@ -610,7 +625,7 @@ def stock_of(w):
 
 
 # ---------------------------------------------------------------- HTML
-def write_html(path, meta, wos, wc_cols, wcnames, load, sug, compare):
+def write_html(path, meta, wos, wc_cols, wcnames, load, sug, compare, po_sug=None):
     data = dict(meta=meta, wcs=[[c, wc_label(c, wcnames), family(c)] for c in wc_cols],
                 wos=[dict(due=w["due"].isoformat() if w["due"] else "", cd=w["cust_date"].isoformat() if w["cust_date"] else w["cust_note"],
                           wo=w["wo"], lv=w["level"], so=w["so"], ac=w["account"], p=w["code"], d=w["des"], rev=w["rev"],
@@ -624,6 +639,11 @@ def write_html(path, meta, wos, wc_cols, wcnames, load, sug, compare):
                 sug=[[s["code"], s["des"], s["so"], s["mrp_qty"], s["due"].isoformat() if s["due"] else "", s["bom"], s["route"],
                       s["account"], s["start"].isoformat() if s["start"] else "", [f[:1] for f in s["families"]],
                       s["so_qty"], s["drawing"]] for s in sug],
+                # PO Suggestions (26 Nov): dates as ISO text, works orders listed
+                pos=[{**s, "needed_by": s["needed_by"].isoformat() if s["needed_by"] else "",
+                      "order_by": s["order_by"].isoformat() if s["order_by"] else "",
+                      "next_po": s["next_po"].isoformat() if s["next_po"] else "",
+                      "last_order": s["last_order"].isoformat() if s["last_order"] else ""} for s in (po_sug or [])],
                 cmp=compare["summary"] if compare else None)
     page = TEMPLATE.replace("__DATA__", json.dumps(data, default=str).replace("</", "<\\/")).replace("__ASAT__", html.escape(meta["as_at"]))
     Path(path).write_text(page, encoding="utf-8")

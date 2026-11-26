@@ -79,7 +79,7 @@ def week_of(d):
 
 
 # ---------------------------------------------------------------- the workbook
-def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_label, drawing_of, stale_days):
+def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_label, drawing_of, stale_days, po_sug=()):
     wb = Workbook()
     as_at = meta["as_at"]
     sub = f"as at {as_at} · {meta['wos']} works orders still to make · from Sage X3 · nothing typed except the ✎ columns"
@@ -305,16 +305,52 @@ def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_labe
     ws.freeze_panes = "B6"
     _print(ws, 5)
 
+    # ---------- PO Suggestions (26 Nov): Purchasing's list - read-only, they raise the orders in Sage X3
+    ps = wb.create_sheet("PO Suggestions", 3)
+    ps.sheet_properties.tabColor = "C5221F"
+    ph = ["Status", "Order by", "Needed by", "Part", "Description", "To order", "Unit", "Call-off", "Last supplier",
+          "Last price", "Currency", "Per", "Est. value", "Lead time (days)", "Lead time from", "Last ordered",
+          "In stock", "On PO", "Next PO due", "Needed (all WOs)", "Works orders"]
+    _banner(ps, "PO Suggestions", "bought-in parts the open works orders are short of: how many to order, by when, who "
+                                  "from last time · read-only - raise the orders in Sage X3 as now", len(ph))
+    _header(ps, 5, ph, [20, 10, 10, 20, 32, 9, 6, 7, 12, 9, 7, 6, 10, 8, 22, 10, 8, 8, 10, 9, 40])
+    fill = {"LATE": RAG["RED"][1], "NOW": RAG["RED"][1], "WEEK": RAG["AMBER"][1]}
+    for i, x in enumerate(po_sug, 6):
+        vals = [x["label"], x["order_by"], x["needed_by"], x["part"], x["des"], x["short"], x["unit"],
+                "Yes" if x["call_off"] else "", x["supplier"], x["price"], x["cur"], x["pu"], x["value"], x["lead"],
+                x["lead_from"], x["last_order"], x["stock"], x["on_po"], x["next_po"], x["need"],
+                ", ".join(x["wos"][:12]) + (f" +{len(x['wos']) - 12}" if len(x["wos"]) > 12 else "")]
+        for j, v in enumerate(vals, 1):
+            c = ps.cell(i, j, v)
+            c.font = Font(size=9, bold=j in (1, 4, 6))
+            c.alignment = Alignment(vertical="top", wrap_text=j in (5, 21))
+        if x["status"] in fill:
+            ps.cell(i, 1).fill = F(fill[x["status"]])
+        for j in (2, 3, 16, 19):
+            ps.cell(i, j).number_format = "dd/mm/yy"
+        ps.cell(i, 10).number_format = ps.cell(i, 13).number_format = "#,##0.00"
+    if po_sug:
+        e = 5 + len(po_sug)
+        ps.conditional_formatting.add(f"B6:B{e}", FormulaRule(formula=["AND(ISNUMBER(B6),B6<=TODAY())"],
+                                                              font=Font(bold=True, color=RAG["RED"][0])))
+        ps.auto_filter.ref = f"A5:U{e}"
+    else:
+        ps.cell(6, 1, "Nothing to order: stock, open POs and works orders cover every bought-in part.").font = \
+            Font(italic=True, color=MUTED)
+    ps.freeze_panes = "E6"
+    _print(ps, 5)
+
     # ---------- Dashboard (first tab)
     db = wb.create_sheet("Dashboard", 0)
     db.sheet_properties.tabColor = INK
-    _banner(db, "Live Orders · Production's plan", sub, 14)
-    for c in range(1, 15):
+    _banner(db, "Live Orders · Production's plan", sub, 16)
+    for c in range(1, 17):
         db.column_dimensions[get_column_letter(c)].width = 11
     tiles = [("Works orders to make", meta["wos"], INK, "F3F3EF"), ("Red: short", meta["red"], *RAG["RED"]),
              ("Amber: covered", meta["amber"], *RAG["AMBER"]), ("Green: in stock", meta["green"], *RAG["GREEN"]),
              ("Overdue", meta["overdue"], RAG["RED"][0], "FFFFFF"), ("Hours to do", round(meta["hours"]), INK, "F3F3EF"),
-             ("WO suggestions", meta["suggestions"], INK, "F3F3EF")]
+             ("WO suggestions", meta["suggestions"], INK, "F3F3EF")] + (
+                [("POs to raise now", meta["po_now"], RAG["RED"][0], "FFFFFF")] if "po_now" in meta else [])
     for i, (label, val, ink, bg) in enumerate(tiles):
         col = 1 + 2 * i
         db.merge_cells(start_row=5, start_column=col, end_row=6, end_column=col + 1)
@@ -387,6 +423,8 @@ def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_labe
              ("Material status", "GREEN all in stock · AMBER covered by a PO / works order in time, or a call-off "
                                  "material · RED short with nothing due in time, or no BOM. Why: the Exploded BOMs tab."),
              ("Shops", "M Metal · J Joinery · A Acrylics, from the part's route. Due date red = overdue."),
+             ("PO Suggestions", "Bought-in parts to order: how many, needed by, order by (lead time from X3's PO lines), "
+                                "last supplier and price. Read-only - raise the orders in Sage X3 as now."),
              ("Print", "Each tab prints A3 landscape, one page wide, headings on every page.")]
     note_row = 27 + max(0, int(0.55 * len(hrs) + 2 - 8.5) * 2)
     for i, (a, b) in enumerate(notes, note_row):
@@ -394,7 +432,7 @@ def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_labe
         db.cell(i, 3, b).font = Font(size=9, color=MUTED)
     _print(db, 1)
     db.print_title_rows = None
-    db.print_area = f"A1:N{note_row + len(notes)}"
+    db.print_area = f"A1:P{note_row + len(notes)}"
 
     # ---------- Read me / checks
     if compare:

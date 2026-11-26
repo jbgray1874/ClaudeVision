@@ -203,7 +203,8 @@ def main(argv=None):
         from live_orders_notes import merge               # + the notes typed in the portal (25 Nov)
         built_at = dt.datetime.now().isoformat(timespec="seconds")   # notes typed after this go in the next run
         carry, status["notes"] = merge(a.carry, runs, read_carry)
-        res = build(extract, out, a.products, a.boms, a.routes, None, 14, a.costs, carry)
+        from x3_source import find                      # PO Suggestions: supplier / price / lead time from X3's PO lines
+        res = build(extract, out, a.products, a.boms, a.routes, None, 14, a.costs, carry, po_lines=find(src, "po_lines"))
         j = next(out / f for f in res["files"] if f.endswith(".json"))
         data = json.loads(j.read_text(encoding="utf-8"))
         data["built_at"] = built_at

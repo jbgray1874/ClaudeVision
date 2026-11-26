@@ -68,6 +68,16 @@ LOGIC = [
      "Sales order lines with quantity still to deliver (salesOrderLine; closed lines left out - as Access), "
      "against works orders and stock.",
      "Same layout as Production's tab 2."),
+    ("PO Suggestions",
+     "Bought-in parts the open works orders are short of (every BOM level, as Shortages): to order = needed - stock - "
+     "on open POs - on works orders. Needed by = the due date of the first works order that can't be covered (works "
+     "orders in due order). Order by = needed by - the part's usual lead time (median days from order date to expected "
+     "receipt on its X3 PO lines; 14 days if it has none). Last supplier / price: its most recent X3 PO line. "
+     "Read-only: Purchasing raise the orders in X3.",
+     "Purchasing checked Access and the sheet by hand.",
+     "BOM lines, stock, PO lines open and closed (purchaseOrderLine: supplier, order date, expected receipt, gross "
+     "price, currency, purchase unit), works orders.",
+     "New (26 Nov) - to agree with Purchasing."),
     ("Exploded BOM",
      "Every works order's BOM at every level (up to 8) x balance, against stock, on PO (and the next PO date), on WO, "
      "make / buy. Short bought-in parts in red. Click a part code to jump to it.",
