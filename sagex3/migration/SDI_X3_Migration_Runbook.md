@@ -5227,3 +5227,60 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - The page lists them per part.
   - Tested against a stand-in X3 (product create plus 2 by-hand) and in the browser.
 - **Deploy:** pull, robocopy, then the installer with `--apply`. Then the first real publish of one estimate in We are SDI.
+
+### 26 Nov (evening) – BOMs and routes saved to Sage X3 automatically, through X3's own import templates
+
+James: "we can't really offer a manual solution… what else can we do to auto import". Later: "we need to do the same for routes and the save products also (only where a product doesn't exist already)". Estimating also want **updates**: "if they change an estimate and resave".
+
+- **Routes tried and dropped (We are SDI):**
+  - **GraphQL operation built on an import template.** An Operations (GESAPIOPE) record of type Create/Update/Delete, method "Creation", which turns out to mean import-based (Sage's COM_ITG_CUD is built this way, on its JSON template JSOITG).
+    - It needs a **Json (API)** copy of the template, which has to name a node on each identifier.
+    - X3 refused every BOM node: ManufacturingBom, SalesBom and ManufacturingBomLine gave "Invalid value" or "main node name is required". Node binding API_BOM is Published = Yes, with Table Filter `{ type: 'manufacturing' }`.
+    - The copy **ZJSOBOM was never saved**. Nothing changed in X3.
+  - **Correction:** the X3 template for BOMs is **YA004BOMP** ("Bill of Materials Essentials", object BOD, two levels: E = BOM, L = BOMD). **YA00408BOM is only the migration file's name.** The portal's "import by hand" wording now says YA004BOMP.
+- **Route that works: X3's standard import web service AOWSIMPORT (classic SOAP).** It runs an existing import template on the file content it's sent, the same as Usage → Imports.
+  - **Classic SOAP pool `SDIEST`** (Administration → Web services → Classic SOAP pools configuration):
+    - endpoint We are SDI (X3ERPV12_ACUX3), locale en-GB, user SDIJG;
+    - 1 channel, auto start;
+    - started, channel ready.
+    - There were no pools before.
+  - **Web service AOWSIMPORT published in We are SDI** (Development → Script dictionary → Scripts → Web services):
+    - Sub-programme, script AOWSIMPORT, subprogram IMPORT;
+    - description "Import via a template (SDI)";
+    - it wasn't in this folder's list before.
+  - **Sign-in:** the existing "SDI Estimate loader" connected app works for SOAP: 200 with it, 401 without. No user password is needed.
+  - **AOWSIMPORT's own description:** GRP1 holds I_MODIMP (template), I_AOWSTA, I_EXEC (REALTIME), I_RECORDSEP, I_FILE (the file, ending END), and returns O_STATUS and O_MESSA.
+- **`sagex3/integration/x3_api/x3_soap.py`:**
+  - `check` is read-only.
+  - `import <file> --template ZSDIITM|YA004BOMP|ZSDIROU2`:
+    - It's a dry run by default; `--apply --confirm <part>` sends it.
+    - One part per file.
+    - A product X3 has is never changed.
+    - A BOM or route X3 has is changed only with `--update`, and the dry run lists each change first.
+    - Before an update, X3's version is saved as a load file in `C:\ProgramData\SDI\x3_before_update`.
+    - After the import it re-reads X3, and every import is logged to `x3_load_history.jsonl`.
+- **First real update (one migrated part's BOM in We are SDI, a test of an estimator re-saving):**
+  - The estimate had the same 8 components as X3, numbered the other way round, and two sheet-metal quantities with more decimals.
+  - X3 reported errors (O_STATUS 0) and changed **4 of the 8 lines**. That BOM now holds three components twice and is missing three.
+  - **Fix in the tool:** a BOM update now keeps X3's line number for every component X3 already has, so only quantities change. A new component goes on the next free line. A component X3 has that the estimate doesn't is reported, not removed.
+  - **That BOM is to be put back by hand** (BOMs BOMP, 4 lines). Then a dry run against the saved "before" file with `--keep-numbers` should show no difference.
+- **Publish wired in (x3_load.py, estimating_routes.py, est_x3_page.html):**
+  - Where the endpoint has a pool (We are SDI), plan and load send the run's three load files through ZSDIITM, YA004BOMP and ZSDIROU2:
+    - **product: only if new;**
+    - **BOM / route:** created if new. If X3's is the same, it's left. If it's different, it shows **X3 HAS A DIFFERENT ONE** with the changes, and is updated only when **"update"** is ticked.
+  - The page has an update tick on Publish and on the single load.
+  - SDI Mig has no pool, so it keeps the earlier route (products by the API, BOM and route by hand).
+  - Tested against a stand-in X3 (new → created; re-saved with a changed quantity → "differs" → updated → the same) and in the browser.
+- **Deploy:**
+  1. pull and robocopy;
+  2. the installer with `--apply`;
+  3. **restart SDIIntelligence** (estimating_routes.py changed).
+- **Before live:**
+  - a pool on the live endpoint, and AOWSIMPORT published there;
+  - a dedicated API user instead of SDIJG;
+  - sign-off;
+  - the test-only guard in x3_load.py has to change.
+- **Open:**
+  - the first route import and update (check whether set-up and run times compare in the same unit);
+  - test what X3 does with a line removed from an estimate (it's reported and not removed, by design);
+  - Sage support's answer on GraphQL BOM creation is no longer needed for this.
