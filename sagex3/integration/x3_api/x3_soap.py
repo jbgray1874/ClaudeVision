@@ -160,7 +160,7 @@ def import_lines(c, pool, template, lines):
     g = res.get("GRP1", res) if isinstance(res, dict) else {}
     ok = code == 200 and p["status"] == "1" and str(g.get("O_STATUS")) == "1"
     return {"ok": ok, "http": code, "status": p["status"], "o_status": g.get("O_STATUS"), "o_message": g.get("O_MESSA"),
-            "messages": p["messages"], "raw": None if p["status"] == "1" else text[:4000]}
+            "messages": p["messages"], "raw": None if ok else text[:6000]}
 
 
 def _num(v):
@@ -253,6 +253,34 @@ def differences(what, now, new):
     return out
 
 
+def align(lines, now):
+    """26 Nov, first update test: X3 changed only 4 of 8 lines when the estimate numbered the same 8 components the
+    other way round (line 10 SHEETMETAL11 -> UPCSTICKER001 ...) - an import that swaps components between line
+    numbers isn't reliable. So an update keeps X3's line number for every component X3 already has (only its
+    quantity changes), and a new component goes on the next free line number. A component X3 has that the estimate
+    no longer has is reported, not removed. Returns (lines, notes)."""
+    seq_of = {}
+    for k, v in now.items():
+        seq_of.setdefault(v[0], k)
+    top = max([int(k) for k in now if str(k).isdigit()] or [0])
+    out, notes, used = [], [], set()
+    for ln in lines:
+        f = ln.split(";")
+        cpn, seq = f[8], f[7]
+        if cpn in seq_of and seq_of[cpn] not in used:
+            new = seq_of[cpn]
+        else:
+            top = (top // 10 + 1) * 10
+            new = str(top)
+        used.add(new)
+        if new != seq:
+            notes.append(f"{cpn}: estimate line {seq} -> X3 line {new}" + ("" if cpn in seq_of else " (new component)"))
+        f[7] = new
+        out.append(";".join(f))
+    gone = [f"{v[0]} (X3 line {k})" for k, v in now.items() if k not in used]
+    return out, notes, gone
+
+
 def do_import(a):
     c = x3_load.guard(x3_api.for_env(x3_load.load_conf(), a.env))
     what, stem = TEMPLATES[a.template]
@@ -270,6 +298,13 @@ def do_import(a):
     now = None
     if has_it:
         now = current(c, what, part)
+        if what == "bom" and now and not a.keep_numbers:
+            lines, notes, gone = align(lines, now)
+            print("Update: X3's own line numbers kept for the components it already has" + (":" if notes else " (no change)"))
+            for n_ in notes:
+                print("   " + n_)
+            for g_ in gone:
+                print(f"   NOT IN THE ESTIMATE: {g_} - left in X3 as it is (remove it in X3 if it should go)")
         if now is None:
             print("   (couldn't read X3's lines to compare)")
         else:
@@ -314,8 +349,9 @@ def do_import(a):
     x3_load.HISTORY.parent.mkdir(parents=True, exist_ok=True)
     with open(x3_load.HISTORY, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, default=str) + "\n")
-    print(f"{'IMPORTED' if r['ok'] else 'NOT IMPORTED'} - HTTP {r['http']}, status {r['status']}, "
-          f"O_STATUS {r['o_status']}, message {r['o_message']!r}")
+    print(("IMPORTED" if r["ok"] else "X3 REPORTED ERRORS - some lines may have changed, see the re-read below"
+           if str(r["o_status"]) == "0" else "NOT IMPORTED")
+          + f" - HTTP {r['http']}, status {r['status']}, O_STATUS {r['o_status']}, message {r['o_message']!r}")
     for t, m in r["messages"][:40]:
         print(f"   X3 says{(' (' + t + ')') if t else ''}: {m[:300]}")
     print(f"X3 after: {what} for {part} {'found' if after else 'NOT found' if after is False else 'could not check'}")
@@ -347,6 +383,8 @@ def main(argv=None):
     im.add_argument("--confirm", default="", help="the part code, typed again")
     im.add_argument("--update", action="store_true", help="allow changing a BOM / route X3 already has")
     im.add_argument("--by", default="")
+    im.add_argument("--keep-numbers", dest="keep_numbers", action="store_true",
+                    help="BOM update: use the file's line numbers as they are (default: keep X3's for its components)")
     a = ap.parse_args(argv)
     return check(a) if a.cmd == "check" else do_import(a)
 
