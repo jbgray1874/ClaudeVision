@@ -5139,3 +5139,16 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - Steps: pull, robocopy, then the installer with `--apply`.
   - No service restart is needed for this change.
   - It shows after the next Regenerate. Weekly sections, zoom and full screen work as soon as the page reloads.
+
+#### 26 Nov – Deployed to SDI-APP01, note sent to James Ryan and Simon
+- **Deployed on SDI-APP01:**
+  - pull and robocopy;
+  - the installer with `--apply` (at 00:11 the routes, guide_ask and pages; at 13:27 the page);
+  - `Restart-Service SDIIntelligence -Force` (done 26 Nov, after the 13:27 apply).
+- **First installer attempt** failed with "C:\Program Files\Python310\python.exe is not recognized". It was run in a window on James's own PC instead of the server. On the server it worked.
+- **Note sent by James to James Ryan and Simon:**
+  - how to refresh: check the environment switch, Regenerate, wait for Done, F5 if the page looks old;
+  - the new features: weekly sections, zoom / full screen, notes, Order lookup, PO Suggestions, Late POs, Data checks, the user guide with Ask the guide;
+  - still We are SDI test data, with Access live until go-live;
+  - not to act on red / amber / green, PO Suggestions or Late POs until the stock reading is confirmed.
+- **Still needed from James:** the "stock check" line from What X3 sent, after a We are SDI Regenerate.
