@@ -1,0 +1,367 @@
+"""Hotel Chocolat: one estimate per product, planned from what the drawings say.
+
+plan  : reads the pack and the estimating service's run list (GET only), writes a readable
+        plan and a JSON plan. Submits nothing and writes nothing to the share.
+queue : reads THAT JSON plan, re-checks every product's source fingerprint, skips products
+        already estimated (unless rerun), and submits the rest in plan order.
+
+Folders are weak evidence in this pack. A file belongs to a product when a drawing of that
+product names it (the BOM references, followed through the whole pack), or when it sits in
+the product's folder with nothing showing it belongs elsewhere. A file can serve several
+products. A file leaves a product only on positive evidence: it is another product's top
+drawing and nothing in this product names it, or its sheet lives only in another product
+that names it. Every file in the pack is accounted for at the end.
+"""
+import sys, os, re, json, hashlib, pathlib, urllib.request, collections, datetime
+import fitz
+
+mode = sys.argv[1]
+if mode == 'plan':
+    pack_root, out_dir = pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
+    only = set(a.strip().upper().replace('.', '').replace('-', '') for a in sys.argv[4].split(',') if a.strip()) if len(sys.argv) > 4 else set()
+else:
+    plan_file, rerun = pathlib.Path(sys.argv[2]), (len(sys.argv) > 3 and sys.argv[3] == 'rerun')
+
+SERVICES = ('http://localhost:8071', 'http://localhost:8072')
+KEY = os.environ.get('HC_KEY', '')
+NAME_REF = re.compile(r'nc1-([a-ln-z])(\d{5})', re.I)
+TEXT_REF = re.compile(r'(?<![A-Z0-9])([A-LN-Z])[.\-]?(\d{5})(?![0-9])', re.I)
+DRAWING_EXT = ('.pdf', '.dxf', '.dwg')
+PACKS = [
+    ('1 Perimeter panels and infills', r'wall panel|infill panel'),
+    ('2 Perimeter shelving', r'shelf|shelving'),
+    ('3 Perimeter battens, end caps and accessories', r'batten|lighting rip|end capping|\brsb\b|hook'),
+    ('4 Storage cupboards', r'cupboard'),
+    ('5 Cash desks', r'cash desk'),
+    ('6 Wall of Chocolate layouts', r'wall of chocolate'),
+    ('7 Social tables and midfloor', r'social table|midfloor unit'),
+    ('8 Plinths and column planter', r'plinth|planter|ballast'),
+]
+
+def get_json(url):
+    req = urllib.request.Request(url, headers={'X-SDI-Key': KEY} if KEY else {})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.loads(r.read().decode('utf-8'))
+
+def existing_runs():
+    """Every Hotel Chocolat run either service still knows, keyed by source fingerprint."""
+    found = {}
+    for s in SERVICES:
+        try:
+            runs = get_json(s + '/api/estimate?limit=500').get('runs', [])
+        except Exception:
+            continue
+        for r in runs:
+            m = re.search(r'\[hc:([0-9a-f]{12})\]', str(r.get('job_title') or ''))
+            if m and str(r.get('client') or '').lower().startswith('hotel'):
+                lst = found.setdefault(m.group(1), [])
+                if all(e['run_id'] != r.get('run_id') for e in lst):
+                    lst.append({'run_id': r.get('run_id'), 'status': r.get('status')})
+    return found
+
+def ref_of(p):
+    m = NAME_REF.search(p.name)
+    return (m.group(1).upper() + m.group(2)) if m else None
+
+def dotted(r):
+    return '%s.%s' % (r[0], r[1:])
+
+def sha1(p):
+    h = hashlib.sha1()
+    with open(p, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+def fingerprint(root, title, files):
+    h = hashlib.sha256((root + '|' + title).encode('utf-8'))
+    for f in sorted(files, key=lambda x: (x['ref'] or '', x['name'], x['sha1'])):
+        h.update(('%s|%s|%d\n' % (f['name'], f['sha1'], f['size'])).encode('utf-8'))
+    return h.hexdigest()[:12]
+
+def pack_of(title):
+    for name, rx in PACKS:
+        if re.search(rx, title, re.I):
+            return name
+    return 'UNASSIGNED PACK'
+
+def clean_title(name):
+    return re.sub(r'^\s*\d+[A-Z]?\.\s*', '', name).strip()
+
+if mode == 'plan':
+    stamp = datetime.datetime.now().strftime('%Y-%m-%d %H%M')
+    every = sorted(p for p in pack_root.rglob('*') if p.is_file())
+    drawing_root = pack_root / 'Drawing'
+    rel = lambda p: str(p.relative_to(pack_root))
+    def category(p):
+        r = rel(p).lower()
+        if 'brief to supplier' in r:
+            return 'brief'
+        if 'signage' in r:
+            return 'signage'
+        if p.suffix.lower() in DRAWING_EXT and ref_of(p):
+            return 'drawing'
+        return 'context'
+    info = {p: {'path': str(p), 'name': p.name, 'rel': rel(p), 'ref': ref_of(p), 'size': p.stat().st_size,
+                'category': category(p)} for p in every}
+    for p, i in info.items():
+        i['sha1'] = sha1(p) if i['size'] else ''
+    by_ref = collections.defaultdict(list)
+    for p, i in info.items():
+        if i['category'] == 'drawing':
+            by_ref[i['ref']].append(p)
+
+    text_cache = {}
+    def mentions_of_file(p):
+        if p not in text_cache:
+            found = set()
+            if p.suffix.lower() == '.pdf' and info[p]['size']:
+                try:
+                    for pg in fitz.open(str(p)):
+                        for m in TEXT_REF.finditer(pg.get_text()):
+                            found.add(m.group(1).upper() + m.group(2))
+                except Exception:
+                    pass
+            text_cache[p] = found
+        return text_cache[p]
+    def mentions_of_ref(r):
+        out = set()
+        for p in by_ref.get(r, []):
+            out |= mentions_of_file(p)
+        return (out & set(by_ref)) - {r}
+
+    # 1. Candidate products from the folders (a working list), with shared libraries.
+    def has_drawings(d):
+        return any(info.get(f, {}).get('category') == 'drawing' for f in d.iterdir() if f.is_file())
+    folders, libraries, layouts = [], set(), []
+    for d in sorted(x for x in drawing_root.rglob('*') if x.is_dir()):
+        if 'signage' in str(d).lower():
+            continue
+        own = [f for f in d.iterdir() if f.is_file()]
+        if not own:
+            continue
+        subs = [s for s in d.iterdir() if s.is_dir() and has_drawings(s)]
+        if subs and has_drawings(d):
+            libraries.add(d)
+            continue
+        if not has_drawings(d):
+            layouts.append(d)
+            continue
+        folders.append(d)
+
+    # 2. Each candidate's top drawing: named by none of its folder's other drawings.
+    products = []
+    for d in folders:
+        own_refs = sorted({info[f]['ref'] for f in d.iterdir() if f.is_file() and info.get(f, {}).get('ref')})
+        named = set()
+        for r in own_refs:
+            named |= mentions_of_ref(r)
+        tops = [r for r in own_refs if r not in named]
+        described = {info[f]['ref'] for f in d.iterdir() if f.is_file() and info.get(f, {}).get('ref') and '_' in f.stem}
+        def elsewhere(r):
+            # Filed in another candidate product's folder too: a shared or foreign sheet.
+            return any(f.parent != d and f.parent in folders for f in by_ref.get(r, []))
+        def score(r):
+            # Unique to this folder, then names the most of its neighbours, then has a
+            # described file name ("nc1-b33519_3 Person Cash Desk"), then the lowest number.
+            return (not elsewhere(r), len(mentions_of_ref(r) & set(own_refs)), r in described, -int(r[1:]))
+        warn = []
+        pool = tops or own_refs
+        root = max(pool, key=score)
+        if len(tops) != 1:
+            warn.append('top drawing chosen as %s from %s (%s): unique to this folder and naming the most of its drawings'
+                        % (dotted(root), ', '.join(dotted(t) for t in pool),
+                           'none unnamed' if not tops else 'several unnamed'))
+        title = clean_title(d.name)
+        if d.parent in libraries:
+            title = clean_title(d.parent.name) + ' - ' + title
+        products.append({'folder': d, 'root': root, 'title': title, 'warnings': warn})
+    roots = {p['root']: p for p in products}
+
+    # 3. Each product's drawings: its folder plus everything its drawings name, through the pack.
+    for prod in products:
+        tree, todo = set(), [prod['root']]
+        while todo:
+            r = todo.pop()
+            if r in tree:
+                continue
+            tree.add(r)
+            for m in mentions_of_ref(r):
+                if m in roots and m != prod['root']:
+                    prod['warnings'].append('its drawings name %s, the top drawing of %s: included as a component; check it is not also priced on its own' % (dotted(m), roots[m]['title']))
+                todo.append(m)
+        prod['tree'] = tree
+        missing = set()
+        for r in tree:
+            for p in by_ref.get(r, []):
+                missing |= {m for m in mentions_of_file(p) if m not in by_ref}
+        if missing:
+            prod['missing'] = sorted(missing)
+            prod['warnings'].append('named by its drawings but not in the pack: %s (priced by allowance; ask Design)'
+                                    % ', '.join(dotted(m) for m in sorted(missing)))
+    dup_roots = collections.Counter(p['root'] for p in products)
+    for prod in products:
+        if dup_roots[prod['root']] > 1:
+            prod['warnings'].append('ANOTHER PRODUCT HAS THE SAME TOP DRAWING %s: check the plan before queueing' % dotted(prod['root']))
+    pdf_homes = collections.defaultdict(set)
+    for prod in products:
+        for f in prod['folder'].iterdir():
+            if f.is_file() and info.get(f, {}).get('ref') and f.suffix.lower() == '.pdf':
+                pdf_homes[info[f]['ref']].add(prod['root'])
+    transfers = []
+    for prod in products:
+        d = prod['folder']
+        chosen, notes = {}, []
+        local = [f for f in d.iterdir() if f.is_file()]
+        if d.parent in libraries:
+            local += [f for f in d.parent.iterdir() if f.is_file()]
+        for f in local:
+            i = info.get(f)
+            if not i or i['category'] not in ('drawing', 'context'):
+                continue
+            r = i['ref']
+            if r and r not in prod['tree']:
+                if r in roots and roots[r] is not prod:
+                    transfers.append('%s: %s left out - it is the top drawing of %s and no drawing of %s names it'
+                                     % (prod['title'], f.name, roots[r]['title'], prod['title']))
+                    continue
+                owners = [o for o in products if o is not prod and r in o['tree']]
+                if owners and f.suffix.lower() != '.pdf' and prod['root'] not in pdf_homes.get(r, set()):
+                    transfers.append('%s: %s moved to %s, whose drawings name it'
+                                     % (prod['title'], f.name, ', '.join(o['title'] for o in owners)))
+                    continue
+                if not owners:
+                    notes.append('%s is in its folder but no drawing names it: kept here' % f.name)
+            chosen[f] = i
+        for r in prod['tree']:
+            for f in by_ref.get(r, []):
+                if f not in chosen and not any(info[c]['ref'] == r and info[c]['sha1'] == info[f]['sha1']
+                                               and c.suffix.lower() == f.suffix.lower() for c in chosen):
+                    chosen[f] = info[f]
+        files, empties, seen = [], [], set()
+        for f, i in sorted(chosen.items(), key=lambda kv: kv[1]['rel']):
+            if not i['size']:
+                empties.append(i['name'])
+                continue
+            key = (i['ref'] or i['name'], f.suffix.lower(), i['sha1'])
+            if key in seen:
+                continue
+            seen.add(key)
+            files.append(i)
+        prod['files'], prod['empties'] = files, empties
+        if empties:
+            prod['warnings'].append('%d empty file(s) supplied, not readable: %s' % (len(empties), ', '.join(empties)))
+        prod['warnings'] += notes
+
+    # 4. A product with nothing readable is priced from its brief and its family, not dropped.
+    for prod in products:
+        prod['brief'] = None
+        if not prod['files']:
+            fam = [o['title'] for o in products if o is not prod and pack_of(o['title']) == pack_of(prod['title'])]
+            prod['brief'] = ('Hotel Chocolat %s (drawing %s). Every drawing supplied for this product is empty, so it is '
+                             'priced as an allowance: the same construction, materials and finish as its family (%s), '
+                             'scaled to the size in its name. State every assumption.' % (prod['title'], dotted(prod['root']), '; '.join(fam)))
+            prod['warnings'].append('no readable drawings: priced from a brief by analogy with its family (allowance)')
+
+    already = existing_runs()
+    plan = []
+    for prod in sorted(products, key=lambda p: -len(p['files'])):
+        fp = fingerprint(prod['root'], prod['title'], prod['files'])
+        ex = already.get(fp, [])
+        plan.append({'drawing': dotted(prod['root']), 'title': prod['title'], 'pack': pack_of(prod['title']),
+                     'fingerprint': fp, 'files': [{k: i[k] for k in ('path', 'name', 'ref', 'size', 'sha1')} for i in prod['files']],
+                     'empty_files': prod['empties'], 'brief': prod['brief'], 'warnings': prod['warnings'],
+                     'existing_runs': ex, 'selected': (not only) or prod['root'] in only})
+
+    # 5. Accounting: every file in the pack, in exactly one bucket.
+    used = collections.Counter()
+    for item in plan:
+        for i in item['files']:
+            used[i['path']] += 1
+    buckets = collections.OrderedDict((k, []) for k in ('in one product', 'shared by several products', 'empty (warned)',
+                                                       'signage (separate signage schedule)', 'brief / reference (not product)',
+                                                       'context / layout (not priced)', 'drawing not used by any product'))
+    empty_paths = {i['path'] for i in info.values() if i['size'] == 0}
+    for p, i in info.items():
+        if i['category'] == 'signage':
+            buckets['signage (separate signage schedule)'].append(i['rel'])
+        elif i['category'] == 'brief':
+            buckets['brief / reference (not product)'].append(i['rel'])
+        elif i['path'] in empty_paths:
+            buckets['empty (warned)'].append(i['rel'])
+        elif used[i['path']] > 1:
+            buckets['shared by several products'].append(i['rel'])
+        elif used[i['path']] == 1:
+            buckets['in one product'].append(i['rel'])
+        elif i['category'] == 'context':
+            buckets['context / layout (not priced)'].append(i['rel'])
+        else:
+            dup = any(info[q]['sha1'] == i['sha1'] and used[str(q)] for q in by_ref.get(i['ref'], []))
+            (buckets['in one product'] if dup else buckets['drawing not used by any product']).append(i['rel'] + (' (identical copy of a file in use)' if dup else ''))
+
+    lines = ['Hotel Chocolat estimate plan, %s' % stamp, 'Pack: %s' % pack_root, '',
+             '%d products, %d selected for this run' % (len(plan), sum(1 for p in plan if p['selected'])), '']
+    for n, item in enumerate(plan, 1):
+        state = ('ALREADY RUN ' + ', '.join('%s (%s)' % (e['run_id'], e['status']) for e in item['existing_runs'])) if item['existing_runs'] else ''
+        lines.append('%2d. %-8s %-50s %-3d files  [%s] %s%s' % (n, item['drawing'], item['title'][:50], len(item['files']),
+                     item['pack'][:1], 'BRIEF ' if item['brief'] else '', state))
+        for w in item['warnings']:
+            lines.append('        ! ' + w)
+    if transfers:
+        lines += ['', 'Files left out of or moved between products (with the evidence):'] + ['  ' + t for t in transfers]
+    lines += ['', 'Packs:'] + ['  %s: %d' % (name, sum(1 for p in plan if p['pack'] == name)) for name, _ in PACKS]
+    if any(p['pack'] == 'UNASSIGNED PACK' for p in plan):
+        lines.append('  UNASSIGNED PACK: %d' % sum(1 for p in plan if p['pack'] == 'UNASSIGNED PACK'))
+    lines += ['', 'Every file in the pack (%d):' % len(info)]
+    for k, v in buckets.items():
+        lines.append('  %-40s %d' % (k, len(v)))
+    lines.append('  %-40s %d' % ('accounted for', sum(len(v) for v in buckets.values())))
+    for k in ('drawing not used by any product', 'context / layout (not priced)', 'empty (warned)'):
+        if buckets[k]:
+            lines += ['', k + ':'] + ['  ' + x for x in buckets[k]]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = out_dir / ('Hotel Chocolat plan ' + stamp)
+    json_path = base.with_suffix('.json')
+    json_path.write_text(json.dumps({'created': stamp, 'pack_root': str(pack_root), 'products': plan,
+                                     'accounting': {k: v for k, v in buckets.items()}}, indent=1), encoding='utf-8')
+    base.with_suffix('.txt').write_text('\n'.join(lines), encoding='utf-8')
+    print('\n'.join(lines))
+    print('\nPlan saved: %s\nJSON plan:  %s' % (base.with_suffix('.txt'), json_path))
+    print('Nothing was submitted.')
+else:
+    data = json.loads(plan_file.read_text(encoding='utf-8'))
+    already = existing_runs()
+    done = sent = held = 0
+    for item in data['products']:
+        if not item['selected']:
+            continue
+        label = '%s  %s' % (item['drawing'], item['title'])
+        changed = [f['name'] for f in item['files'] if not os.path.exists(f['path'])
+                   or os.path.getsize(f['path']) != f['size'] or sha1(f['path']) != f['sha1']]
+        if changed:
+            print('HELD    %s: files changed since the plan (%s); plan again' % (label, ', '.join(changed[:5])))
+            held += 1
+            continue
+        live = [e for e in already.get(item['fingerprint'], []) if str(e.get('status')).lower() not in ('failed', 'error', 'stopped', 'cancelled')]
+        if live and not rerun:
+            print('SKIPPED %s: already run %s' % (label, ', '.join('%s (%s)' % (e['run_id'], e['status']) for e in live)))
+            done += 1
+            continue
+        body = {'client': 'Hotel Chocolat', 'drawing_number': item['drawing'], 'units': 1,
+                'job_title': '%s [hc:%s]' % (item['title'], item['fingerprint']),
+                'files': [f['path'] for f in item['files']]}
+        if item.get('brief'):
+            body['enquiry_brief'] = item['brief']
+            if not item['files']:
+                body['method'] = 'llm'
+        req = urllib.request.Request(SERVICES[0] + '/api/estimate', data=json.dumps(body).encode('utf-8'), method='POST',
+                                     headers=dict({'Content-Type': 'application/json; charset=utf-8'}, **({'X-SDI-Key': KEY} if KEY else {})))
+        try:
+            with urllib.request.urlopen(req, timeout=300) as r:
+                print('QUEUED  %s  run %s' % (label, json.loads(r.read().decode('utf-8')).get('run_id')))
+            sent += 1
+        except Exception as e:
+            detail = getattr(e, 'read', lambda: b'')().decode('utf-8', 'replace') or str(e)
+            print('REFUSED %s: %s' % (label, detail[:300]))
+            held += 1
+    print('%d queued, %d already run, %d held or refused' % (sent, done, held))
