@@ -176,9 +176,11 @@ def _same(a, b):
 
 
 def current(c, what, part):
-    """What X3 holds now for this part, read live: {key: (component / work centre, qty / times...)}, or None."""
+    """What X3 holds now for this part, read live: {sequence / operation: (component, qty) or (work centre, set-up,
+    run, description)}, or None if X3 couldn't be read. Keyed by line / operation number (estimates use one BOM
+    code and one routing code; X3's internal _id for the BOM code isn't the plain "10")."""
     path, _, forms = x3_load.EXISTS[what]
-    sel = ("bomCode { _id } sequence componentProduct { code } linkQuantity parentProduct { code }" if what == "bom" else
+    sel = ("sequence componentProduct { code } linkQuantity parentProduct { code }" if what == "bom" else
            "operationNumber mainWorkCenter { code } setupTime runTime operationDescription product { code }")
     lit = part.replace("\\", "\\\\").replace("'", "\\'")
     for form in forms:
@@ -194,15 +196,11 @@ def current(c, what, part):
         for e in d or []:
             n = e.get("node") or {}
             if what == "bom":
-                if ((n.get("parentProduct") or {}).get("code")) != part:
-                    continue
-                alt = str((n.get("bomCode") or {}).get("_id") or "").split("|")[-1].split("~")[-1]
-                out[(alt, str(n.get("sequence")))] = ((n.get("componentProduct") or {}).get("code"), n.get("linkQuantity"))
-            else:
-                if ((n.get("product") or {}).get("code")) != part:
-                    continue
+                if ((n.get("parentProduct") or {}).get("code")) == part:
+                    out[str(n.get("sequence"))] = ((n.get("componentProduct") or {}).get("code"), n.get("linkQuantity"))
+            elif ((n.get("product") or {}).get("code")) == part:
                 out[str(n.get("operationNumber"))] = ((n.get("mainWorkCenter") or {}).get("code"), n.get("setupTime"),
-                                                      n.get("runTime"))
+                                                      n.get("runTime"), n.get("operationDescription") or "")
         return out
     return None
 
@@ -212,23 +210,46 @@ def from_file(what, lines):
     for ln in lines:
         f = ln.split(";") + [""] * 12
         if what == "bom":       # ITMREF BOMALT USESTA BOHSTRDAT BOHENDDAT BASQTY QTYCOD BOMSEQ CPNITMREF CPNTYP LIKQTY
-            out[(f[1], f[7])] = (f[8], f[10])
+            out[f[7]] = (f[8], f[10])
         else:                   # ITMREF ROUALT FCY USESTA TIMUOMCOD WORTYP OPENUM WST ROODES SETTIM OPETIM
-            out[f[6]] = (f[7], f[9], f[10])
+            out[f[6]] = (f[7], f[9], f[10], f[8])
     return out
 
 
-def differences(what, now, new):
-    """Lines: what the import would change, in words. Empty when the file matches X3."""
+def before_file(what, lines, now):
+    """X3's lines as they are now, in the same load-file layout (the file's other fields), so an update can be put
+    back by importing this file with --update."""
+    if not lines or not now:
+        return []
+    f0 = lines[0].split(";")
     out = []
-    for k in sorted(set(now) | set(new), key=lambda k: [int(x) if str(x).isdigit() else 0 for x in (k if isinstance(k, tuple) else (k,))]):
-        lab = f"line {k[1]}" if what == "bom" else f"operation {k}"
+    for k in sorted(now, key=lambda k: int(k) if str(k).isdigit() else 0):
+        f = list(f0)
+        if what == "bom":
+            f[7], f[8], f[10] = k, now[k][0] or "", _txt(now[k][1])
+        else:
+            f[6], f[7], f[9], f[10], f[8] = k, now[k][0] or "", _txt(now[k][1]), _txt(now[k][2]), (now[k][3] or "")[:30]
+        out.append(";".join(f))
+    return out
+
+
+def _txt(v):
+    x = _num(v)
+    return ("%.6f" % x).rstrip("0").rstrip(".") if x is not None else str(v or "")
+
+
+def differences(what, now, new):
+    """What the import would change, line by line. Empty when the file matches X3."""
+    out = []
+    show = (lambda v: f"{v[0]} x {v[1]}") if what == "bom" else (lambda v: f"{v[0]} set-up {v[1]} run {v[2]}")
+    for k in sorted(set(now) | set(new), key=lambda k: int(k) if str(k).isdigit() else 0):
+        lab = f"line {k}" if what == "bom" else f"operation {k}"
         if k not in now:
-            out.append(f"NEW      {lab}: {' / '.join(str(x) for x in new[k])}")
+            out.append(f"NEW      {lab}: {show(new[k])}")
         elif k not in new:
-            out.append(f"X3 ONLY  {lab}: {' / '.join(str(x) for x in now[k])}  (not in the file - X3 may keep it)")
-        elif not all(_same(x, y) for x, y in zip(now[k], new[k])):
-            out.append(f"CHANGE   {lab}: {' / '.join(str(x) for x in now[k])}  ->  {' / '.join(str(x) for x in new[k])}")
+            out.append(f"X3 ONLY  {lab}: {show(now[k])}  (not in the file)")
+        elif not all(_same(x, y) for x, y in zip(now[k][:3], new[k][:3])):
+            out.append(f"CHANGE   {lab}: {show(now[k])}  ->  {show(new[k])}")
     return out
 
 
@@ -246,6 +267,7 @@ def do_import(a):
     has_product, has_it = x3_load.exists(c, "product", part), x3_load.exists(c, what, part)
     print(f"X3 now: product {part} {'exists' if has_product else 'NOT FOUND' if has_product is False else 'could not check'}; "
           f"{what} {'EXISTS' if has_it else 'none' if has_it is False else 'could not check'}")
+    now = None
     if has_it:
         now = current(c, what, part)
         if now is None:
@@ -273,6 +295,13 @@ def do_import(a):
     if a.confirm != part:
         print(f"Refused: --confirm must be the part code, {part}")
         return 1
+    before = None
+    if has_it and now:
+        before = x3_load.HISTORY.parent / "x3_before_update" / \
+            f"{part}_{what}_{dt.datetime.now():%Y%m%d-%H%M%S}.txt"
+        before.parent.mkdir(parents=True, exist_ok=True)
+        before.write_bytes("".join(ln + "\r\n" for ln in before_file(what, lines, now)).encode(ENC, "replace"))
+        print(f"X3's {what} as it was, saved: {before}  (to put it back: import that file with --update)")
     t0 = time.time()
     r = import_lines(c, a.pool, a.template, lines)
     after = x3_load.exists(c, what, part)
@@ -280,7 +309,8 @@ def do_import(a):
              "via": "soap AOWSIMPORT", "endpoint": c.get("endpoint"), "pool": a.pool, "template": a.template,
              "part": part, "what": what, "lines": len(lines), "update": bool(has_it), "file": str(a.file),
              "ok": r["ok"], "o_status": r["o_status"], "o_message": r["o_message"], "messages": r["messages"][:50],
-             "in_x3_after": after, "seconds": round(time.time() - t0, 1)}
+             "in_x3_after": after, "seconds": round(time.time() - t0, 1),
+             "before_saved": str(before) if before else None}
     x3_load.HISTORY.parent.mkdir(parents=True, exist_ok=True)
     with open(x3_load.HISTORY, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, default=str) + "\n")
@@ -289,6 +319,13 @@ def do_import(a):
     for t, m in r["messages"][:40]:
         print(f"   X3 says{(' (' + t + ')') if t else ''}: {m[:300]}")
     print(f"X3 after: {what} for {part} {'found' if after else 'NOT found' if after is False else 'could not check'}")
+    if after and has_it:
+        now2 = current(c, what, part)
+        if now2 is not None:
+            left = differences(what, now2, from_file(what, lines))
+            print("Re-read X3: " + ("matches the file" if not left else f"{len(left)} difference(s) left:"))
+            for d_ in left:
+                print("   " + d_)
     if r["raw"]:
         print("X3's answer:", re.sub(r"\s+", " ", r["raw"])[:1500])
     print(f"Logged: {x3_load.HISTORY}")
