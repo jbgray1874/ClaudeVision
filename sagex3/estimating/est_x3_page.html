@@ -81,6 +81,14 @@ tr.files td{background:var(--soft)}
 .envsw{display:inline-flex;border:1px solid rgba(255,255,255,.35);border-radius:99px;overflow:hidden;margin-right:8px;vertical-align:middle}.envsw button{border:0;border-radius:0;background:transparent;color:#e9eae7;font-weight:700;padding:7px 12px;width:auto}
 .envsw button.on{background:var(--y);color:#1c1c1c}.etag{border-radius:99px;padding:1px 8px;font-size:11px;font-weight:800;white-space:nowrap;background:var(--y);color:#1c1c1c}.etag.uat{background:#7fd39a;color:#0f2a17}
 .banner span{min-width:0;overflow-wrap:anywhere}.banner .tag{white-space:normal}.saved,#x3box{overflow-wrap:anywhere}#x3box pre{overflow-wrap:anywhere}
+/* 26 Nov (James): the user guide to the side - a panel that slides in from the right (📖 User guide, Esc or ✕ closes);
+   the estimate workspace sits straight under the heading */
+details#guide{position:fixed;top:0;right:0;height:100vh;width:min(560px,94vw);margin:0;border-radius:0;border-width:0 0 0 1px;z-index:60;
+  overflow:auto;box-shadow:-12px 0 32px rgba(0,0,0,.18);transform:translateX(105%);transition:transform .25s ease;visibility:hidden;padding:0 18px 24px}
+details#guide[open]{transform:none;visibility:visible}
+details#guide>summary{position:sticky;top:0;z-index:2;list-style:none;margin:0 -18px 8px;padding:14px 18px;background:var(--ink);color:#fff;border-bottom:3px solid var(--y);font-size:16px;display:flex;justify-content:space-between;align-items:center}
+details#guide>summary::-webkit-details-marker{display:none}details#guide>summary::after{content:"✕ Close";font-size:12px;font-weight:700;color:var(--y)}
+#gscrim{position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:55;display:none}body.gopen #gscrim{display:block}
 /* 26 Nov (James): several estimates at once - add, pre-check, publish */
 .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 14px}
 .stp{position:relative;border:1px solid var(--line);border-radius:12px;padding:10px 12px 10px 52px;background:var(--soft);min-height:58px}
@@ -100,10 +108,11 @@ tr.files td{background:var(--soft)}
 </head>
 <body>
 <header><div class="w hd" style="display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap"><div><div class="brand">we.are.sdi · Estimating</div><h1>Estimate → Sage X3</h1>
-<div class="sub">Upload an estimate. Get the X3 product, BOM and route import files and the write-up, checked against Sage X3's own product list, saved in <b id="savedto">K:\Operations\Reporting\SageEstimates</b>. A READY run can be loaded into Sage X3 (test company, after a check).</div></div>
+<div class="sub">Add one or several estimates, pre-check them against Sage X3's own product list, look through each one's product, BOM and route, then publish the READY ones to Sage X3 (test environments). Every run is kept; READY ones are saved in <b id="savedto">K:\Operations\Reporting\SageEstimates</b>.</div></div>
 <div><span class="envsw" id="envsw" title="Which Sage X3 environment the estimate is checked against and loaded into"><button data-env="mig">SDI Mig (test)</button><button data-env="uat">We are SDI (UAT)</button></span><button class="ghost" id="svbtn" title="Every estimate saved in the SageEstimates folder">📂 Saved estimates</button><button class="ghost" id="ugbtn" title="How to use this page">📖 User guide</button></div></div></header>
 <main class="w">
-  <details class="card guide" id="guide"><summary>User guide - how to use this page</summary>
+  <div id="gscrim" title="Close the user guide"></div>
+  <details class="card guide" id="guide"><summary>📖 User guide - Estimate → Sage X3</summary>
     <div class="ask" id="ask"><b>💬 Ask the guide</b> <span class="muted">- e.g. "what does NOT READY mean?", "how do I load it into X3?", "where are the files saved?"</span>
       <div id="asklog"></div>
       <div class="bar" style="margin:8px 0 0"><input id="askq" placeholder="Type a question and press Enter" maxlength="600" style="flex:1;min-width:220px"><button id="askgo" class="y">Ask</button></div>
@@ -324,7 +333,11 @@ function askGuide(){const q=$('#askq').value.trim();if(!q)return;$('#askq').valu
     .then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(show)
     .catch(e=>show({why:`The chat couldn't answer (${e.message}) - from the guide:`})).finally(()=>{$('#askgo').disabled=false;$('#askq').focus()})}
 $('#askgo').onclick=askGuide;$('#askq').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();askGuide()}});
-$('#ugbtn').onclick=()=>{const g=$('#guide');g.open=true;g.scrollIntoView({behavior:'smooth',block:'start'})};
+const G=$('#guide');
+G.addEventListener('toggle',()=>document.body.classList.toggle('gopen',G.open));
+$('#ugbtn').onclick=()=>{G.open=!G.open;if(G.open)G.scrollTop=0};
+$('#gscrim').onclick=()=>{G.open=false};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&G.open)G.open=false});
 try{if(new URLSearchParams(location.search).get('view')==='guide')$('#ugbtn').onclick()}catch(e){}   // …/page?view=guide opens the user guide (23 Nov: linked from the email to users)
 $('#tabs').addEventListener('click',e=>{const b=e.target.closest('button[data-t]');if(!b)return;tab=b.dataset.t;$$('#tabs button').forEach(x=>x.classList.toggle('on',x===b));render()});
 
@@ -438,7 +451,7 @@ function loadResult(L,old){const ok=L.ok;const res=(L.results||L.done||[]).map(r
 // ------------------------------------------------ history
 function when(s){const m=String(s||'').match(/(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/);return m?`${m[3]}/${m[2]} ${m[4]}:${m[5]}`:(s||'')}
 function loadHist(){return fetch(`${API}/runs`,{headers:HD()}).then(r=>r.json()).then(h=>{const L=h.runs||[];
-  if(!L.length)$('#guide').open=true;                     // first use: the guide opens by itself
+  if(!L.length&&!sessionStorage.getItem('estGuideSeen')){$('#guide').open=true;try{sessionStorage.setItem('estGuideSeen','1')}catch(e){}}   // first use: the guide opens by itself, once
   if(h.saved_to!==undefined)$('#savedto').textContent=h.saved_to||'(not saved to a folder)';
   $('#histnote').textContent=L.length?`${L.length} run${L.length==1?'':'s'} kept. Click one to see it again.`:'No runs yet.';
   $('#hist').innerHTML=L.length?'<tr><th>When</th><th>Part</th><th>Estimate</th><th>Result</th></tr>'+L.map(r=>`<tr data-id="${esc(r.id)}"><td>${esc(when(r.when))}</td><td><b>${esc(r.code||'')}</b> ${etag(r.env)}</td><td>${esc(r.estimate||'')}</td><td>${!r.ok?'<span class="lv STOP">ERROR</span>':r.ready?'<span class="lv INFO" style="background:var(--gb);color:var(--g)">READY</span>':`<span class="lv STOP">${r.stop} STOP</span>`}${r.x3&&r.x3.ok?' <span class="tag g">IN X3</span>':''}</td></tr>`).join(''):'';markHist()}).catch(()=>{})}
