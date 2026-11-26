@@ -255,7 +255,7 @@ MATERIAL_PATTERN = (
     r"|TIMBER|WOOD|MDF|PLYWOOD|SOFTWOOD"
     r"|HIGH\s+IMPACT\s+ACRYLIC|ACRYLIC|PERSPEX|POLYCARBONATE)\b"
 )
-FINISH_PATTERN = r"(?:SURFACE\s+FINISH|FINISH)\s*[:\-]?\s*([A-Z0-9\s\-\[\]/,]+)"
+FINISH_PATTERN = r"(?:SURFACE\s+FINISH|FINISH(?!ED))\s*[:\-]?\s*([A-Z0-9\s\-\[\]/,]+)"
 COLOUR_PATTERN = r"(?:COLOUR|COLOR)\s*[:\-]?\s*([A-Z0-9\s\-,\[\]/]+)"
 WEIGHT_PATTERN = r"WEIGHT\s*[:\-]?\s*([0-9.]+\s*(?:KG|kg|g|G))"
 QUANTITY_PATTERN = r"\b(?:QTY|QUANTITY)\s*[:\-]?\s*(\d+)\b"

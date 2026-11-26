@@ -86,3 +86,48 @@ def reference_in_file_name(stem) -> Optional[str]:
     """The drawing reference a cut file is named by, compacted ("nc1-b33579" -> B33579)."""
     m = _IN_NAME.search(str(stem or ""))
     return f"{m.group(1).upper()}{m.group(2)}" if m else None
+
+
+# A TITLE BLOCK'S OWN STOCK CODE (Hotel Chocolat, Wall of Chocolate, 26 Nov 2026). Each sheet
+# prints the finished part it draws: "FINISHED PART NO.00026207" on A-33488, the WOC box
+# assembly, and "FINISHED PART NO. : - 10100277" on E-33488, its ticket surround. The GA's
+# parts list names the box by that stock code alone ("00026207 WOC BOX ASSEMBLY x30"), so
+# nothing joined the line to the sheet whose own list holds the box's parts, and every one of
+# them was costed once instead of thirty times. The title block is the join.
+_FINISHED = re.compile(r"FINISHED\s+PART\s+N[O0]\s*\.?\s*[:.\-–\s]*" + _STOCK + r"(?!\d)",
+                       re.I)
+_DRG_NO = re.compile(rf"DRG\.?\s*N[O0]\s*\.?\s*[:.\-\s]*{_REF}(?!\d)", re.I)
+
+
+def finished_parts_on_sheet(text) -> set:
+    """Every stock code a sheet's text prints after FINISHED PART NO."""
+    return {m.group(1) for m in _FINISHED.finditer(str(text or ""))}
+
+
+def sheet_drawing_reference(text) -> Optional[str]:
+    """The one drawing reference a sheet prints after DRG No., as printed; None when it
+    prints none or more than one (a parts-list header beside a title block, say)."""
+    found = {_printed(m.group(0), m.group(1), m.group(2))
+             for m in _DRG_NO.finditer(str(text or ""))}
+    return next(iter(found)) if len({compact(f) for f in found}) == 1 else None
+
+
+def drawings_named_by_title_blocks(sheets) -> dict:
+    """{stock code: drawing reference} from the sheets' title blocks.
+
+    ``sheets`` yields (text, drawing, own_codes): a sheet's text, the drawing it is when its
+    parts list was read under a title block (else None, and the sheet's DRG No. is read), and
+    the stock codes its own parts list prints. A sheet does not name itself on its own list,
+    so a code its list prints is a row, not the title block (a FINISHED PART NO. column
+    header runs into the first row's code). A sheet is read only when one code remains; a
+    code two drawings claim joins neither.
+    """
+    claims: dict = {}
+    for text, drawing, own_codes in sheets:
+        codes = finished_parts_on_sheet(text) - set(own_codes or ())
+        if len(codes) != 1:
+            continue
+        ref = drawing if is_drawing_reference(drawing) else sheet_drawing_reference(text)
+        if ref:
+            claims.setdefault(next(iter(codes)), {}).setdefault(compact(ref), ref)
+    return {code: next(iter(refs.values())) for code, refs in claims.items() if len(refs) == 1}

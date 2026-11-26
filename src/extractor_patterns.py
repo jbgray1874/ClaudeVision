@@ -950,7 +950,7 @@ def _extract_project_title_candidates(text: str) -> List[str]:
 def _extract_finish_candidates(text: str) -> List[str]:
     values = _extract_labeled_value(
         text,
-        r"(?:SURFACE\s+FINISH|FINISH)\s*[:\-]?",
+        r"(?:SURFACE\s+FINISH|FINISH(?!ED))\s*[:\-]?",
         TITLE_BLOCK_STOP_LABELS,
     )
     cleaned: List[str] = []

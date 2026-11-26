@@ -856,6 +856,52 @@ def _bought_in_record(record: Mapping[str, Any]) -> bool:
     return not has_fabrication_evidence(dict(record))
 
 
+def _stock_code_aliases(bom_rows: Any, identities: Iterable[str]) -> Dict[str, str]:
+    """ONE DRAWING, ONE NODE: BY ITS STOCK CODE AND BY ANY SPELLING OF ITS NUMBER (Hotel
+    Chocolat, Wall of Chocolate, 26 Nov 2026).
+
+    A line that carries both a stock code and a drawing reference (a DRG NO. cell, or the
+    title block of the sheet that draws it) is the drawing. Another reader that knew the part
+    only by the stock code (the model's hierarchy named the box "00026207" and hung its parts
+    under that) is joined to it, or the graph holds the box twice and its parts once each.
+    And B.33579, B-33579 and B33579 are one drawing: the spelling its own sheet's title block
+    uses wins. Only between identities this job already holds; a stock code two drawings
+    claim joins neither."""
+    from drawing_reference import compact, is_drawing_reference
+
+    held = {clean_part_number(i) for i in identities} - {""}
+    rows = [r for r in (bom_rows or []) if isinstance(r, Mapping)]
+    title_spelling = {compact(r.get("bom_parent")): clean_part_number(r.get("bom_parent"))
+                      for r in rows if is_drawing_reference(r.get("bom_parent"))}
+    out: Dict[str, str] = {}
+    groups: Dict[str, Set[str]] = {}
+    for ident in held:
+        key = compact(ident)
+        if key != ident or is_drawing_reference(ident):
+            groups.setdefault(key, set()).add(ident)
+    for key, spellings in groups.items():
+        if key in held:
+            spellings = spellings | {key}
+        if len(spellings) < 2 or not any(is_drawing_reference(x) for x in spellings):
+            continue
+        target = title_spelling.get(key)
+        if target not in spellings:
+            target = sorted(x for x in spellings if is_drawing_reference(x))[0]
+        for x in spellings:
+            if x != target:
+                out[x] = target
+    claims: Dict[str, Set[str]] = {}
+    for r in rows:
+        stock = clean_part_number(r.get("finished_part_no"))
+        ident = clean_part_number(r.get("part_number"))
+        if stock and ident and r.get("drawing_reference") and stock != ident:
+            claims.setdefault(stock, set()).add(out.get(ident, ident))
+    for stock, targets in claims.items():
+        if stock in held and len(targets) == 1:
+            out.setdefault(stock, next(iter(targets)))
+    return out
+
+
 def _drawing_code_aliases(identities: Iterable[str],
                           records: Optional[Mapping[str, Mapping[str, Any]]] = None,
                           refused: Optional[List[Dict[str, str]]] = None,
@@ -1806,6 +1852,10 @@ def build_part_graph(
             _kind_records, _refused_cross_kind,
             listed=_bom_listed | _hierarchy_codes).items():
         aliases.setdefault(_src, _dst)
+    for _src, _dst in _stock_code_aliases(
+            bom_rows, set(raw_original) | set(extracted) | _hierarchy_codes | _bom_listed).items():
+        if _src != _dst:
+            aliases.setdefault(_src, _dst)
     # ONE DRAWING, ONE NODE, WHATEVER VERSION MARK THE MODEL GAVE IT. 12645: the model names
     # the body "12645-01GA V2"; its sheet, its title block and this job's drawing list number
     # it "12645-01GA". _code_spellings already reads the first as a spelling of the second,

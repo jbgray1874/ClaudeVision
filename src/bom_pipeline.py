@@ -89,6 +89,79 @@ def is_drawing_furniture(code: str, description: str) -> bool:
     return True
 
 
+def _sheet_texts(pdf_paths: Sequence[Any]):
+    """(sheet id, text) for every page of the pack, the sheet id spelled as the bill reader
+    spells it ("<file name>#<page index>"). A file that will not open is skipped."""
+    try:
+        import fitz  # PyMuPDF
+    except Exception:                                                # noqa: BLE001
+        return
+    for p in pdf_paths or ():
+        try:
+            doc = fitz.open(str(p))
+        except Exception:                                            # noqa: BLE001
+            continue
+        try:
+            for i, page in enumerate(doc):
+                try:
+                    yield f"{os.path.basename(str(p))}#{i}", page.get_text()
+                except Exception:                                    # noqa: BLE001
+                    continue
+        finally:
+            doc.close()
+
+
+def name_lines_by_title_blocks(rows: List[Dict[str, Any]], sheets) -> List[Dict[str, Any]]:
+    """A LINE NAMED BY A STOCK CODE IS THE DRAWING WHOSE TITLE BLOCK PRINTS THAT CODE
+    (Hotel Chocolat, Wall of Chocolate, 26 Nov 2026).
+
+    The GA lists "00026207 WOC BOX ASSEMBLY x30" with no drawing column; sheet A-33488 prints
+    "FINISHED PART NO.00026207" in its title block and holds the box's own parts list. The
+    line and the sheet were two parts, so the box's parts were costed once, not thirty times.
+    The line now carries the drawing as its identity, exactly as a DRG NO. cell would have
+    given it, and keeps its stock code beside it. ``sheets`` yields (sheet id, text).
+
+    Only a line with no drawing reference of its own, never on the drawing's own list, and
+    only where one drawing claims the code. Changes rows in place; returns findings."""
+    from drawing_reference import compact, drawings_named_by_title_blocks, is_drawing_reference
+
+    label_of: Dict[str, str] = {}
+    own_codes: Dict[str, set] = {}
+    spelled: Dict[str, str] = {}
+    for r in rows:
+        sheet = str(r.get("bom_sheet") or "")
+        parent = str(r.get("bom_parent") or "")
+        if r.get("bom_parent_known") is not False and is_drawing_reference(parent):
+            spelled.setdefault(compact(parent), parent)
+            if sheet:
+                label_of.setdefault(sheet, parent)
+        if sheet:
+            for c in (r.get("finished_part_no"), r.get("part_number")):
+                if c:
+                    own_codes.setdefault(sheet, set()).add(str(c).strip())
+    named = drawings_named_by_title_blocks(
+        (text, label_of.get(sheet), own_codes.get(sheet, ())) for sheet, text in sheets)
+    found: List[Dict[str, Any]] = []
+    for r in rows:
+        code = str(r.get("part_number") or "").strip()
+        ref = named.get(code)
+        if not ref or r.get("drawing_reference"):
+            continue
+        if compact(r.get("bom_parent")) == compact(ref):
+            continue
+        ident = spelled.get(compact(ref), ref)
+        r["part_number"] = ident
+        r["finished_part_no"] = code
+        r["drawing_reference"] = ident
+        r["drawing_reference_from"] = f"title block of {ident}: FINISHED PART NO. {code}"
+        found.append({
+            "code": "bom_line_named_by_title_block", "severity": "info",
+            "detail": (f"{r.get('bom_parent')}: line {code} '{r.get('description')}' is "
+                       f"drawing {ident} — its title block prints FINISHED PART NO. {code}"),
+            "page": r.get("bom_parent")})
+    return found
+
+
 def number_drawing_members(rows: List[Dict[str, Any]]) -> int:
     """One drawing reference on several lines of one table, each a different thing.
 
@@ -275,6 +348,7 @@ def reconciled_bom_rows_for_job(
                         _row_out["length_mm"] = _lv
                         break
             flat.append(_row_out)
+    findings_extra.extend(name_lines_by_title_blocks(flat, _sheet_texts(pdf_paths)))
     number_drawing_members(flat)
     findings_extra.extend(reconcile_one_stray_letter(flat, pdf_paths))
     # A reader that did not run is the only failure this module cannot see in its output:
