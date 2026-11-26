@@ -4988,3 +4988,70 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - Python's typed questions didn't work in the consoles used: ISE holds the questions back, and in the remote-desktop console answers only moved on after Ctrl+C.
   - **Next:** setup takes the client ID and user on the command line and the secret from the clipboard, with no questions. Then `mutations --env mig` and `--env uat`.
   - The second connected application (create rights) is still to be confirmed as created.
+
+#### 25 Nov – Live Orders: Simon's and Dave's feedback, notes in the portal, Ask the guide, fixes 1–6
+- **Simon's and Dave's feedback, and James's decisions:**
+  - **Customer date:** removed from the Live Orders view, CSV and workbook. The shop floor doesn't need it. It stays in the data file.
+  - **The busy auto material column** ("SHEETMETAL14 to call off …"): removed from the main view.
+    - The reason now shows at the top of each line's exploded BOM (click the line).
+    - The workbook's Exploded BOMs tab is unchanged.
+  - **Material** is now a blank typed column for Production's own notes (Dave: "leave blank for us to make notes").
+  - **New typed Notes column** (Dave: "another section like this … to make notes").
+  - **Shops** show as letters M / J / A everywhere, not coloured dots. In the workbook the three shop columns hold the letters.
+  - **BOM level column:** kept. James will check it with Estimating.
+  - **Simon: the spreadsheet isn't collaborative.** Answered by typing notes in the portal.
+  - **"Where the job is" (process tracking):** deferred. It needs X3 works-order operations booked; to discuss with Production.
+- **Notes typed in the portal (James: "ok, do it"):**
+  - **Columns:** Comments, Prog, Tube req, Material, Notes.
+  - **Typing:** click a cell, Enter to save. The page asks for a name once per PC.
+  - **Sharing:** everyone sees the note within 30 seconds. Hovering shows who wrote it and when.
+  - **Storage and log:** one store per environment, `<runs>\notes.json`. Every change is also logged to `notes_log.jsonl`: who, when, old and new text.
+  - **Regenerate** merges the portal notes with anything typed in the newest workbook (`live_orders_notes.py`):
+    - changed in one place only: that change is kept;
+    - changed in both: the later change wins.
+  - The new workbook and its data file then hold the merged notes.
+  - Older runs opened from Workbooks are read-only.
+  - **Tested over two runs:**
+    - a portal-only note came through;
+    - an Excel-only note came through;
+    - with both changed, the later change won each way.
+  - Notes typed in the 20 Nov layout's "Production's material note" column carry into Material.
+- **Portal or spreadsheet, now in the user guide:**
+  - The portal is the daily working tool.
+  - The spreadsheet is the saved record: print, send, sort in Excel, look back.
+- **Ask the guide (James: "like a chat bot"):** a 💬 box at the top of the Live Orders and Estimate → X3 user guides.
+  - Claude answers from that page's guide only (plus How it works for Live Orders). It never sees works orders, estimates or X3 data. The page asks people not to type customer or supplier details.
+  - Endpoints: `POST /api/live-orders/ask` and `POST /api/estimate-x3/ask`, both in `guide_ask.py`.
+  - Model and settings: the current Opus model at low effort. The guide is sent as a cached prompt. The API's own refusal fallback is on.
+  - **Without Claude,** the box shows the two guide sections that best match the question. This covers no `ANTHROPIC_API_KEY` in the portal's `.env`, no `anthropic` package, or any error.
+  - **To switch Claude on:** James puts `ANTHROPIC_API_KEY` in the portal's `.env` himself and runs `pip install anthropic` for the portal's Python. Restart the service afterwards. The key never goes in chat, git or email.
+- **Fix 1, the red/stock check:**
+  - **What X3 sent** now has a "stock check" line: the parts in stock, the X3 column the part code came from, and how many of them appear on the PO, SO or works-order lines.
+  - If none match, a WARNING opens the panel by itself.
+  - The pull also asks X3 for the stock's `product { code }` and keeps it only if X3 accepts it. The adapter prefers `product.code`, so if `_id` was the problem, the next Regenerate fixes it.
+- **Fix 4, SO lines:** the pull tries the order header's customer order reference and currency (`salesOrder { customerOrderReference }`, `salesOrder { currency { code } }`, and `currency { code }` on the line).
+  - Each is tried once with one row and kept only if X3 accepts it.
+  - The log line says which were kept.
+- **Fix 5, overnight refresh (SCRUM-333):**
+  - At 05:30 the portal reads products, BOMs and routes for SDI Mig, then We are SDI. The time is set by `LIVE_ORDERS_OVERNIGHT` in `.env`, or `off`.
+  - It uses Regenerate's one-at-a-time lock: Regenerate shows "Busy: reading products, BOMs and routes … (the overnight refresh)".
+  - The day's Regenerates then read only works orders, stock and orders.
+  - If a night fails, the first Regenerate after 24 hours reads them itself, as before.
+  - Logs: `<runs>\overnight.log` and `live_orders_overnight.json`.
+- **Fix 6, user guide:** new sections for notes, portal or spreadsheet, red / amber / green and the shop letters, and the overnight refresh.
+  - How it works is updated, and so is the Word guide's text (`build_guide.py`).
+- **Tested here:**
+  - the pipeline on mock X3 data (layout, letters, merged notes);
+  - the notes and ask endpoints: validation, the log, environments kept apart, no key, a mock Claude, a refusal, a 500;
+  - the overnight lock;
+  - the optional-field probe;
+  - the page in a browser: typing, Shift+Enter, Esc, polling, search, CSV, the BOM drop-down, the warning panel, and the chat on both pages.
+- **Deploy:**
+  1. pull;
+  2. robocopy;
+  3. the installer with `--apply`, which now also copies `guide_ask.py`;
+  4. `Restart-Service SDIIntelligence -Force`, because the routes changed. Never during a Regenerate.
+- **Still open:**
+  - Fix 3, SDI Mig's SO due dates and doubled lines: needs the inventory summary from James.
+  - Fix 2, the page fix: goes out with this deploy.
+  - James to check the next We are SDI run's stock check line.
