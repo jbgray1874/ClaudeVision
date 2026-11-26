@@ -274,6 +274,39 @@ def creates(schema):
     return types, out
 
 
+STD_OPS = {"create", "update", "delete"}
+LOOK = re.compile(r"bom|rou|imp|zsdi|ya00|template|import", re.I)
+
+
+def custom_ops(schema):
+    """Mutations other than create / update / delete - e.g. an Import-type operation added in X3's Operations screen
+    (GESAPIOPE) that runs an import template. 26 Nov: the BOM / routing route to automation. Read-only listing.
+    {"root.node.op": {"args": [{"name", "sig", "fields": [[name, sig], ...]}], "returns": name}}"""
+    s = schema["__schema"]
+    types = {t["name"]: t for t in s["types"]}
+    root = (s.get("mutationType") or {}).get("name")
+    out, seen = {}, set()
+
+    def walk(tname, path, depth):
+        if not tname or tname in seen or depth > 3:
+            return
+        seen.add(tname)
+        for f in types.get(tname, {}).get("fields") or []:
+            b = _base(f["type"])
+            if f.get("args"):
+                if f["name"] not in STD_OPS:
+                    out[".".join(path + [f["name"]])] = {
+                        "returns": b.get("name"),
+                        "args": [{"name": a["name"], "sig": _sig(a["type"]),
+                                  "fields": [[x["name"], _sig(x["type"])] for x in
+                                             types.get(_base(a["type"]).get("name"), {}).get("inputFields") or []][:40]}
+                                 for a in f["args"]]}
+            elif b.get("kind") == "OBJECT":
+                walk(b.get("name"), path + [f["name"]], depth + 1)
+    walk(root, [], 0)
+    return out
+
+
 def _field(types, tname, cands):
     fs = {f["name"]: f for f in types.get(tname, {}).get("inputFields") or []}
     low = {k.lower(): k for k in fs}
@@ -368,6 +401,7 @@ def mutations(a):
     f.write_text(json.dumps({"as_at": dt.datetime.now().isoformat(timespec="seconds"), "site": c.get("site"),
                              "endpoint": c.get("endpoint"), "schema": sch}))
     res = resolve(sch)
+    res["custom"] = custom_ops(sch)
     if a.json:
         print(json.dumps(res, indent=1))
         return
@@ -391,6 +425,16 @@ def mutations(a):
             print("    X3 REQUIRES, not in our files:", ", ".join(r["required_not_covered"]))
         if r["missing_ours"]:
             print("    STOP - can't place:", ", ".join(r["missing_ours"]))
+    cu = res["custom"]
+    hits = {k: v for k, v in cu.items() if LOOK.search(k)}
+    print(f"\nOther X3 operations (not create / update / delete): {len(cu)}"
+          + (f" - {len(hits)} look like BOM / routing / import:" if hits else " - none look like BOM / routing / import"))
+    for k, v in sorted(hits.items()):
+        print(f"    {k}  -> returns {v['returns']}")
+        for ar in v["args"]:
+            print(f"        arg {ar['name']}: {ar['sig']}")
+            for n, sg in ar["fields"]:
+                print(f"            {n}: {sg}")
     print("\nSend Claude this output (no secret in it).")
 
 
