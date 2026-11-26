@@ -10,13 +10,21 @@ already makes through YA004BOMP and ZSDIROU2, which Ethan's migration loads ran 
         Read-only. Can the "SDI Estimate loader" connection sign in to the SOAP service, and (with --pool) what
         does AOWSIMPORT take? Calls getDescription only - it describes the web service, it imports nothing.
 
-The import call itself is added once `check` has shown X3's exact parameter layout (no guessing at a write).
+    python x3_soap.py import <part>_YA00408BOM.txt --template YA004BOMP --env uat --pool SDIEST
+        Dry run: reads X3 (is the product there? a BOM already?) and says what it would do. Nothing is sent.
+    ... --apply --confirm <part> [--update] [--by NAME]
+        Runs the template on the file (REALTIME) and logs it to x3_load_history.jsonl. One part per file; a BOM
+        or route X3 already has is only changed with --update (estimators re-saving, James 26 Nov).
+
 Test environments only (same guard as x3_load.py). Nothing secret is printed.
 """
 import argparse
+import datetime as dt
 import json
+import os
 import re
 import sys
+import time
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -120,14 +128,111 @@ def check(a):
     return 0
 
 
+# ---------------------------------------------------------------- the import (26 Nov: AOWSIMPORT published in We are SDI)
+# AOWSIMPORT's own description (getDescription, 26 Nov): one group GRP1 - I_MODIMP template, I_AOWSTA storage,
+# I_EXEC execution type, I_RECORDSEP record separator, I_FILE the file (clob); O_REQNUM, O_STATUS, O_MESSA back.
+# Only these templates: the BOM and route load files the Estimate portal writes, in exactly the format Ethan's
+# migration loads used (0 errors). template -> (what, the load file's name part)
+TEMPLATES = {"YA004BOMP": ("bom", "YA00408BOM"), "ZSDIROU2": ("route", "ZSDIROU2")}
+SEP = "|"                       # record separator sent with the file; refused if a line contains it
+ENC = "cp850"                   # the load files' code page (migration/rebuild/common.py write_load)
+
+
+def file_lines(path):
+    text = Path(path).read_bytes().decode(ENC)
+    return [ln for ln in text.replace("\r\n", "\n").split("\n") if ln.strip()]
+
+
+def import_lines(c, pool, template, lines):
+    """THE WRITE: run the X3 import template on these lines, now (REALTIME). Same as Usage -> Imports by hand."""
+    if template not in TEMPLATES:
+        raise SystemExit(f"Refused: only {', '.join(TEMPLATES)} can be imported from here")
+    if any(SEP in ln for ln in lines):
+        raise SystemExit(f"Refused: a line contains '{SEP}', the record separator - it would split the line")
+    inp = {"GRP1": {"I_MODIMP": template, "I_AOWSTA": "NO", "I_EXEC": "REALTIME", "I_RECORDSEP": SEP,
+                    "I_FILE": SEP.join(lines + ["END"])}}
+    code, _, text = call(c, "run", pool, "AOWSIMPORT", inp)
+    p = parse(text)
+    try:
+        res = json.loads(p["result"] or "{}")
+    except ValueError:
+        res = {}
+    g = res.get("GRP1", res) if isinstance(res, dict) else {}
+    ok = code == 200 and p["status"] == "1" and str(g.get("O_STATUS")) == "1"
+    return {"ok": ok, "http": code, "status": p["status"], "o_status": g.get("O_STATUS"), "o_message": g.get("O_MESSA"),
+            "messages": p["messages"], "raw": None if p["status"] == "1" else text[:4000]}
+
+
+def do_import(a):
+    c = x3_load.guard(x3_api.for_env(x3_load.load_conf(), a.env))
+    what, stem = TEMPLATES[a.template]
+    lines = file_lines(a.file)
+    parents = sorted({ln.split(";")[0] for ln in lines})
+    print(f"X3: {c['site']} - endpoint {c.get('endpoint')} - pool {a.pool} - template {a.template} ({what})")
+    print(f"File: {a.file} - {len(lines)} line(s) for {', '.join(parents) or 'nothing'}")
+    if len(parents) != 1:
+        print("STOP: the file must be for exactly one part")
+        return 1
+    part = parents[0]
+    has_product, has_it = x3_load.exists(c, "product", part), x3_load.exists(c, what, part)
+    print(f"X3 now: product {part} {'exists' if has_product else 'NOT FOUND' if has_product is False else 'could not check'}; "
+          f"{what} {'EXISTS' if has_it else 'none' if has_it is False else 'could not check'}")
+    stop = []
+    if not has_product:
+        stop.append(f"the product {part} must be in X3 first (the portal creates it before the BOM and route)")
+    if has_it is None:
+        stop.append(f"couldn't read X3 to see whether {part} already has a {what}")
+    if has_it and not a.update:
+        stop.append(f"X3 already has a {what} for {part}; changing it needs --update (estimators re-saving an estimate)")
+    for s_ in stop:
+        print("STOP:", s_)
+    if stop:
+        return 1
+    if not a.apply:
+        print(f"Dry run - nothing sent. To import: add  --apply --confirm {part}")
+        return 0
+    if a.confirm != part:
+        print(f"Refused: --confirm must be the part code, {part}")
+        return 1
+    t0 = time.time()
+    r = import_lines(c, a.pool, a.template, lines)
+    after = x3_load.exists(c, what, part)
+    entry = {"at": dt.datetime.now().isoformat(timespec="seconds"), "by": a.by or os.environ.get("USERNAME", ""),
+             "via": "soap AOWSIMPORT", "endpoint": c.get("endpoint"), "pool": a.pool, "template": a.template,
+             "part": part, "what": what, "lines": len(lines), "update": bool(has_it), "file": str(a.file),
+             "ok": r["ok"], "o_status": r["o_status"], "o_message": r["o_message"], "messages": r["messages"][:50],
+             "in_x3_after": after, "seconds": round(time.time() - t0, 1)}
+    x3_load.HISTORY.parent.mkdir(parents=True, exist_ok=True)
+    with open(x3_load.HISTORY, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, default=str) + "\n")
+    print(f"{'IMPORTED' if r['ok'] else 'NOT IMPORTED'} - HTTP {r['http']}, status {r['status']}, "
+          f"O_STATUS {r['o_status']}, message {r['o_message']!r}")
+    for t, m in r["messages"][:40]:
+        print(f"   X3 says{(' (' + t + ')') if t else ''}: {m[:300]}")
+    print(f"X3 after: {what} for {part} {'found' if after else 'NOT found' if after is False else 'could not check'}")
+    if r["raw"]:
+        print("X3's answer:", re.sub(r"\s+", " ", r["raw"])[:1500])
+    print(f"Logged: {x3_load.HISTORY}")
+    return 0 if r["ok"] else 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     ck = sub.add_parser("check", help="read-only: sign-in to SOAP, and AOWSIMPORT's description")
     ck.add_argument("--env", choices=sorted(x3_api.ENVS), default="uat", help="mig = SDI Mig, uat = We are SDI")
     ck.add_argument("--pool", default="", help="the Classic SOAP pool alias")
+    im = sub.add_parser("import", help="import one part's BOM or route file through X3's template (dry run without --apply)")
+    im.add_argument("file", help="the .txt load file (one part)")
+    im.add_argument("--template", required=True, choices=sorted(TEMPLATES))
+    im.add_argument("--env", choices=sorted(x3_api.ENVS), default="uat")
+    im.add_argument("--pool", required=True)
+    im.add_argument("--apply", action="store_true", help="without it, nothing is sent")
+    im.add_argument("--confirm", default="", help="the part code, typed again")
+    im.add_argument("--update", action="store_true", help="allow changing a BOM / route X3 already has")
+    im.add_argument("--by", default="")
     a = ap.parse_args(argv)
-    return check(a)
+    return check(a) if a.cmd == "check" else do_import(a)
 
 
 if __name__ == "__main__":
