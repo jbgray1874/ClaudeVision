@@ -84,6 +84,8 @@ def test_a_check_changes_nothing_and_says_who_to_look_at(server):
     assert d["not_clocked_in"] == ["Old Leaver"]
     assert [r["name"] for r in d["forgotten"]] == ["Sam Forgot"]
     assert d["at_reception"] == 1 and d["on_inventry"] == 3
+    # Only the console sign-in: the sync's own (Old Leaver) is signed out by the update.
+    assert [n.split(" (")[0] for n in d["no_clocking"]] == ["Ann Desk"]
     # It is in the app's History, by name, like a press of the button.
     assert hr_history.recent(1)[0]["by"] == ms.BY and hr_history.recent(1)[0]["kind"] == "check"
 
@@ -98,7 +100,10 @@ def test_with_update_inventry_is_updated_first_and_read_after(server):
 
 def test_the_email_has_the_figures_the_names_and_the_link(server):
     subject, page, text = ms.compose(ms.gather(now=NOW), ms.app_url())
-    assert subject == "HR morning summary: 2 clocked in, 4 to check"
+    assert subject == "HR morning summary: 2 clocked in, 5 to check"
+    # Signed in on the console with no BrightHR clocking: on the fire list, no hours.
+    assert "On InVentry, not clocked in on BrightHR: 1 person" in text
+    assert "Ann Desk (signed in " in text
     for said in ("New Starter", "Old Leaver", "Sam Forgot (80 days)", "press Update InVentry",
                  "https://sdi.example/app/hr-inventry.html#roll", "1 signed in on the console"):
         assert said in text, said
@@ -309,7 +314,7 @@ def test_with_the_update_running_only_people_it_has_missed_need_looking_at(serve
     assert "In step: 1 of 3 clocked in are on InVentry's list (33%)" in text   # the arrival counts against it
     # New Starter and the forgotten clock-out need looking at; the two the next
     # update will handle do not.
-    assert subject.endswith("2 to check")
+    assert subject.endswith("3 to check")     # includes the console sign-in with no clocking
 
 
 def test_without_the_update_running_a_new_arrival_is_still_missing(server, tmp_path):
@@ -318,3 +323,20 @@ def test_without_the_update_running_a_new_arrival_is_still_missing(server, tmp_p
     d = ms.gather(now=NOW)
     assert not d["automatic"] and "Just Arrived" in d["not_on_inventry"] and d["just_arrived"] == []
     assert d["not_clocked_in"] == ["Old Leaver"]
+
+
+def test_a_console_sign_in_with_no_clocking_is_named_with_its_day():
+    """The other direction from the fire list: on InVentry, no BrightHR clocking.
+    An earlier day's sign-in says so, because it was never signed out."""
+    now = datetime.datetime(2026, 11, 26, 10, 0, tzinfo=datetime.timezone.utc)
+    today = {"name": "Dee Dunn", "inventry": {"since": "2026-11-26T07:41:00.000", "by": "reception"}}
+    earlier = {"name": "Fay Ford", "inventry": {"since": "2026-11-24T08:02:00.000", "by": "reception"}}
+
+    assert ms._console_label(today, now) == "Dee Dunn (signed in 07:41)"
+    assert ms._console_label(earlier, now) == "Fay Ford (signed in Tue 24 Nov, not signed out since)"
+
+
+def test_nothing_is_said_when_everyone_on_inventry_has_a_clocking():
+    d = {"no_clocking": [], "not_on_inventry": [], "not_clocked_in": [], "forgotten": [], "notes": [],
+         "time": NOW.isoformat(), "last_update": {"time": NOW.isoformat(), "by": "x"}}
+    assert not any("not clocked in on BrightHR" in h for h, _, _ in ms.attention(d))

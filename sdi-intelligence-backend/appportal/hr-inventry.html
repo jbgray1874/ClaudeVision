@@ -75,6 +75,7 @@
   .panel::before{content:"";position:absolute;top:-1px;left:16px;width:30px;height:2px;
          background:var(--brand);border-radius:0 0 2px 2px}
   .panel .panel{background:var(--panel-2)}
+  [hidden]{display:none!important}
   .panel h4{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--dim);
             text-transform:uppercase;font-weight:500;margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   .panel.warn{border-color:rgba(232,163,61,.35);background:rgba(232,163,61,.06)}
@@ -265,6 +266,7 @@
         <p class="muted" id="tdnote" style="margin-top:8px"></p>
       </div>
       <div class="panel" id="tdmissing"></div>
+      <div class="panel" id="tdnoclock"></div>
     </div>
 
     <div class="view" id="v-latest">
@@ -344,6 +346,7 @@ function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;',
 function when(iso){ const t=Date.parse(iso||''); if(isNaN(t)) return '';
   const d=new Date(t); return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'})+' '
     +d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}); }
+function isoDay(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
 function ago(iso){ const t=Date.parse(iso||''); if(isNaN(t)) return null; return (Date.now()-t)/3600000; }
 
 function gate(cls, html){ const g=$('gate'); g.className='panel '+cls; g.innerHTML=html; g.style.display='';
@@ -665,6 +668,20 @@ function renderToday(){
     m.innerHTML='<h4>Missing from InVentry\'s fire list ('+missing.length+')</h4><p class="muted" style="margin-bottom:6px">Clocked in on BrightHR, '
       +'not on InVentry\'s list. The Roll call includes them. '+(last&&lh<0.25?'If a name stays here, see Data issues: their InVentry record may need fixing.'
       :'Update InVentry signs them in.')+'</p><p>'+show+(missing.length>12?' and '+(missing.length-12)+' more':'')+'</p>'; }
+  // ── the other direction: on InVentry from the console, no BrightHR clocking ──
+  const noclock=inv.filter(p=>p.inventry.by!=='sync'&&!p.brighthr), nc=$('tdnoclock');
+  if(invDown){ nc.innerHTML=''; nc.hidden=true; }
+  else { nc.hidden=false;
+    const sinceOf=p=>{ const s=String(p.inventry.since||''); if(!s) return '';
+      const d=s.slice(0,10), earlier=d && d<isoDay(new Date());
+      return earlier?' (since '+esc(when(s))+', not signed out)':' (signed in '+esc(s.slice(11,16))+')'; };
+    nc.innerHTML=!noclock.length
+      ? '<h4>On InVentry, not clocked in on BrightHR (0)</h4><p>Everyone on InVentry\'s list has a BrightHR clocking.</p>'
+      : '<h4>On InVentry, not clocked in on BrightHR ('+noclock.length+')</h4><p class="muted" style="margin-bottom:6px">'
+        +'Signed in on the console with no BrightHR clocking. They are on the fire list, but their hours are missing '
+        +'from BrightHR: ask them to clock in on Blip. The update never signs out a console sign-in.</p><p>'
+        +noclock.slice(0,12).map(p=>esc(p.name)+sinceOf(p)).join(', ')
+        +(noclock.length>12?' and '+(noclock.length-12)+' more':'')+'</p>'; }
   // ── chart: both counts at every update today ──
   const pts=todays.filter(e=>(e.kind==='update'||e.kind==='dry run')&&e.brighthr_on_site!=null)
     .map(e=>({t:Date.parse(e.time), bh:e.brighthr_on_site,
