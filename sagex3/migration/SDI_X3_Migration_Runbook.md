@@ -5197,3 +5197,33 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - **First use:** the panel opens by itself once, on the first ever visit.
   - **The heading text** now describes the several-estimates flow.
   - **Deploy:** pull, robocopy, then the installer with `--apply`. No restart.
+
+#### 26 Nov, afternoon – Publish to Sage X3 switched on (product); BOM and route by hand for now
+- **The write connected application "SDI Estimate loader"** was created on the training site (Administration → Administration → Authentication → Connected applications).
+  - Url: `http://10.0.0.5:8071`.
+  - Tokens validity: 300.
+  - X3 Connector: blank. The "reference could not be found" warning on save is harmless.
+  - Allowed user: SDIJG (James) for testing. **A dedicated API user is needed before live.**
+  - One connection serves every portal user; X3 records SDIJG as the creator, and the portal logs who pressed Publish. **Before live:** limit Publish to named people.
+  - Name has no "(test)": James expects We are SDI to become the live company. The loader is locked to the `-trn` site, so live would need a code change and sign-off.
+- **Setup on SDI-APP01:** `x3_load.py setup --client-id … --user SDIJG --secret-from-clipboard` with `X3_LOAD_CONFIG=C:\ProgramData\SDI\x3_load.json`.
+  - The secret was read from the clipboard (32 characters) and the clipboard cleared.
+  - First try: the secret got pasted into the console (right-click pastes) and shown on screen. That secret was regenerated straight away and is now useless.
+  - Lesson: paste the setup command first, copy the secret, then left-click the window's title bar and press Enter.
+- **`mutations --env uat`:**
+  - The connection signs in to We are SDI (X3ERPV12_ACUX3).
+  - 29 create operations are offered. **Product create works, and every product field maps.**
+  - **No create for BOMs or routings.**
+- **Tried in X3 → Development → Data and Parameters → API → Operations (GESAPIOPE), in SDI Mig:**
+  - **What's there:** Sage's standard CUD operations, e.g. COM_ITM_CUD = Product, built on window OITM. There's also PUR_POH_CUD = purchase orders, useful later. There's none for BOM or routing.
+  - **Nodes exist for both:**
+    - ManufacturingBom (table BOM) and ManufacturingBomLine (BOMD);
+    - Routing (ROUTING) and RoutingOperation (ROUOPE).
+  - **New operation `ZSDI_BOM_CUD` wouldn't save:** with Main node name ManufacturingBom, X3 kept saying "The main node name is required". Nothing was saved.
+  - **Still open:** ask **Sage support** (not Acuity) how to expose BOM and routing creation through the GraphQL API in this version. Do it in We are SDI's folder too: operations are per folder.
+- **So Publish now (commit after d7fcb90):**
+  - It creates the product through the API, or skips it if X3 already has it.
+  - It marks the BOM and route "import by hand": Usage → Imports, template YA00408BOM, then ZSDIROU2, using the files in the part's saved folder in K:\Operations\Reporting\SageEstimates.
+  - The page lists them per part.
+  - Tested against a stand-in X3 (product create plus 2 by-hand) and in the browser.
+- **Deploy:** pull, robocopy, then the installer with `--apply`. Then the first real publish of one estimate in We are SDI.
