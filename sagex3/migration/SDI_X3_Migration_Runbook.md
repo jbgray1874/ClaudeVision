@@ -5152,3 +5152,39 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - still We are SDI test data, with Access live until go-live;
   - not to act on red / amber / green, PO Suggestions or Late POs until the stock reading is confirmed.
 - **Still needed from James:** the "stock check" line from What X3 sent, after a We are SDI Regenerate.
+
+#### 26 Nov – Estimate → X3: several estimates at once, pre-check, publish; loader setup without typed questions
+- **James's ask (verbatim):** "we need to be able to drop in or add n estimate sheets and then click a pre check ? Where we can see the Boms, Routes and Products in files and view through the form itself for them to check. then they can publish this to sage. they can also bi pass that validate process and export direct to sagex3 and also generate the import files which all get saved to the UI for estimators to see old ones also." He also asked that it "look awesome".
+- **Built (commit d7fcb90):**
+  - **Three steps across the top**, with live counts: 1 Add estimates, 2 Pre-check, 3 Publish to Sage X3.
+  - **Adding:** drop or choose one or several `.xls` / `.xlsx` estimates. They go on a list, and ✕ removes one. Files that aren't estimates are refused by name.
+  - **① Pre-check:**
+    - Each estimate runs through the existing converter (`POST /run`) against the live X3 product list.
+    - The list shows READY or NOT READY (with the number of STOPs), the part code, new or already in X3, BOM lines and route operations.
+    - The part-code override applies only when there's one estimate.
+  - **👁 View:** opens one estimate's product, BOM and route files, the estimate-to-X3 write-up and its checks, on the page. These are the screens already tested.
+  - **② Publish to Sage X3:**
+    - For each READY estimate, it checks against X3 (`x3-plan`), then loads it (`x3-load`, with that estimate's own part code as the confirmation).
+    - One PUBLISH confirmation covers the whole list.
+    - Only the test environments (the guard in `x3_load.py`), create only, never changes or deletes.
+  - **⚡ Check and publish in one go:** the "bypass" route. It pre-checks and publishes straight away, with no stop to review.
+    - **Our checks can't be skipped,** because they are what produce the import files.
+    - **A NOT READY estimate is never published.** It's held back and named in the summary, because X3 would refuse it and leave a half-loaded part.
+  - **Before asking for PUBLISH,** publishing checks that the X3 write connection is set up. If it isn't, it says so and points to the saved READY files for importing by hand.
+  - **Saved and visible:** every run stays under Earlier runs, for every estimator. READY runs are also saved in `K:\Operations\Reporting\SageEstimates` (📂 Saved estimates).
+  - **User guide** steps rewritten. Ask the guide picks them up.
+- **Tested with a stand-in server:**
+  - 4 estimates plus a non-estimate: 2 READY, 1 NOT READY, 1 failed;
+  - View shows 1 product row, 8 BOM lines and 9 route operations;
+  - with publishing not switched on: the message appears and PUBLISH is never asked for;
+  - with it switched on: 2 plans and 2 loads, each confirmed with its own code;
+  - one go: 1 published and 1 held back, named.
+- **Loader setup with no typed questions** (the 23 Nov blocker): `x3_load.py setup --client-id <id> --user <login> --secret-from-clipboard`.
+  - The secret is read from the clipboard, never typed into the console, and the clipboard is then cleared.
+  - It refuses an empty clipboard, ordinary text, or a live site. The secret is never printed.
+  - Run it with `$env:X3_LOAD_CONFIG = "C:\ProgramData\SDI\x3_load.json"` set first, so the portal's service reads the same file.
+- **To switch publishing on:**
+  1. Confirm the write connected application exists in X3: create rights, its client ID, user and secret.
+  2. Run setup as above.
+  3. Run `x3_load.py mutations --env uat` (read-only) and send Claude the output.
+  4. Make a first test load of one estimate into We are SDI.
