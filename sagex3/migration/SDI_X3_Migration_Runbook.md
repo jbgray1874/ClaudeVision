@@ -5087,3 +5087,55 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - Steps: pull, robocopy, then the installer with `--apply`.
   - Only the page and the build changed (no route code), so there's no service restart this time.
   - It shows after the next Regenerate.
+
+#### 26 Nov – Dave's asks (weekly sections, zoom) and the read-only ideas advanced (James: "advancing as far as we can now that the users are engaged")
+- **Dave, on the Live Orders page:** "it's great mate". He asked for two things:
+  - weekly sections, as in his sheet;
+  - zooming out below 100% and a bigger viewing area.
+- **Weekly sections:**
+  - **Portal:** a band above each week.
+    - It shows the works orders, the balance, hours by shop (M / J / A) and the red count, for the lines shown under the current filters.
+    - Overdue weeks are tinted.
+    - Click a band to fold that week.
+  - **Workbook:** a band row above each week, with its hours per work centre.
+    - These use SUBTOTAL, so they follow the filter and row 5's totals skip them.
+    - The colour scale covers only the works-order rows.
+    - Notes carry-forward ignores the band rows (no WO number).
+- **Zoom and full screen:**
+  - **− 100% +** in the top bar sets the zoom from 50% to 130%, remembered per PC.
+  - **⛶ Full screen** opens Live Orders in its own browser tab when it's inside the portal (F11 then hides the browser's bars).
+  - The Live Orders table now fills the screen below the tabs at any zoom: 25 rows at 100%, 31 at 80%, 35 at 70% on a 900-pixel-high screen.
+- **Ideas list (25 Nov): the read-only ones are built.**
+  - **Late POs (Purchasing):**
+    - open PO lines past their expected date, or due in the next 7 days;
+    - for each, the works orders waiting on the part, and how many of them are red;
+    - **✉ Copy chase text** per supplier. It copies an email body to paste and send by hand.
+    - Nothing is sent from the portal. The guide repeats Claire's BCC rule for any email to several suppliers.
+  - **Order lookup (Customer Services):**
+    - every open SO line, searchable by order, customer order reference, account or part;
+    - shows the works orders making it, with status and due date;
+    - flags a works order due after the customer's date, and lines with no works order yet.
+  - **Go-live data checks:**
+    - made parts with no BOM or no route;
+    - BOM components that aren't X3 products;
+    - route work centres not in the work-centre map;
+    - products with no description.
+    - "Made" means `isManufactured`, or an FG category.
+    - Up to 5,000 rows are listed, with counts per check. The list shrinks with each Regenerate as the data is fixed.
+- **Each of these** has a portal tab, a workbook tab, a user guide section and a How it works row. Ask the guide finds each section.
+- **Tested on mock X3 data:**
+  - weekly bands, folding and filters;
+  - zoom (rows on screen as above), and Full screen inside a frame opening its own tab;
+  - the late PO line and the chase text;
+  - the order lookup by customer ref, and its "late" filter;
+  - the five planted data problems;
+  - the workbook tabs and their order.
+- **Still waiting on decisions:**
+  - the morning shortage email: how the server sends email;
+  - raising works or purchase orders in X3: whether X3 allows creating them through the API (`mutations`), and Charlotte's controls;
+  - shop-floor booking: same as above;
+  - reports from X3: after go-live.
+- **Deploy:**
+  - Steps: pull, robocopy, then the installer with `--apply`.
+  - No service restart is needed for this change.
+  - It shows after the next Regenerate. Weekly sections, zoom and full screen work as soon as the page reloads.
