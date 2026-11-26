@@ -7,12 +7,17 @@
 #   -Mode queue                submits the NEWEST JSON plan in Downloads (or -Plan <file>), exactly as
 #                              reviewed: files re-checked against their fingerprints, products already
 #                              run skipped.
-#   -Mode queue -Rerun         also resubmits products that have already run.
+#   -Mode queue -Since '2026-11-26 12:57'
+#                              a result queued before that time (a release) does not count as run, so
+#                              those products are submitted again. A product queued or running is never
+#                              submitted twice, -Rerun or not.
+#   -Mode queue -Rerun         also resubmits products whose run has finished.
 param(
   [ValidateSet('plan','queue')][string]$Mode = 'plan',
   [string]$Only = '',
   [string]$Plan = '',
   [switch]$Rerun,
+  [string]$Since = '',
   [string]$Pack = '\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\Live Enquiry\HotelChocolat-1204'
 )
 $downloads = Join-Path $env:USERPROFILE 'Downloads'
@@ -28,7 +33,11 @@ $py = Join-Path $env:TEMP 'hc_plan2.py'
 plan  : reads the pack and the estimating service's run list (GET only), writes a readable
         plan and a JSON plan. Submits nothing and writes nothing to the share.
 queue : reads THAT JSON plan, re-checks every product's source fingerprint, skips products
-        already estimated (unless rerun), and submits the rest in plan order.
+        already estimated (unless rerun), and submits the rest in plan order. A product with a
+        run queued or running is never submitted again, rerun or not. since=<YYYY-MM-DD HH:MM>
+        makes a result queued before that time not count as estimated (a release since). A
+        submit that does not answer is checked against the run list before it is called
+        anything: a slow answer is not a refusal.
 
 Folders are weak evidence in this pack. A file belongs to a product when a drawing of that
 product names it (the BOM references, followed through the whole pack), or when it sits in
@@ -37,7 +46,7 @@ products. A file leaves a product only on positive evidence: it is another produ
 drawing and nothing in this product names it, or its sheet lives only in another product
 that names it. Every file in the pack is accounted for at the end.
 """
-import sys, os, re, json, hashlib, pathlib, urllib.request, collections, datetime
+import sys, os, re, json, hashlib, pathlib, urllib.request, urllib.error, collections, datetime, time
 import fitz
 
 mode = sys.argv[1]
@@ -46,8 +55,10 @@ if mode == 'plan':
     only = set(a.strip().upper().replace('.', '').replace('-', '') for a in sys.argv[4].split(',') if a.strip()) if len(sys.argv) > 4 else set()
 else:
     plan_file, rerun = pathlib.Path(sys.argv[2]), (len(sys.argv) > 3 and sys.argv[3] == 'rerun')
+    _since = next((a[6:].strip() for a in sys.argv[4:] if a.startswith('since=')), '')
+    since = datetime.datetime.strptime(_since, '%Y-%m-%d %H:%M').timestamp() if _since else 0.0
 
-SERVICES = ('http://localhost:8071', 'http://localhost:8072')
+SERVICES = tuple(os.environ.get('HC_SERVICES', 'http://localhost:8071,http://localhost:8072').split(','))
 KEY = os.environ.get('HC_KEY', '')
 NAME_REF = re.compile(r'nc1-([a-ln-z])(\d{5})', re.I)
 TEXT_REF = re.compile(r'(?<![A-Z0-9])([A-LN-Z])[.\-]?(\d{5})(?![0-9])', re.I)
@@ -81,7 +92,8 @@ def existing_runs():
             if m and str(r.get('client') or '').lower().startswith('hotel'):
                 lst = found.setdefault(m.group(1), [])
                 if all(e['run_id'] != r.get('run_id') for e in lst):
-                    lst.append({'run_id': r.get('run_id'), 'status': r.get('status')})
+                    lst.append({'run_id': r.get('run_id'), 'status': r.get('status'),
+                                'queued_at': r.get('queued_at') or 0})
     return found
 
 def ref_of(p):
@@ -283,9 +295,22 @@ if mode == 'plan':
         prod['brief'] = None
         if not prod['files']:
             fam = [o['title'] for o in products if o is not prod and pack_of(o['title']) == pack_of(prod['title'])]
-            prod['brief'] = ('Hotel Chocolat %s (drawing %s). Every drawing supplied for this product is empty, so it is '
-                             'priced as an allowance: the same construction, materials and finish as its family (%s), '
-                             'scaled to the size in its name. State every assumption.' % (prod['title'], dotted(prod['root']), '; '.join(fam)))
+            own_refs = sorted({info[f]['ref'] for f in info if info[f]['ref'] and f.parent == prod['folder']
+                               and f.name in prod['empties']})
+            elsewhere = []
+            for r in own_refs:
+                good = sorted({f.parent.name for f in by_ref.get(r, []) if info[f]['size']})
+                if good:
+                    elsewhere.append('%s (readable in: %s)' % (dotted(r), '; '.join(good)))
+            prod['brief'] = ('Hotel Chocolat %s (drawing %s). Every drawing supplied for this product is empty (%s), so '
+                             'it is priced as an allowance: the same construction, materials and finish as its family '
+                             '(%s), scaled to the size in its name.%s State every assumption.'
+                             % (prod['title'], dotted(prod['root']), ', '.join(dotted(r) for r in own_refs) or 'none named',
+                                '; '.join(fam),
+                                (' The same drawing numbers are readable elsewhere in the pack: %s.' % '; '.join(elsewhere))
+                                if elsewhere else ''))
+            if elsewhere:
+                prod['warnings'].append('readable copies elsewhere: ' + '; '.join(elsewhere))
             prod['warnings'].append('no readable drawings: priced from a brief by analogy with its family (allowance)')
 
     already = existing_runs()
@@ -356,7 +381,7 @@ if mode == 'plan':
 else:
     data = json.loads(plan_file.read_text(encoding='utf-8'))
     already = existing_runs()
-    done = sent = held = 0
+    done = sent = held = unsure = 0
     for item in data['products']:
         if not item['selected']:
             continue
@@ -367,7 +392,14 @@ else:
             print('HELD    %s: files changed since the plan (%s); plan again' % (label, ', '.join(changed[:5])))
             held += 1
             continue
-        live = [e for e in already.get(item['fingerprint'], []) if str(e.get('status')).lower() not in ('failed', 'error', 'stopped', 'cancelled')]
+        runs = already.get(item['fingerprint'], [])
+        flying = [e for e in runs if str(e.get('status')).lower() in ('queued', 'running')]
+        if flying:
+            print('IN FLIGHT %s: %s; not submitted again' % (label, ', '.join('%s (%s)' % (e['run_id'], e['status']) for e in flying)))
+            done += 1
+            continue
+        live = [e for e in runs if str(e.get('status')).lower() not in ('failed', 'error', 'stopped', 'cancelled')
+                and float(e.get('queued_at') or 0) >= since]
         if live and not rerun:
             print('SKIPPED %s: already run %s' % (label, ', '.join('%s (%s)' % (e['run_id'], e['status']) for e in live)))
             done += 1
@@ -381,15 +413,33 @@ else:
                 body['method'] = 'llm'
         req = urllib.request.Request(SERVICES[0] + '/api/estimate', data=json.dumps(body).encode('utf-8'), method='POST',
                                      headers=dict({'Content-Type': 'application/json; charset=utf-8'}, **({'X-SDI-Key': KEY} if KEY else {})))
+        asked = time.time()
         try:
-            with urllib.request.urlopen(req, timeout=300) as r:
-                print('QUEUED  %s  run %s' % (label, json.loads(r.read().decode('utf-8')).get('run_id')))
+            with urllib.request.urlopen(req, timeout=float(os.environ.get('HC_SUBMIT_TIMEOUT') or 600)) as r:
+                print('QUEUED  %s  run %s' % (label, json.loads(r.read().decode('utf-8')).get('run_id')), flush=True)
             sent += 1
-        except Exception as e:
-            detail = getattr(e, 'read', lambda: b'')().decode('utf-8', 'replace') or str(e)
-            print('REFUSED %s: %s' % (label, detail[:300]))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode('utf-8', 'replace') or str(e)
+            print('REFUSED %s: %s' % (label, detail[:300]), flush=True)
             held += 1
-    print('%d queued, %d already run, %d held or refused' % (sent, done, held))
+        except Exception as e:
+            # NO ANSWER IS NOT NO. On 26 Nov a submit timed out and the run was there, running.
+            found = []
+            for _ in range(12):
+                found = [x for x in existing_runs().get(item['fingerprint'], [])
+                         if float(x.get('queued_at') or 0) >= asked - 60]
+                if found:
+                    break
+                time.sleep(10)
+            if found:
+                print('QUEUED  %s  run %s (the service answered slowly; the run is on the list)'
+                      % (label, found[0]['run_id']), flush=True)
+                sent += 1
+            else:
+                print('UNSURE  %s: %s, and no run for it is on the list after two minutes. Check the Wall '
+                      'before queueing again; queueing again skips it if it appears.' % (label, e), flush=True)
+                unsure += 1
+    print('%d queued, %d already run or in flight, %d held or refused, %d unsure' % (sent, done, held, unsure))
 '@ | Set-Content -LiteralPath $py -Encoding UTF8
 $env:HC_KEY = $key
 try {
@@ -400,7 +450,8 @@ try {
     if (-not $Plan) { $Plan = (Get-ChildItem -LiteralPath $downloads -Filter 'Hotel Chocolat plan *.json' | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName }
     if (-not $Plan -or -not (Test-Path -LiteralPath $Plan)) { Write-Host 'No plan found. Run -Mode plan first.' -ForegroundColor Red; return }
     Write-Host "Queueing the reviewed plan: $Plan" -ForegroundColor Cyan
-    & 'C:\ClaudeVision\.venv\Scripts\python.exe' -I $py queue $Plan $(if ($Rerun) { 'rerun' } else { 'once' })
+    if ($Since -and $Since -notmatch '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$') { Write-Host "-Since must look like '2026-11-26 12:57'. Nothing queued." -ForegroundColor Red; return }
+    & 'C:\ClaudeVision\.venv\Scripts\python.exe' -I $py queue $Plan $(if ($Rerun) { 'rerun' } else { 'once' }) "since=$Since"
   }
 } finally {
   Remove-Item Env:\HC_KEY -ErrorAction SilentlyContinue
