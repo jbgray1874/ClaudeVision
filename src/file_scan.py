@@ -4984,6 +4984,18 @@ def _finalize_scan_summary(
         if _reval:
             print(f"   [detail-geometry] {', '.join(_reval)} re-read from their own sheet — "
                   f"weight, features and page geometry from the page that is theirs", flush=True)
+        # A MEMBER OF A SHEET THAT DRAWS SEVERAL PARTS IS SIZED FROM ITS OWN LABELLED VIEW
+        # (Hotel Chocolat B.34495: top, side and base panels on one sheet), before the sheet's
+        # overall could size every member alike.
+        try:
+            from sheet_view_sizes import apply_sheet_view_sizes
+            _views = apply_sheet_view_sizes(_parts_dg, summary)
+            if _views:
+                print(f"   [detail-geometry] {', '.join(_views)} sized from their own labelled "
+                      f"view on a sheet that draws several parts", flush=True)
+        except Exception as _sv_exc:                                     # noqa: BLE001
+            print(f"   [detail-geometry] labelled views not read ({type(_sv_exc).__name__}: "
+                  f"{_sv_exc})", flush=True)
         run_timing.mark("start detail_page_geometry")
         _n_dg = apply_detail_page_geometry(_parts_dg, summary)
         run_timing.mark("done detail_page_geometry")

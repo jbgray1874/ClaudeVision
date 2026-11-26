@@ -319,6 +319,12 @@ SOURCE_RANK: Dict[str, int] = {
     # must go on showing it as inferred. A pack with no model is priced from this or not
     # priced at all, which is why it exists; it is not a substitute for a flat pattern.
     "pdf_overall_dims": 65,
+    # THE PART'S OWN LABELLED VIEW ON A SHEET THAT DRAWS SEVERAL (Hotel Chocolat, 26 Nov 2026).
+    # B.34495 draws a plinth's top, side and base panels; each view carries a label naming the
+    # panel and the dimensions printed around it. Those figures are the panel's own, which an
+    # overall of the whole sheet is not, so this sits just above it and still below anything
+    # measured.
+    "drawing_view_dimensions": 66,
     "bom_tree": 60,
     # THE TREE'S PER-UNIT COUNT OUTRANKS THE ROW'S OWN (D-552). A parts-list row states how
     # many of a part its assembly holds; the tree multiplies that by how many of the assembly
@@ -583,6 +589,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "bom_table":              "the parts table on the drawing",
     "vision":                 "the parts table, read from the image by the vision model",
     "pdf_overall_dims":       "the drawing's overall dimensions",
+    "drawing_view_dimensions": "the dimensions printed on its own labelled view of the drawing",
     "bom_tree":               "the bill of materials",
     "bom_tree_per_unit":      "the bill of materials, times its assembly's own count",
     "override_rule":          "an SDI override rule",
@@ -640,7 +647,7 @@ MEASURED_SOURCES = frozenset({
     # below a real measurement.
     "solidworks_docmgr", "solidworks_docmgr_applied_material",
     "dxf", "dxf_flat_pattern", "mirror_of_measured", "drawing_deterministic",
-    "title_block", "pdf_overall_dims", "bom_tree",
+    "title_block", "pdf_overall_dims", "drawing_view_dimensions", "bom_tree",
 })
 
 
@@ -895,6 +902,7 @@ EVIDENCE_FAMILY: Dict[str, str] = {
     "bom_tree": "the drawing",
     "bom_tree_per_unit": "the drawing",
     "pdf_overall_dims": "the drawing",
+    "drawing_view_dimensions": "the drawing",
     "llm_extract": "the drawing",
     "llm_full_extract": "the drawing",
     "vision": "the drawing",

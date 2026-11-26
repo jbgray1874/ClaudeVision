@@ -16394,6 +16394,18 @@ def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
                 _late = [r for r in _late if r in _pes]
         except Exception as _fold_exc:                               # noqa: BLE001
             print(f"   [one-cell] not folded ({type(_fold_exc).__name__}: {_fold_exc})", flush=True)
+        # A LATE MEMBER OF A SHEET THAT DRAWS SEVERAL PARTS IS SIZED FROM ITS OWN LABELLED VIEW
+        # (Hotel Chocolat B.34495: top, side and base panels on one sheet), exactly as a record
+        # in time is in the detail-geometry pass, before it meets the make-or-buy rule.
+        try:
+            from sheet_view_sizes import apply_sheet_view_sizes as _views_late
+            _vs = _views_late(_late, summary)
+            if _vs:
+                print(f"   [detail-geometry] {', '.join(_vs)} (late) sized from their own "
+                      f"labelled view on a sheet that draws several parts", flush=True)
+        except Exception as _vs_exc:                                 # noqa: BLE001
+            print(f"   [detail-geometry] late labelled views not read ({type(_vs_exc).__name__}: "
+                  f"{_vs_exc})", flush=True)
         try:
             from size_reading import apply_size_readings as _size_late
             # MEASURED AGAINST THE WRITEUP'S RECORDS TOO (D-451): the costed records keep only
