@@ -3674,6 +3674,12 @@ def section_words_on_line(desc: Any, material_estimate: Any) -> str:
     me = material_estimate if isinstance(material_estimate, dict) else {}
     words = str(me.get("section_description") or "")
     text = str(desc or "")
+    allowance = me.get("material_allowance") or {}
+    if (allowance.get("source") == "own_sheet_weight_with_config_section_hold"
+            and "PIPE STOCK ALLOWANCE" not in text):
+        return (f"{text} [PROVISIONAL PIPE STOCK ALLOWANCE: "
+                f"{allowance['mass_kg_per_piece']:g}kg x GBP {allowance['rate_gbp_per_kg']:g}/kg; "
+                "cut loss included; confirm profile]")
     if "OVAL" in words.upper() and "OVAL" not in text.upper():
         return f"{text}  {words}".strip()
     return text
@@ -5637,6 +5643,23 @@ def _flag(msg: str, flags: List[str]):
 _DIMS_REQUIRED = "DIMS REQUIRED"
 
 
+def grow_labour_block(wb, cm, required: int, flags: List[str]) -> int:
+    """Grow the generated book's labour block to fit every route group, or say why not.
+
+    A template the grower does not recognise, or whose department-hours scan is too short,
+    is REFUSED by workbook_labour_capacity before anything is touched. That refusal must not
+    cost the estimator the whole workbook: the book is written as before, the groups that do
+    not fit are reported as labour not on the sheet, and this line says why.
+    """
+    from workbook_labour_capacity import ensure_labour_capacity
+    try:
+        return ensure_labour_capacity(wb, cm, required, flags)
+    except ValueError as exc:
+        _flag(f"labour block not grown to {required} rows: {exc} The groups that do not fit "
+              f"are listed as labour not on the sheet.", flags)
+        return 0
+
+
 def mark_row_needs_dimensions(ws, row: int, col_desc: int, missing) -> bool:
     """Say on the sheet, in the row itself, that this part was never measured.
 
@@ -6386,7 +6409,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         #     read L×W and would show £0. Write it as a DIRECT-priced BOM line (the same proven
         #     path the tubes use) so its real per-part material cost reaches the sheet. Steel
         #     stated-weight parts that DO carry a blank still route to the Sheet Steel block below.
-        elif stock_form == "stated_weight" and blank_l is None and _safe(me.get("cost_per_part_gbp")):
+        elif (stock_form == "stated_weight" and _safe(me.get("cost_per_part_gbp"))
+              and (blank_l is None or (me.get("material_allowance") or {}).get("source")
+                   == "own_sheet_weight_with_config_section_hold")):
+            # A named pipe's weight allowance needs no plate gauge. Preserve its
+            # geometry/route, but do not send this price back into a broken nest.
             bom_parts.append(pe)
         # 2c. A SHEET METAL PRICED AT ITS OWN RATE IS NOT L5's STEEL (D-559): stainless and
         #     aluminium carry their own £/kg in config, and the Sheet Steel block would re-cost
@@ -7994,6 +8021,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     row = lb["first_row"]
     _parts_col = labour_parts_column(ws, lb, flags)
     labour_overflow = False
+    summary.pop("labour_not_on_sheet", None)  # this writer owns the current book's coverage
     # Labour applies to FABRICATED parts (steel, board, weldment) plus tubes (which get
     # powder/handling as real finishing). Bought-in BOM items (fixings, BI-*, NOTE-*,
     # electricals) are purchased finished goods — they must NOT generate fabrication
@@ -8005,6 +8033,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
     labour_parts += [p for p in bom_parts
                      if str((p.get("material_estimate") or {}).get("stock_form") or "").lower() == "tube"
+                     or ((p.get("material_estimate") or {}).get("material_allowance") or {}).get("source")
+                        == "own_sheet_weight_with_config_section_hold"
                      # Timber/board panels are direct-priced in the BOM block for MATERIAL, but they
                      # still need their sawing/routing/gluing/lacquer LABOUR — pull them into the
                      # labour path (their stated-weight stock_form + board material is the signature;
@@ -8752,6 +8782,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 str(_g.get("wb_op") or ""))
 
     _charge_once = bool(getattr(config, "ASSEMBLY_SCOPED_OPS_CHARGE_ONCE", False))
+    # The route can exceed the template's original 72 rows (12517: 98 groups).
+    # Grow this output book before writing; preserve every route and its setup.
+    if grow_labour_block(wb, cm, len(_groups), flags):
+        repair_labour_sheet_references(wb, cm, flags)
+        fill_missing_block_totals(ws, cm, flags)
     for _key in sorted(_groups.keys(), key=_group_order):
         g = _groups[_key]
         # An assembly-level operation is done once per product however many parts it joins.

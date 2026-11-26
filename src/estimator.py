@@ -6,7 +6,7 @@ import os
 import re
 import time
 from datetime import date, datetime, timezone
-from math import floor, pi as _PI
+from math import floor, isfinite, pi as _PI
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
@@ -7605,6 +7605,65 @@ def _a_family_rate_is_not_the_specified_board(part: Dict[str, Any],
     me["note"] = (str(me.get("note") or "") + f" {me['specification_line_note']}.").strip()
 
 
+def section_weight_allowance(part: Dict[str, Any], material: str, quantity: int) -> Optional[Dict[str, Any]]:
+    """A disclosed stock allowance from a pipe's own piece mass, without inventing a gauge.
+
+    Only a named made pipe/tube with an unresolved section reaches this fallback.
+    Never infer geometry, rates or weights from an assembly, another part, or a
+    document total. A complete profile is priced by the existing section path.
+    """
+    words = str(part.get("description") or "").strip()
+    if not re.search(r'\b(?:pipe|tube)\s*$', words, re.I):
+        return None
+    if part.get("is_assembly_parent") or part.get("is_bought_in"):
+        return None
+    stock = part.get("section_stock") or {}
+    if all(_safe_float(stock.get(k)) for k in ("a", "b", "t", "length_mm")):
+        return None
+    mass = _sheet_printed_weight_kg(part)
+    # The allowance uses a stated mass, so no density is used in the arithmetic.
+    # Plain-carbon steel is a common drawing-office name absent from the density
+    # aliases; accepting it here does not rewrite the drawing's material field.
+    known_material = (_density_for_material(material)
+                      or re.sub(r'[^A-Z]', '', str(material).upper()) == 'PLAINCARBONSTEEL')
+    if mass is None or not known_material:
+        return None
+    rate = getattr(config, "SECTION_STOCK_PRICE_GBP_PER_KG", None)
+    if isinstance(rate, dict):
+        rate = rate.get(str(material).upper())
+    rate = _safe_float(rate)
+    if not rate or not isfinite(rate) or rate <= 0:
+        return None
+    waste = 1 + float((getattr(config, "SECTION_STOCK_POLICY", {}) or {}).get("waste_factor_pct", 4)) / 100
+    cost = round(mass * rate * waste, 4)
+    basis = (f"PROVISIONAL PIPE STOCK ALLOWANCE: own printed piece weight {mass:g} kg x "
+             f"GBP {rate:g}/kg (config SECTION_STOCK_PRICE_GBP_PER_KG), "
+             f"{(waste-1)*100:g}% cut-loss included once. Profile/gauge unresolved; no flat-sheet nest "
+             "or supplier quote implied. Confirm stock specification and purchasing rate.")
+    flags = part.setdefault("review_flags", [])
+    if basis not in flags:
+        flags.append(basis)
+    allowance = {"basis": basis, "mass_kg_per_piece": mass, "rate_gbp_per_kg": rate,
+                 "source": "own_sheet_weight_with_config_section_hold", "provisional": True}
+    part["material_allowance"] = allowance
+    stamp = _build_price_source_metadata({}, fallback_source="config_section_stock_rate",
+                                         applied=True, applied_basis=basis)
+    # This is money from a reproducible house hold, not an external catalogue
+    # lookup and not an unpriced line (there is no selected supplier candidate).
+    stamp.update(source_class="config", price_class=price_provenance.source_class_of(
+        "config_section_stock_rate", source_type="config", priced=True),
+        unit="gbp_per_kg", provisional=True, review_reason=basis)
+    return {"material": material, "thickness_mm": part.get("normalized_thickness_mm"),
+            "blank_length_mm": None, "blank_width_mm": None, "blank_area_m2": None,
+            "unit_material_mass_kg": mass, "unit_material_cost_gbp": cost,
+            "cost_per_part_gbp": cost, "extended_material_cost_gbp": round(cost * quantity, 4),
+            "stock_estimate": None, "stock_form": "stated_weight", "requires_flat_blank": False,
+            "waste_included": True, "waste_factor_applied": waste,
+            "cost_method": "section_stock_config_rate", "material_allowance": allowance,
+            "rate_gbp_per_kg": rate, "section_description": f"{words} - own-weight stock allowance; confirm profile",
+            "price_source": stamp}
+
+
 def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # BEFORE ANY PER-EACH OR PER-KILO RATE. A thing sold off a roll is priced by the length
     # taken off it; everything below this line prices a blank, a weight or an each, and all
@@ -9154,6 +9213,14 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 | {"section_profile_mm": {"a": side_a_mm, "b": side_b_mm, "t": wall_t_mm}}
                 | _len_stamp,
             }
+
+    # A PIPE WHOSE PROFILE WAS NOT RECOVERED STILL BUYS STEEL. Its own printed
+    # piece weight supports a provisional stock allowance, not a flat-sheet nest
+    # with a missing gauge. Use the existing section-stock hold, not a sheet rate.
+    # Full profiles/catalogue matches have already taken their more specific path.
+    _pipe_allowance = section_weight_allowance(part, material, quantity)
+    if _pipe_allowance is not None:
+        return _pipe_allowance
 
     # Stated-weight path: when the drawing declares a part weight (e.g. "WEIGHT: 885g"),
     # use it directly instead of computing mass from area x thickness x density.
