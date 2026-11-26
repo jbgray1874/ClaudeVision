@@ -100,3 +100,28 @@ def test_an_all_empty_product_is_planned_from_a_brief_and_a_slow_submit_is_not_a
         assert "0 queued" in _run("queue", plan_file, "once", "since=", env=env)
     finally:
         svc.close()
+
+
+def test_a_plan_that_read_fewer_files_than_the_share_holds_cannot_be_queued(tmp_path):
+    """Three shelving folders sit 260-261 characters deep on the share. PowerShell counted 590
+    files; the planner read 566 and planned 32 products of 35 without a word."""
+    _pack(tmp_path / "pack")
+    env = dict(os.environ, HC_SERVICES="http://127.0.0.1:9,http://127.0.0.1:9")
+    text = _run("plan", str(tmp_path / "pack"), str(tmp_path), "expect=7", env=env)
+    assert "THE SHARE HOLDS 7 FILES AND THIS PLAN READ 4" in text
+    plan_file = str(next(tmp_path.glob("Hotel Chocolat plan *.json")))
+    out = _run("queue", plan_file, "once", "since=", env=env)
+    assert out.startswith("NOT QUEUED: this plan read 4 of the 7 files")
+
+
+def test_a_path_past_260_characters_is_read_by_its_long_form_and_shown_by_its_own():
+    import types
+    src = PLANNER.read_text("utf-8")
+    ns = {"os": types.SimpleNamespace(name="nt", path=types.SimpleNamespace(
+        abspath=lambda x: "C:\\work\\" + x))}
+    exec(src[src.index("def long_path"):src.index("TOO_LONG = 260")], ns)
+    unc = "\\\\sdi-dc01\\shareddata$\\Shared\\HotelChocolat-1204\\nc1-b33381.pdf"
+    assert ns["long_path"](unc) == "\\\\?\\UNC\\sdi-dc01\\shareddata$\\Shared\\HotelChocolat-1204\\nc1-b33381.pdf"
+    assert ns["short_path"](ns["long_path"](unc)) == unc
+    assert ns["long_path"](ns["long_path"](unc)) == ns["long_path"](unc)
+    assert ns["short_path"](ns["long_path"]("a.pdf")) == "C:\\work\\a.pdf"

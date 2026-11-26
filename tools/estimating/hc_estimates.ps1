@@ -49,10 +49,36 @@ that names it. Every file in the pack is accounted for at the end.
 import sys, os, re, json, hashlib, pathlib, urllib.request, urllib.error, collections, datetime, time
 import fitz
 
+# PATHS OVER 260 CHARACTERS (26 Nov 2026). Three shelving folders sit 260-261 characters deep on
+# the share; PowerShell lists them, Windows' classic file calls do not, and the plan silently came
+# out 32 products of 35. Every read goes through the long-path form; every path shown or submitted
+# is the ordinary one.
+def long_path(p):
+    s = str(p)
+    if os.name != 'nt' or s.startswith('\\\\?\\'):
+        return s
+    if s.startswith('\\\\'):
+        return '\\\\?\\UNC\\' + s[2:]
+    return '\\\\?\\' + os.path.abspath(s)
+
+def short_path(p):
+    s = str(p)
+    if s.startswith('\\\\?\\UNC\\'):
+        return '\\\\' + s[8:]
+    if s.startswith('\\\\?\\'):
+        return s[4:]
+    return s
+
+TOO_LONG = 260
+
 mode = sys.argv[1]
 if mode == 'plan':
-    pack_root, out_dir = pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
-    only = set(a.strip().upper().replace('.', '').replace('-', '') for a in sys.argv[4].split(',') if a.strip()) if len(sys.argv) > 4 else set()
+    pack_root, out_dir = pathlib.Path(long_path(sys.argv[2])), pathlib.Path(sys.argv[3])
+    _rest = sys.argv[4:]
+    _only = next((a for a in _rest if not a.startswith('expect=')), '')
+    only = set(a.strip().upper().replace('.', '').replace('-', '') for a in _only.split(',') if a.strip())
+    # How many files the share holds by another reader's count (PowerShell's), to hold this one to.
+    expected = next((int(a[7:]) for a in _rest if a.startswith('expect=') and a[7:].isdigit()), None)
 else:
     plan_file, rerun = pathlib.Path(sys.argv[2]), (len(sys.argv) > 3 and sys.argv[3] == 'rerun')
     _since = next((a[6:].strip() for a in sys.argv[4:] if a.startswith('since=')), '')
@@ -105,7 +131,7 @@ def dotted(r):
 
 def sha1(p):
     h = hashlib.sha1()
-    with open(p, 'rb') as f:
+    with open(long_path(p), 'rb') as f:
         for chunk in iter(lambda: f.read(1 << 20), b''):
             h.update(chunk)
     return h.hexdigest()
@@ -139,7 +165,7 @@ if mode == 'plan':
         if p.suffix.lower() in DRAWING_EXT and ref_of(p):
             return 'drawing'
         return 'context'
-    info = {p: {'path': str(p), 'name': p.name, 'rel': rel(p), 'ref': ref_of(p), 'size': p.stat().st_size,
+    info = {p: {'path': short_path(p), 'name': p.name, 'rel': rel(p), 'ref': ref_of(p), 'size': p.stat().st_size,
                 'category': category(p)} for p in every}
     for p, i in info.items():
         i['sha1'] = sha1(p) if i['size'] else ''
@@ -154,7 +180,7 @@ if mode == 'plan':
             found = set()
             if p.suffix.lower() == '.pdf' and info[p]['size']:
                 try:
-                    for pg in fitz.open(str(p)):
+                    for pg in fitz.open(short_path(p) if len(short_path(p)) < TOO_LONG else str(p)):
                         for m in TEXT_REF.finditer(pg.get_text()):
                             found.add(m.group(1).upper() + m.group(2))
                 except Exception:
@@ -286,6 +312,10 @@ if mode == 'plan':
             seen.add(key)
             files.append(i)
         prod['files'], prod['empties'] = files, empties
+        deep = [i['name'] for i in files if len(i['path']) >= TOO_LONG]
+        if deep:
+            prod['warnings'].append('path of %d character(s) or more, which the engine may not open: %s '
+                                    '(shorten the folder names)' % (TOO_LONG, ', '.join(deep)))
         if empties:
             prod['warnings'].append('%d empty file(s) supplied, not readable: %s' % (len(empties), ', '.join(empties)))
         prod['warnings'] += notes
@@ -346,10 +376,14 @@ if mode == 'plan':
         elif i['category'] == 'context':
             buckets['context / layout (not priced)'].append(i['rel'])
         else:
-            dup = any(info[q]['sha1'] == i['sha1'] and used[str(q)] for q in by_ref.get(i['ref'], []))
+            dup = any(info[q]['sha1'] == i['sha1'] and used[info[q]['path']] for q in by_ref.get(i['ref'], []))
             (buckets['in one product'] if dup else buckets['drawing not used by any product']).append(i['rel'] + (' (identical copy of a file in use)' if dup else ''))
 
-    lines = ['Hotel Chocolat estimate plan, %s' % stamp, 'Pack: %s' % pack_root, '',
+    lines = ['Hotel Chocolat estimate plan, %s' % stamp, 'Pack: %s' % short_path(pack_root), '']
+    if expected is not None and expected != len(every):
+        lines += ['!!! THE SHARE HOLDS %d FILES AND THIS PLAN READ %d. Files are missing from this plan: do not '
+                  'queue it. Send this plan to be checked.' % (expected, len(every)), '']
+    lines += [
              '%d products, %d selected for this run' % (len(plan), sum(1 for p in plan if p['selected'])), '']
     for n, item in enumerate(plan, 1):
         state = ('ALREADY RUN ' + ', '.join('%s (%s)' % (e['run_id'], e['status']) for e in item['existing_runs'])) if item['existing_runs'] else ''
@@ -372,7 +406,8 @@ if mode == 'plan':
     out_dir.mkdir(parents=True, exist_ok=True)
     base = out_dir / ('Hotel Chocolat plan ' + stamp)
     json_path = base.with_suffix('.json')
-    json_path.write_text(json.dumps({'created': stamp, 'pack_root': str(pack_root), 'products': plan,
+    json_path.write_text(json.dumps({'created': stamp, 'pack_root': short_path(pack_root),
+                                     'files_read': len(every), 'files_expected': expected, 'products': plan,
                                      'accounting': {k: v for k, v in buckets.items()}}, indent=1), encoding='utf-8')
     base.with_suffix('.txt').write_text('\n'.join(lines), encoding='utf-8')
     print('\n'.join(lines))
@@ -380,14 +415,18 @@ if mode == 'plan':
     print('Nothing was submitted.')
 else:
     data = json.loads(plan_file.read_text(encoding='utf-8'))
+    if data.get('files_expected') is not None and data['files_expected'] != data.get('files_read'):
+        print('NOT QUEUED: this plan read %s of the %s files on the share, so products may be missing. '
+              'Plan again; nothing was submitted.' % (data.get('files_read'), data['files_expected']))
+        sys.exit(0)
     already = existing_runs()
     done = sent = held = unsure = 0
     for item in data['products']:
         if not item['selected']:
             continue
         label = '%s  %s' % (item['drawing'], item['title'])
-        changed = [f['name'] for f in item['files'] if not os.path.exists(f['path'])
-                   or os.path.getsize(f['path']) != f['size'] or sha1(f['path']) != f['sha1']]
+        changed = [f['name'] for f in item['files'] if not os.path.exists(long_path(f['path']))
+                   or os.path.getsize(long_path(f['path'])) != f['size'] or sha1(f['path']) != f['sha1']]
         if changed:
             print('HELD    %s: files changed since the plan (%s); plan again' % (label, ', '.join(changed[:5])))
             held += 1
@@ -445,7 +484,9 @@ $env:HC_KEY = $key
 try {
   if ($Mode -eq 'plan') {
     if (-not (Test-Path -LiteralPath (Join-Path $Pack 'Drawing'))) { Write-Host "No Drawing folder under $Pack. Nothing done." -ForegroundColor Red; return }
-    & 'C:\ClaudeVision\.venv\Scripts\python.exe' -I $py plan $Pack $downloads $Only
+    $n = @(Get-ChildItem -LiteralPath $Pack -Recurse -File -Force).Count
+    Write-Host "The share holds $n files under the pack; the plan must read all of them." -ForegroundColor Cyan
+    & 'C:\ClaudeVision\.venv\Scripts\python.exe' -I $py plan $Pack $downloads $Only "expect=$n"
   } else {
     if (-not $Plan) { $Plan = (Get-ChildItem -LiteralPath $downloads -Filter 'Hotel Chocolat plan *.json' | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName }
     if (-not $Plan -or -not (Test-Path -LiteralPath $Plan)) { Write-Host 'No plan found. Run -Mode plan first.' -ForegroundColor Red; return }
