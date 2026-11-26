@@ -54,6 +54,23 @@ def _local(ts, fmt="%a %d %b %H:%M") -> str:
     return t.astimezone().strftime(fmt) if t else "?"
 
 
+def _console_label(p, now) -> str:
+    """'Name (signed in 07:41)', or the day too when it was an earlier day.
+
+    InVentry writes local time with no offset, so the text is read as it
+    stands rather than converted.
+    """
+    import hr_inventry_api as api
+    since = str((p.get("inventry") or {}).get("since") or "")
+    try:
+        day = datetime.date.fromisoformat(since[:10])
+    except ValueError:
+        return p["name"]
+    if day >= (api.inventry_day(now) or day):
+        return f"{p['name']} (signed in {since[11:16]})"
+    return f"{p['name']} (signed in {day.strftime('%a')} {day.day} {day.strftime('%b')}, not signed out since)"
+
+
 def _state_path() -> Path:
     return Path(cfg.HR_SNAPSHOT_DIR) / "hr_morning_summary.json"
 
@@ -145,6 +162,15 @@ def gather(update=False, now=None, sleep=time.sleep) -> dict:
         t = _parse((p.get("brighthr") or {}).get("since"))
         return automatic and t is not None and (now - t).total_seconds() < JUST_MINUTES * 60
     left = [p["name"] for p in compared if (p.get("inventry") or {}).get("by") == "sync" and not p.get("brighthr")]
+    # The other direction: on InVentry from a console sign-in, with no BrightHR
+    # clocking. The fire list has them; BrightHR has no hours for them, and the
+    # update never signs a console sign-in out. A forgotten clock-out is listed
+    # on its own instead.
+    forgot = forgotten_clockouts.forgotten(snap or {}, now=now)
+    forgot_names = {f.get("name") for f in forgot}
+    no_clocking = [_console_label(p, now) for p in compared
+                   if p.get("inventry") and (p["inventry"].get("by") != "sync")
+                   and not p.get("brighthr") and p["name"] not in forgot_names]
     # Who is clocked in, by name. A clocking open past the limit is a forgotten
     # clock-out, listed on its own, not someone in the building.
     clocked = []
@@ -166,7 +192,8 @@ def gather(update=False, now=None, sleep=time.sleep) -> dict:
         "just_arrived": [p["name"] for p in missing if just_in(p)],
         "not_clocked_in": [] if automatic else left,
         "just_left": left if automatic else [],
-        "forgotten": forgotten_clockouts.forgotten(snap or {}, now=now),
+        "forgotten": forgot,
+        "no_clocking": no_clocking,
         "roll_calls": calls, "since": since.isoformat(), "last_update": last_update,
     }
 
@@ -208,6 +235,12 @@ def attention(d: dict) -> list:
                     "clocking is closed in BrightHR with the time they left.",
                     [f"{r['name']} ({r['days']:.0f} day{'' if round(r['days']) == 1 else 's'})"
                      for r in d["forgotten"]]))
+    if d.get("no_clocking"):
+        out.append((f"On InVentry, not clocked in on BrightHR: {_people(len(d['no_clocking']))}",
+                    "Signed in on the console, but BrightHR has no clocking for them. They are on InVentry's "
+                    "fire list, but their hours are missing from BrightHR. Ask them to clock in on Blip. "
+                    "The update never signs out a console sign-in.",
+                    d["no_clocking"]))
     last = d.get("last_update")
     if not push:
         t = _parse((last or {}).get("time"))

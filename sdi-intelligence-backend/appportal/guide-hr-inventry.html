@@ -197,6 +197,10 @@
     each time; <b>Show as a table</b> lists them all.</li>
     <li><b>Missing from InVentry's fire list</b>: anyone clocked in but not on InVentry's list. If a name stays
     there while the update is running, their InVentry record needs fixing: see Data issues.</li>
+    <li><b>On InVentry, not clocked in on BrightHR</b>: the other way round. Anyone signed in on the console
+    with no BrightHR clocking. They are on the fire list, but BrightHR has no hours for them, so ask them to
+    clock in on Blip. The update only goes from BrightHR to InVentry and never signs out a console sign-in, so
+    "not signed out" beside a name means they signed in on an earlier day and are still shown as in.</li>
   </ul>
   <h3>Latest</h3>
   <p>The most recent check or update, whoever ran it, with when it ran. Anyone clocked in for more than
@@ -279,7 +283,8 @@
   <ul>
     <li><b>how many are clocked in</b> on BrightHR, and how many are on InVentry's fire list;</li>
     <li><b>what needs attention</b>: people clocked in but not on InVentry's list, people still on the list
-    after clocking out, forgotten clock-outs, and whether InVentry has been updated in the last day;</li>
+    after clocking out, people signed in on the console with no BrightHR clocking, forgotten clock-outs,
+    and whether InVentry has been updated in the last day;</li>
     <li><b>the roll calls since the last email</b>, each with how many were present and absent, and who was
     absent.</li>
       <li><b>whether InVentry is being updated automatically</b>, every 5 minutes, and when it last was. While
