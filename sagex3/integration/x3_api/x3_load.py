@@ -521,6 +521,17 @@ def plan(run_dir, c=None):
         if what != "product" and not (run.get("bom_rows") if what == "bom" else run.get("rou_rows")):
             rec.update(action="none", why="nothing in the estimate for this")
             continue
+        if not r["node"] and what != "product":
+            # 26 Nov: X3 (We are SDI) lets the connection create products but not BOMs or routings yet. Rather than
+            # refuse the whole estimate, the product is created and the BOM / route is imported by hand from the
+            # saved file - the same import Estimating does today (Usage -> Imports).
+            tpl = {"bom": "YA00408BOM", "route": "ZSDIROU2"}[what]
+            fname = next((f for f in run.get("load_files") or [] if tpl in f), f"..._{tpl}.txt")
+            folder = (run.get("published") or {}).get("folder") or "the run's saved folder"
+            rec.update(action="manual", template=tpl, file=fname, folder=folder,
+                       why=f"X3 doesn't let the connection create this yet - import it by hand: Usage -> Imports, "
+                           f"template {tpl}, file {fname} from {folder}")
+            continue
         if not r["node"]:
             rec["why"] = "X3 offers no create for this yet (X3 Builder -> API operations; runbook 20 Nov night)"
             stop(f"{WHAT[what]}: {rec['why']}")
@@ -552,6 +563,8 @@ def plan(run_dir, c=None):
                                             + (f" ({r['mode']})" if what != "product" else ""))
     out["ok"] = not out["stops"]
     out["creates"] = sum(len(r["send"]) for r in out["records"] if r["action"] == "create")
+    out["manual"] = [{k: r.get(k) for k in ("what", "label", "template", "file", "folder")}
+                     for r in out["records"] if r["action"] == "manual"]
     (run_dir / "x3_load_plan.json").write_text(json.dumps(out, indent=1, default=str), encoding="utf-8")
     return out
 
@@ -602,7 +615,9 @@ def load(run_dir, confirm, by=""):
     res = resolve(load_schema(c["endpoint"])["schema"])
     for rec in p["records"]:
         if rec["action"] != "create":
-            log["results"].append({"what": rec["what"], "action": rec["action"], "why": rec["why"]})
+            log["results"].append({"what": rec["what"], "action": rec["action"], "why": rec["why"],
+                                   **({k: rec.get(k) for k in ("template", "file", "folder")}
+                                      if rec["action"] == "manual" else {})})
             continue
         r = res[rec["what"]]
         made = []

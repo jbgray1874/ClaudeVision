@@ -222,7 +222,7 @@ function qRender(){const n=Q.length,ck=Q.filter(q=>q.run).length,rd=Q.filter(isR
   $('#queue').innerHTML=n?'<tr><th>Estimate</th><th>Part</th><th>Pre-check</th><th class="n">BOM lines</th><th class="n">Route ops</th><th>Sage X3</th><th></th></tr>'+Q.map(q=>{const j=q.run;
     const st=q.state==='checking'?'<span class="qst c"><span class="spin"></span> checking…</span>':q.state==='wait'?'<span class="qst w">to check</span>':q.err?`<span class="qst no" title="${esc(q.err)}">couldn't run</span>`:
       !j.ok?`<span class="qst no" title="${esc(j.error||'')}">couldn't convert</span>`:j.ready?'<span class="qst ok">READY</span>':`<span class="qst no" title="Open it with 👁 View - the Checks tab lists what to fix">NOT READY · ${j.stop} to fix</span>`;
-    const x3=q.loading?'<span class="qst c"><span class="spin"></span> publishing…</span>':inX3(q)?'<span class="qst x3">IN SAGE X3</span>':q.load&&!q.load.ok?`<span class="qst no" title="${esc(q.load.error||'')}">not loaded</span>`:q.note?`<span class="muted">${esc(q.note)}</span>`:'';
+    const x3=q.loading?'<span class="qst c"><span class="spin"></span> publishing…</span>':inX3(q)?((q.manual||[]).length?'<span class="qst x3">PRODUCT IN X3</span><br><span class="muted">BOM / route: import by hand</span>':'<span class="qst x3">IN SAGE X3</span>'):q.load&&!q.load.ok?`<span class="qst no" title="${esc(q.load.error||'')}">not loaded</span>`:q.note?`<span class="muted">${esc(q.note)}</span>`:'';
     return `<tr data-q="${q.id}" class="${R&&j&&R.id===j.id?'sel':''}"><td class="fn" title="${esc(q.name)}"><b>${esc(q.name)}</b><br><span class="muted">${(q.size/1024).toFixed(0)} KB${j?' · '+etag(envOf(j)):''}</span></td><td><b>${esc(j&&j.code||'')}</b>${j&&j.ok?`<br><span class="muted">${j.existing?'already in X3':'new part'}</span>`:''}</td><td>${st}</td><td class="n">${j&&j.ok?j.bom:''}</td><td class="n">${j&&j.ok?j.ops:''}</td><td>${x3}</td>
       <td class="qa2">${j&&j.ok?'<a data-view="1">👁 View</a>':''}${q.state!=='checking'&&!BUSY?'<a class="rm" data-rm="1" title="Take it off the list (runs already done stay under Earlier runs)">✕</a>':''}</td></tr>`}).join(''):'';
   const todo=Q.filter(q=>q.state!=='done'||q.err).length,pubOk=Q.filter(q=>isReady(q)&&!inX3(q)).length;
@@ -253,14 +253,16 @@ async function publishAll(){const L=Q.filter(q=>isReady(q)&&!inX3(q));if(!L.leng
   let i=0;for(const q of L){i++;q.loading=true;qRender();prog(i-1,L.length);$('#stat').innerHTML=`<span class="spin"></span> Publishing ${i} of ${L.length}: ${esc(q.run.code)} into Sage X3 - ${esc(ENVS[ENV])}…`;
     const B=`${API}/run/${enc(q.run.id)}`;
     try{const p=await fetch(`${B}/x3-plan`,{method:'POST',headers:HD()}).then(J);
+      q.manual=p.manual||[];
       if(!p.ok){q.load={ok:false,error:(p.stops||[]).join(' · ')||'Sage X3 check failed'}}
-      else if(!p.creates){q.note='already in Sage X3 - nothing to add'}
+      else if(!p.creates){q.note=q.manual.length?'product already in X3':'already in Sage X3 - nothing to add'}
       else{q.load=await fetch(`${B}/x3-load?confirm=${enc(q.run.code)}`,{method:'POST',headers:HD()}).then(J)}}
     catch(e){q.load={ok:false,error:e.message}}
     q.loading=false;qRender()}
   prog(0,0);loadHist();const ok=L.filter(inX3).length,bad=L.filter(q=>q.load&&!q.load.ok);
-  const held=Q.filter(q=>q.run&&q.run.ok&&!q.run.ready);
-  $('#stat').innerHTML=`Published: <b class="ok">${ok} loaded into Sage X3</b>${L.filter(q=>q.note).length?` · ${L.filter(q=>q.note).length} already there`:''}${bad.length?` · <b class="err">${bad.length} not loaded</b> - hover "not loaded" for X3's reason`:''}${held.length?` · <b class="err">${held.length} held back (NOT READY): ${held.map(q=>esc(q.run.code)).join(', ')}</b> - 👁 View for what to fix`:''}. Open each part in Sage X3 and compare it with the write-up.`;return true}
+  const held=Q.filter(q=>q.run&&q.run.ok&&!q.run.ready),byhand=L.filter(q=>(q.manual||[]).length&&!(q.load&&!q.load.ok));
+  $('#stat').innerHTML=`Published: <b class="ok">${ok} ${byhand.length?`product${ok==1?'':'s'} created`:'loaded'} in Sage X3</b>${L.filter(q=>q.note).length?` · ${L.filter(q=>q.note).length} already there`:''}${bad.length?` · <b class="err">${bad.length} not loaded</b> - hover "not loaded" for X3's reason`:''}${held.length?` · <b class="err">${held.length} held back (NOT READY): ${held.map(q=>esc(q.run.code)).join(', ')}</b> - 👁 View for what to fix`:''}. Open each part in Sage X3 and compare it with the write-up.`+
+    (byhand.length?`<div class="saved" style="margin-top:8px"><b>Now import the BOM and route by hand in Sage X3</b> - X3 doesn't let the portal create them yet. For each part, Usage → Imports, BOM first then route:<ul style="margin:4px 0 0 18px;padding:0">${byhand.map(q=>`<li><b>${esc(q.run.code)}</b>: ${q.manual.map(m=>`template <b>${esc(m.template)}</b>, file ${esc(m.file)}`).join(' · ')} <span class="muted">- in ${esc(q.manual[0].folder)}</span></li>`).join('')}</ul></div>`:'');return true}
 async function canPublish(){const st=await x3Status(ENV);if(st.setup&&st.target_ok!==false)return true;
   $('#stat').innerHTML=`<b>Publishing isn't switched on yet on this portal</b> - it needs the Sage X3 write connection set up${st.problem?' ('+esc(st.problem)+')':''}. The READY files are saved in <b>${esc($('#savedto').textContent||'the SageEstimates folder')}</b>: import them by hand in Sage X3 (Usage → Imports: product, then BOM, then route).`;return false}
 function confirmPublish(n,codes){const c=prompt(`Publish ${n} estimate${n==1?'':'s'} into Sage X3 - ${ENVS[ENV]}:\n${codes}\n\nThis creates the product, BOM and route Sage X3 hasn't got (it never changes or deletes what's there).\n\nType PUBLISH to go ahead:`);
@@ -431,7 +433,7 @@ function x3Box(j){const bx=$('#x3box');bx.classList.remove('hide');PLAN=null;con
       (st.schema?'':` <span class="err">X3's API hasn't been read yet for ${esc(ENVS[je])} (x3_load.py mutations --env ${je}).</span>`)});
   $('#x3plan').onclick=()=>{$('#x3plan').disabled=true;$('#x3load').disabled=true;$('#x3msg').innerHTML='<span class="spin"></span> reading Sage X3 - nothing is written…';
     fetch(`${base(j)}/x3-plan`,{method:'POST',headers:HD()}).then(r=>r.json().then(k=>{if(!r.ok)throw new Error(k.detail||r.status);return k})).then(p=>{PLAN=p;$('#x3msg').textContent='';$('#x3out').innerHTML=planTable(p);
-      $('#x3load').disabled=!(p.ok&&p.creates>0);if(p.ok&&!p.creates)$('#x3msg').textContent='Sage X3 already has all of it - nothing to load.'})
+      $('#x3load').disabled=!(p.ok&&p.creates>0);if(p.ok&&!p.creates)$('#x3msg').textContent=(p.manual||[]).length?'Nothing for the portal to create - see the import by hand below.':'Sage X3 already has all of it - nothing to load.';$('#x3out').innerHTML+=MAN(p.manual)})
      .catch(e=>{$('#x3msg').innerHTML=`<span class="err">${esc(e.message)}</span>`}).finally(()=>{$('#x3plan').disabled=false})};
   $('#x3load').onclick=()=>{if(!PLAN||!PLAN.ok)return;
     const c=prompt(`This creates ${PLAN.records.filter(r=>r.action==='create').map(r=>r.label).join(', ')} for ${j.code} in Sage X3 - ${ENVS[je]} (${(PLAN.target||{}).endpoint||''}).\n\nType the part code to confirm:`);
@@ -439,14 +441,16 @@ function x3Box(j){const bx=$('#x3box');bx.classList.remove('hide');PLAN=null;con
     $('#x3load').disabled=true;$('#x3plan').disabled=true;$('#x3msg').innerHTML='<span class="spin"></span> loading into Sage X3…';
     fetch(`${base(j)}/x3-load?confirm=${enc(c.trim())}`,{method:'POST',headers:HD()}).then(r=>r.json().then(k=>{if(!r.ok)throw new Error(k.detail||r.status);return k})).then(L=>{$('#x3msg').textContent='';$('#x3out').innerHTML=loadResult(L);loadHist();if(!$('#savedcard').classList.contains('hide'))loadSaved()})
      .catch(e=>{$('#x3msg').innerHTML=`<span class="err">${esc(e.message)}</span>`}).finally(()=>{$('#x3plan').disabled=false})}}
-const ACT={create:['CREATE','g'],skip:['ALREADY IN X3 - left as it is','m'],stop:['STOP','r'],none:['nothing to load','m']};
+const ACT={create:['CREATE','g'],skip:['ALREADY IN X3 - left as it is','m'],stop:['STOP','r'],none:['nothing to load','m'],manual:['IMPORT BY HAND','a']};
+// 26 Nov: X3 lets the connection create products but not BOMs / routings yet - those two are imported by hand
+const MAN=l=>l&&l.length?`<div class="saved" style="margin-top:8px"><b>Then import ${l.map(m=>esc(m.label.replace(/^the /,''))).join(' and ')} by hand in Sage X3</b> (X3 doesn't let the portal create them yet):<ol style="margin:4px 0 0 18px;padding:0">${l.map(m=>`<li>Usage → Imports → template <b>${esc(m.template)}</b> → file <b>${esc(m.file)}</b> from <b>${esc(m.folder)}</b></li>`).join('')}</ol></div>`:'';
 function planTable(p){const rows=(p.records||[]).map(r=>{const a=ACT[r.action]||[r.action,'m'];
     return `<tr><td><b>${esc(r.label)}</b><br><span class="muted">${esc(r.node||'')}</span></td><td><span class="tag ${a[1]}">${esc(a[0])}</span></td><td>${esc(r.why)}${(r.notes||[]).length?'<ul style="margin:4px 0 0 16px;padding:0">'+r.notes.map(n=>`<li class="muted">${esc(n)}</li>`).join('')+'</ul>':''}${r.action==='create'?`<details><summary class="muted" style="cursor:pointer">What will be sent</summary><pre>${esc(JSON.stringify(r.send,null,1))}</pre></details>`:''}</td></tr>`}).join('');
   return `<p class="note" style="margin-top:10px">${p.ok?`<span class="ok">Checked ${esc(when(p.when))}: ${p.creates} create${p.creates==1?'':'s'} to send.</span> Check the values below, then press 2.`:`<span class="err">Can't load yet:</span> ${(p.stops||[]).map(esc).join(' · ')}`}</p>`+
     (rows?`<div class="tbl" style="max-height:none"><table><tr><th>Record</th><th>In Sage X3</th><th>Detail</th></tr>${rows}</table></div>`:'')}
 function loadResult(L,old){const ok=L.ok;const res=(L.results||L.done||[]).map(r=>Array.isArray(r)?{what:r[0],action:r[1],ok:r[2]}:r);
   return `<div class="banner ${ok?'ok':'no'}" style="margin-top:10px"><b>${ok?'LOADED INTO SAGE X3':'NOT LOADED'}</b><span>${old?'Last load ':''}${esc(when(L.when))}${L.endpoint||L.target?' · '+esc(L.endpoint||(L.target||{}).endpoint):''}${L.by?' · from '+esc(L.by):''}${L.error?' · '+esc(L.error):''}</span></div>`+
-    (res.length?`<ul style="margin:0 0 0 18px;padding:0">${res.map(r=>`<li>${esc({product:'Product',bom:'BOM',route:'Route'}[r.what]||r.what)}: ${r.action==='create'?(r.ok?`<span class="ok">created</span>${r.of>1?` (${r.created} of ${r.of})`:''}`:'<span class="err">refused by X3</span>'):r.action==='skip'?'already in X3 - left as it is':esc(r.action)}</li>`).join('')}</ul>`:'')}
+    (res.length?`<ul style="margin:0 0 0 18px;padding:0">${res.map(r=>`<li>${esc({product:'Product',bom:'BOM',route:'Route'}[r.what]||r.what)}: ${r.action==='create'?(r.ok?`<span class="ok">created</span>${r.of>1?` (${r.created} of ${r.of})`:''}`:'<span class="err">refused by X3</span>'):r.action==='skip'?'already in X3 - left as it is':r.action==='manual'?`<b style="color:var(--a)">import by hand</b> - template ${esc(r.template||'')}, file ${esc(r.file||'')}`:esc(r.action)}</li>`).join('')}</ul>`:'')+MAN(res.filter(r=>r.action==='manual').map(r=>({...r,label:{bom:'the BOM',route:'the route'}[r.what]||r.what})))}
 
 // ------------------------------------------------ history
 function when(s){const m=String(s||'').match(/(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d)/);return m?`${m[3]}/${m[2]} ${m[4]}:${m[5]}`:(s||'')}
