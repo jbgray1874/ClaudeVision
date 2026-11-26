@@ -199,10 +199,14 @@ def main(argv=None):
             last = newest_workbook(a.share, a.env) if a.share else None
             a.carry = str(last) if last else None
         status["carried_from"] = a.carry
-        from build_live_orders import build
-        res = build(extract, out, a.products, a.boms, a.routes, None, 14, a.costs, a.carry)
+        from build_live_orders import build, read_carry
+        from live_orders_notes import merge               # + the notes typed in the portal (25 Nov)
+        built_at = dt.datetime.now().isoformat(timespec="seconds")   # notes typed after this go in the next run
+        carry, status["notes"] = merge(a.carry, runs, read_carry)
+        res = build(extract, out, a.products, a.boms, a.routes, None, 14, a.costs, carry)
         j = next(out / f for f in res["files"] if f.endswith(".json"))
         data = json.loads(j.read_text(encoding="utf-8"))
+        data["built_at"] = built_at
         data["env"] = env_info                            # which X3 environment this came from (shown on the page)
         data["x3_report"] = status["adapter"]             # what X3 sent and what was kept (22 Nov)
         j.write_text(json.dumps(data, default=str), encoding="utf-8")

@@ -1,8 +1,8 @@
 """The Live Orders workbook - Production's sheet, built from Sage X3 data, made to be edited. Written 20 Nov 2026.
 
 Same tabs and column names as Dave's sheet (Live Orders, Work-centre load, WO Suggestions, BOM explosion), plus a
-Dashboard. Production type in the yellow columns (Comments, Prog, Tube req, their material note); next run carries
-them forward by works order (build_live_orders.read_carry), so nothing is re-typed on Monday.
+Dashboard. Production type in the yellow columns (Comments, Prog, Tube req, Material, Notes - here or in the portal);
+next run carries them forward by works order (build_live_orders.read_carry), so nothing is re-typed on Monday.
 
 Called by build_live_orders.write_xlsx. openpyxl only - no macros, opens in any Excel.
 """
@@ -22,6 +22,10 @@ INK, YELLOW, PAPER, LINE, MUTED = "1C1C1C", "FFD400", "FAFAF7", "D9D9D4", "6B6B6
 RAG = {"GREEN": ("1E8E3E", "E3F4E8"), "AMBER": ("B06D00", "FFF1C7"), "RED": ("C5221F", "FDE2E1")}
 FAMILY = {"Metal": "2F6FB2", "Joinery": "9A6B2F", "Acrylics": "7E57C2"}
 EDIT_FILL = PatternFill("solid", fgColor="FFF7CC")
+# Production's typed columns (25 Nov: "Material" is now typed, blank for their notes; "Notes" added for Dave) and the
+# keys they're carried forward under (build_live_orders.read_carry) and kept by the portal (live_orders_routes notes).
+EDITABLE = ("Comments", "Prog", "Tube req", "Material", "Notes")
+CARRY_KEYS = ("comments", "prog", "tube", "mat", "notes")
 F = lambda c: PatternFill("solid", fgColor=c)
 thin, thick = Side(style="thin", color=LINE), Side(style="medium", color=INK)
 
@@ -84,84 +88,90 @@ def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_labe
     lo = wb.active
     lo.title = "Live Orders"
     lo.sheet_properties.tabColor = YELLOW
-    fixed = ["Week", "Due date", "Customer date", "WO Num", "Level", "Parent WO", "SO Num", "Account", "Part code",
-             "Description", "DRAWING NUMBER", "REV", "MATERIAL STATUS", "Material detail", "QTY", "Booked in", "Balance",
-             "Metal", "Joinery", "Acrylics", "Comments", "Prog", "Tube req", "Production's material note"]
-    editable = ("Comments", "Prog", "Tube req", "Production's material note")
+    # 25 Nov (Simon, Dave): no Customer date (not for the shop floor), no auto material text (the BOM drill-down keeps
+    # it) - "Material" is now a blank typed column, plus "Notes"; shops as M / J / A letters, not coloured dots.
+    fixed = ["Week", "Due date", "WO Num", "Level", "Parent WO", "SO Num", "Account", "Part code", "Description",
+             "DRAWING NUMBER", "REV", "MATERIAL STATUS", "QTY", "Booked in", "Balance", "Metal", "Joinery", "Acrylics",
+             *EDITABLE]
+    ix = {h: i for i, h in enumerate(fixed, 1)}
+    CL = {h: get_column_letter(i) for h, i in ix.items()}
     wc_heads = [f"{wc_label(c, wcnames)} ({c})" for c in wc_cols]
     heads = fixed + wc_heads
-    widths = [9, 10, 11, 12, 9, 11, 14, 9, 20, 32, 15, 5, 11, 40, 7, 8, 8, 5, 5, 5, 28, 8, 9, 28] + [7.5] * len(wc_cols)
+    widths = [9, 10, 12, 9, 11, 14, 9, 20, 32, 15, 5, 11, 7, 8, 8, 4, 4, 4, 28, 8, 9, 26, 28] + [7.5] * len(wc_cols)
     _banner(lo, "Live Orders", sub, len(heads))
     # row 4: group captions; row 5: totals that follow the filter; row 6: headers
     first_wc = len(fixed) + 1
+    e0, e1 = ix[EDITABLE[0]], ix[EDITABLE[-1]]
     if wc_cols:
         lo.cell(4, first_wc, "Hours still to do, by work centre").font = Font(bold=True, color=MUTED, size=9)
         lo.merge_cells(start_row=4, start_column=first_wc, end_row=4, end_column=len(heads))
-    lo.cell(4, 21, "Production's columns - type here, carried forward every run").font = Font(bold=True, color="8A6D00", size=9)
-    lo.merge_cells(start_row=4, start_column=21, end_row=4, end_column=24)
+    lo.cell(4, e0, "Production's columns - type here or in the portal, carried forward every run").font = \
+        Font(bold=True, color="8A6D00", size=9)
+    lo.merge_cells(start_row=4, start_column=e0, end_row=4, end_column=e1)
     H = 6
-    _header(lo, H, heads, widths, editable)
+    _header(lo, H, heads, widths, EDITABLE)
     for i, c in enumerate(wc_cols, first_wc):                       # colour the work-centre headers by shop
         fam = {"M": "Metal", "J": "Joinery", "A": "Acrylics"}.get(c[:1])
         if fam:
             lo.cell(H, i).fill = F(FAMILY[fam])
     first, last = H + 1, H + len(wos)
-    lo.cell(5, 9, "Totals (follow the filter):").font = Font(bold=True, color=MUTED, size=9)
-    for col in [15, 16, 17] + list(range(first_wc, len(heads) + 1)):
+    lo.cell(5, ix["Part code"], "Totals (follow the filter):").font = Font(bold=True, color=MUTED, size=9)
+    for col in [ix["QTY"], ix["Booked in"], ix["Balance"]] + list(range(first_wc, len(heads) + 1)):
         L = get_column_letter(col)
         c = lo.cell(5, col, f"=SUBTOTAL(109,{L}{first}:{L}{max(last, first)})")
         c.font, c.number_format = Font(bold=True, size=9), "#,##0.0" if col >= first_wc else "#,##0"
-    lo.cell(5, 4, f"=SUBTOTAL(103,D{first}:D{max(last, first)})&\" works orders\"").font = Font(bold=True, size=9)
+    W = CL["WO Num"]
+    lo.cell(5, ix["WO Num"], f"=SUBTOTAL(103,{W}{first}:{W}{max(last, first)})&\" works orders\"").font = Font(bold=True, size=9)
 
     bom_first, prev_week = {}, "start"
     rows_by_wo = {}
+    wrap = {ix["Description"], *range(e0, e1 + 1)} - {ix["Prog"], ix["Tube req"]}
     for i, w in enumerate(wos):
         r = first + i
         cr = w.get("carry", {})
         wk = week_of(w["due"])
-        vals = [wk, w["due"], w["cust_date"] or w["cust_note"], w["wo"], w["level"], w["parent"], w["so"], w["account"],
-                w["code"], w["des"], drawing_of(w["code"]), w["rev"], w["status"], w["mat_text"], w["qty"], w["done"],
-                w["bal"], *["●" if f in w["families"] else "" for f in ("Metal", "Joinery", "Acrylics")],
-                cr.get("comments", ""), cr.get("prog", ""), cr.get("tube", ""), cr.get("note", "")]
+        vals = [wk, w["due"], w["wo"], w["level"], w["parent"], w["so"], w["account"], w["code"], w["des"],
+                drawing_of(w["code"]), w["rev"], w["status"], w["qty"], w["done"], w["bal"],
+                *[f[:1] if f in w["families"] else "" for f in ("Metal", "Joinery", "Acrylics")],
+                *[cr.get(k, "") for k in CARRY_KEYS]]
         vals += [round(w["hours"][c], 2) if w["hours"].get(c) else None for c in wc_cols]
         for j, v in enumerate(vals, 1):
             cell = lo.cell(r, j, v)
             cell.font = Font(size=9)
-            cell.alignment = Alignment(vertical="top", wrap_text=j in (10, 14, 21, 24))
+            cell.alignment = Alignment(vertical="top", wrap_text=j in wrap)
         rows_by_wo[w["wo"]] = r
-        for j, fam in zip((18, 19, 20), ("Metal", "Joinery", "Acrylics")):
-            lo.cell(r, j).font = Font(bold=True, color=FAMILY[fam], size=11)
-            lo.cell(r, j).alignment = Alignment(horizontal="center", vertical="top")
-        for j in range(21, 25):
+        for fam in ("Metal", "Joinery", "Acrylics"):
+            lo.cell(r, ix[fam]).font = Font(bold=True, color=FAMILY[fam], size=10)
+            lo.cell(r, ix[fam]).alignment = Alignment(horizontal="center", vertical="top")
+        for j in range(e0, e1 + 1):
             lo.cell(r, j).fill = EDIT_FILL
         if w["level"] != "Top":
-            lo.cell(r, 9).alignment = Alignment(indent=1, vertical="top")
+            lo.cell(r, ix["Part code"]).alignment = Alignment(indent=1, vertical="top")
         if wk != prev_week:                                          # Dave's weekly break line
             for j in range(1, len(heads) + 1):
                 lo.cell(r, j).border = Border(top=thick)
             prev_week = wk
     for r in range(first, last + 1):
         lo.cell(r, 1).number_format = lo.cell(r, 2).number_format = "dd/mm/yy"
-        lo.cell(r, 3).number_format = "dd/mm/yy"
         for j in range(first_wc, len(heads) + 1):
             lo.cell(r, j).number_format = "0.0;;"
     if wos:
-        _rag_rules(lo, f"M{first}:M{last}")
+        S = CL["MATERIAL STATUS"]
+        _rag_rules(lo, f"{S}{first}:{S}{last}")
         lo.conditional_formatting.add(f"B{first}:B{last}", FormulaRule(formula=[f"AND(ISNUMBER(B{first}),B{first}<TODAY())"],
                                                                          font=Font(bold=True, color=RAG["RED"][0])))
-        lo.conditional_formatting.add(f"C{first}:C{last}", FormulaRule(       # customer wants it before we finish it
-            formula=[f"AND(ISNUMBER(C{first}),ISNUMBER(B{first}),C{first}<B{first})"], fill=F(RAG["AMBER"][1])))
         if wc_cols:
             rng = f"{get_column_letter(first_wc)}{first}:{get_column_letter(len(heads))}{last}"
             lo.conditional_formatting.add(rng, ColorScaleRule(start_type="num", start_value=0, start_color="FFFFFF",
                                                               mid_type="percentile", mid_value=60, mid_color="FFE7A3",
                                                               end_type="percentile", end_value=98, end_color="F28C28"))
-        lo.conditional_formatting.add(f"Q{first}:Q{last}", DataBarRule(start_type="num", start_value=0, end_type="max",
+        B = CL["Balance"]
+        lo.conditional_formatting.add(f"{B}{first}:{B}{last}", DataBarRule(start_type="num", start_value=0, end_type="max",
                                                                          color="9DB9D9", showValue=True))
         lo.auto_filter.ref = f"A{H}:{get_column_letter(len(heads))}{last}"
-    lo.freeze_panes = lo.cell(H + 1, 10)                             # header + week..part stay put
-    for col in ("E", "F", "H"):                                      # detail columns fold away
-        lo.column_dimensions[col].outlineLevel = 1
+    lo.freeze_panes = lo.cell(H + 1, ix["Description"])              # header + week..part stay put
+    for h in ("Level", "Parent WO", "Account"):                       # detail columns fold away
+        lo.column_dimensions[CL[h]].outlineLevel = 1
     _print(lo, H)
 
     # ---------- Exploded BOMs
@@ -182,7 +192,7 @@ def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_labe
             c.font, c.fill = Font(bold=True, size=9), F("EFEFEA")
             c.border = Border(top=thin)
         if w["wo"] in rows_by_wo:
-            eb.cell(r, 1).hyperlink = Hyperlink(ref=f"A{r}", location=f"'Live Orders'!D{rows_by_wo[w['wo']]}",
+            eb.cell(r, 1).hyperlink = Hyperlink(ref=f"A{r}", location=f"'Live Orders'!{W}{rows_by_wo[w['wo']]}",
                                                 tooltip="Back to the works order on Live Orders")
             eb.cell(r, 1).font = Font(bold=True, color="2B6CB0", underline="single", size=9)
         start_cost = r
@@ -214,7 +224,7 @@ def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_labe
     for w in wos:
         rr, tgt = rows_by_wo[w["wo"]], bom_first.get(w["wo"])
         if tgt:
-            c = lo.cell(rr, 9)
+            c = lo.cell(rr, ix["Part code"])
             c.hyperlink = Hyperlink(ref=c.coordinate, location=f"'Exploded BOMs'!A{tgt}",
                                     tooltip="Exploded BOM: stock, on order, PO due date")
             c.font = Font(color="2B6CB0", underline="single", size=9, bold=w["level"] == "Top")
@@ -371,11 +381,12 @@ def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_labe
     notes = [("How to use it", ""),
              ("Live Orders", "One line per works order. Click a part code for its exploded BOM. Filter any column; totals "
                              "follow the filter. A thick line starts each week."),
-             ("✎ yellow columns", "Comments, Prog, Tube req and your material note are yours. Type freely - the next run "
-                                 "carries them forward by works order, so there's no Monday copy-over."),
+             ("✎ yellow columns", "Comments, Prog, Tube req, Material and Notes are yours. Type them in the portal (shared, "
+                                 "live) or here - the next run carries them forward by works order, so there's no "
+                                 "Monday copy-over."),
              ("Material status", "GREEN all in stock · AMBER covered by a PO / works order in time, or a call-off "
-                                 "material · RED short with nothing due in time, or no BOM."),
-             ("Due date red", "Overdue. Customer date shaded = the customer wants it before the works order finishes."),
+                                 "material · RED short with nothing due in time, or no BOM. Why: the Exploded BOMs tab."),
+             ("Shops", "M Metal · J Joinery · A Acrylics, from the part's route. Due date red = overdue."),
              ("Print", "Each tab prints A3 landscape, one page wide, headings on every page.")]
     note_row = 27 + max(0, int(0.55 * len(hrs) + 2 - 8.5) * 2)
     for i, (a, b) in enumerate(notes, note_row):

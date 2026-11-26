@@ -221,6 +221,7 @@
         "Delivery date"
       ],
       "CUSORDREF": [
+        "salesOrder.customerOrderReference",
         "CUSORDREF",
         "customerOrderReference",
         "Customer order ref",
@@ -293,6 +294,7 @@
         "Gross price"
       ],
       "CUR": [
+        "salesOrder.currency.code",
         "CUR",
         "currency.code",
         "currency",

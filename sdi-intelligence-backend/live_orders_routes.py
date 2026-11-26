@@ -25,6 +25,9 @@ Endpoints (X-SDI-Key on all but the dashboard page, which holds no data):
     GET  /api/live-orders/files             every spreadsheet in Production's folder (generated + saved by hand)
     GET  /api/live-orders/file/{name}       download one of them
     GET  /api/live-orders/preview/{name}    its tabs and first rows (xlsx_preview.py), to look without Excel
+    GET  /api/live-orders/notes             Production's notes typed in the portal (25 Nov), who and when
+    POST /api/live-orders/notes             save one (wo, key, value, by)
+    POST /api/live-orders/ask               ask the user guide (guide_ask.py: Claude, or the matching guide sections)
     GET  /api/live-orders/dashboard         the dashboard page
 
 .env (written by add_live_orders_to_portal.py; all optional):
@@ -46,7 +49,7 @@ import sys
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Body, Header, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 
 import config
@@ -172,6 +175,86 @@ def _running():
     return p is not None and p.poll() is None
 
 
+def _doing(verb=True):
+    lab = ENVS[_proc["env"]]["label"]
+    if _proc.get("what") == "overnight":
+        return f"reading products, BOMs and routes for {lab} (the overnight refresh)"
+    return f"generating {lab}" if verb else lab
+
+
+# ---------------------------------------------------------------- overnight refresh (25 Nov, SCRUM-333)
+# Products, BOMs and routes change slowly and are the slow part of a pull, so they're read every night - SDI Mig, then
+# We are SDI - and the day's Regenerates read only works orders, stock and orders (a few minutes). Read-only, the
+# lean fields, one at a time like Regenerate (it shares the same lock: a Regenerate waits, and is waited for).
+# LIVE_ORDERS_OVERNIGHT in .env: the time (default 05:30), or "off". If a night's read fails, the first Regenerate
+# after 24 hours reads them itself, as before.
+OVERNIGHT = os.getenv("LIVE_ORDERS_OVERNIGHT", "05:30").strip()
+X3_API = Path(os.getenv("LIVE_ORDERS_X3_API", str(HOME.parent.parent / "integration" / "x3_api" / "x3_api.py")))
+_overnight = {"started": False}
+
+
+def _overnight_once(env):
+    """Pull products / boms / routes for one environment, holding the one-at-a-time lock. Returns a short result."""
+    deadline = dt.datetime.now() + dt.timedelta(hours=3)
+    while True:                                           # wait for a Regenerate that's running to finish
+        with _lock:
+            if not _running():
+                runs = _runs(env)
+                runs.mkdir(parents=True, exist_ok=True)
+                log = open(runs / "overnight.log", "a", encoding="utf-8")
+                log.write(f"\n==== {dt.datetime.now().isoformat(timespec='seconds')} overnight refresh {env}\n")
+                log.flush()
+                p = subprocess.Popen([PYTHON, "-u", str(X3_API), "pull", "products", "boms", "routes", "--env", env],
+                                     cwd=str(X3_API.parent), stdout=log, stderr=subprocess.STDOUT,
+                                     env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+                _proc.update(p=p, started=dt.datetime.now().isoformat(timespec="seconds"), env=env, what="overnight")
+                break
+        if dt.datetime.now() > deadline:
+            return {"env": env, "ok": False, "error": "a Regenerate was still running after 3 hours - skipped"}
+        threading.Event().wait(30)
+    try:
+        code = p.wait(timeout=3 * 3600)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        code = -9
+    log.close()
+    return {"env": env, "ok": code == 0, "code": code, "finished": dt.datetime.now().isoformat(timespec="seconds")}
+
+
+def _overnight_loop():
+    hh, mm = (int(x) for x in OVERNIGHT.split(":"))
+    while True:
+        now = dt.datetime.now()
+        nxt = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if nxt <= now:
+            nxt += dt.timedelta(days=1)
+        threading.Event().wait((nxt - now).total_seconds())
+        results = []
+        for env in ENVS:                                  # SDI Mig, then We are SDI
+            try:
+                results.append(_overnight_once(env))
+            except Exception as e:                         # noqa: BLE001 - never stops the loop or the portal
+                results.append({"env": env, "ok": False, "error": str(e)[:300]})
+        try:
+            (RUNS.parent / "live_orders_overnight.json").write_text(json.dumps(
+                {"at": nxt.isoformat(timespec="minutes"), "results": results}, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+
+
+def start_overnight():
+    """Started once when the portal loads this file (and only if LIVE_ORDERS_OVERNIGHT isn't "off")."""
+    if _overnight["started"] or OVERNIGHT.lower() in ("", "off", "no", "0") or not re.match(r"^\d{1,2}:\d\d$", OVERNIGHT):
+        return
+    if not X3_API.exists():
+        return
+    _overnight["started"] = True
+    threading.Thread(target=_overnight_loop, name="live-orders-overnight", daemon=True).start()
+
+
+start_overnight()
+
+
 @router.post("/regenerate")
 def regenerate(env: str = "mig", full: bool = False, x_sdi_key: str | None = Header(default=None)):
     """Pull from Sage X3 (read-only), build, save a new workbook + views. One at a time, across both environments."""
@@ -179,8 +262,8 @@ def regenerate(env: str = "mig", full: bool = False, x_sdi_key: str | None = Hea
     _env(env)
     with _lock:
         if _running():
-            raise HTTPException(status_code=409, detail=f"Already generating {ENVS[_proc['env']]['label']} since "
-                                                        f"{_proc['started']} - one at a time, try again when it's done")
+            raise HTTPException(status_code=409, detail=f"Already {_doing()} since {_proc['started']} - one at a time, "
+                                                        f"try again when it's done")
         script = HOME / "run_x3.py"
         if not script.exists():
             raise HTTPException(status_code=500, detail=f"run_x3.py not found in {HOME} (LIVE_ORDERS_HOME)")
@@ -196,6 +279,7 @@ def regenerate(env: str = "mig", full: bool = False, x_sdi_key: str | None = Hea
                                       env=dict(os.environ, PYTHONIOENCODING="utf-8"))
         _proc["started"] = dt.datetime.now().isoformat(timespec="seconds")
         _proc["env"] = env
+        _proc["what"] = "regenerate"
     return {"started": _proc["started"], "full": full, "env": env}
 
 
@@ -203,17 +287,75 @@ def regenerate(env: str = "mig", full: bool = False, x_sdi_key: str | None = Hea
 def regenerate_status(env: str = "mig", x_sdi_key: str | None = Header(default=None)):
     _check_key(x_sdi_key)
     runs = _runs(_env(env))
-    mine = _running() and _proc["env"] == env
+    mine = _running() and _proc["env"] == env and _proc.get("what") != "overnight"
     log = runs / "regenerate.log"
     tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-12:] if log.exists() else []
     st = {}
     if (runs / "status.json").exists():
         st = json.loads((runs / "status.json").read_text(encoding="utf-8"))
         st.pop("trace", None)
-    return {"running": mine, "busy": ENVS[_proc["env"]]["label"] if _running() and not mine else None,
+    return {"running": mine, "busy": _doing(False) if _running() and not mine else None,
             "started": _proc["started"] if _proc["env"] == env else st.get("started"), "log": tail, "env": env,
             "last": {k: st.get(k) for k in ("ok", "started", "finished", "error", "warning", "published",
-                                            "carried_from", "master_refreshed", "pull_failed", "adapter")}}
+                                            "carried_from", "notes", "master_refreshed", "pull_failed", "adapter")}}
+
+
+# ---------------------------------------------------------------- Production's notes, typed in the portal (25 Nov)
+# James: "ok, do it" - Comments, Prog, Tube req, Material and Notes typed on the Live Orders page, shared by everyone,
+# who and when kept. One store per environment, <runs>\notes.json; every change also appended to notes_log.jsonl.
+# Regenerate merges them with anything typed in the workbook (live_orders_notes.py) into the next workbook.
+NOTE_KEYS = ("comments", "prog", "tube", "mat", "notes")
+WO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9/_.\-]{0,39}$")
+_notes_lock = threading.Lock()
+
+
+def _notes_file(env):
+    return _runs(env) / "notes.json"
+
+
+def _read_notes(env):
+    f = _notes_file(env)
+    try:
+        return json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    except (OSError, ValueError):
+        return {}
+
+
+@router.get("/notes")
+def notes_get(env: str = "mig", x_sdi_key: str | None = Header(default=None)):
+    _check_key(x_sdi_key)
+    return {"env": _env(env), "notes": _read_notes(env), "now": dt.datetime.now().isoformat(timespec="seconds")}
+
+
+@router.post("/notes")
+def notes_post(body: dict = Body(...), env: str = "mig", x_sdi_key: str | None = Header(default=None)):
+    """One cell: {"wo": "WO123", "key": "comments", "value": "text", "by": "Dave"}. Empty value clears it."""
+    _check_key(x_sdi_key)
+    _env(env)
+    wo, key = str(body.get("wo") or "").strip(), str(body.get("key") or "")
+    value, by = str(body.get("value") or "").strip(), str(body.get("by") or "").strip()[:60]
+    if not WO_RE.match(wo):
+        raise HTTPException(status_code=400, detail="Not a works-order number")
+    if key not in NOTE_KEYS:
+        raise HTTPException(status_code=400, detail=f"key is one of {', '.join(NOTE_KEYS)}")
+    if len(value) > 1000:
+        raise HTTPException(status_code=400, detail="Too long - 1,000 characters at most")
+    if not by:
+        raise HTTPException(status_code=400, detail="Your name is needed, so others can see who wrote it")
+    at = dt.datetime.now().isoformat(timespec="seconds")
+    with _notes_lock:
+        runs = _runs(env)
+        runs.mkdir(parents=True, exist_ok=True)
+        store = _read_notes(env)
+        old = ((store.get(wo) or {}).get(key) or {}).get("v", "")
+        store.setdefault(wo, {})[key] = {"v": value, "by": by, "at": at}
+        tmp = runs / "notes.json.tmp"
+        tmp.write_text(json.dumps(store, ensure_ascii=False, indent=0), encoding="utf-8")
+        os.replace(tmp, _notes_file(env))
+        with open(runs / "notes_log.jsonl", "a", encoding="utf-8") as lg:
+            lg.write(json.dumps({"at": at, "by": by, "wo": wo, "key": key, "old": old, "new": value},
+                                ensure_ascii=False) + "\n")
+    return {"wo": wo, "key": key, "v": value, "by": by, "at": at}
 
 
 @router.get("/status")
@@ -291,6 +433,39 @@ def preview(name: str, sheet: str = "", rows: int = 300, x_sdi_key: str | None =
     if res.get("error"):
         raise HTTPException(status_code=500, detail=res["error"])
     return res
+
+
+_guide_cache = {}
+
+
+def _guide_text():
+    """The Live Orders user guide (the page's User guide view) and the How it works rules, as plain text for Claude."""
+    import guide_ask
+    m = DASHBOARD.stat().st_mtime if DASHBOARD.exists() else 0
+    if _guide_cache.get("m") != m:
+        page = DASHBOARD.read_text(encoding="utf-8") if DASHBOARD.exists() else ""
+        g = guide_ask.text_of(guide_ask.section(page, '<section class="view" id="v-ug">', "</section>"))
+        try:                                              # How it works: the same rules as the workbook's tab
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("live_orders_logic", HOME / "live_orders_logic.py")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            g += "\n\n## How it works (the rules)\n" + mod.LIVE + "\n" + "\n".join(
+                f"- {r[0]}: {r[1]} (Access / Production's sheet: {r[2]}; Sage X3: {r[3]})" for r in mod.LOGIC)
+        except (OSError, AttributeError, ImportError, SyntaxError):
+            pass
+        _guide_cache.update(m=m, text=g)
+    return _guide_cache["text"]
+
+
+@router.post("/ask")
+def ask_guide(body: dict = Body(...), x_sdi_key: str | None = Header(default=None)):
+    """Ask the user guide (25 Nov): {"q": question, "history": [{"q", "a"}, ...]} -> {"answer", "source", "why"}.
+    Claude sees only the guide text; with no Claude the page shows the matching guide sections."""
+    _check_key(x_sdi_key)
+    import guide_ask
+    return guide_ask.ask(body.get("q"), body.get("history"), _guide_text(),
+                         "Live Orders - Production's board of open works orders, built from Sage X3 (read-only)")
 
 
 @router.get("/dashboard", response_class=HTMLResponse)

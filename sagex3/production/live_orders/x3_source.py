@@ -206,6 +206,7 @@ def to_extract(folder, out_path, conf_path=HERE / "x3_columns.json", check=False
     as_at = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     lines.append(f"CHECK\tas at\t{as_at}\tsource X3 {Path(folder).name}")
     used_instead = set()
+    kept, read_n, src_of = {}, {}, {}                     # for the stock check below (25 Nov)
     for name in ORDER:
         spec = conf.get(name)
         if not spec:
@@ -232,6 +233,8 @@ def to_extract(folder, out_path, conf_path=HERE / "x3_columns.json", check=False
             recs = [r for r in recs if r.get("ITMREF") and (r.get(qf) == "" or float(r.get(qf) or 0) > 0)]
         if n0 > len(recs):
             why["no order number / product / quantity"] += n0 - len(recs)
+        kept[spec["grid"]], read_n[spec["grid"]] = recs, len(rows)
+        src_of[spec["grid"]] = {k: v[1] for k, v in used.items()}
         cols = GRIDS[spec["grid"]]
         for r in recs:
             lines.append("\t".join([spec["grid"]] + [str(r.get(c, "")).replace("\t", " ") for c in cols[1:]]))
@@ -244,9 +247,36 @@ def to_extract(folder, out_path, conf_path=HERE / "x3_columns.json", check=False
                 report.append(f"    {field:<14} <- {src if src else '** NOT FOUND **'}" + (f"  minus {minus}" if minus else ""))
         if missing:
             report.append(f"    not found: {', '.join(missing)}")
+    report += stock_check(kept, read_n, src_of)
     if out_path:
         Path(out_path).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return report
+
+
+def stock_check(kept, read_n, src_of):
+    """Does the stock's part code match the part codes on the orders? (25 Nov, fix 1: on We are SDI 17 of 20 works
+    orders were red and none green - if X3's stock comes through under an internal id instead of the part code, no
+    stock is ever found and everything shows red.) A line starting WARNING opens What X3 sent on the page."""
+    if "SMR" not in kept:
+        return []
+    stock = {str(r.get("ITMREF")) for r in kept["SMR"] if r.get("ITMREF")}
+    other = ({str(r.get("ITMREF")) for g in ("POH", "SOH") for r in kept.get(g, []) if r.get("ITMREF")}
+             | {str(r.get("product")) for r in kept.get("WOR", []) if r.get("product")})
+    col = (src_of.get("SMR") or {}).get("ITMREF") or "none"
+    if not stock:
+        if read_n.get("SMR"):
+            return [f"WARNING: X3 sent {read_n['SMR']} stock lines but none were kept (stock status not A, or no part "
+                    f"code - X3 column {col}): every works order with a BOM will show RED until this is fixed."]
+        return ["stock check: X3 sent no stock for this environment."]
+    hit = stock & other
+    out = [f"stock check: {len(stock)} parts in stock (part code from X3 column {col}); {len(hit)} of them are on the "
+           f"PO, SO or works-order lines."]
+    if other and not hit:
+        out.append(f"WARNING: none of the stock's part codes match a part on the PO, SO or works-order lines, so no "
+                   f"stock is found and works orders show RED. The stock's part code is probably coming through as "
+                   f"an internal id (X3 column {col}). For example stock {', '.join(sorted(stock)[:2])} against order "
+                   f"lines {', '.join(sorted(other)[:2])}. Tell James.")
+    return out
 
 
 def main(argv=None):

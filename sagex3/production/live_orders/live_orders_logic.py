@@ -11,7 +11,7 @@ Each row: (what, the rule, how Access / Production's sheet did it, where it come
 
 LIVE = ("Live, not a history report: every Regenerate reads Sage X3 at that moment - open works orders, stock, open "
         "sales and purchase order lines - and works the board out from scratch. Products, BOMs and routings are "
-        "refreshed daily. Each generation is saved as its own workbook (never overwritten) so you can look back; "
+        "refreshed overnight. Each generation is saved as its own workbook (never overwritten) so you can look back; "
         "the portal always opens the newest.")
 
 LOGIC = [
@@ -33,12 +33,6 @@ LOGIC = [
      "The WO scheduled date; the weekly break lines were typed.",
      "endDate on the work order line.",
      "76 / 102 (25 of the 26 differences were reschedules after the sheet was saved)."),
-    ("Customer date",
-     "From the works order's sales order: the line for the same part, else any line on that order. One date is shown; "
-     "no open line = 'SO not open'; several dates = 'Check SO dates'.",
-     "Looked up by hand from the sales order (the column had #REF! errors).",
-     "The work order's salesOrder, then that order's lines (requestedDeliveryDate).",
-     "Sales order 98 / 102. Works orders migrated from Access carry no sales-order link; new X3 ones do."),
     ("Material status",
      "1) Each works order needs BOM quantity x balance of every component. 2) Stock is shared out to works orders in "
      "due-date order, earliest first. 3) A shortage is covered by open PO lines (earliest first), then by works orders "
@@ -49,9 +43,10 @@ LOGIC = [
      "BOM lines (manufacturingBomLine), stock (status A), PO lines with quantity still to receive (not closed - as "
      "Access), expected receipt date, works orders.",
      "Listed beside Production's typed status for every works order (By works order tab); the rule and the call-off "
-     "list are to agree with Production (LO-01)."),
+     "list are to agree with Production (LO-01). The reason (which material, short or to call off) is shown when you "
+     "click the line, and on the Exploded BOMs tab - not as a column (25 Nov, Simon)."),
     ("Metal / Joinery / Acrylics",
-     "From the work centres on the part's routing: M = Metal, J = Joinery, A = Acrylics.",
+     "From the work centres on the part's routing, shown as the letters M = Metal, J = Joinery, A = Acrylics.",
      "Y typed per shop.",
      "routingOperation.mainWorkCenter.",
      "63 / 102 - the sheet's Y's were Production's own judgement, the board uses the route."),
@@ -85,9 +80,11 @@ LOGIC = [
      "majorProductVersion on the work order line.",
      "Check against the GA drawing still to add (which drawing folder - open point)."),
     ("Production's notes",
-     "Comments, Prog, Tube req and the material note are typed in the workbook (yellow columns) and carried to the "
-     "next generation by works order, so nothing is copied over on Monday.",
+     "Comments, Prog, Tube req, Material (Production's own material notes) and Notes are typed on the portal's Live "
+     "Orders page - shared by everyone, with who and when - or in the newest workbook's yellow columns. Each "
+     "generation carries them forward by works order (if a cell was changed in both, the later change wins), so "
+     "nothing is copied over on Monday.",
      "Rachael copied the sheet into a new week by hand every Monday.",
-     "Not in X3 - kept in the workbooks in K:\\Operations\\Reporting\\LiveOrders.",
+     "Not in X3 - kept by the portal (per environment) and in each workbook in K:\\Operations\\Reporting\\LiveOrders.",
      "-"),
 ]

@@ -501,6 +501,36 @@ LEAN = {
                      "operationDescription setupTime runTime rate baseQuantity managementUnit runTimeType",
     "work_centres":  "code description manufacturingSite { code } workCenterGroup { code }",
 }
+# 25 Nov: fields Live Orders wants whose names in this X3 aren't confirmed. Each is tried once per pull with one row
+# (a wrong name fails only that try) and added to the data set's fields only if X3 accepts it.
+#  - stock: the product's code (the stock read product { _id } only; if _id isn't the part code, every works order
+#    shows red - We are SDI, 23 Nov: 17 red, no green)
+#  - so_lines: the customer's order reference and the currency, from the order header (or the line)
+OPTIONAL = {
+    "stock":    ["product { code }"],
+    "so_lines": ["salesOrder { customerOrderReference }", "salesOrder { currency { code } }", "currency { code }"],
+}
+
+
+def with_optional(c, name, ds):
+    """ds with whichever of OPTIONAL[name] this X3 accepts (one tiny read each). X3 not answering stops the pull as
+    before; any other refusal just leaves that field out, said on the log line."""
+    extra = [f for f in OPTIONAL.get(name, []) if f not in ds.get("fields", "")]
+    if not extra or ds.get("class"):
+        return ds
+    keep, drop = [], []
+    for f in extra:
+        try:
+            pull_graphql(c, dict(ds, fields=f"{ds['fields']} {f}"), limit=1)
+            keep.append(f)
+        except X3Unavailable:
+            raise
+        except (SystemExit, Exception):                  # noqa: BLE001 - X3 doesn't know that field: leave it out
+            drop.append(f)
+        time.sleep(PAUSE)
+    print(f"{name}: optional fields - " + ", ".join([f"+ {k}" for k in keep] + [f"not in this X3: {d}" for d in drop]),
+          flush=True)
+    return dict(ds, fields=" ".join([ds["fields"]] + keep)) if keep else ds
 
 
 def draft(a):
@@ -710,6 +740,7 @@ def pull(a):
         t0 = time.time()
         try:
             notes = []
+            ds = with_optional(c, n, ds)
             rows = pull_rest(c, ds) if ds.get("class") else pull_graphql(c, ds, limit=a.limit, notes=notes)
             write_rows(rows, day / n)
             log.append(dict(name=n, ok=True, rows=len(rows), seconds=round(time.time() - t0, 1), notes=notes))

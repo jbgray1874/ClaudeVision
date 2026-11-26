@@ -111,6 +111,29 @@ def _x3_summary(d):
             "done": [[r.get("what"), r.get("action"), r.get("ok")] for r in j.get("results") or []]}
 
 
+_guide_cache = {}
+
+
+@router.post("/ask")
+async def ask_guide(request: Request, x_sdi_key: str | None = Header(default=None)):
+    """Ask the user guide (25 Nov): {"q": question, "history": [{"q", "a"}, ...]} -> {"answer", "source", "why"}.
+    Claude sees only the page's user guide (guide_ask.py); with no Claude the page shows the matching guide sections."""
+    _check_key(x_sdi_key)
+    import guide_ask
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Send JSON: {\"q\": \"your question\"}")
+    m = PAGE.stat().st_mtime if PAGE.exists() else 0
+    if _guide_cache.get("m") != m:
+        html_ = PAGE.read_text(encoding="utf-8") if PAGE.exists() else ""
+        _guide_cache.update(m=m, text=guide_ask.text_of(guide_ask.section(html_, '<details class="card guide" id="guide">',
+                                                                          "</details>")))
+    return await asyncio.to_thread(guide_ask.ask, body.get("q"), body.get("history"), _guide_cache["text"],
+                                   "Estimate → X3 - turns a saved estimate into Sage X3 product / BOM / route import "
+                                   "files and a write-up, and can load them into X3")
+
+
 @router.get("/page", response_class=HTMLResponse)
 def page():
     if not PAGE.exists():

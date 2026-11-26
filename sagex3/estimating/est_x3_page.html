@@ -64,6 +64,12 @@ details.guide p,details.guide li{font-size:13.5px}details.guide ol,details.guide
 .ghost{background:transparent;border:1px solid rgba(255,255,255,.3);color:#fff;font-weight:700;padding:8px 14px;border-radius:8px}.ghost:hover{border-color:var(--y)}
 .saved{margin:4px 0 8px;padding:8px 12px;border-radius:10px;background:var(--soft);border:1px solid var(--line);font-size:13px}.saved a{color:var(--m);cursor:pointer;font-weight:600;margin-left:8px}
 .ghost+.ghost{margin-left:8px}
+/* Ask the guide (25 Nov) */
+.ask{border-left:4px solid var(--y);background:var(--soft);border-radius:10px;padding:12px 14px;margin:10px 0 6px}
+.ask input{font:inherit;padding:7px 11px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--t)}
+.qa{margin-top:10px}.qa .q{font-weight:700}.qa .q::before{content:"You: ";color:var(--muted);font-weight:600}
+.qa .a{margin-top:4px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px}.qa .a p{margin:4px 0}
+.qa .gs{margin-top:8px;padding-top:6px;border-top:1px dashed var(--line)}.qa .gs>b{display:block;margin-bottom:2px}
 .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}.bar input,.bar select{width:auto;min-width:150px}
 a.lk{color:var(--m);cursor:pointer;font-weight:600;margin-right:10px;white-space:nowrap}
 .fl{display:inline-flex;align-items:center;margin:4px 8px 4px 0}.dl .fl a{margin:0}.dl .fl a.pv{border-left:0;border-radius:0 8px 8px 0;padding:6px 9px}.dl .fl a:first-child{border-radius:8px 0 0 8px}
@@ -84,6 +90,10 @@ tr.files td{background:var(--soft)}
 <div><span class="envsw" id="envsw" title="Which Sage X3 environment the estimate is checked against and loaded into"><button data-env="mig">SDI Mig (test)</button><button data-env="uat">We are SDI (UAT)</button></span><button class="ghost" id="svbtn" title="Every estimate saved in the SageEstimates folder">📂 Saved estimates</button><button class="ghost" id="ugbtn" title="How to use this page">📖 User guide</button></div></div></header>
 <main class="w">
   <details class="card guide" id="guide"><summary>User guide - how to use this page</summary>
+    <div class="ask" id="ask"><b>💬 Ask the guide</b> <span class="muted">- e.g. "what does NOT READY mean?", "how do I load it into X3?", "where are the files saved?"</span>
+      <div id="asklog"></div>
+      <div class="bar" style="margin:8px 0 0"><input id="askq" placeholder="Type a question and press Enter" maxlength="600" style="flex:1;min-width:220px"><button id="askgo" class="y">Ask</button></div>
+      <p class="note" style="margin:4px 0 0">Answers come from this guide only - Claude doesn't see the estimate or the X3 files. Please don't type customer or supplier details in the question.</p></div>
     <h3>What it does</h3>
     <p>Turns a saved estimate into the three <b>Sage X3 import files</b> - the product (ZSDIITM), its bill of materials (YA00408BOM) and its route (ZSDIROU2) - and a <b>write-up workbook</b> that shows every line of the estimate, where it lands in X3 and how each quantity and run time is worked out. Every line is checked against <b>Sage X3's own product list</b> and work centres first. A READY estimate can then be <b>loaded into Sage X3</b> from this page (step 7) - into the test environments only: <b>We are SDI (UAT)</b> or <b>SDI Mig</b>, never live.</p>
     <h3>Steps</h3>
@@ -215,6 +225,29 @@ function dlUrl(url,name){fetch(url,{headers:HD()}).then(r=>{if(!r.ok)throw new E
 $('#dl').addEventListener('click',e=>{const p=e.target.closest('a[data-pv]');if(p){preview(p.dataset.pv,p.dataset.pn,p.dataset.pd);return}
   const a=e.target.closest('a[data-f]');if(a)dlUrl(a.dataset.f,a.dataset.n)});
 $('#order').addEventListener('click',e=>{const a=e.target.closest('a[data-cp]');if(!a)return;navigator.clipboard&&navigator.clipboard.writeText(a.dataset.cp);a.textContent='Copied ✓';setTimeout(()=>a.textContent='Copy path',1500)});
+// Ask the guide (25 Nov, James: "like a chat bot"): Claude answers from this guide (POST /api/estimate-x3/ask,
+// guide_ask.py); if Claude isn't available, the guide sections that best match are shown instead.
+const ASKH=[],STOPW=new Set('a an and are as at be can do does for from get have how i if in is it me my of on or so that the then this to was we what when where which who why will with you your'.split(' '));
+function guideParts(){const out=[];let c={h:'User guide',n:[]};
+  [...$('#guide').children].forEach(el=>{if(el.id==='ask'||el.tagName==='SUMMARY')return;if(el.tagName==='H3'){if(c.n.length)out.push(c);c={h:el.textContent,n:[]}}else c.n.push(el)});
+  if(c.n.length)out.push(c);return out.map(s=>({h:s.h,html:s.n.map(x=>x.outerHTML).join(''),t:(s.h+' '+s.n.map(x=>x.textContent).join(' ')).toLowerCase()}))}
+function bestParts(q){const ws=(q.toLowerCase().match(/[a-z0-9]+/g)||[]).filter(x=>!STOPW.has(x)&&x.length>1).map(x=>x.length>5&&/ing$/.test(x)?x.slice(0,-3):x.length>3&&/[^s]s$/.test(x)?x.slice(0,-1):x);
+  // whole words only ("red" not in "ordered"); a word in the heading counts most, then how often it's used (up to 3)
+  const n=(t,x)=>(t.match(new RegExp('\\b'+x.replace(/[^a-z0-9]/g,'')+'(s|es|d|ed|ing)?\\b','g'))||[]).length;
+  const P=guideParts().filter(s=>s.h!=='User guide'),wt=x=>Math.log(1+P.length/Math.max(1,P.filter(s=>n(s.t,x)).length));   // rarer words count more
+  return P.map(s=>({s,k:ws.reduce((a,x)=>a+wt(x)*((n(s.h.toLowerCase(),x)?3:0)+Math.min(3,n(s.t,x))),0)}))
+    .filter(x=>x.k>0).sort((a,b)=>b.k-a.k).slice(0,2).map(x=>x.s)}
+function fmtA(t){return t.split(/\n{2,}/).map(p=>`<p>${esc(p).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\n/g,'<br>')}</p>`).join('')}
+function askGuide(){const q=$('#askq').value.trim();if(!q)return;$('#askq').value='';
+  const box=document.createElement('div');box.className='qa';box.innerHTML=`<div class="q">${esc(q)}</div><div class="a"><span class="muted">Looking in the guide…</span></div>`;$('#asklog').appendChild(box);
+  const show=r=>{const a=box.querySelector('.a');
+    if(r&&r.answer){a.innerHTML=fmtA(r.answer);ASKH.push({q,a:r.answer});return}
+    const S=bestParts(q);a.innerHTML=`<span class="muted">${esc((r&&r.why)||'From the guide:')}</span>`+(S.length?S.map(s=>`<div class="gs"><b>${esc(s.h)}</b>${s.html}</div>`).join(''):'<p>Nothing in the guide matches that - try other words, or ask James Gray.</p>')};
+  $('#askgo').disabled=true;
+  fetch(API+'/ask',{method:'POST',headers:{...HD(),'Content-Type':'application/json'},body:JSON.stringify({q,history:ASKH.slice(-4)})})
+    .then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(show)
+    .catch(e=>show({why:`The chat couldn't answer (${e.message}) - from the guide:`})).finally(()=>{$('#askgo').disabled=false;$('#askq').focus()})}
+$('#askgo').onclick=askGuide;$('#askq').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();askGuide()}});
 $('#ugbtn').onclick=()=>{const g=$('#guide');g.open=true;g.scrollIntoView({behavior:'smooth',block:'start'})};
 try{if(new URLSearchParams(location.search).get('view')==='guide')$('#ugbtn').onclick()}catch(e){}   // …/page?view=guide opens the user guide (23 Nov: linked from the email to users)
 $('#tabs').addEventListener('click',e=>{const b=e.target.closest('button[data-t]');if(!b)return;tab=b.dataset.t;$$('#tabs button').forEach(x=>x.classList.toggle('on',x===b));render()});

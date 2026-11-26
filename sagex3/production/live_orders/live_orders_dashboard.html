@@ -65,6 +65,19 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}td.wrap{white-space
 .GREEN{background:var(--gb);color:var(--g)}.AMBER{background:var(--ab);color:var(--a)}.RED{background:var(--rb);color:var(--r)}
 tr.main{cursor:pointer}tr.x>td{background:var(--soft);white-space:normal;padding:10px}.muted{color:var(--muted)}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:3px}
+/* 25 Nov (Simon): shops as M / J / A letters, readable without colour */
+.shop{display:inline-block;min-width:18px;text-align:center;font-weight:800;font-size:11px;line-height:16px;border:1.5px solid currentColor;border-radius:4px;margin-right:3px}
+/* Production's typed columns (25 Nov): click to type, shared by everyone */
+td.ed{background:color-mix(in srgb,var(--y) 14%,transparent);cursor:text;min-width:70px;white-space:pre-wrap;max-width:260px;vertical-align:top}
+td.ed.w{min-width:150px}td.ed:hover{outline:1px dashed var(--a);outline-offset:-2px}td.ed.ro{cursor:default}td.ed.ro:hover{outline:0}
+td.ed.saved{animation:flash 1.2s ease}@keyframes flash{from{background:var(--gb)}}
+td.ed textarea{width:100%;min-width:140px;min-height:52px;font:inherit;font-size:13px;padding:4px 6px;border:2px solid var(--y);border-radius:6px;resize:vertical}
+th.ed{background:#5a4d00}
+/* Ask the guide (25 Nov) */
+.ask{border-left:4px solid var(--y);background:var(--soft);border-radius:10px;padding:12px 14px;margin:8px 0 6px}
+.qa{margin-top:10px}.qa .q{font-weight:700}.qa .q::before{content:"You: ";color:var(--muted);font-weight:600}
+.qa .a{margin-top:4px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px}.qa .a p{margin:4px 0}
+.qa .gs{margin-top:8px;padding-top:6px;border-top:1px dashed var(--line)}.qa .gs>b{display:block;margin-bottom:2px}
 .bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center}
 input,select,button{font:inherit;padding:7px 11px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--t);max-width:100%}
 button{cursor:pointer}button:disabled{opacity:.55;cursor:wait}
@@ -120,7 +133,7 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
   </section>
 
   <section class="view" id="v-lo"><div class="card">
-    <h2>Live Orders</h2><p class="note">One line per works order, as Production's sheet. Click a row for its exploded BOM - stock, on order and the PO due date. Notes are Production's, from the workbook.</p>
+    <h2>Live Orders</h2><p class="note">One line per works order, as Production's sheet. Click a row for why it's red / amber and its exploded BOM - stock, on order and the PO due date. <b>✎ Yellow columns:</b> click a cell to type - everyone sees it, with your name and the time (hover); Enter saves, Esc cancels, Shift+Enter for a new line. Shops: M Metal · J Joinery · A Acrylics.</p>
     <div class="bar">
       <select id="fst"><option value="">All statuses</option><option>RED</option><option>AMBER</option><option>GREEN</option></select>
       <select id="ffam"><option value="">All shops</option><option value="M">Metal</option><option value="J">Joinery</option><option value="A">Acrylics</option></select>
@@ -158,33 +171,44 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
     </div></section>
 
   <section class="view" id="v-ug"><div class="card guide">
-    <h2>User guide</h2><p class="note">Live Orders in the SDI Intelligence portal - for Production, Purchasing and Customer Services. Written 20 Nov 2026, updated 23 Nov.</p>
+    <h2>User guide</h2><p class="note">Live Orders in the SDI Intelligence portal - for Production, Purchasing and Customer Services. Written 20 Nov 2026, updated 25 Nov (notes typed here, Simon's and Dave's changes).</p>
+    <div class="ask" id="ask"><b>💬 Ask the guide</b> <span class="muted">- e.g. "how do I add a note?", "why is a works order red?", "where is the workbook saved?"</span>
+      <div id="asklog"></div>
+      <div class="bar" style="margin:8px 0 0"><input id="askq" placeholder="Type a question and press Enter" maxlength="600" style="flex:1;min-width:220px"><button id="askgo" class="y">Ask</button></div>
+      <p class="note" style="margin:4px 0 0">Answers come from this guide only - Claude doesn't see the works orders or the spreadsheets. Please don't type customer or supplier details in the question.</p></div>
     <h3>What it is</h3>
-    <p>Production's Live Orders sheet, built from <b>Sage X3</b>: every open works order with its material status, the hours still to do in each work centre, the works orders to raise (WO Suggestions) and the exploded BOM of each order. It follows the same rules as the Access SupplyChain sheet - see <a class="lk" data-go="hw">How it works</a>. It <b>reads</b> Sage X3; it never changes anything in it.</p>
+    <p>Production's Live Orders sheet, built from <b>Sage X3</b>: every open works order with its material status, the hours still to do in each work centre, the works orders to raise (WO Suggestions) and the exploded BOM of each order. It follows the same rules as the Access SupplyChain sheet - see <a class="lk" data-go="hw">How it works</a>. It <b>reads</b> Sage X3; it never changes anything in it. Production's notes (the yellow ✎ columns) are typed on this page and kept by the portal, not in X3.</p>
     <h3>1. Get today's Live Orders</h3>
-    <ol><li><b>Choose the Sage X3 environment</b> (top left of the bar): <b>We are SDI (UAT)</b> - where you test - or <b>SDI Mig (test)</b>. The badge by the date says which one you're looking at. Each has its own workbooks, named <i>SDI_Live_Orders_UAT_…</i> or <i>…_MIG_…</i>, and your notes carry forward only within the same environment. The choice is remembered on this PC (and used by Estimate → X3 too).</li>
-      <li>Press <b>↻ Regenerate</b> (top right). It reads Sage X3 now; the progress shows next to the button. It takes a few minutes (the first run of a day can take longer, while products, BOMs and routes are refreshed; the very first run in an environment can take 30-60 minutes). <b>Use the page as normal while it runs</b> - it runs on the server, so the tabs, User guide, Workbooks or closing the page don't stop it. Only one Regenerate runs at a time, across both environments: if someone else's is running, the button says <i>Busy</i> and comes back when it's done.</li>
+    <ol><li><b>Choose the Sage X3 environment</b> (top left of the bar): <b>We are SDI (UAT)</b> - where you test - or <b>SDI Mig (test)</b>. The badge by the date says which one you're looking at. Each has its own workbooks, named <i>SDI_Live_Orders_UAT_…</i> or <i>…_MIG_…</i>, and its own notes. The choice is remembered on this PC (and used by Estimate → X3 too).</li>
+      <li>Press <b>↻ Regenerate</b> (top right). It reads Sage X3 now; the progress shows next to the button. It takes a few minutes: products, BOMs and routes are refreshed overnight, so the day's runs only read the works orders, stock and orders (the very first run in an environment can take 30-60 minutes). <b>Use the page as normal while it runs</b> - it runs on the server, so the tabs, User guide, Workbooks, typing notes or closing the page don't stop it. Only one Regenerate runs at a time, across both environments: if someone else's is running, the button says <i>Busy</i> and comes back when it's done.</li>
       <li>When it's done, the line by the button names the new workbook, e.g. <b>SDI_Live_Orders_UAT_2026-11-23_0815.xlsx</b> (UAT = We are SDI, MIG = SDI Mig), with <b>Preview</b> and <b>Download</b>. The views below refresh by themselves.</li>
-      <li><b>What X3 sent</b> (by the Done line) lists, for each kind of data, how many rows Sage X3 sent, how many are on the sheet, and why the others were left out (closed, planned, nothing left to make). If no works orders come through, it opens by itself and says why - an empty Live Orders tab always has a reason.</li>
+      <li><b>What X3 sent</b> (by the Done line) lists, for each kind of data, how many rows Sage X3 sent, how many are on the sheet, and why the others were left out (closed, planned, nothing left to make). If no works orders come through, it opens by itself and says why - an empty Live Orders tab always has a reason. It also warns if the stock from X3 doesn't match the part codes (everything would show red).</li>
       <li>The workbook is saved in <b>K:\Operations\Reporting\LiveOrders</b>. Each run is a new file with the date and time in its name - nothing is ever overwritten, so anyone can run it at any time.</li></ol>
     <h3>2. The views</h3>
     <table class="gt"><tr><th>Tab</th><th>What it shows</th><th>For</th></tr>
-      <tr><td>Overview</td><td>The headline numbers, red / amber / green, works orders by due week, hours by week and shop, the busiest work centres, the biggest shortages, what's due in the next 14 days.</td><td>Everyone</td></tr>
-      <tr><td>Live Orders</td><td>One line per works order, as Production's sheet. Filter by status, shop, week or level; search by part, WO, SO or account. <b>Click a line</b> for its exploded BOM (stock, on order, next PO date). Export CSV.</td><td>Production</td></tr>
+      <tr><td>Overview</td><td>The headline numbers, red / amber / green, works orders by due week, hours by week and shop, the busiest work centres, the biggest shortages, what's due in the next 14 days and why it isn't green.</td><td>Everyone</td></tr>
+      <tr><td>Live Orders</td><td>One line per works order, as Production's sheet. Filter by status, shop, week or level; search by part, WO, SO, account or any note. <b>Click a line</b> for why it's red or amber and its exploded BOM (stock, on order, next PO date). <b>Click a yellow ✎ cell</b> to type a note. Export CSV.</td><td>Production</td></tr>
       <tr><td>Work-centre load</td><td>Hours still to do per work centre, by the week each order is due. Darker = busier.</td><td>Production</td></tr>
       <tr><td>Shortages</td><td>Every bought-in component the open works orders need, against stock, on order and on works orders - what's short and which orders it holds up.</td><td>Purchasing</td></tr>
       <tr><td>WO Suggestions</td><td>Sales-order lines for made parts that no works order or stock covers. Red = no BOM or no route.</td><td>Production, Customer Services</td></tr>
       <tr><td>Customers</td><td>Works orders, red count, overdue and hours by account. Click an account to see its orders.</td><td>Customer Services</td></tr>
       <tr><td>Trends</td><td>Red / amber / green and hours across every saved run.</td><td>Managers</td></tr>
       <tr><td>Workbooks</td><td>Every spreadsheet in the Live Orders folder (also the <b>📂 Workbooks</b> button).</td><td>Everyone</td></tr></table>
-    <p><b>Material status:</b> <span class="st GREEN">GREEN</span> all material in stock · <span class="st AMBER">AMBER</span> covered by a PO or works order due in time · <span class="st RED">RED</span> short with nothing due in time, or no BOM.</p>
-    <h3>3. Add Production's notes (Comments, Prog, Tube req)</h3>
-    <ol><li>Press <b>📂 Workbooks</b>, find the newest workbook (marked <b>latest</b>) and press <b>Copy path</b>.</li>
-      <li>In Excel: File → Open, paste the path, Open. (Or paste it into File Explorer.)</li>
-      <li>Type in the <b>yellow ✎ columns</b> on the Live Orders tab and save.</li>
-      <li>The next Regenerate carries the notes to the new workbook, by works-order number - nobody copies them over on Monday.</li></ol>
-    <p class="note"><b>Don't</b> type notes in a downloaded copy (it doesn't go back to the folder) and don't rename the generated files: the notes are taken from the newest generated workbook in the folder.</p>
-    <h3>4. Look back</h3>
+    <h3>Red, amber, green - and the shop letters</h3>
+    <p><b>Material status:</b> <span class="st GREEN">GREEN</span> all material in stock · <span class="st AMBER">AMBER</span> covered by a PO or works order due in time, or a call-off material · <span class="st RED">RED</span> short with nothing due in time, or no BOM. Click the line to see which material and why.</p>
+    <p><b>Shops:</b> <span class="shop" style="color:var(--m)">M</span> Metal · <span class="shop" style="color:var(--j)">J</span> Joinery · <span class="shop" style="color:var(--ac)">A</span> Acrylics - from the work centres on the part's route. <b>Level:</b> Top = the works order for the sales order; Sub = a sub-assembly made for it.</p>
+    <h3>3. Production's notes - type them here</h3>
+    <ol><li>On <b>Live Orders</b>, the yellow <b>✎</b> columns are yours: <b>Comments</b>, <b>Prog</b>, <b>Tube req</b>, <b>Material</b> (blank for your own material notes - the reason a line is red or amber is in the drop-down when you click the line) and <b>Notes</b>.</li>
+      <li><b>Click a cell</b>, type, and press <b>Enter</b> to save (<b>Shift+Enter</b> for a new line, <b>Esc</b> to cancel). Clicking away also saves. The first time, it asks your name - once per PC.</li>
+      <li>Everyone sees the note straight away (the page checks for new notes every 30 seconds). Hover over a note to see who wrote it and when. To clear one, delete the text and press Enter.</li>
+      <li>Notes stay with the works order: each Regenerate puts them in the new workbook too, so nothing is copied over on Monday. Each environment has its own notes.</li></ol>
+    <p class="note">Notes can only be typed on the latest run - an older one opened with <b>View in the dashboard</b> shows them read-only. Every change is logged (who, when, old and new text).</p>
+    <h3>4. The portal or the spreadsheet?</h3>
+    <ul><li><b>The portal is the daily working tool.</b> Everyone sees the same live page; notes typed here are shared at once, with names and times. Use it to plan, filter, look at an order's BOM, and for Purchasing's Shortages.</li>
+      <li><b>The spreadsheet is the saved record.</b> Each Regenerate saves a dated copy in <b>K:\Operations\Reporting\LiveOrders</b>, with the notes as they were. Use it to print (A3, one page wide), to send, to sort or total your own way in Excel, and to look back at an earlier run.</li>
+      <li>Notes typed in the <b>newest</b> spreadsheet (opened from the folder, not a downloaded copy) still count: they come into the portal at the next Regenerate. If the same cell was changed in both, the later change wins. Notes typed in an older spreadsheet or a download are not read.</li>
+      <li>The spreadsheet isn't shared live - two people can't type in it at once. That's why notes are typed in the portal.</li></ul>
+    <h3>5. Look back</h3>
     <ul><li><b>📂 Workbooks</b> lists every spreadsheet in the folder: sort newest / oldest first or by name, search, and <b>Preview</b> any of them here, tab by tab, without opening Excel.</li>
       <li><b>View in the dashboard</b> shows an older run in all the views; the header then says "viewing …" - press <b>back to latest</b> to return.</li></ul>
     <h3>If something isn't right</h3>
@@ -202,7 +226,7 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
       <select id="fkind"><option value="">All spreadsheets</option><option value="gen">Generated by the portal</option><option value="other">Saved by hand</option></select>
       <input id="fq2" placeholder="Search file name" size="26"><a class="lk" id="copyfolder" title="Copy the folder path">Copy folder path</a><span class="muted" id="fcount"></span></div>
     <div class="tbl" style="max-height:440px"><table id="files"></table></div>
-    <p class="note" style="margin-top:8px">To edit, open the workbook from the folder (Copy path, then paste in Excel's Open box or File Explorer) - a downloaded copy doesn't go back to the folder. Comments, Prog and Tube req typed in the newest workbook carry forward to the next generation.</p>
+    <p class="note" style="margin-top:8px">To edit, open the workbook from the folder (Copy path, then paste in Excel's Open box or File Explorer) - a downloaded copy doesn't go back to the folder. Notes are typed on the Live Orders tab (shared by everyone); notes typed in the newest workbook also carry forward to the next generation.</p>
   </div>
   <div class="card hide" id="pvcard"><div class="bar" style="justify-content:space-between"><h2 id="pvtitle" style="margin:0">Preview</h2><span><a class="lk" id="pvdl">Download</a><a class="lk" id="pvclose">Close</a></span></div>
     <p class="note" id="pvnote"></p><div id="pvtabs"></div><div class="tbl" style="max-height:620px"><table id="pv"></table></div></div></section>
@@ -219,7 +243,7 @@ const today=new Date().toISOString().slice(0,10);
 function monday(d){const x=new Date(String(d).slice(0,10)+'T12:00:00');const k=(x.getDay()+6)%7;x.setDate(x.getDate()-k);return x.toISOString().slice(0,10)}
 function dd(s){if(!s)return '';const [y,m,d]=String(s).slice(0,10).split('-');return d?`${d}/${m}/${y.slice(2)}`:s}
 function niceStep(x){const p=Math.pow(10,Math.floor(Math.log10(Math.max(x,1e-9))));const n=x/p;return (n<=1?1:n<=2?2:n<=5?5:10)*p}
-function dots(F){return (F||[]).map(f=>`<span class="dot" title="${(FAM[f]||FAM[''])[0]}" style="background:${css((FAM[f]||FAM[''])[1])}"></span>`).join('')}
+function dots(F){return (F||[]).map(f=>`<span class="shop" title="${(FAM[f]||FAM[''])[0]}" style="color:${css((FAM[f]||FAM[''])[1])}">${esc(f||'?')}</span>`).join('')}
 function hrsOf(w){return Object.values(w.h||{}).reduce((a,b)=>a+b,0)}
 
 // ---------------------------------------------------------------- charts (plain SVG)
@@ -304,7 +328,7 @@ function render(data){
   $('#topshort').innerHTML=top.length?`<div class="tbl"><table><tr><th>Component</th><th class="n">Short</th><th class="n">WOs held up</th><th>First WO due</th><th>Next PO</th></tr>`+top.map(a=>`<tr><td>${esc(a.c)}</td><td class="n"><span class="st RED">${fmtN(a.short,1)}</span></td><td class="n">${a.n}</td><td>${dd(a.first)}</td><td>${esc(a.due)||'<span class="muted">none</span>'}</td></tr>`).join('')+'</table></div><p class="note" style="margin-top:8px"><a class="lk" data-go="sh">All shortages →</a></p>':'<p class="muted">No bought-in shortages.</p>';
   const lim=new Date(Date.now()+14*864e5).toISOString().slice(0,10);
   const soon=D.wos.filter(w=>w.due&&w.due>=today&&w.due<=lim&&w.st!=='GREEN').sort((a,b)=>a.due<b.due?-1:1).slice(0,12);
-  $('#soon').innerHTML=soon.length?`<div class="tbl"><table><tr><th>Due</th><th>WO</th><th>Part</th><th>Status</th><th>Material</th></tr>`+soon.map(w=>`<tr><td>${dd(w.due)}</td><td>${esc(w.wo)}</td><td>${esc(w.p)}</td><td><span class="st ${esc(w.st)}">${esc(w.st)}</span></td><td class="wrap">${esc(w.mt)}</td></tr>`).join('')+'</table></div>':'<p class="muted">Nothing amber or red due in the next 14 days.</p>';
+  $('#soon').innerHTML=soon.length?`<div class="tbl"><table><tr><th>Due</th><th>WO</th><th>Part</th><th>Status</th><th>Why</th></tr>`+soon.map(w=>`<tr><td>${dd(w.due)}</td><td>${esc(w.wo)}</td><td>${esc(w.p)}</td><td><span class="st ${esc(w.st)}">${esc(w.st)}</span></td><td class="wrap">${esc(w.mt)}</td></tr>`).join('')+'</table></div>':'<p class="muted">Nothing amber or red due in the next 14 days.</p>';
   // filters
   $('#fwk').innerHTML='<option value="">All weeks</option><option value="od">Overdue</option>'+[...new Set(D.wos.map(w=>w.wk).filter(Boolean))].sort().map(k=>`<option value="${k}">w/c ${dd(k)}</option>`).join('');
   table();loadView();shortView();sugView();custView();trends();howView()}
@@ -313,22 +337,52 @@ function howView(){const L=D.logic||[];$('#hwlive').innerHTML=D.live?`<b>Live da
   $('#t6').innerHTML=L.length?`<table><thead><tr><th>What</th><th>The rule</th><th>Access SupplyChain / Production's sheet</th><th>Where it comes from in Sage X3</th><th>Reconciled to Access (16 Nov)</th></tr></thead><tbody>`+
     L.map(r=>`<tr><td style="vertical-align:top"><b>${esc(r[0])}</b></td>${r.slice(1).map((v,i)=>`<td class="wrap" style="vertical-align:top;${i==0?'min-width:320px':''}">${esc(v)}</td>`).join('')}</tr>`).join('')+'</tbody></table>':''}
 
+// Production's typed columns (25 Nov, Simon / Dave): Customer date and the busy auto material text are off the main view
+// (the material reason is at the top of each row's exploded BOM); Material is blank for Production's notes, plus Notes.
+// Typed here, shared by everyone, who and when kept; Regenerate merges them with anything typed in the workbook.
+const NK=[['comments','Comments'],['prog','Prog'],['tube','Tube req'],['mat','Material'],['notes','Notes']];
+let NOTES={};
+function nv(w,k){const p=(NOTES[w.wo]||{})[k],n=w.n||{},built=(D&&D.built_at)||'';
+  const v=String((k==='mat'?(n.mat??n.note):n[k])??'');
+  if(p&&(p.at>built||p.v===v))return {v:p.v,by:p.by,at:p.at};return {v,by:'',at:''}}
+const canEdit=()=>onPortal&&!(cur&&hist.length&&cur!==hist[0].name);
+function edCell(w,k){const c=nv(w,k),ro=!canEdit();
+  const tip=c.by?`${c.by}, ${fwhen(c.at)}`:ro?(onPortal?'Notes are typed on the latest run':'Notes are typed in the portal'):'Click to type - everyone sees it';
+  return `<td class="ed${k==='comments'||k==='mat'||k==='notes'?' w':''}${ro?' ro':''}" data-k="${k}" title="${esc(tip)}">${esc(c.v)}</td>`}
 function filtered(){const st=$('#fst').value,fam=$('#ffam').value,wk=$('#fwk').value,lv=$('#flv').value,q=$('#fq').value.trim().toLowerCase();
   return D.wos.filter(w=>(!st||w.st===st)&&(!fam||w.F.includes(fam))&&(!lv||w.lv===lv)&&(!wk||(wk==='od'?w.due&&w.due<today:w.wk===wk))&&
-    (!q||[w.p,w.wo,w.so,w.d,w.ac,w.pa].some(v=>String(v||'').toLowerCase().includes(q))))}
+    (!q||[w.p,w.wo,w.so,w.d,w.ac,w.pa,...NK.map(([k])=>nv(w,k).v)].some(v=>String(v||'').toLowerCase().includes(q))))}
+const LOH=['Due','WO','Level','SO','Account','Part','Description','Rev','Status','Qty','Made','Balance','Shops','Hours',...NK.map(x=>x[1])];
 function table(){const rows=filtered();$('#count').textContent=`${fmtN(rows.length)} of ${fmtN(D.wos.length)}`;
-  $('#t1').innerHTML=`<table><thead><tr><th>Due</th><th>Customer date</th><th>WO</th><th>Level</th><th>SO</th><th>Account</th><th>Part</th><th>Description</th><th>Rev</th><th>Status</th><th>Material</th><th class="n">Qty</th><th class="n">Made</th><th class="n">Balance</th><th>Shops</th><th class="n">Hours</th><th>Production's notes</th></tr></thead><tbody>`+
-    rows.slice(0,1000).map(w=>{const od=w.due&&w.due<today,n=w.n||{};
-      const notes=[n.comments&&esc(n.comments),n.prog&&`<b>Prog</b> ${esc(n.prog)}`,n.tube&&`<b>Tube</b> ${esc(n.tube)}`,n.note&&esc(n.note)].filter(Boolean);
-      return `<tr class="main" data-wo="${esc(w.wo)}"><td style="${od?'color:var(--r);font-weight:700':''}">${dd(w.due)}</td><td>${/^\d{4}-/.test(w.cd||'')?dd(w.cd):`<span class="muted">${esc(w.cd)}</span>`}</td><td>${esc(w.wo)}</td><td>${w.lv==='Top'?'Top':'<span class="muted">Sub</span>'}</td><td>${esc(w.so)}</td><td>${esc(w.ac)}</td><td><b>${esc(w.p)}</b></td><td class="wrap">${esc(w.d)}</td><td>${esc(w.rev)}</td><td><span class="st ${esc(w.st)}">${esc(w.st)}</span></td><td class="wrap">${esc(w.mt)}</td><td class="n">${fmtN(w.q,0)}</td><td class="n">${fmtN(w.b,0)}</td><td class="n"><b>${fmtN(w.bal,0)}</b></td><td>${dots(w.F)}</td><td class="n">${fmtN(w.H,1)}</td><td class="wrap notes">${notes.join(' · ')}</td></tr>`}).join('')+'</tbody></table>'+
+  $('#t1').innerHTML=`<table><thead><tr><th>Due</th><th>WO</th><th>Level</th><th>SO</th><th>Account</th><th>Part</th><th>Description</th><th>Rev</th><th>Status</th><th class="n">Qty</th><th class="n">Made</th><th class="n">Balance</th><th title="M Metal · J Joinery · A Acrylics">Shops</th><th class="n">Hours</th>${NK.map(([k,l])=>`<th class="ed" title="Production's column - click a cell to type">✎ ${l}</th>`).join('')}</tr></thead><tbody>`+
+    rows.slice(0,1000).map(w=>{const od=w.due&&w.due<today;
+      return `<tr class="main" data-wo="${esc(w.wo)}"><td style="${od?'color:var(--r);font-weight:700':''}">${dd(w.due)}</td><td>${esc(w.wo)}</td><td>${w.lv==='Top'?'Top':'<span class="muted">Sub</span>'}</td><td>${esc(w.so)}</td><td>${esc(w.ac)}</td><td><b>${esc(w.p)}</b></td><td class="wrap">${esc(w.d)}</td><td>${esc(w.rev)}</td><td><span class="st ${esc(w.st)}">${esc(w.st)}</span></td><td class="n">${fmtN(w.q,0)}</td><td class="n">${fmtN(w.b,0)}</td><td class="n"><b>${fmtN(w.bal,0)}</b></td><td>${dots(w.F)}</td><td class="n">${fmtN(w.H,1)}</td>${NK.map(([k])=>edCell(w,k)).join('')}</tr>`}).join('')+'</tbody></table>'+
     (rows.length>1000?`<p class="note" style="padding:8px">Showing the first 1,000 - filter to narrow it down.</p>`:'')}
-$('#t1').addEventListener('click',e=>{const t=e.target.closest('tr.main');if(!t)return;const n=t.nextElementSibling;if(n&&n.classList.contains('x')){n.remove();return}
+function noteCells(){if(!D)return;const by=Object.fromEntries(D.wos.map(w=>[w.wo,w]));
+  $$('#t1 tr.main').forEach(tr=>{const w=by[tr.dataset.wo];if(!w)return;tr.querySelectorAll('td.ed').forEach(td=>{if(td.querySelector('textarea'))return;
+    const c=nv(w,td.dataset.k);if(td.textContent!==c.v||(c.by&&!td.title.startsWith(c.by)))td.outerHTML=edCell(w,td.dataset.k)})})}
+function loadNotes(){if(!onPortal)return Promise.resolve();const pe=ENV;return fetch(U('/api/live-orders/notes'),{headers:HD()}).then(r=>r.ok?r.json():null).then(j=>{if(j&&pe===ENV){NOTES=j.notes||{};noteCells()}}).catch(()=>{})}
+function myName(){let n='';try{n=localStorage.getItem('sdiName')||''}catch(e){}
+  if(!n){n=(prompt('Your name, so others can see who wrote each note (asked once on this PC):')||'').trim().slice(0,60);if(n)try{localStorage.setItem('sdiName',n)}catch(e){}}return n}
+function editNote(td){if(td.querySelector('textarea')||!canEdit())return;const wo=td.closest('tr').dataset.wo,k=td.dataset.k,w=D.wos.find(x=>x.wo===wo);if(!w)return;
+  const old=nv(w,k).v,ta=document.createElement('textarea');ta.value=old;ta.maxLength=1000;td.textContent='';td.appendChild(ta);ta.focus();
+  let done=false;const cell=()=>{const tr=[...$$('#t1 tr.main')].find(r=>r.dataset.wo===wo);return tr&&tr.querySelector(`td.ed[data-k="${k}"]`)};
+  const put=flash=>{const c=cell();if(!c)return;c.outerHTML=edCell(w,k);const n=cell();if(n&&flash)n.classList.add('saved')};
+  const finish=save=>{if(done)return;done=true;const v=ta.value.trim();if(!save||v===old){put();return}
+    const by=myName();if(!by){put();return}
+    ta.disabled=true;fetch(U('/api/live-orders/notes'),{method:'POST',headers:{...HD(),'Content-Type':'application/json'},body:JSON.stringify({wo,key:k,value:v,by})})
+      .then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(j=>{(NOTES[wo]=NOTES[wo]||{})[k]={v:j.v,by:j.by,at:j.at};put(true)})
+      .catch(e=>{alert('Not saved: '+e.message);put()})};
+  ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();finish(true)}else if(e.key==='Escape'){finish(false)}});
+  ta.addEventListener('blur',()=>finish(true))}
+$('#t1').addEventListener('click',e=>{const ed=e.target.closest('td.ed');if(ed){editNote(ed);return}
+  const t=e.target.closest('tr.main');if(!t)return;const n=t.nextElementSibling;if(n&&n.classList.contains('x')){n.remove();return}
   const w=D.wos.find(x=>x.wo===t.dataset.wo);const x=document.createElement('tr');x.className='x';
-  x.innerHTML=`<td colspan="17">${(w.x||[]).length?`<b>Exploded BOM · ${esc(w.p)} × ${fmtN(w.bal,0)}</b><table style="margin-top:6px"><tr><th>Level</th><th>Component</th><th>Description</th><th class="n">Required</th><th class="n">In stock</th><th class="n">On PO</th><th>Next PO</th><th class="n">On WO</th><th>Make / buy</th></tr>`+
+  x.innerHTML=`<td colspan="${LOH.length}">${w.mt?`<p style="margin:0 0 6px"><b>Material:</b> <span class="st ${esc(w.st)}">${esc(w.st)}</span> ${esc(w.mt)}</p>`:''}${(w.x||[]).length?`<b>Exploded BOM · ${esc(w.p)} × ${fmtN(w.bal,0)}</b><table style="margin-top:6px"><tr><th>Level</th><th>Component</th><th>Description</th><th class="n">Required</th><th class="n">In stock</th><th class="n">On PO</th><th>Next PO</th><th class="n">On WO</th><th>Make / buy</th></tr>`+
     w.x.map(e=>{const sh=e[8]==='Purchased'&&e[3]>e[4]+e[5]+e[7];return `<tr><td>${'·&nbsp;'.repeat(Math.max(0,e[0]-1))}${e[0]}</td><td style="${sh?'color:var(--r);font-weight:700':''}">${esc(e[1])}</td><td class="wrap">${esc(e[2])}</td><td class="n">${fmtN(e[3],2)}</td><td class="n">${fmtN(e[4],2)}</td><td class="n">${fmtN(e[5],2)}</td><td>${esc(e[6])}</td><td class="n">${fmtN(e[7],2)}</td><td>${esc(e[8])}</td></tr>`}).join('')+'</table>':'<span class="muted">No BOM in Sage X3 for this part.</span>'}</td>`;t.after(x)});
 ['#fst','#ffam','#fwk','#flv'].forEach(s=>$(s).onchange=table);$('#fq').oninput=table;
-$('#csv1').onclick=()=>csv(`Live_Orders_${today}.csv`,['Due','Customer date','WO','Level','SO','Account','Part','Description','Rev','Status','Material','Qty','Made','Balance','Shops','Hours','Comments','Prog','Tube req'],
-  filtered().map(w=>[w.due,w.cd,w.wo,w.lv,w.so,w.ac,w.p,w.d,w.rev,w.st,w.mt,w.q,w.b,w.bal,w.F.join('/'),Math.round(w.H*10)/10,(w.n||{}).comments,(w.n||{}).prog,(w.n||{}).tube]));
+$('#csv1').onclick=()=>csv(`Live_Orders_${today}.csv`,LOH,
+  filtered().map(w=>[w.due,w.wo,w.lv,w.so,w.ac,w.p,w.d,w.rev,w.st,w.q,w.b,w.bal,w.F.join(' '),Math.round(w.H*10)/10,...NK.map(([k])=>nv(w,k).v)]));
 
 function loadView(){const fam=$('#lfam').value,famOf={},lab={};(D.wcs||[]).forEach(c=>{famOf[c[0]]=(c[2]||'').charAt(0);lab[c[0]]=c[1]||c[0]});
   const L=(D.load||[]).slice(0,14);const wcs=Object.keys(famOf).filter(c=>!fam||famOf[c]===fam);
@@ -388,7 +442,7 @@ let ENV='mig';try{const e=localStorage.getItem('sdiX3Env');if(ENVS[e])ENV=e;cons
 const U=p=>p+(p.includes('?')?'&':'?')+'env='+ENV;
 const src=new URLSearchParams(location.search).get('data')||(onPortal?U('/api/live-orders/latest'):null);
 const HD=()=>sdiKey?{'X-SDI-Key':sdiKey}:{};
-function load(url,name){return fetch(url,{headers:HD()}).then(r=>{if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}).then(d=>{cur=name||'';render(d);markCur()}).catch(e=>{D=null;document.body.classList.add('nodata');const none=/^404/.test(e.message);
+function load(url,name){return fetch(url,{headers:HD()}).then(r=>{if(!r.ok)throw new Error(r.status+' '+r.statusText);return r.json()}).then(d=>{cur=name||'';render(d);markCur();loadNotes()}).catch(e=>{D=null;document.body.classList.add('nodata');const none=/^404/.test(e.message);
   $('#asat').textContent=`No Live Orders data yet for ${ENVS[ENV]}`;
   $('#drop').classList.remove('hide');$('#drop').innerHTML=`<b>No Live Orders data yet for ${esc(ENVS[ENV])}</b><br><span class="muted">${none?"It hasn't been generated in this environment yet":esc(e.message)}${onPortal?' - press Regenerate':''}</span>`;showEnv()})}
 function showEnv(){$$('#envsw button').forEach(b=>b.classList.toggle('on',b.dataset.env===ENV));const b=$('#envb');if(!onPortal)return;
@@ -399,13 +453,15 @@ function showEnv(){$$('#envsw button').forEach(b=>b.classList.toggle('on',b.data
 function x3Report(open,lines){lines=lines||(D&&D.x3_report)||[];if(!lines.length){if(!open)$('#x3rep').classList.add('hide');return}
   const wl=lines.find(l=>/^(wo_products|works_orders) \(/.test(l))||'',m=wl.match(/(\d+) rows read, (\d+) kept/);
   const none=!wl?'Sage X3 sent no works orders file.':m&&+m[2]===0?(+m[1]===0?`Sage X3 (${ENVS[ENV]}) has no works orders: none were sent.`:`Sage X3 sent ${m[1]} works-order lines, but none are on the sheet - see "left out" below.`):'';
-  $('#x3rep').classList.toggle('warn',!!none);$('#x3rept').textContent=none?'⚠ No works orders on the sheet - why':'What Sage X3 sent';
+  const warn=lines.filter(l=>/^WARNING/.test(l));   // 25 Nov: e.g. the stock's part codes don't match the orders' (all red)
+  $('#x3rep').classList.toggle('warn',!!none||warn.length>0);$('#x3rept').textContent=none?'⚠ No works orders on the sheet - why':warn.length?'⚠ What Sage X3 sent - check this':'What Sage X3 sent';
   $('#x3repb').innerHTML=(none?`<p><b>${esc(none)}</b> The Live Orders tab lists works orders, so it stays empty until ${ENVS[ENV]} has open, firm works orders. WO Suggestions, Shortages and the rest still work from the other data.</p>`:'')+
+    warn.map(w=>`<p style="color:var(--a)"><b>⚠ ${esc(w.replace(/^WARNING:\s*/,''))}</b></p>`).join('')+
     `<p class="muted" style="margin:6px 0 0">Per data set: rows read from X3, rows kept, and why the others were left out (closed, planned, nothing left to make or deliver). "statuses from X3" are the values X3 sent, to check against the rules on How it works.</p><pre>${esc(lines.join('\n'))}</pre>`;
-  if(open||none)$('#x3rep').classList.remove('hide')}
+  if(open||none||warn.length)$('#x3rep').classList.remove('hide')}
 $('#x3repc').onclick=()=>$('#x3rep').classList.add('hide');
 $('#envsw').addEventListener('click',e=>{const b=e.target.closest('button[data-env]');if(!b||b.dataset.env===ENV)return;ENV=b.dataset.env;try{localStorage.setItem('sdiX3Env',ENV)}catch(x){}
-  D=null;cur='';hist=[];files=[];document.body.classList.add('nodata');$('#x3rep').classList.add('hide');$('#rstat').textContent='';showEnv();
+  D=null;cur='';hist=[];files=[];NOTES={};document.body.classList.add('nodata');$('#x3rep').classList.add('hide');$('#rstat').textContent='';showEnv();
   $('#asat').textContent='Loading '+ENVS[ENV]+'…';load(U('/api/live-orders/latest'),'');loadHistory().catch(()=>{});poll()});
 function markCur(){const latest=hist.length?hist[0].name:'';$$('#files tr[data-n]').forEach(tr=>tr.classList.toggle('cur',tr.dataset.n===(cur||latest)));
   $('#viewing').innerHTML=cur&&hist.length&&cur!==hist[0].name?`<span class="chip old">viewing ${esc(fmtWhen(cur))} · <a style="color:inherit;cursor:pointer;text-decoration:underline" data-latest="1">back to latest</a></span>`:(onPortal&&hist.length?'<span class="chip">latest</span>':'')}
@@ -445,13 +501,38 @@ $('#files').addEventListener('click',e=>{const a=e.target.closest('a');if(!a)ret
   if(a.dataset.run){load('/api/live-orders/run/'+encodeURIComponent(a.dataset.run),a.dataset.run).then(()=>go('ov'))}
   if(a.dataset.dl)dlFile(a.dataset.dl);
   if(a.dataset.p){navigator.clipboard&&navigator.clipboard.writeText(a.dataset.p);a.textContent='Copied ✓';setTimeout(()=>a.textContent='Copy path',1500)}});
+// ---------------------------------------------------------------- Ask the guide (25 Nov, James: "like a chat bot")
+// Claude answers from this guide (POST /api/live-orders/ask, guide_ask.py); if Claude isn't available, the guide
+// sections that best match the question are shown instead - the box always answers.
+const ASKH=[],STOPW=new Set('a an and are as at be can do does for from get have how i if in is it me my of on or so that the then this to was we what when where which who why will with you your'.split(' '));
+function guideParts(){const out=[];let c={h:'User guide',n:[]};
+  [...$('#v-ug .guide').children].forEach(el=>{if(el.id==='ask'||el.tagName==='H2')return;if(el.tagName==='H3'){if(c.n.length)out.push(c);c={h:el.textContent,n:[]}}else c.n.push(el)});
+  if(c.n.length)out.push(c);return out.map(s=>({h:s.h,html:s.n.map(x=>x.outerHTML).join(''),t:(s.h+' '+s.n.map(x=>x.textContent).join(' ')).toLowerCase()}))}
+function bestParts(q){const ws=(q.toLowerCase().match(/[a-z0-9]+/g)||[]).filter(x=>!STOPW.has(x)&&x.length>1).map(x=>x.length>5&&/ing$/.test(x)?x.slice(0,-3):x.length>3&&/[^s]s$/.test(x)?x.slice(0,-1):x);
+  // whole words only ("red" not in "ordered"); a word in the heading counts most, then how often it's used (up to 3)
+  const n=(t,x)=>(t.match(new RegExp('\\b'+x.replace(/[^a-z0-9]/g,'')+'(s|es|d|ed|ing)?\\b','g'))||[]).length;
+  const P=guideParts().filter(s=>s.h!=='User guide'),wt=x=>Math.log(1+P.length/Math.max(1,P.filter(s=>n(s.t,x)).length));   // rarer words count more
+  return P.map(s=>({s,k:ws.reduce((a,x)=>a+wt(x)*((n(s.h.toLowerCase(),x)?3:0)+Math.min(3,n(s.t,x))),0)}))
+    .filter(x=>x.k>0).sort((a,b)=>b.k-a.k).slice(0,2).map(x=>x.s)}
+function fmtA(t){return t.split(/\n{2,}/).map(p=>`<p>${esc(p).replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\n/g,'<br>')}</p>`).join('')}
+function askGuide(){const q=$('#askq').value.trim();if(!q)return;$('#askq').value='';
+  const box=document.createElement('div');box.className='qa';box.innerHTML=`<div class="q">${esc(q)}</div><div class="a"><span class="muted">Looking in the guide…</span></div>`;$('#asklog').appendChild(box);
+  const show=r=>{const a=box.querySelector('.a');
+    if(r&&r.answer){a.innerHTML=fmtA(r.answer);ASKH.push({q,a:r.answer});return}
+    const S=bestParts(q);a.innerHTML=`<span class="muted">${esc((r&&r.why)||'From the guide:')}</span>`+(S.length?S.map(s=>`<div class="gs"><b>${esc(s.h)}</b>${s.html}</div>`).join(''):'<p>Nothing in the guide matches that - try other words, or ask James Gray.</p>')};
+  if(!onPortal){show({why:'From the guide (in the portal, Claude answers):'});return}
+  $('#askgo').disabled=true;
+  fetch(U('/api/live-orders/ask'),{method:'POST',headers:{...HD(),'Content-Type':'application/json'},body:JSON.stringify({q,history:ASKH.slice(-4)})})
+    .then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(show)
+    .catch(e=>show({why:`The chat couldn't answer (${e.message}) - from the guide:`})).finally(()=>{$('#askgo').disabled=false;$('#askq').focus()})}
+$('#askgo').onclick=askGuide;$('#askq').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();askGuide()}});
 $('#ugbtn').onclick=()=>{$('#tabs').classList.remove('hide');go('ug');window.scrollTo({top:0,behavior:'smooth'})};
 $('#wbbtn').onclick=()=>{$('#tabs').classList.remove('hide');$('#drop').classList.add('hide');go('wb');loadHistory().catch(()=>{})};
 let pollEnv=null;
 function poll(){const pe=ENV;pollEnv=pe;fetch(U('/api/live-orders/regenerate'),{headers:HD()}).then(r=>r.json()).then(s=>{if(pe!==ENV)return;
   const last=(s.log||[]).filter(x=>x.trim()).slice(-1)[0]||'';
   if(s.running){$('#regen').disabled=true;$('#rstat').textContent=`Generating ${ENVS[ENV]}… `+last.slice(0,90);setTimeout(()=>{if(pollEnv===pe)poll()},4000);return}
-  if(s.busy){$('#regen').disabled=true;$('#rstat').textContent=`Busy: generating ${s.busy} - one at a time. Regenerate comes back when it's done.`;setTimeout(()=>{if(pollEnv===pe)poll()},8000);return}
+  if(s.busy){$('#regen').disabled=true;$('#rstat').textContent=`Busy: ${/^reading/.test(s.busy)?s.busy:'generating '+s.busy} - one at a time. Regenerate comes back when it's done.`;setTimeout(()=>{if(pollEnv===pe)poll()},8000);return}
   $('#regen').disabled=false;
   if(s.started){const ok=s.last&&s.last.ok,pub=ok&&s.last.published&&s.last.published.xlsx?String(s.last.published.xlsx).split(/[\\/]/).pop():'';
     if(ok)$('#rstat').innerHTML='Done '+esc((s.last.finished||'').replace('T',' '))+' - saved '+(pub?`<b>${esc(pub)}</b><a data-rpv="${esc(pub)}">Preview</a><a data-rdl="${esc(pub)}">Download</a> <span id="savechk"></span>`:'a new workbook')+(s.last.warning?' <span>('+esc(s.last.warning.slice(0,200))+')</span>':'');
@@ -462,7 +543,7 @@ function poll(){const pe=ENV;pollEnv=pe;fetch(U('/api/live-orders/regenerate'),{
 $('#rstat').addEventListener('click',e=>{const a=e.target.closest('a');if(!a)return;if(a.dataset.rep){x3Report(true);$('#x3rep').scrollIntoView({behavior:'smooth'});return}if(a.dataset.rpv){$('#tabs').classList.remove('hide');go('wb');preview(a.dataset.rpv)}if(a.dataset.rdl)dlFile(a.dataset.rdl)});
 $('#regen').addEventListener('click',()=>{if(!confirm(`Pull fresh data from Sage X3 - ${ENVS[ENV]} - and save a new Live Orders workbook?`))return;
   fetch(U('/api/live-orders/regenerate'),{method:'POST',headers:HD()}).then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(()=>{$('#rstat').textContent='Starting…';setTimeout(poll,1500)}).catch(e=>{$('#rstat').textContent='Could not start: '+e.message})});
-if(onPortal){showEnv();$('#filebar').classList.add('hide');$('#portalbar').classList.remove('hide');$('#drop').classList.add('hide');$('#tabs').classList.remove('hide');loadHistory().catch(()=>{});poll()}
+if(onPortal){setInterval(()=>{if(!document.hidden)loadNotes()},30000);showEnv();$('#filebar').classList.add('hide');$('#portalbar').classList.remove('hide');$('#drop').classList.add('hide');$('#tabs').classList.remove('hide');loadHistory().catch(()=>{});poll()}
 else{$('nav.tabs [data-v="wb"]').classList.add('hide')}
 try{const t=sessionStorage.getItem('loTab');if(t&&(onPortal||t!=='wb'))go(t)}catch(e){}
 // A link can open one view directly, e.g. …/dashboard?view=ug for the user guide (23 Nov: linked from the email to users).

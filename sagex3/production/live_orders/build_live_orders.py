@@ -223,7 +223,8 @@ def read_costs(path):
 def read_carry(path):
     """Production's typed columns from last week's sheet (Dave's layout or a board saved by Production), by WO.
     Dave (26 Oct): Rachael copies the sheet over by hand every Monday - this carries Comments, Prog, Tube req and
-    the typed material note forward, so nothing is re-typed."""
+    the typed material note forward, so nothing is re-typed. 25 Nov: the board's typed "Material" column (was
+    "Production's material note") and the new "Notes" column; keys comments / prog / tube / mat / notes."""
     wb = load_workbook(path, data_only=True)
     ws = next((wb[n] for n in wb.sheetnames if n.strip().lower() == "live orders"), wb.worksheets[0])
     hrow = 1                     # the heading row: row 1 on Dave's sheet, lower on the board (banner rows above it)
@@ -234,8 +235,13 @@ def read_carry(path):
     head = [re.sub(r"\s+", " ", re.sub(r"^✎\s*", "", str(c.value or ""))).strip().lower() for c in ws[hrow]]
     def col(*names):
         return next((head.index(n) for n in names if n in head), None)
-    wo_c, com_c, prog_c, tube_c = col("wo num", "wo"), col("comments"), col("prog"), col("tube req")
-    mat_c = col("production's material note") if "material detail" in head else col("material status")  # typed text only
+    wo_c, com_c, prog_c, tube_c, notes_c = col("wo num", "wo"), col("comments"), col("prog"), col("tube req"), col("notes")
+    if "material" in head:                     # the board from 25 Nov: "Material" is typed
+        mat_c = col("material")
+    elif "material detail" in head:            # the board 20-24 Nov: the typed one was "Production's material note"
+        mat_c = col("production's material note")
+    else:                                      # Dave's own sheet: "MATERIAL STATUS" was typed text
+        mat_c = col("material status")
     out = {}
     if wo_c is None:
         return out
@@ -243,8 +249,8 @@ def read_carry(path):
         wo = str(r[wo_c] or "").strip()
         if not wo:
             continue
-        val = lambda c: ("" if c is None or r[c] is None else str(r[c]).strip())
-        rec = dict(comments=val(com_c), prog=val(prog_c), tube=val(tube_c), note=val(mat_c))
+        val = lambda c: ("" if c is None or c >= len(r) or r[c] is None else str(r[c]).strip())
+        rec = dict(comments=val(com_c), prog=val(prog_c), tube=val(tube_c), mat=val(mat_c), notes=val(notes_c))
         if any(rec.values()):
             out[wo] = rec
     return out
@@ -435,7 +441,8 @@ def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, le
                 overdue=sum(1 for w in wos if w["due"] and w["due"] < today),
                 hours=round(sum(sum(w["hours"].values()) for w in wos), 1))
     name = f"SDI_Live_Orders_{stamp[:10]}"
-    carried = read_carry(carry) if carry else {}
+    # Production's notes: a workbook to read them from, or already merged with the portal's (run_x3, 25 Nov)
+    carried = carry if isinstance(carry, dict) else (read_carry(carry) if carry else {})
     for w in wos:
         w["carry"] = carried.get(w["wo"], {})
     meta["carried"] = sum(1 for w in wos if w["carry"])
@@ -537,7 +544,7 @@ def write_xlsx_plain(path, meta, wos, wc_cols, wcnames, load, sug, checks, compa
              w["des"], drawing_of(w["code"]), w["rev"], w["status"], w["mat_text"], w["qty"], w["done"], w["bal"],
              *["Y" if f in w["families"] else "" for f in ("Metal", "Joinery", "Acrylics")],
              w.get("carry", {}).get("comments", ""), w.get("carry", {}).get("prog", ""), w.get("carry", {}).get("tube", ""),
-             w.get("carry", {}).get("note", "")]
+             w.get("carry", {}).get("mat", "")]
             + [round(w["hours"][c], 2) if w["hours"].get(c) else None for c in wc_cols] for w in wos]
     bom_rows, bom_first = [], {}
     for w in wos:

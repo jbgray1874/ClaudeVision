@@ -6,7 +6,8 @@ same evening).
     python add_live_orders_to_portal.py --target <backend folder> --runs <SDI_X3_runs folder>
 
 Default target: C:\\ClaudeVision\\sdi-intelligence-backend (the folder the SDIIntelligence service runs). It only ADDS:
-  1. live_orders_routes.py + live_orders_dashboard.html and estimating_routes.py + est_x3_page.html, next to app.py
+  1. live_orders_routes.py + live_orders_dashboard.html and estimating_routes.py + est_x3_page.html (+ guide_ask.py,
+     the "Ask the guide" box on both, 25 Nov), next to app.py
   2. two lines in app.py that mount the Live Orders endpoints (beside the HR ones)
   3. a "Live Orders" menu item, its page (the dashboard in a frame) and its label in sdi-intelligence-portal.html
   4. the Live Orders settings in .env (only those missing; a LIVE_ORDERS_ROUTES whose file isn't there is commented
@@ -63,7 +64,8 @@ def plan(target, runs, opts):
             sys.exit(f"Not found: {f} - is --target the folder with app.py and the portal page?")
     changes = []                                    # (file, new text or None for a copy, source, description)
     for src, name in ((HERE / "live_orders_routes.py", "live_orders_routes.py"), (DASH, "live_orders_dashboard.html"),
-                      (HERE / "estimating_routes.py", "estimating_routes.py"), (EST_PAGE, "est_x3_page.html")):
+                      (HERE / "estimating_routes.py", "estimating_routes.py"), (EST_PAGE, "est_x3_page.html"),
+                      (HERE / "guide_ask.py", "guide_ask.py")):          # 25 Nov: "Ask the guide" on both pages
         dst = target / name
         if not dst.exists() or dst.read_bytes() != src.read_bytes():
             changes.append((dst, None, src, f"copy {name}" + (" (update)" if dst.exists() else "")))

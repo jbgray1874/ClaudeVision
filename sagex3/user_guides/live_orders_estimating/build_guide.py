@@ -117,8 +117,9 @@ def build(shots, out):
     table(doc, ["Tab", "What it shows", "For"], [
         ["Overview", "Headline numbers, red / amber / green, works orders by due week, hours by week and shop, busiest "
                      "work centres, biggest shortages, what's due in the next 14 days.", "Everyone"],
-        ["Live Orders", "One line per works order, as Production's sheet. Filter by status, shop, week or level; search "
-                        "by part, WO, SO or account. Click a line for its exploded BOM. Export CSV.", "Production"],
+        ["Live Orders", "One line per works order, as Production's sheet. Filter by status, shop (M / J / A), week or "
+                        "level; search by part, WO, SO, account or note. Click a line for why it's red / amber and its "
+                        "exploded BOM; click a yellow cell to type a note. Export CSV.", "Production"],
         ["Work-centre load", "Hours still to do per work centre, by the week each order is due. Darker = busier.",
          "Production"],
         ["Shortages", "Every bought-in component the open works orders need, against stock, on order and on works "
@@ -135,16 +136,21 @@ def build(shots, out):
                (" short with nothing due in time, or no BOM.", False)], after=8)
     shot(doc, shots, "02_live_orders_grid_and_bom.png", "Live Orders: click a works order for its exploded BOM - stock, "
                                                         "on PO and the next PO date, on WO")
-    h(doc, "Add Production's notes (Comments, Prog, Tube req)", 2)
-    steps(doc, ([("Press ", False), ("📂 Workbooks", True), (", find the newest workbook (marked ", False),
-                   ("latest", True), (") and press ", False), ("Copy path", True), (".", False)],
-                  [("In Excel: File → Open, paste the path, Open (or paste it into File Explorer).", False)],
-                  [("Type in the ", False), ("yellow ✎ columns", True), (" on the Live Orders tab, and save.", False)],
-                  [("The next Regenerate carries the notes to the new workbook by works-order number - nobody copies "
-                    "them over on Monday.", False)]))
-    rich(doc, [("Don't ", True), ("type notes in a downloaded copy (it doesn't go back to the folder), and don't rename "
-               "the generated files: the notes are taken from the newest generated workbook in the folder.", False)],
-         after=8)
+    h(doc, "Production's notes - type them on the page (25 Nov)", 2)
+    steps(doc, ([("On ", False), ("Live Orders", True), (", the yellow ✎ columns are Production's: ", False),
+                   ("Comments, Prog, Tube req, Material", True), (" (blank for your own material notes - why a line is "
+                   "red or amber shows when you click the line) and ", False), ("Notes", True), (".", False)],
+                  [("Click a cell", True), (", type, and press ", False), ("Enter", True), (" to save (Shift+Enter for a "
+                   "new line, Esc to cancel). The first time, it asks your name - once per PC.", False)],
+                  [("Everyone sees the note straight away; hover over it to see who wrote it and when. Each Regenerate "
+                    "puts the notes in the new workbook too, so nothing is copied over on Monday.", False)]))
+    rich(doc, [("The portal or the spreadsheet? ", True), ("The portal is the daily working tool - one live page, notes "
+               "shared at once. The spreadsheet is the saved record - a dated copy of every run in the folder, to print, "
+               "send, sort in Excel or look back. Notes typed in the newest spreadsheet still come into the portal at the "
+               "next Regenerate (if a cell was changed in both, the later change wins); a downloaded copy or an older "
+               "spreadsheet isn't read.", False)], after=8)
+    rich(doc, [("Ask the guide: ", True), ("the 💬 box at the top of each page's User guide answers questions about the "
+               "page in plain words (from the guide only - it doesn't see the data).", False)], after=8)
     h(doc, "Look back: 📂 Workbooks", 2)
     p(doc, "Every spreadsheet in the folder - the generated ones and any saved there by hand. Sort newest or oldest "
            "first or by name; search; Preview any of them in the portal, tab by tab, without opening Excel; View in "
