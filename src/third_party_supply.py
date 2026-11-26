@@ -161,6 +161,25 @@ def mark_third_party_supplied(parts: List[Dict[str, Any]],
             marked.append({"part_number": str(p.get("part_number") or ""),
                            "item": "its own line", "party": _own})
             continue
+        # THE LINE SAYS IT IS NOT SDI'S TO SUPPLY AT ALL (Hotel Chocolat's 3 m cash desk:
+        # "CASH DRAWER FOR REFERENCE ONLY" x3 went out at £140.40 of a £180.31 unit). The
+        # shared supply-exclusion vocabulary (bought_in_recogniser: for reference, not
+        # supplied, by others, free issue ...) read against the line's own words only.
+        try:
+            from bought_in_recogniser import bom_row_is_reference_only as _ref_only
+            _excluded = _ref_only(str(p.get("description") or ""))
+        except Exception:                                             # noqa: BLE001
+            _excluded = False
+        if _excluded:
+            p["supplied_by_third_party"] = "OTHERS"
+            p.setdefault("risk_flags", []).append("customer_supplied_zero_cost")
+            p.setdefault("review_flags", []).append(
+                f"not SDI's supply per its own BOM line "
+                f"('{str(p.get('description') or '')[:120]}') — listed at £0 so the pack is "
+                f"complete. If SDI is buying it, price the line.")
+            marked.append({"part_number": str(p.get("part_number") or ""),
+                           "item": "its own line", "party": "OTHERS"})
+            continue
         if not notes or _is_ours(p):
             continue
         desc = " ".join(str(p.get(k) or "") for k in ("description", "part_number"))
