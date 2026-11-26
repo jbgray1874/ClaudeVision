@@ -81,6 +81,20 @@ tr.files td{background:var(--soft)}
 .envsw{display:inline-flex;border:1px solid rgba(255,255,255,.35);border-radius:99px;overflow:hidden;margin-right:8px;vertical-align:middle}.envsw button{border:0;border-radius:0;background:transparent;color:#e9eae7;font-weight:700;padding:7px 12px;width:auto}
 .envsw button.on{background:var(--y);color:#1c1c1c}.etag{border-radius:99px;padding:1px 8px;font-size:11px;font-weight:800;white-space:nowrap;background:var(--y);color:#1c1c1c}.etag.uat{background:#7fd39a;color:#0f2a17}
 .banner span{min-width:0;overflow-wrap:anywhere}.banner .tag{white-space:normal}.saved,#x3box{overflow-wrap:anywhere}#x3box pre{overflow-wrap:anywhere}
+/* 26 Nov (James): several estimates at once - add, pre-check, publish */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 14px}
+.stp{position:relative;border:1px solid var(--line);border-radius:12px;padding:10px 12px 10px 52px;background:var(--soft);min-height:58px}
+.stp b{position:absolute;left:12px;top:12px;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;background:var(--line);color:var(--t);font-size:15px}
+.stp span{display:block;font-weight:800}.stp small{display:block;color:var(--muted);font-size:12px}
+.stp.on{border-color:var(--y);background:color-mix(in srgb,var(--y) 14%,var(--card))}.stp.on b{background:var(--y);color:#1c1c1c}
+.stp.done b{background:var(--g);color:#fff}.stp.done b::after{content:"✓"}.stp.done b span{display:none}
+#queue td,#queue th{vertical-align:middle}#queue tr.sel td{background:var(--ab)}#queue .fn{max-width:280px;overflow:hidden;text-overflow:ellipsis}
+.qst{font-weight:800;border-radius:99px;padding:2px 9px;font-size:11px;white-space:nowrap}.qst.w{background:var(--soft);color:var(--muted);border:1px solid var(--line)}
+.qst.c{background:var(--ab);color:var(--a)}.qst.ok{background:var(--gb);color:var(--g)}.qst.no{background:var(--rb);color:var(--r)}.qst.x3{background:var(--m);color:#fff}
+.qa2 a{cursor:pointer;color:var(--m);font-weight:700;margin-right:10px;white-space:nowrap}.qa2 a.rm{color:var(--muted)}
+.prog{height:6px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:10px}.prog i{display:block;height:100%;width:0;background:var(--y);transition:width .3s}
+.btnrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px}.btnrow button{font-weight:700}
+.fast{background:var(--ink);color:#fff;border-color:var(--ink)}.fast:disabled{opacity:.5}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--y);border-radius:50%;animation:s 1s linear infinite;vertical-align:-2px}@keyframes s{to{transform:rotate(360deg)}}
 </style>
 </head>
@@ -98,12 +112,13 @@ tr.files td{background:var(--soft)}
     <p>Turns a saved estimate into the three <b>Sage X3 import files</b> - the product (ZSDIITM), its bill of materials (YA00408BOM) and its route (ZSDIROU2) - and a <b>write-up workbook</b> that shows every line of the estimate, where it lands in X3 and how each quantity and run time is worked out. Every line is checked against <b>Sage X3's own product list</b> and work centres first. A READY estimate can then be <b>loaded into Sage X3</b> from this page (step 7) - into the test environments only: <b>We are SDI (UAT)</b> or <b>SDI Mig</b>, never live.</p>
     <h3>Steps</h3>
     <ol><li><b>Choose the Sage X3 environment</b> (top right): <b>We are SDI (UAT)</b> - where you test - or <b>SDI Mig (test)</b>. The estimate is checked against that environment's product list, its saved folder is tagged <i>_UAT_</i> or <i>_MIG_</i>, and "Load into Sage X3" puts it back into that same environment. The choice is shared with Live Orders.</li>
-      <li><b>Drop the estimate</b> in the box (or click to choose it) - the .xls or .xlsx exactly as the estimator saved it. Both the estimators' template and Dave's IMPORT layout are read.</li>
+      <li><b>Add the estimates</b>: drop <b>one or several</b> in the box (or click to choose them) - the .xls or .xlsx exactly as the estimator saved them. Both the estimators' template and Dave's IMPORT layout are read. They go on a list; ✕ takes one off.</li>
       <li><b>Options</b> (leave them unless you know otherwise): <i>Category if the part is new</i> FGML (or FGSL); <i>Sheet steel material</i> CR4 unless the estimate says ZINTEC or Galvanised; <i>Part code</i> only to override the estimate's own code (e.g. a test part); <i>IMPORT layout only</i> where the revision goes.</li>
-      <li>Press <b>Generate the X3 files</b>. It takes a few seconds.</li>
+      <li>Press <b>① Pre-check</b>. Each estimate is read and checked against Sage X3 - a few seconds each - and the list shows <b>READY</b> or <b>NOT READY</b>, the part code, and how many BOM lines and route operations it makes. Press <b>👁 View</b> on any of them to check it here: the <b>Product file</b>, <b>BOM file</b> and <b>Route file</b> tabs show exactly what goes into Sage X3, <b>Estimate → X3</b> shows where each line came from in the estimate, and <b>Checks</b> lists anything to fix.</li>
+      <li>Press <b>② Publish to Sage X3</b> to load every READY estimate on the list, and type PUBLISH to confirm. Or skip the review: <b>⚡ Check and publish in one go</b> pre-checks the list and publishes the READY ones straight away. Either way a NOT READY estimate is <b>never</b> published - it's missing something Sage X3 would refuse - so fix it and add it again. Publishing only goes into the test environments, only creates what X3 hasn't got, and never changes or deletes anything.</li>
       <li><b>READY TO LOAD</b> (green): every line checked. <b>NOT READY</b> (red): the <b>Checks</b> tab lists each <b>STOP</b> with the estimate cell to fix - fix it in the estimate, save, and run it again. <b>WARN</b> = have a look; <b>INFO</b> = for information.</li>
       <li><b>Where the files go</b>: a READY run is saved in <b>K:\Operations\Reporting\SageEstimates</b>, in its own folder named by part, date and time (e.g. <i>XX-0000001_2026-11-20_2015</i>): the three .txt load files and the write-up. The page shows the folder, with <b>Copy path</b>. You can also download them here. A NOT READY run isn't saved there.</li>
-      <li><b>Load into Sage X3</b>, in the yellow box under the result:
+      <li><b>One at a time instead:</b> 👁 View an estimate, then use the <b>Load into Sage X3</b> box under it:
         <ol type="a"><li><b>Check against Sage X3</b> reads X3 (nothing is written) and lists what would be created: the product, the BOM, the route. Anything X3 already has shows as <b>ALREADY IN X3 - left as it is</b>: this page only <b>creates</b>, it never changes or deletes an existing part, BOM or route.</li>
           <li><b>Load into Sage X3</b>: type the part code to confirm. It creates them in order - product, BOM, route - and stops at the first thing X3 refuses, with X3's message. The result is kept with the run (and in the saved folder) and shows as <b>IN X3</b> in the lists.</li>
           <li>Then open the part in X3 and compare its BOM and route with the write-up.</li></ol>
@@ -118,19 +133,24 @@ tr.files td{background:var(--soft)}
     <p class="note">Not carried into X3 (shown in the write-up): scrap %, and the estimate's costs - the standard-cost load is still to come. Every run is kept under <b>Earlier runs</b> - click one to see it again; READY ones are also in 📂 Saved estimates. Questions: James Gray.</p>
   </details>
   <div class="grid">
-    <div class="card">
-      <h2>1. The estimate</h2><p class="note">The estimators' template or Dave's IMPORT layout, .xls or .xlsx, as saved - no macro, no copy and paste.</p>
-      <div id="drop"><b>Drop the estimate here</b><br><span class="muted">or click to choose a file</span></div><input type="file" id="file" accept=".xls,.xlsx,.xlsm" class="hide">
+    <div class="card" id="wf">
+      <div class="steps"><div class="stp on" id="s1"><b><span>1</span></b><span>Add estimates</span><small id="s1n">one or several</small></div>
+        <div class="stp" id="s2"><b><span>2</span></b><span>Pre-check</span><small id="s2n">product, BOM and route, checked</small></div>
+        <div class="stp" id="s3"><b><span>3</span></b><span>Publish to Sage X3</span><small id="s3n">test environments only</small></div></div>
+      <div id="drop"><b>Drop estimates here</b><br><span class="muted">one or several .xls / .xlsx - or click to choose them</span></div><input type="file" id="file" accept=".xls,.xlsx,.xlsm" multiple class="hide">
       <div class="opts">
         <div><label for="category">Category if the part is new</label><select id="category"><option>FGML</option><option>FGSL</option></select></div>
         <div><label for="sheet">Sheet steel material</label><select id="sheet"><option>CR4</option><option>ZINTEC</option><option>Galvanised</option></select></div>
-        <div><label for="parent">Part code (optional override)</label><input id="parent" placeholder="from the estimate"></div>
+        <div><label for="parent">Part code override (one estimate only)</label><input id="parent" placeholder="from the estimate"></div>
         <div><label for="rev">IMPORT layout only</label><select id="rev"><option value="">Revision in Description 2</option><option value="1">Revision in the part code</option></select></div>
       </div>
-      <div class="row"><button class="y" id="go" disabled>Generate the X3 files</button><span id="stat" class="muted"></span></div>
+      <div id="qwrap" class="hide" style="margin-top:12px"><div class="tbl" style="max-height:340px"><table id="queue"></table></div></div>
+      <div class="btnrow"><button class="y" id="go" disabled>① Pre-check</button><button id="pub" disabled title="Load the READY estimates into Sage X3">② Publish to Sage X3</button>
+        <button class="fast" id="fast" disabled title="Pre-check, then publish every READY one straight away - no stop to review">⚡ Check and publish in one go</button><a class="lk hide" id="qclear">Clear the list</a></div>
+      <div class="prog hide" id="prog"><i></i></div><p id="stat" class="muted" style="margin:8px 0 0"></p>
     </div>
-    <div class="card"><h2>Earlier runs</h2><p class="note" id="histnote">Every run is kept: click one to see it again.</p>
-      <div class="tbl" style="max-height:330px"><table id="hist"></table></div></div>
+    <div class="card"><h2>Earlier runs - every estimator's</h2><p class="note" id="histnote">Every run is kept: click one to see it again.</p>
+      <div class="tbl" style="max-height:560px"><table id="hist"></table></div></div>
   </div>
 
   <div class="card hide" id="savedcard">
@@ -169,24 +189,80 @@ try{const e=localStorage.getItem('sdiX3Env');if(ENVS[e])ENV=e;const q=new URLSea
 const envOf=j=>((j&&j.env&&j.env.key)||'mig');
 const etag=e=>`<span class="etag ${e==='uat'?'uat':''}" title="${esc(ENVS[e||'mig'])}">${(e||'mig')==='uat'?'UAT':'MIG'}</span>`;
 function showEnv(){$$('#envsw button').forEach(b=>b.classList.toggle('on',b.dataset.env===ENV));
-  $('#go').textContent=`Generate the X3 files (${ENV==='uat'?'We are SDI':'SDI Mig'})`;if(SV.length)renderSaved()}
+  if(typeof qRender==='function')qRender();if(SV.length)renderSaved()}
 
 
-// ------------------------------------------------ upload
+// ------------------------------------------------ several estimates: add -> pre-check -> publish (26 Nov, James)
+// "drop in or add n estimate sheets and then click a pre check ... they can then publish this to sage. they can also
+// bypass that validate process and export direct to sagex3". Each estimate runs on its own (POST /run, the tested
+// converter); its product, BOM and route open below with 👁 View. Publishing uses the same check-then-load as one at
+// a time (x3-plan, x3-load): Sage X3 test environments only, creates only, never changes what X3 already has.
+// Only READY estimates are published: a NOT READY one is missing something X3 would refuse, so it's held back.
+const Q=[];let QID=0,BUSY=false;
 const dz=$('#drop');dz.onclick=()=>$('#file').click();
-$('#file').onchange=e=>pick(e.target.files[0]);
+$('#file').onchange=e=>{add([...e.target.files]);e.target.value=''};
 ['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('on')}));
 ['dragleave','drop'].forEach(ev=>dz.addEventListener(ev,()=>dz.classList.remove('on')));
-dz.addEventListener('drop',e=>{e.preventDefault();pick(e.dataTransfer.files[0])});
-function pick(f){if(!f)return;if(!/\.(xls|xlsx|xlsm)$/i.test(f.name)){$('#stat').innerHTML='<span class="err">That isn\'t an .xls or .xlsx estimate.</span>';return}
-  FILE=f;dz.innerHTML=`<b>${esc(f.name)}</b><br><span class="muted">${(f.size/1024).toFixed(0)} KB · click to choose another</span>`;$('#go').disabled=false;$('#stat').textContent=''}
-$('#go').onclick=()=>{if(!FILE)return;$('#go').disabled=true;$('#stat').innerHTML=`<span class="spin"></span> Reading the estimate and checking it against Sage X3 (${ENVS[ENV]})…`;
-  const q=new URLSearchParams({name:FILE.name,category:$('#category').value,sheet_material:$('#sheet').value,parent:$('#parent').value.trim(),rev_in_code:$('#rev').value?'true':'false',env:ENV});
-  fetch(`${API}/run?${q}`,{method:'POST',headers:{...HD(),'Content-Type':'application/octet-stream'},body:FILE})
-   .then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j}))
-   .then(j=>{$('#stat').textContent='';show(j);loadHist()})
-   .catch(e=>{$('#stat').innerHTML=`<span class="err">Couldn't run: ${esc(e.message)}</span>`})
-   .finally(()=>{$('#go').disabled=false})};
+dz.addEventListener('drop',e=>{e.preventDefault();add([...e.dataTransfer.files])});
+function add(files){const bad=files.filter(f=>!/\.(xls|xlsx|xlsm)$/i.test(f.name));
+  files.filter(f=>/\.(xls|xlsx|xlsm)$/i.test(f.name)).forEach(f=>{if(!Q.some(q=>q.name===f.name&&q.size===f.size&&q.state!=='done'))Q.push({id:++QID,file:f,name:f.name,size:f.size,state:'wait'})});
+  $('#stat').innerHTML=bad.length?`<span class="err">Not added (not an .xls or .xlsx estimate): ${bad.map(f=>esc(f.name)).join(', ')}</span>`:'';qRender()}
+const isReady=q=>q.run&&q.run.ok&&q.run.ready,inX3=q=>(q.load&&q.load.ok)||(q.run&&q.run.x3_load&&q.run.x3_load.ok);
+function qRender(){const n=Q.length,ck=Q.filter(q=>q.run).length,rd=Q.filter(isReady).length,pub=Q.filter(inX3).length;
+  $('#qwrap').classList.toggle('hide',!n);$('#qclear').classList.toggle('hide',!n||BUSY);
+  $('#queue').innerHTML=n?'<tr><th>Estimate</th><th>Part</th><th>Pre-check</th><th class="n">BOM lines</th><th class="n">Route ops</th><th>Sage X3</th><th></th></tr>'+Q.map(q=>{const j=q.run;
+    const st=q.state==='checking'?'<span class="qst c"><span class="spin"></span> checking…</span>':q.state==='wait'?'<span class="qst w">to check</span>':q.err?`<span class="qst no" title="${esc(q.err)}">couldn't run</span>`:
+      !j.ok?`<span class="qst no" title="${esc(j.error||'')}">couldn't convert</span>`:j.ready?'<span class="qst ok">READY</span>':`<span class="qst no">NOT READY · ${j.stop} STOP</span>`;
+    const x3=q.loading?'<span class="qst c"><span class="spin"></span> publishing…</span>':inX3(q)?'<span class="qst x3">IN SAGE X3</span>':q.load&&!q.load.ok?`<span class="qst no" title="${esc(q.load.error||'')}">not loaded</span>`:q.note?`<span class="muted">${esc(q.note)}</span>`:'';
+    return `<tr data-q="${q.id}" class="${R&&j&&R.id===j.id?'sel':''}"><td class="fn" title="${esc(q.name)}"><b>${esc(q.name)}</b><br><span class="muted">${(q.size/1024).toFixed(0)} KB${j?' · '+etag(envOf(j)):''}</span></td><td><b>${esc(j&&j.code||'')}</b>${j&&j.ok?`<br><span class="muted">${j.existing?'already in X3':'new part'}</span>`:''}</td><td>${st}</td><td class="n">${j&&j.ok?j.bom:''}</td><td class="n">${j&&j.ok?j.ops:''}</td><td>${x3}</td>
+      <td class="qa2">${j&&j.ok?'<a data-view="1">👁 View</a>':''}${q.state!=='checking'&&!BUSY?'<a class="rm" data-rm="1" title="Take it off the list (runs already done stay under Earlier runs)">✕</a>':''}</td></tr>`}).join(''):'';
+  const todo=Q.filter(q=>q.state!=='done'||q.err).length,pubOk=Q.filter(q=>isReady(q)&&!inX3(q)).length;
+  $('#go').disabled=BUSY||!todo;$('#go').textContent=`① Pre-check${todo?` ${todo} estimate${todo==1?'':'s'}`:''} (${ENV==='uat'?'We are SDI':'SDI Mig'})`;
+  $('#pub').disabled=BUSY||!pubOk;$('#pub').textContent=`② Publish ${pubOk?pubOk+' ':''}to Sage X3`;
+  $('#fast').disabled=BUSY||!(todo||pubOk);
+  $('#s1n').textContent=n?`${n} estimate${n==1?'':'s'} on the list`:'one or several';
+  $('#s2n').textContent=ck?`${rd} READY · ${ck-rd} not ready${n-ck?` · ${n-ck} to check`:''}`:'product, BOM and route, checked';
+  $('#s3n').textContent=pub?`${pub} in Sage X3`:'test environments only';
+  $('#s1').classList.toggle('done',n>0);$('#s2').classList.toggle('on',n>0);$('#s2').classList.toggle('done',n>0&&ck===n);$('#s3').classList.toggle('on',rd>0);$('#s3').classList.toggle('done',rd>0&&pub>=rd)}
+$('#queue').addEventListener('click',e=>{const tr=e.target.closest('tr[data-q]');if(!tr)return;const q=Q.find(x=>x.id==tr.dataset.q);if(!q)return;
+  if(e.target.closest('[data-rm]')){Q.splice(Q.indexOf(q),1);qRender();return}
+  if(q.run&&q.run.ok){show(q.run);qRender();$('#result').scrollIntoView({behavior:'smooth',block:'start'})}});
+$('#qclear').onclick=()=>{if(BUSY)return;Q.length=0;$('#stat').textContent='';qRender()};
+function prog(i,n){$('#prog').classList.toggle('hide',!n);$('#prog i').style.width=n?Math.round(i/n*100)+'%':'0'}
+const J=r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j});
+async function checkAll(){const L=Q.filter(q=>q.state!=='done'||q.err);let i=0;
+  for(const q of L){i++;q.state='checking';q.err='';qRender();prog(i-1,L.length);$('#stat').innerHTML=`<span class="spin"></span> Checking ${i} of ${L.length}: ${esc(q.name)} against Sage X3 (${ENVS[ENV]})…`;
+    const o=new URLSearchParams({name:q.name,category:$('#category').value,sheet_material:$('#sheet').value,parent:L.length==1?$('#parent').value.trim():'',rev_in_code:$('#rev').value?'true':'false',env:ENV});
+    try{q.run=await fetch(`${API}/run?${o}`,{method:'POST',headers:{...HD(),'Content-Type':'application/octet-stream'},body:q.file}).then(J)}catch(e){q.err=e.message;q.run=null}
+    q.state='done';qRender()}
+  prog(0,0);const rd=Q.filter(isReady).length,nr=Q.filter(q=>q.run&&!q.run.ready).length;loadHist();
+  $('#stat').innerHTML=`Pre-check done: <b class="ok">${rd} READY</b>${nr?` · <b class="err">${nr} not ready</b> - 👁 View shows the STOP checks to fix in the estimate`:''}. 👁 View any of them to see its product, BOM and route.`;
+  const first=Q.find(isReady)||Q.find(q=>q.run&&q.run.ok);if(first&&L.length===1)show(first.run)}
+async function publishAll(){const L=Q.filter(q=>isReady(q)&&!inX3(q));if(!L.length)return;
+  const other=L.filter(q=>envOf(q.run)!==ENV);if(other.length){$('#stat').innerHTML=`<span class="err">${other.length} of them were checked against ${esc(ENVS[envOf(other[0].run)])} - switch to it at the top, or pre-check them again here.</span>`;return}
+  if(!await canPublish())return false;
+  let i=0;for(const q of L){i++;q.loading=true;qRender();prog(i-1,L.length);$('#stat').innerHTML=`<span class="spin"></span> Publishing ${i} of ${L.length}: ${esc(q.run.code)} into Sage X3 - ${esc(ENVS[ENV])}…`;
+    const B=`${API}/run/${enc(q.run.id)}`;
+    try{const p=await fetch(`${B}/x3-plan`,{method:'POST',headers:HD()}).then(J);
+      if(!p.ok){q.load={ok:false,error:(p.stops||[]).join(' · ')||'Sage X3 check failed'}}
+      else if(!p.creates){q.note='already in Sage X3 - nothing to add'}
+      else{q.load=await fetch(`${B}/x3-load?confirm=${enc(q.run.code)}`,{method:'POST',headers:HD()}).then(J)}}
+    catch(e){q.load={ok:false,error:e.message}}
+    q.loading=false;qRender()}
+  prog(0,0);loadHist();const ok=L.filter(inX3).length,bad=L.filter(q=>q.load&&!q.load.ok);
+  const held=Q.filter(q=>q.run&&q.run.ok&&!q.run.ready);
+  $('#stat').innerHTML=`Published: <b class="ok">${ok} loaded into Sage X3</b>${L.filter(q=>q.note).length?` · ${L.filter(q=>q.note).length} already there`:''}${bad.length?` · <b class="err">${bad.length} not loaded</b> - hover "not loaded" for X3's reason`:''}${held.length?` · <b class="err">${held.length} held back (NOT READY): ${held.map(q=>esc(q.run.code)).join(', ')}</b> - 👁 View for what to fix`:''}. Open each part in Sage X3 and compare it with the write-up.`;return true}
+async function canPublish(){const st=await x3Status(ENV);if(st.setup&&st.target_ok!==false)return true;
+  $('#stat').innerHTML=`<b>Publishing isn't switched on yet on this portal</b> - it needs the Sage X3 write connection set up${st.problem?' ('+esc(st.problem)+')':''}. The READY files are saved in <b>${esc($('#savedto').textContent||'the SageEstimates folder')}</b>: import them by hand in Sage X3 (Usage → Imports: product, then BOM, then route).`;return false}
+function confirmPublish(n,codes){const c=prompt(`Publish ${n} estimate${n==1?'':'s'} into Sage X3 - ${ENVS[ENV]}:\n${codes}\n\nThis creates the product, BOM and route Sage X3 hasn't got (it never changes or deletes what's there).\n\nType PUBLISH to go ahead:`);
+  return c!==null&&c.trim().toUpperCase()==='PUBLISH'}
+$('#go').onclick=async()=>{if(BUSY)return;BUSY=true;qRender();try{await checkAll()}finally{BUSY=false;qRender()}};
+$('#pub').onclick=async()=>{if(BUSY)return;const L=Q.filter(q=>isReady(q)&&!inX3(q));if(!L.length||!await canPublish())return;
+  if(!confirmPublish(L.length,L.map(q=>q.run.code).join(', ')))return;BUSY=true;qRender();try{await publishAll()}finally{BUSY=false;qRender()}};
+$('#fast').onclick=async()=>{if(BUSY)return;const n=Q.filter(q=>q.state!=='done'||q.err||isReady(q)&&!inX3(q)).length;
+  if(!await canPublish()){const m=$('#stat').innerHTML;BUSY=true;qRender();try{await checkAll()}finally{BUSY=false;qRender()}$('#stat').innerHTML+='<br>'+m;return}
+  if(!confirmPublish(n,Q.map(q=>q.name).join('\n')+'\n\n(each is checked first; only the READY ones are published - a NOT READY one is held back and listed)'))return;
+  BUSY=true;qRender();try{await checkAll();await publishAll()}finally{BUSY=false;qRender()}};
 
 // ------------------------------------------------ result
 const enc=encodeURIComponent;

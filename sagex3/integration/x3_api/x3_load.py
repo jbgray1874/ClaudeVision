@@ -35,6 +35,7 @@ import argparse
 import datetime as dt
 import getpass
 import json
+import subprocess
 import os
 import re
 import sys
@@ -172,21 +173,55 @@ def run_env(run):
     return k if k in x3_api.ENVS else "mig"
 
 
-def setup(_):
+def _clipboard():
+    """The secret from the Windows clipboard (26 Nov: on the server's consoles typed answers didn't arrive - ISE held
+    them back, remote desktop only moved on after Ctrl+C). The clipboard is cleared after reading."""
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"], capture_output=True,
+                           text=True, timeout=20)
+        val = (r.stdout or "").strip()
+        subprocess.run(["powershell", "-NoProfile", "-Command", "Set-Clipboard -Value ' '"], capture_output=True,
+                       timeout=20)
+        return val
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def setup(a):
+    """Questions on screen, or none (26 Nov): with --client-id and --user given, nothing is asked - the other
+    settings keep their saved / default values unless given, and the secret comes from the clipboard
+    (--secret-from-clipboard) so it's never typed into the console or its history."""
     base = json.loads(READ_CONF.read_text()) if READ_CONF.exists() else {}
     c = json.loads(CONF.read_text()) if CONF.exists() else {
         k: base[k] for k in ("site", "folder", "endpoint", "connector", "graphql_path", "aud", "endpoint_header",
                              "token_seconds") if k in base}
-    ask = lambda k, q, d="": input(f"{q} [{c.get(k, d)}]: ").strip() or c.get(k, d)
+    quiet = bool(getattr(a, "client_id", "") and getattr(a, "user", ""))
+    def ask(k, q, d="", given=""):
+        if given:
+            return given
+        if quiet:
+            return c.get(k, d)
+        return input(f"{q} [{c.get(k, d)}]: ").strip() or c.get(k, d)
     print("The WRITE connected application (not 'SDI Live Orders read-only'): see the runbook, 20 Nov night.")
-    c["site"] = ask("site", "Site address (the TRAINING site)", "https://sdi-displays-trn.uk.sagex3.com").rstrip("/")
-    c["folder"] = ask("folder", "X3 folder", "SDIMIG")
-    c["endpoint"] = ask("endpoint", "Endpoint", "X3ERPV12_SDIMIG")
-    c["client_id"] = ask("client_id", "Write connected application client ID")
-    c["user"] = ask("user", "X3 user it runs as (its login)")
-    s = getpass.getpass("Its secret (typing is hidden; Enter keeps the saved one): ").strip()
-    if s:
-        c["secret"] = s
+    c["site"] = ask("site", "Site address (the TRAINING site)", "https://sdi-displays-trn.uk.sagex3.com",
+                    getattr(a, "site", "")).rstrip("/")
+    c["folder"] = ask("folder", "X3 folder", "SDIMIG", getattr(a, "folder", ""))
+    c["endpoint"] = ask("endpoint", "Endpoint", "X3ERPV12_SDIMIG", getattr(a, "endpoint", ""))
+    c["client_id"] = ask("client_id", "Write connected application client ID", "", getattr(a, "client_id", ""))
+    c["user"] = ask("user", "X3 user it runs as (its login)", "", getattr(a, "user", ""))
+    if getattr(a, "secret_from_clipboard", False):
+        sec = _clipboard()
+        if not sec or len(sec) < 16 or any(ch.isspace() for ch in sec):
+            raise SystemExit("The clipboard doesn't hold a secret (copy the connected application's secret from Sage "
+                             "X3 first, then run this again). Nothing saved.")
+        c["secret"] = sec
+        print(f"Secret read from the clipboard ({len(sec)} characters) and the clipboard cleared.")
+    elif not quiet:
+        sec = getpass.getpass("Its secret (typing is hidden; Enter keeps the saved one): ").strip()
+        if sec:
+            c["secret"] = sec
+    if not c.get("secret"):
+        raise SystemExit("No secret saved yet: run it again with --secret-from-clipboard. Nothing saved.")
     c["token_seconds"] = int(ask("token_seconds", "Token lifetime in seconds", 300))
     guard(c)
     CONF.parent.mkdir(parents=True, exist_ok=True)
@@ -195,7 +230,8 @@ def setup(_):
         os.chmod(CONF, 0o600)
     except OSError:
         pass
-    print(f"Saved to {CONF} - private: never in git, email or chat. Next: python x3_load.py mutations")
+    print(f"Saved to {CONF} - private: never in git, email or chat. Next: python x3_load.py mutations --env mig "
+          "(and --env uat)")
 
 
 # ---------------------------------------------------------------- X3's schema: what can be created, and how
@@ -634,7 +670,14 @@ def status(env="mig"):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("setup")
+    su = sub.add_parser("setup", help="the write connection: questions, or none with --client-id and --user")
+    su.add_argument("--client-id", dest="client_id", default="")
+    su.add_argument("--user", default="")
+    su.add_argument("--site", default="")
+    su.add_argument("--folder", default="")
+    su.add_argument("--endpoint", default="")
+    su.add_argument("--secret-from-clipboard", dest="secret_from_clipboard", action="store_true",
+                    help="read the secret from the clipboard (copy it first); never type it into the console")
     m = sub.add_parser("mutations")
     m.add_argument("--json", action="store_true")
     m.add_argument("--env", choices=sorted(x3_api.ENVS), default="mig", help="mig = SDI Mig, uat = We are SDI")
