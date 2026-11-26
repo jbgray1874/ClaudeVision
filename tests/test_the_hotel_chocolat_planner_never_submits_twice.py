@@ -30,7 +30,7 @@ def _pack(root: Path) -> None:
 class _Service:
     """Two ports, one list of runs. The first submit is created, then answered slowly."""
 
-    def __init__(self, slow: float):
+    def __init__(self, slow: float, on_first_post=None):
         self.runs, self.posts = [], 0
         service = self
 
@@ -49,6 +49,8 @@ class _Service:
                                      "job_title": req["job_title"], "status": "queued",
                                      "queued_at": time.time(), "method": req.get("method")})
                 if service.posts == 1:
+                    if on_first_post:
+                        on_first_post(service.runs)
                     time.sleep(slow)
                 try:
                     body = json.dumps({"run_id": "r%d" % service.posts}).encode()
@@ -125,3 +127,27 @@ def test_a_path_past_260_characters_is_read_by_its_long_form_and_shown_by_its_ow
     assert ns["short_path"](ns["long_path"](unc)) == unc
     assert ns["long_path"](ns["long_path"](unc)) == ns["long_path"](unc)
     assert ns["short_path"](ns["long_path"]("a.pdf")) == "C:\\work\\a.pdf"
+
+
+def test_a_product_submitted_by_someone_else_meanwhile_is_not_submitted_again(tmp_path):
+    """The run list is read again right before each submit: a second queue window, or a
+    person on the Wall, may have submitted the product since this queue started."""
+    _pack(tmp_path / "pack")
+    holder = {}
+
+    def someone_else_submits_the_second(runs):
+        second = holder["plan"]["products"][1]
+        runs.append({"run_id": "elsewhere", "client": "Hotel Chocolat", "status": "queued",
+                     "job_title": "%s [hc:%s]" % (second["title"], second["fingerprint"]),
+                     "queued_at": time.time()})
+
+    svc = _Service(slow=0, on_first_post=someone_else_submits_the_second)
+    env = dict(os.environ, HC_SERVICES=svc.urls)
+    try:
+        _run("plan", str(tmp_path / "pack"), str(tmp_path), env=env)
+        plan_file = next(tmp_path.glob("Hotel Chocolat plan *.json"))
+        holder["plan"] = json.loads(plan_file.read_text("utf-8"))
+        out = _run("queue", str(plan_file), "once", "since=", env=env)
+        assert "elsewhere (queued); not submitted again" in out and svc.posts == 1
+    finally:
+        svc.close()

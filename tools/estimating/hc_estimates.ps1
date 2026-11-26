@@ -421,16 +421,27 @@ else:
         sys.exit(0)
     already = existing_runs()
     done = sent = held = unsure = 0
+    _digests = {}
+    def digest(path):
+        # One read per file per queue: the Wall of Chocolate products share 150 files.
+        if path not in _digests:
+            _digests[path] = sha1(path)
+        return _digests[path]
     for item in data['products']:
         if not item['selected']:
             continue
         label = '%s  %s' % (item['drawing'], item['title'])
+        if item['files']:
+            print('checking %d file(s) of %s against the plan...' % (len(item['files']), label), flush=True)
         changed = [f['name'] for f in item['files'] if not os.path.exists(long_path(f['path']))
-                   or os.path.getsize(long_path(f['path'])) != f['size'] or sha1(f['path']) != f['sha1']]
+                   or os.path.getsize(long_path(f['path'])) != f['size'] or digest(f['path']) != f['sha1']]
         if changed:
             print('HELD    %s: files changed since the plan (%s); plan again' % (label, ', '.join(changed[:5])))
             held += 1
             continue
+        # THE LIST AS IT IS NOW, not as it was when this queue started: a second queue window
+        # started meanwhile, or a person on the Wall, may have submitted this product since.
+        already = existing_runs()
         runs = already.get(item['fingerprint'], [])
         flying = [e for e in runs if str(e.get('status')).lower() in ('queued', 'running')]
         if flying:
