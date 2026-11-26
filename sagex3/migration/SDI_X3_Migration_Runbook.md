@@ -5055,3 +5055,35 @@ Keep this up to date with every setting we choose. **Never write the secret here
   - Fix 3, SDI Mig's SO due dates and doubled lines: needs the inventory summary from James.
   - Fix 2, the page fix: goes out with this deploy.
   - James to check the next We are SDI run's stock check line.
+
+#### 26 Nov – Purchase orders through the toolset: James's direction, and PO Suggestions (read-only) built
+- **James (25 Nov):** can the tool raise purchase orders, or suggest them for people to raise and save back to Sage X3? "The idea is to remove the dependency on Sage X3 using this SDI Intelligence toolset."
+  - **Decision: start with suggestions only** ("Suggesting purchase orders is easy and safe - let's do this to start with").
+  - **Licences:** everyone in the company has a Sage X3 licence (James).
+  - **Raising orders in X3 from the tool is a later step**, built like the estimate loader:
+    - a person presses the button;
+    - create only, test environments first;
+    - approval and signing stay in X3.
+  - **Still to settle for that step:**
+    - whether this X3 lets the API create purchase orders (`x3_load.py mutations --env uat`, once the loader setup is done);
+    - the audit trail (X3 records the connected application as the creator; we'd log who pressed the button);
+    - Charlotte's agreement on the controls, including approval limits.
+- **PO Suggestions, built 26 Nov:** a tab in the portal and in the workbook, a "POs to raise now" tile on the Overview, a user guide section and a How it works rule.
+  - **What it lists:** each bought-in part the open works orders are short of, every BOM level. It uses the same quantities as Shortages.
+  - **To order** = needed − stock − on open POs − on works orders.
+  - **Needed by** = the due date of the first works order that can't be covered (works orders in due order).
+  - **Order by** = needed by − the part's usual lead time.
+    - The lead time is the median number of days from order date to expected receipt on the part's X3 PO lines, open and closed.
+    - If the part has no X3 PO lines, the page assumes 14 days and marks it *.
+  - **Status:** Late (needed already), Order now, This week, Later.
+  - **Call-off materials** are marked.
+  - **Last supplier, price, currency, purchase unit and last ordered:** from the part's most recent X3 PO line.
+  - **Est. value** = to order × last price, only where the purchase unit is the stock unit.
+  - **Read-only:** nothing is written to X3. Purchasing raise the orders in X3 as now; the next Regenerate counts the new order as on order.
+  - **Suppliers show as X3 codes.** Names would need the supplier record from X3, which isn't read yet.
+  - **Not in yet:** minimum order quantities, pack sizes, price breaks.
+  - **Tested on mock X3 data:** the figures were checked by hand, including the late, now, call-off and no-history cases, the workbook tab, the page filters, search, CSV, and Ask the guide finding the new section.
+- **Deploy:**
+  - Steps: pull, robocopy, then the installer with `--apply`.
+  - Only the page and the build changed (no route code), so there's no service restart this time.
+  - It shows after the next Regenerate.
