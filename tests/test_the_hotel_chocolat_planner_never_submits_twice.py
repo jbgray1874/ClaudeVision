@@ -213,3 +213,22 @@ def test_the_planner_survives_being_saved_as_ascii():
     assert PLANNER.read_text("utf-8").isascii() and wrapper.isascii()
     planner = PLANNER.read_text("utf-8").rstrip("\n")
     assert wrapper[wrapper.index("@'\n") + 3:wrapper.index("\n'@ | Set-Content")] == planner
+
+
+def test_a_drawing_whose_pdf_has_no_text_names_its_parts_through_its_dxf(tmp_path):
+    """B.34493's PDF is outlines only; its DXF's parts list names the ballast plate D.34496."""
+    plinths = tmp_path / "pack" / "Drawing" / "ACC" / "02. PLINTHS"
+    (plinths / "03. 1050MM HIGH PLINTH").mkdir(parents=True)
+    (plinths / "04. PLINTH BALLAST PLATE").mkdir(parents=True)
+    own = plinths / "03. 1050MM HIGH PLINTH"
+    (own / "nc1-b34493.pdf").write_bytes(b"x")
+    (own / "nc1-b34493.DXF").write_bytes(b"  1\nA.34494\n  1\nD.34496\n  5\nB34499\n")
+    (own / "nc1-a34494.pdf").write_bytes(b"x")
+    (plinths / "04. PLINTH BALLAST PLATE" / "nc1-d34496.pdf").write_bytes(b"x")
+    env = dict(os.environ, HC_SERVICES="http://127.0.0.1:9,http://127.0.0.1:9")
+    _run("plan", str(tmp_path / "pack"), str(tmp_path), env=env)
+    plan = json.loads(next(tmp_path.glob("Hotel Chocolat plan *.json")).read_text("utf-8"))
+    plinth = next(p for p in plan["products"] if "1050" in p["title"])
+    assert plinth["drawing"] == "B.34493"
+    assert "nc1-d34496.pdf" in [f["name"] for f in plinth["files"]]
+    assert not any("top drawing chosen" in w for w in plinth["warnings"])

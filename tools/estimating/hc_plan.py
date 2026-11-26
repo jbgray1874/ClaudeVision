@@ -64,6 +64,7 @@ else:
 SERVICES = tuple(os.environ.get('HC_SERVICES', 'http://localhost:8071,http://localhost:8072').split(','))
 KEY = os.environ.get('HC_KEY', '')
 NAME_REF = re.compile(r'nc1-([a-ln-z])(\d{5})', re.I)
+DXF_REF = re.compile(r'(?<![A-Z0-9])([A-LN-Z])[.\-](\d{5})(?![0-9])', re.I)
 TEXT_REF = re.compile(r'(?<![A-Z0-9])([A-LN-Z])[.\-]?(\d{5})(?![0-9])', re.I)
 DRAWING_EXT = ('.pdf', '.dxf', '.dwg')
 PACKS = [
@@ -160,6 +161,18 @@ if mode == 'plan':
                     for pg in fitz.open(short_path(p) if len(short_path(p)) < TOO_LONG else str(p)):
                         for m in TEXT_REF.finditer(pg.get_text()):
                             found.add(m.group(1).upper() + m.group(2))
+                except Exception:
+                    pass
+            # A DRAWING WHOSE PDF HAS NO TEXT LAYER STILL NAMES ITS PARTS IN ITS DXF (26 Nov 2026).
+            # B.34493's PDF is outlines only; its DXF's parts list names A.34494 and D.34496, the
+            # ballast plate it takes four of. A DXF's handles are hex, so here the separator is
+            # required: B.34493, never B34493.
+            elif p.suffix.lower() == '.dxf' and info[p]['size']:
+                try:
+                    with open(long_path(p), 'rb') as fh:
+                        raw = fh.read().decode('latin-1')
+                    for m in DXF_REF.finditer(raw):
+                        found.add(m.group(1).upper() + m.group(2))
                 except Exception:
                     pass
             text_cache[p] = found
