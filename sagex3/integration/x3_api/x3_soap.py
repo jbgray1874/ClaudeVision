@@ -61,9 +61,12 @@ def _tag(xml, name):
 
 def parse(xml):
     """status (1 ok / 0 not), X3's messages, the result (JSON text when optreturn=JSON)."""
-    msgs = []
-    for blk in re.findall(r"<messages\b[^>]*>(.*?)</messages>", xml or "", re.S):
-        msgs.append(((_tag(blk, "type") or "").strip(), re.sub(r"\s+", " ", _tag(blk, "message") or "").strip()))
+    # X3 puts messages either inline (<messages><message/><type/></messages>) or as SOAP multiRefs; read every
+    # <message> / <type> pair wherever it is, in document order.
+    texts = [re.sub(r"\s+", " ", _tag(m, "message") or "").strip()
+             for m in re.findall(r"(<(?:\w+:)?message\b[^>]*>.*?</(?:\w+:)?message>)", xml or "", re.S)]
+    types = [t.strip() for t in re.findall(r"<(?:\w+:)?type\b[^>]*>\s*(\d+)\s*</(?:\w+:)?type>", xml or "", re.S)]
+    msgs = [(types[i] if i < len(types) else "", t) for i, t in enumerate(texts) if t]
     msgs += [("", re.sub(r"\s+", " ", m).strip()) for m in re.findall(r"<faultstring[^>]*>(.*?)</faultstring>", xml or "", re.S)]
     return {"status": _tag(xml, "status"), "messages": msgs, "result": _tag(xml, "resultXml")}
 
@@ -102,6 +105,15 @@ def check(a):
             print("      Description:")
             for line in p["result"].splitlines()[:80]:
                 print("        " + line[:160])
+        if auth and p["status"] != "1":
+            # X3's whole answer (it holds no secret), tags on their own lines, so nothing it says is lost
+            body = re.sub(r"<\?xml[^>]*>", "", text or "")
+            body = re.sub(r"\s*xmlns(:\w+)?=\"[^\"]*\"", "", body)
+            body = re.sub(r"\s*xsi:type=\"[^\"]*\"", "", body)
+            print("      X3's full answer:")
+            for line in re.sub(r">\s*<", ">\n<", body).splitlines()[:60]:
+                if line.strip():
+                    print("        " + line.strip()[:200])
         elif code != 200 and not p["messages"]:
             print("      " + x3_api.redact(text)[:300].strip())
     print("\nSend Claude this output (no secret in it).")
