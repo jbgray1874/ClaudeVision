@@ -416,18 +416,22 @@ def _target(kind, ref):
 
 
 @router.post("/{kind}/{ref}/x3-plan")
-async def x3_plan(kind: str, ref: str, x_sdi_key: str | None = Header(default=None)):
-    """Dry run: reads X3 (live) and says what would be created. Nothing is written to X3."""
+async def x3_plan(kind: str, ref: str, update: bool = False, x_sdi_key: str | None = Header(default=None)):
+    """Dry run: reads X3 (live) and says what would be created - and, where X3 already has a different BOM / route,
+    every change an update would make. Nothing is written to X3."""
     _check_key(x_sdi_key)
     if kind not in ("run", "saved"):
         raise HTTPException(status_code=404, detail="Not found")
     d = _target(kind, ref)
-    return await asyncio.to_thread(_x3, ["plan", str(d)], 300)
+    return await asyncio.to_thread(_x3, ["plan", str(d)] + (["--update"] if update else []), 300)
 
 
 @router.post("/{kind}/{ref}/x3-load")
-async def x3_load(kind: str, ref: str, request: Request, confirm: str = "", x_sdi_key: str | None = Header(default=None)):
-    """Creates the product, BOM and route X3 doesn't have yet - test company only (x3_load.py refuses anything else)."""
+async def x3_load(kind: str, ref: str, request: Request, confirm: str = "", update: bool = False,
+                  x_sdi_key: str | None = Header(default=None)):
+    """Creates the product, BOM and route X3 doesn't have yet - test company only (x3_load.py refuses anything else).
+    update=true (26 Nov, estimators re-saving): also changes a BOM / route X3 has to match the estimate (never a
+    product; nothing deleted; X3's version saved first)."""
     _check_key(x_sdi_key)
     if kind not in ("run", "saved"):
         raise HTTPException(status_code=404, detail="Not found")
@@ -436,6 +440,7 @@ async def x3_load(kind: str, ref: str, request: Request, confirm: str = "", x_sd
         raise HTTPException(status_code=409, detail="Another load into X3 is running - try again in a minute")
     try:
         by = request.client.host if request.client else ""
-        return await asyncio.to_thread(_x3, ["load", str(d), "--apply", "--confirm", confirm, "--by", by], 900)
+        return await asyncio.to_thread(_x3, ["load", str(d), "--apply", "--confirm", confirm, "--by", by]
+                                       + (["--update"] if update else []), 900)
     finally:
         _load_lock.release()

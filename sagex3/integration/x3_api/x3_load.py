@@ -11,6 +11,14 @@ through X3's GraphQL API as create mutations, in the order X3 needs: product -> 
     python x3_load.py status [--json]          # set up? which X3? what can be created? (no call to X3)
     python x3_load.py plan <run_folder> [--json]                      # dry run: what would be created, what exists
     python x3_load.py load <run_folder> --apply --confirm <part> [--by NAME] [--json]   # creates what doesn't exist
+    ... plan / load ... --update       # also change a BOM / route X3 already has (the plan lists each change first)
+
+26 Nov: where the X3 endpoint has a Classic SOAP pool (We are SDI: SDIEST - x3_soap.POOLS), the product, BOM and route
+go through X3's own import templates (ZSDIITM, YA004BOMP, ZSDIROU2) via the AOWSIMPORT web service, with the run's
+load files - exactly what Estimating imports by hand (x3_soap.py). A product X3 has is never changed. A BOM or route
+X3 has is changed only with --update (James 26 Nov: "if they change an estimate and resave"): the plan shows every
+change, a BOM keeps X3's line number for each component it has (no swaps), nothing is deleted, and X3's version is
+saved first so it can be put back. Elsewhere (SDI Mig) the GraphQL create-only route below still applies.
 
 Safety, in the code (not settings):
   * TEST ONLY: refuses any site but the training site (sdi-displays-trn) and any endpoint but X3ERPV12_SDIMIG (SDI
@@ -142,7 +150,7 @@ EXISTS = {
     "route": (["x3Manufacturing", "routingOperation"], "product { code }",
               ["{{product: {{code: '{c}'}}}}", "{{product: '{c}'}}", "{{product: {{_id: '{c}'}}}}"]),
 }
-WHAT = {"product": "the product (ZSDIITM)", "bom": "the BOM (YA00408BOM)", "route": "the route (ZSDIROU2)"}
+WHAT = {"product": "the product (ZSDIITM)", "bom": "the BOM (YA004BOMP)", "route": "the route (ZSDIROU2)"}
 
 
 # ---------------------------------------------------------------- settings and the test-only guard
@@ -531,7 +539,7 @@ def exists(c, what, code):
 
 
 # ---------------------------------------------------------------- plan and load
-def plan(run_dir, c=None):
+def plan(run_dir, c=None, update=False, keep=None):
     run_dir = Path(run_dir)
     run = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     out = {"when": dt.datetime.now().isoformat(timespec="seconds"), "code": run.get("code"), "ok": False,
@@ -549,6 +557,10 @@ def plan(run_dir, c=None):
         return out
     out["target"] = {"site": c["site"], "endpoint": c["endpoint"], "user": c.get("user"),
                      "label": x3_api.ENVS[env]["label"]}
+    import x3_soap                                         # (late: x3_soap imports this file)
+    pool = x3_soap.pool_for(c)
+    if pool:
+        return _plan_soap(run_dir, run, c, pool, out, update, keep)
     sch = load_schema(c["endpoint"])
     if not sch:
         stop(f"X3's API hasn't been read yet for {x3_api.ENVS[env]['label']}: run  python x3_load.py mutations "
@@ -639,7 +651,7 @@ def send_create(c, node, arg, sig, ret, data):
     return True, out.get("data")
 
 
-def load(run_dir, confirm, by=""):
+def load(run_dir, confirm, by="", update=False):
     run_dir = Path(run_dir)
     run = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
     log = {"when": dt.datetime.now().isoformat(timespec="seconds"), "by": by, "code": run.get("code"),
@@ -654,6 +666,10 @@ def load(run_dir, confirm, by=""):
     except SystemExit as e:
         log["error"] = f"Not loaded: {e}"
         return _save_log(run_dir, run, log)
+    import x3_soap
+    pool = x3_soap.pool_for(c)
+    if pool:
+        return _load_soap(run_dir, run, c, pool, log, by, update)
     p = plan(run_dir, c)                                       # fresh: X3 is read again just before writing
     log["target"], log["plan"] = p.get("target"), {k: p[k] for k in ("ok", "stops", "creates") if k in p}
     if not p["ok"]:
@@ -706,6 +722,99 @@ def _save_log(run_dir, run, log):
     return log
 
 
+# ---------------------------------------------------------------- 26 Nov: through X3's import web service
+SOAP_WORDS = {"create": "import", "update": "update"}
+
+
+def _plan_soap(run_dir, run, c, pool, out, update, keep):
+    """Where the endpoint has a Classic SOAP pool (We are SDI: SDIEST), the product, BOM and route go through X3's own
+    import templates (ZSDIITM, YA004BOMP, ZSDIROU2) with the run's load files - the same as Usage -> Imports by hand.
+    A product X3 has is never changed. A BOM / route X3 has is changed only with update=True (estimators re-saving
+    an estimate, James 26 Nov), and the plan lists every change first."""
+    import x3_soap
+    stop = out["stops"].append
+    out["via"] = f"X3 import templates, web service pool {pool}"
+    product_coming = False
+    for what in ("product", "bom", "route"):
+        tpl = x3_soap.BY_WHAT[what]
+        stem = x3_soap.TEMPLATES[tpl][1]
+        rec = {"what": what, "label": WHAT[what].replace("YA00408BOM", tpl), "template": tpl, "action": "stop",
+               "why": "", "diff": [], "notes": [], "send": []}
+        out["records"].append(rec)
+        if what != "product" and not (run.get("bom_rows") if what == "bom" else run.get("rou_rows")):
+            rec.update(action="none", why="nothing in the estimate for this")
+            continue
+        fname = next((f for f in run.get("load_files") or [] if f.endswith(f"_{stem}.txt")), None)
+        if not fname or not (Path(run_dir) / fname).exists():
+            rec["why"] = f"the load file (..._{stem}.txt) isn't in {run_dir}"
+            stop(f"{WHAT[what]}: {rec['why']}")
+            continue
+        try:
+            P = x3_soap.prepare(c, tpl, x3_soap.file_lines(Path(run_dir) / fname), product_coming=product_coming)
+        except (SystemExit, OSError, UnicodeDecodeError) as e:
+            rec["why"] = f"couldn't read X3 or the file: {e}"
+            stop(f"{WHAT[what]}: {rec['why']}")
+            continue
+        rec.update(file=fname, lines=len(P["lines"]), diff=P["diff"],
+                   notes=P["notes"] + [f"not in the estimate: {g} - left in X3 as it is" for g in P["gone"]])
+        if keep is not None:
+            keep[what] = (P, Path(run_dir) / fname)
+        n = len(P["lines"])
+        if P["action"] == "stop":
+            rec["why"] = "; ".join(P["stops"])
+            stop(f"{WHAT[what]}: {rec['why']}")
+        elif P["action"] == "skip":
+            rec.update(action="skip", why="X3 already has this product - left as it is (products are never changed)")
+        elif P["action"] == "same":
+            rec.update(action="skip", why=f"X3 already has this {what}, the same as the estimate")
+        elif P["action"] == "create":
+            rec.update(action="import", why=f"new in X3 - {n} line{'s' if n != 1 else ''} through template {tpl}")
+            product_coming = product_coming or what == "product"
+        elif update:
+            rec.update(action="update", why=f"X3 has a different {what} - it will be updated: {len(P['diff'])} change(s)")
+        else:
+            rec.update(action="differs", why=f"X3 already has a different {what} ({len(P['diff'])} difference(s)) - "
+                                             "tick Update Sage X3 to change it to match the estimate")
+    out["ok"] = not out["stops"]
+    out["creates"] = sum(r["action"] == "import" for r in out["records"])
+    out["updates"] = sum(r["action"] == "update" for r in out["records"])
+    out["differs"] = sum(r["action"] == "differs" for r in out["records"])
+    out["manual"] = []
+    (Path(run_dir) / "x3_load_plan.json").write_text(json.dumps(out, indent=1, default=str), encoding="utf-8")
+    return out
+
+
+def _load_soap(run_dir, run, c, pool, log, by, update):
+    import x3_soap
+    keep = {}
+    p = plan(run_dir, c, update=update, keep=keep)          # fresh: X3 is read again just before writing
+    log["target"], log["via"] = p.get("target"), p.get("via")
+    log["plan"] = {k: p[k] for k in ("ok", "stops", "creates", "updates", "differs") if k in p}
+    if not p["ok"]:
+        log["error"] = "Not loaded: " + " | ".join(p["stops"])
+        return _save_log(run_dir, run, log)
+    for rec in p["records"]:
+        if rec["action"] not in ("import", "update"):
+            log["results"].append({"what": rec["what"], "action": rec["action"], "why": rec["why"],
+                                   "diff": rec.get("diff") or []})
+            continue
+        P, src = keep[rec["what"]]
+        res = x3_soap.apply(c, pool, P, by, src)
+        res.pop("raw", None) if res["ok"] else None
+        log["results"].append({**res, "action": rec["action"], "label": rec["label"], "diff": rec.get("diff") or []})
+        if not res["ok"]:
+            left = [d for d in (res.get("left") or []) if not d.startswith("X3 ONLY")]
+            log["error"] = (f"{rec['label']}: X3 reported a problem (status {res['o_status']}"
+                            + (f", {res['o_message']}" if res.get("o_message") else "") + ")"
+                            + (f" - {len(left)} line(s) don't match the estimate after the import" if left else "")
+                            + ". Stopped here: nothing after it was sent."
+                            + (f" X3's previous version is saved: {res['before_saved']}" if res.get("before_saved") else ""))
+            return _save_log(run_dir, run, log)
+        time.sleep(0.3)
+    log["ok"] = True
+    return _save_log(run_dir, run, log)
+
+
 def status(env="mig"):
     ep = x3_api.ENVS[env]["endpoint"]
     out = {"setup": CONF.exists(), "config": str(CONF), "schema": None, "test_only": sorted(TEST_ENDPOINTS),
@@ -726,6 +835,12 @@ def status(env="mig"):
         out["gaps"] = {w: res[w].get("missing_ours", []) + res[w].get("required_not_covered", []) for w in MAP if res[w]["node"]}
     out["ready"] = bool(out.get("target_ok") and sch and all((out.get("can_create") or {}).values())
                         and not any((out.get("gaps") or {}).values()))
+    import x3_soap
+    pool = x3_soap.POOLS.get(ep)
+    if pool:                                   # 26 Nov: product, BOM and route through X3's import templates
+        out.update(soap_pool=pool, can_create={"product": "template ZSDIITM", "bom": "template YA004BOMP",
+                                               "route": "template ZSDIROU2"}, gaps={},
+                   ready=bool(out.get("target_ok")))
     return out
 
 
@@ -749,11 +864,13 @@ def main(argv=None):
     p = sub.add_parser("plan")
     p.add_argument("run_folder")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--update", action="store_true", help="plan to update a BOM / route X3 already has")
     ld = sub.add_parser("load")
     ld.add_argument("run_folder")
     ld.add_argument("--apply", action="store_true", help="without it, load only plans")
     ld.add_argument("--confirm", default="", help="the part code, typed again")
     ld.add_argument("--by", default="")
+    ld.add_argument("--update", action="store_true", help="also update a BOM / route X3 already has (shown first)")
     ld.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     if a.cmd == "setup":
@@ -765,25 +882,30 @@ def main(argv=None):
         print(json.dumps(st, indent=1) if a.json else "\n".join(f"{k}: {v}" for k, v in st.items()))
         return 0
     if a.cmd == "plan" or (a.cmd == "load" and not a.apply):
-        out = plan(a.run_folder)
+        out = plan(a.run_folder, update=a.update)
         if a.json:
             print(json.dumps(out, default=str))
         else:
-            print(f"{out.get('code')}: {'OK to load' if out['ok'] else 'NOT loadable'} - {out.get('creates', 0)} create(s)")
+            print(f"{out.get('code')}: {'OK to load' if out['ok'] else 'NOT loadable'} - {out.get('creates', 0)} create(s)"
+                  + (f", {out.get('updates', 0)} update(s), {out.get('differs', 0)} different in X3 (not changed)"
+                     if "updates" in out else ""))
             for r in out["records"]:
                 print(f"  {r['label']:<28} {r['action'].upper():<7} {r['why']}")
                 for n in r.get("notes") or []:
                     print(f"      {n}")
+                for d in r.get("diff") or []:
+                    print(f"      {d}")
             for s_ in out["stops"]:
                 print("  STOP", s_)
         return 0 if out["ok"] else 1
-    out = load(a.run_folder, a.confirm, a.by)
+    out = load(a.run_folder, a.confirm, a.by, update=a.update)
     if a.json:
         print(json.dumps(out, default=str))
     else:
         print(f"{out.get('code')}: {'LOADED' if out['ok'] else 'NOT LOADED'} {out.get('error', '')}")
         for r in out["results"]:
-            print(f"  {WHAT[r['what']]:<28} {r['action']} {'' if r.get('ok') is None else ('ok' if r['ok'] else 'FAILED')}")
+            print(f"  {WHAT[r['what']]:<28} {r['action']} {'' if r.get('ok') is None else ('ok' if r['ok'] else 'FAILED')}"
+                  + (f"  (X3's previous version: {r['before_saved']})" if r.get("before_saved") else ""))
     return 0 if out["ok"] else 1
 
 

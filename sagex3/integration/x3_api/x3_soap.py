@@ -133,7 +133,15 @@ def check(a):
 # I_EXEC execution type, I_RECORDSEP record separator, I_FILE the file (clob); O_REQNUM, O_STATUS, O_MESSA back.
 # Only these templates: the BOM and route load files the Estimate portal writes, in exactly the format Ethan's
 # migration loads used (0 errors). template -> (what, the load file's name part)
-TEMPLATES = {"YA004BOMP": ("bom", "YA00408BOM"), "ZSDIROU2": ("route", "ZSDIROU2")}
+TEMPLATES = {"ZSDIITM": ("product", "ZSDIITM"), "YA004BOMP": ("bom", "YA00408BOM"), "ZSDIROU2": ("route", "ZSDIROU2")}
+BY_WHAT = {w: t for t, (w, _) in TEMPLATES.items()}
+# The Classic SOAP pool for each endpoint (Administration -> Web services -> Classic SOAP pools configuration).
+# 26 Nov: SDIEST, We are SDI, user SDIJG, 1 channel, auto start. SDI Mig has none: its BOMs / routes stay by hand.
+POOLS = {"X3ERPV12_ACUX3": "SDIEST"}
+
+
+def pool_for(c):
+    return POOLS.get(c.get("endpoint"))
 SEP = "|"                       # record separator sent with the file; refused if a line contains it
 ENC = "cp850"                   # the load files' code page (migration/rebuild/common.py write_load)
 
@@ -281,91 +289,147 @@ def align(lines, now):
     return out, notes, gone
 
 
-def do_import(a):
-    c = x3_load.guard(x3_api.for_env(x3_load.load_conf(), a.env))
-    what, stem = TEMPLATES[a.template]
-    lines = file_lines(a.file)
-    parents = sorted({ln.split(";")[0] for ln in lines})
-    print(f"X3: {c['site']} - endpoint {c.get('endpoint')} - pool {a.pool} - template {a.template} ({what})")
-    print(f"File: {a.file} - {len(lines)} line(s) for {', '.join(parents) or 'nothing'}")
-    if len(parents) != 1:
-        print("STOP: the file must be for exactly one part")
-        return 1
-    part = parents[0]
-    has_product, has_it = x3_load.exists(c, "product", part), x3_load.exists(c, what, part)
-    print(f"X3 now: product {part} {'exists' if has_product else 'NOT FOUND' if has_product is False else 'could not check'}; "
-          f"{what} {'EXISTS' if has_it else 'none' if has_it is False else 'could not check'}")
-    now = None
-    if has_it:
-        now = current(c, what, part)
-        if what == "bom" and now and not a.keep_numbers:
-            lines, notes, gone = align(lines, now)
-            print("Update: X3's own line numbers kept for the components it already has" + (":" if notes else " (no change)"))
-            for n_ in notes:
-                print("   " + n_)
-            for g_ in gone:
-                print(f"   NOT IN THE ESTIMATE: {g_} - left in X3 as it is (remove it in X3 if it should go)")
-        if now is None:
-            print("   (couldn't read X3's lines to compare)")
-        else:
-            diff = differences(what, now, from_file(what, lines))
-            print(f"Compared with X3 ({len(now)} {'lines' if what == 'bom' else 'operations'} in X3, {len(lines)} in the file; "
-                  f"{'component / link qty' if what == 'bom' else 'work centre / set-up / run'}):")
-            for d_ in diff or ["no difference - an --update would re-save the same values"]:
-                print("   " + d_)
-    stop = []
-    if not has_product:
-        stop.append(f"the product {part} must be in X3 first (the portal creates it before the BOM and route)")
+def part_of(what, line):
+    f = line.split(";")
+    return (f[1] if what == "product" else f[0]) if len(f) > 1 else ""
+
+
+def prepare(c, template, lines, keep_numbers=False, product_coming=False):
+    """Read X3 (live) and decide, for one load file: action create / update / same / skip / stop, and what an update
+    would change. Nothing is sent. product_coming: the product is created in this same publish, just before."""
+    what = TEMPLATES[template][0]
+    P = {"what": what, "template": template, "lines": list(lines), "notes": [], "gone": [], "diff": [], "stops": [],
+         "now": None}
+    parents = sorted({part_of(what, ln) for ln in lines})
+    if len(parents) != 1 or not parents[0]:
+        P.update(action="stop", part=", ".join(parents))
+        P["stops"].append(f"the {what} file must be for exactly one part (it has {len(parents)})")
+        return P
+    part = P["part"] = parents[0]
+    if any(SEP in ln for ln in lines):
+        P["stops"].append(f"a line contains '{SEP}' - it can't be sent")
+    has_it = x3_load.exists(c, what, part)
+    has_product = has_it if what == "product" else x3_load.exists(c, "product", part)
+    P.update(has_product=has_product, has_it=has_it)
     if has_it is None:
-        stop.append(f"couldn't read X3 to see whether {part} already has a {what}")
-    if has_it and not a.update:
-        stop.append(f"X3 already has a {what} for {part}; changing it needs --update (estimators re-saving an estimate)")
-    for s_ in stop:
-        print("STOP:", s_)
-    if stop:
-        return 1
-    if not a.apply:
-        print(f"Dry run - nothing sent. To import: add  --apply --confirm {part}")
-        return 0
-    if a.confirm != part:
-        print(f"Refused: --confirm must be the part code, {part}")
-        return 1
+        P["stops"].append(f"couldn't read X3 to see whether it already has {'the product' if what == 'product' else 'a ' + what} for {part}")
+    if what != "product" and not has_product and not product_coming:
+        P["stops"].append(f"the product {part} isn't in X3 (it has to be created first)")
+    if what == "product":
+        P["action"] = "skip" if has_it else "create"
+    elif has_it:
+        now = P["now"] = current(c, what, part)
+        if now is None:
+            P["stops"].append(f"couldn't read X3's {what} for {part} to compare")
+        else:
+            if what == "bom" and not keep_numbers:
+                P["lines"], P["notes"], P["gone"] = align(lines, now)
+            P["diff"] = differences(what, now, from_file(what, P["lines"]))
+        P["action"] = "update" if P["diff"] else "same"
+    else:
+        P["action"] = "create"
+    if P["stops"]:
+        P["action"] = "stop"
+    return P
+
+
+def apply(c, pool, P, by="", src=""):
+    """THE WRITE for one prepared file (action create or update): snapshot X3 first if it's an update, import,
+    re-read X3, log. Returns the result."""
+    if P["action"] not in ("create", "update"):
+        raise SystemExit(f"Refused: nothing to send for this {P['what']} ({P['action']})")
+    what, part, lines = P["what"], P["part"], P["lines"]
     before = None
-    if has_it and now:
-        before = x3_load.HISTORY.parent / "x3_before_update" / \
-            f"{part}_{what}_{dt.datetime.now():%Y%m%d-%H%M%S}.txt"
+    if P["action"] == "update" and P.get("now"):
+        before = x3_load.HISTORY.parent / "x3_before_update" / f"{part}_{what}_{dt.datetime.now():%Y%m%d-%H%M%S}.txt"
         before.parent.mkdir(parents=True, exist_ok=True)
-        before.write_bytes("".join(ln + "\r\n" for ln in before_file(what, lines, now)).encode(ENC, "replace"))
-        print(f"X3's {what} as it was, saved: {before}  (to put it back: import that file with --update)")
+        before.write_bytes("".join(ln + "\r\n" for ln in before_file(what, lines, P["now"])).encode(ENC, "replace"))
     t0 = time.time()
-    r = import_lines(c, a.pool, a.template, lines)
+    r = import_lines(c, pool, P["template"], lines)
     after = x3_load.exists(c, what, part)
-    entry = {"at": dt.datetime.now().isoformat(timespec="seconds"), "by": a.by or os.environ.get("USERNAME", ""),
-             "via": "soap AOWSIMPORT", "endpoint": c.get("endpoint"), "pool": a.pool, "template": a.template,
-             "part": part, "what": what, "lines": len(lines), "update": bool(has_it), "file": str(a.file),
-             "ok": r["ok"], "o_status": r["o_status"], "o_message": r["o_message"], "messages": r["messages"][:50],
-             "in_x3_after": after, "seconds": round(time.time() - t0, 1),
-             "before_saved": str(before) if before else None}
+    left = None
+    if what != "product" and after:
+        now2 = current(c, what, part)
+        left = differences(what, now2, from_file(what, lines)) if now2 is not None else None
+    elif what == "product":
+        left = [] if after else None
+    # a component / operation X3 has that the estimate doesn't is left in X3 on purpose - not a failure
+    ok = bool(r["ok"] and after and left is not None and not [d for d in left if not d.startswith("X3 ONLY")])
+    res = {"what": what, "part": part, "action": P["action"], "template": P["template"], "lines": len(lines),
+           "ok": ok, "x3_ok": r["ok"], "o_status": r["o_status"], "o_message": r["o_message"], "messages": r["messages"][:50],
+           "in_x3_after": after, "left": left, "before_saved": str(before) if before else None,
+           "seconds": round(time.time() - t0, 1), "raw": r["raw"]}
+    entry = {"at": dt.datetime.now().isoformat(timespec="seconds"), "by": by or os.environ.get("USERNAME", ""),
+             "via": "soap AOWSIMPORT", "endpoint": c.get("endpoint"), "pool": pool, "file": str(src),
+             **{k: v for k, v in res.items() if k != "raw"}}
     x3_load.HISTORY.parent.mkdir(parents=True, exist_ok=True)
     with open(x3_load.HISTORY, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, default=str) + "\n")
-    print(("IMPORTED" if r["ok"] else "X3 REPORTED ERRORS - some lines may have changed, see the re-read below"
-           if str(r["o_status"]) == "0" else "NOT IMPORTED")
-          + f" - HTTP {r['http']}, status {r['status']}, O_STATUS {r['o_status']}, message {r['o_message']!r}")
-    for t, m in r["messages"][:40]:
+    return res
+
+
+def show_result(res):
+    print(("DONE" if res["ok"] else "X3 REPORTED ERRORS - some lines may have changed, see below" if str(res["o_status"]) == "0"
+           else "NOT DONE") + f" - {res['what']} {res['part']} ({res['action']}): O_STATUS {res['o_status']}, "
+          f"message {res['o_message']!r}, in X3 after: {res['in_x3_after']}")
+    for t, m in res["messages"][:40]:
         print(f"   X3 says{(' (' + t + ')') if t else ''}: {m[:300]}")
-    print(f"X3 after: {what} for {part} {'found' if after else 'NOT found' if after is False else 'could not check'}")
-    if after and has_it:
-        now2 = current(c, what, part)
-        if now2 is not None:
-            left = differences(what, now2, from_file(what, lines))
-            print("Re-read X3: " + ("matches the file" if not left else f"{len(left)} difference(s) left:"))
-            for d_ in left:
-                print("   " + d_)
-    if r["raw"]:
-        print("X3's answer:", re.sub(r"\s+", " ", r["raw"])[:1500])
+    if res["left"]:
+        print(f"   Re-read X3: {len(res['left'])} difference(s) left:")
+        for d_ in res["left"]:
+            print("      " + d_)
+    elif res["left"] == []:
+        print("   Re-read X3: matches the file")
+    if res["before_saved"]:
+        print(f"   X3's {res['what']} as it was: {res['before_saved']}  (to put it back: import that file with --update --keep-numbers)")
+    if res["raw"] and not res["ok"]:
+        print("   X3's answer:", re.sub(r"\s+", " ", res["raw"])[:1500])
+
+
+def do_import(a):
+    c = x3_load.guard(x3_api.for_env(x3_load.load_conf(), a.env))
+    a.pool = a.pool or pool_for(c) or ""
+    if not a.pool:
+        print(f"STOP: no SOAP pool for {c.get('endpoint')} (x3_soap.POOLS)")
+        return 1
+    lines = file_lines(a.file)
+    P = prepare(c, a.template, lines, keep_numbers=a.keep_numbers)
+    what = P["what"]
+    print(f"X3: {c['site']} - endpoint {c.get('endpoint')} - pool {a.pool} - template {a.template} ({what})")
+    print(f"File: {a.file} - {len(lines)} line(s) for {P.get('part') or 'nothing'}")
+    print(f"X3 now: product {'exists' if P.get('has_product') else 'NOT FOUND' if P.get('has_product') is False else '?'}"
+          + ("" if what == "product" else f"; {what} {'EXISTS' if P.get('has_it') else 'none' if P.get('has_it') is False else '?'}"))
+    if P["notes"]:
+        print("Update: X3's own line numbers kept for the components it already has:")
+        for n_ in P["notes"]:
+            print("   " + n_)
+    for g_ in P["gone"]:
+        print(f"   NOT IN THE ESTIMATE: {g_} - left in X3 as it is (remove it in X3 if it should go)")
+    if P.get("now") is not None:
+        print(f"Compared with X3 ({len(P['now'])} in X3, {len(P['lines'])} in the file):")
+        for d_ in P["diff"] or ["no difference - nothing to change"]:
+            print("   " + d_)
+    stops = list(P["stops"])
+    if P["action"] == "skip":
+        stops.append(f"the product {P['part']} is already in X3 - products are never changed from here")
+    if P["action"] == "same":
+        stops.append("X3 already matches the file - nothing to send")
+    if P["action"] == "update" and not a.update:
+        stops.append(f"X3 already has a {what} for {P['part']}; changing it needs --update (estimators re-saving)")
+    for s_ in stops:
+        print("STOP:", s_)
+    if stops:
+        return 1
+    if not a.apply:
+        print(f"Dry run - nothing sent. To {P['action']}: add  --apply --confirm {P['part']}")
+        return 0
+    if a.confirm != P["part"]:
+        print(f"Refused: --confirm must be the part code, {P['part']}")
+        return 1
+    res = apply(c, a.pool, P, a.by, a.file)
+    show_result(res)
     print(f"Logged: {x3_load.HISTORY}")
-    return 0 if r["ok"] else 1
+    return 0 if res["ok"] else 1
 
 
 def main(argv=None):
@@ -378,13 +442,14 @@ def main(argv=None):
     im.add_argument("file", help="the .txt load file (one part)")
     im.add_argument("--template", required=True, choices=sorted(TEMPLATES))
     im.add_argument("--env", choices=sorted(x3_api.ENVS), default="uat")
-    im.add_argument("--pool", required=True)
+    im.add_argument("--pool", default="", help="default: the endpoint's pool (SDIEST for We are SDI)")
     im.add_argument("--apply", action="store_true", help="without it, nothing is sent")
     im.add_argument("--confirm", default="", help="the part code, typed again")
     im.add_argument("--update", action="store_true", help="allow changing a BOM / route X3 already has")
     im.add_argument("--by", default="")
     im.add_argument("--keep-numbers", dest="keep_numbers", action="store_true",
                     help="BOM update: use the file's line numbers as they are (default: keep X3's for its components)")
+    # (the pool defaults to the endpoint's: SDIEST for We are SDI)
     a = ap.parse_args(argv)
     return check(a) if a.cmd == "check" else do_import(a)
 
