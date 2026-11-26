@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monday2Friday · SDI Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0d0d0f; --surface:#17171b; --surface-2:#1d1d22; --line:#2a2a31; --line-soft:#202026;
+    --ink:#f3f2ee; --ink-dim:#a3a3aa; --ink-faint:#6b6b73;
+    --accent:#ffd400; --ok:#5fd08a; --warn:#ff9d42; --fail:#ff5d5d; --info:#6db3ff; --grey:#7d7d86;
+    --r:4px; --mono:'JetBrains Mono',ui-monospace,monospace; --disp:'Archivo',sans-serif; --body:'Hanken Grotesk',sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:14.5px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  button,input,select,textarea{font:inherit;color:inherit}
+  .app{display:grid;grid-template-columns:236px 1fr;min-height:100vh}
+  .side{border-right:1px solid var(--line);background:linear-gradient(180deg,#101013,#0d0d0f);position:sticky;top:0;height:100vh;display:flex;flex-direction:column}
+  .brand{padding:20px;border-bottom:1px solid var(--line-soft);display:flex;gap:11px;align-items:center}
+  .mark{width:32px;height:32px;background:var(--accent);border-radius:3px;display:grid;place-items:center;flex:none}
+  .mark b{font-family:var(--disp);font-weight:900;color:#000;font-size:13px;letter-spacing:-.5px}
+  .brand .t1{font-family:var(--disp);font-weight:800;letter-spacing:.06em;font-size:13.5px}
+  .brand .t2{font-size:10px;color:var(--ink-faint);letter-spacing:.28em;text-transform:uppercase}
+  .nav{padding:10px;flex:1;overflow:auto}
+  .nav .grp{font-size:10px;letter-spacing:.22em;color:var(--ink-faint);text-transform:uppercase;padding:14px 10px 6px}
+  .nav a{display:flex;align-items:center;justify-content:space-between;padding:8px 11px;border-radius:var(--r);color:var(--ink-dim);font-weight:500;font-size:13.5px;cursor:pointer;position:relative}
+  .nav a:hover{background:var(--surface);color:var(--ink)}
+  .nav a.active{background:var(--surface-2);color:var(--ink)}
+  .nav a.active::before{content:"";position:absolute;left:-10px;top:7px;bottom:7px;width:3px;background:var(--accent);border-radius:0 3px 3px 0}
+  .nav .badge{font-family:var(--mono);font-size:10.5px;background:var(--accent);color:#000;border-radius:9px;padding:0 6px}
+  .side-foot{padding:12px 16px;border-top:1px solid var(--line-soft);font-size:11.5px;color:var(--ink-faint)}
+  .side-foot a{color:var(--accent);font-weight:600}
+  main{padding:22px 30px 60px;min-width:0}
+  .top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:18px}
+  .crumb{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  .top .sp{flex:1}
+  h1{font-family:var(--disp);font-weight:800;font-size:28px;letter-spacing:-.02em;line-height:1.1}
+  h2{font-family:var(--disp);font-weight:700;font-size:16px;margin-bottom:10px}
+  .sub{color:var(--ink-dim);margin:4px 0 18px;max-width:900px}
+  .btn{font-family:var(--disp);font-weight:700;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;background:var(--accent);color:#000;border:0;border-radius:var(--r);padding:8px 13px;cursor:pointer;white-space:nowrap}
+  .btn:hover{background:#fff}
+  .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  .btn.ghost:hover{border-color:var(--ink-faint)}
+  .btn.small{padding:5px 9px;font-size:10.5px}
+  .btn:disabled{opacity:.5;cursor:wait}
+  input,select,textarea{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);padding:7px 9px;font-size:13.5px;min-width:0}
+  input:focus,select:focus,textarea:focus{outline:1px solid var(--accent);border-color:var(--accent)}
+  textarea{width:100%;min-height:62px;resize:vertical}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 17px;margin-bottom:16px;min-width:0}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px}
+  .grid2{display:grid;grid-template-columns:1.5fr 1fr;gap:16px}
+  .kpi{margin-bottom:0}
+  .kpi .lab{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  .kpi .big{font-family:var(--disp);font-weight:800;font-size:32px;letter-spacing:-.02em;margin:2px 0 8px}
+  .kpi .note{font-size:12.5px;color:var(--ink-dim)}
+  .bar{display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--line);margin:8px 0 10px}
+  .bar span{display:block;height:100%}
+  .split{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;font-size:11.5px}
+  .split .v{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+  .split .k{color:var(--ink-faint);display:flex;gap:5px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block;flex:none}
+  .s-Invoiced{background:var(--ok)} .s-Confirmed{background:var(--info)} .s-TBC{background:var(--warn)} .s-Risk{background:var(--fail)} .s-Unclassified{background:var(--grey)}
+  .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;border:1px solid var(--line);white-space:nowrap;color:var(--ink-dim)}
+  .tag.Invoiced,.tag.ok,.tag.Approved{color:var(--ok);border-color:rgba(95,208,138,.4)}
+  .tag.Confirmed,.tag.info{color:var(--info);border-color:rgba(109,179,255,.4)}
+  .tag.TBC,.tag.warn,.tag.Awaiting{color:var(--warn);border-color:rgba(255,157,66,.4)}
+  .tag.Risk,.tag.fail,.tag.Decision{color:var(--fail);border-color:rgba(255,93,93,.4)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:9px 10px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  tr.click{cursor:pointer} tr.click:hover td{background:var(--surface-2)}
+  td.num,th.num{text-align:right;font-family:var(--mono);white-space:nowrap}
+  tr.child td:first-child{padding-left:26px;color:var(--ink-dim)}
+  tr.group td{font-weight:700}
+  .muted{color:var(--ink-faint);font-size:12.5px}
+  .dim{color:var(--ink-dim)}
+  .wrap{white-space:pre-line}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .item{padding:11px 0;border-bottom:1px solid var(--line-soft)} .item:last-child{border-bottom:0}
+  .item .t{font-weight:600} .item .amt{font-family:var(--mono);color:var(--fail);float:right}
+  .item .act{color:var(--accent);font-size:12.5px;font-weight:600;margin-top:2px}
+  .empty{color:var(--ink-faint);padding:18px 0;text-align:center}
+  .notice{border:1px solid rgba(255,212,0,.35);background:rgba(255,212,0,.06);border-radius:var(--r);padding:12px 14px;margin-bottom:16px;font-size:13.5px}
+  .notice.bad{border-color:rgba(255,93,93,.45);background:rgba(255,93,93,.07)}
+  .tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+  .tabs a{padding:6px 11px;border:1px solid var(--line);border-radius:14px;font-size:12.5px;color:var(--ink-dim);cursor:pointer}
+  .tabs a.on{background:var(--surface-2);color:var(--ink);border-color:var(--ink-faint)}
+  .q{border-left:3px solid var(--line)} .q.done{border-left-color:var(--ok)}
+  .q .topic{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);font-weight:600}
+  .q .ask{font-family:var(--disp);font-weight:700;font-size:16px;margin:3px 0 4px}
+  .q ul{margin:8px 0 10px 18px;color:var(--ink-dim);font-size:13px}
+  .q ul li{margin:2px 0}
+  .swatch{display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:-1px;margin-right:4px;border:1px solid var(--line)}
+  .drawer{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;z-index:20}
+  .drawer.open{display:block}
+  .drawer .panel{position:absolute;right:0;top:0;bottom:0;width:min(720px,100%);background:var(--bg);border-left:1px solid var(--line);padding:22px 24px;overflow:auto}
+  .kv{display:grid;grid-template-columns:170px 1fr;gap:6px 14px;font-size:13px;margin:10px 0 16px}
+  .kv div:nth-child(odd){color:var(--ink-faint)}
+  details summary{cursor:pointer;color:var(--ink-dim);font-size:13px;margin:6px 0}
+  .form{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+  .form label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ink-dim)}
+  .form .full{grid-column:1/-1}
+  .toast{position:fixed;bottom:18px;right:18px;background:var(--surface-2);border:1px solid var(--line);border-left:3px solid var(--accent);padding:10px 14px;border-radius:var(--r);z-index:30;font-size:13px;display:none;max-width:420px}
+  .soon{opacity:.55}
+  @media(max-width:1100px){.grid4{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:900px){.app{grid-template-columns:1fr}.side{position:static;height:auto}.nav{display:flex;flex-wrap:wrap}.nav .grp{width:100%}.grid3,.grid2,.grid4{grid-template-columns:1fr}main{padding:18px 16px}.form{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><div class="mark"><b>M2F</b></div><div><div class="t1">Monday2Friday</div><div class="t2">SDI Intelligence</div></div></div>
+    <nav class="nav" id="nav">
+      <div class="grp">Commercial</div>
+      <a data-view="dashboard">Director dashboard</a>
+      <a data-view="review">Weekly review</a>
+      <a data-view="variations">Variations</a>
+      <a data-view="accounts">Accounts</a>
+      <div class="grp">Workspaces</div>
+      <a data-view="am">AM workspace</a>
+      <a data-view="pm">PM overview</a>
+      <a data-view="projects">All projects</a>
+      <div class="grp">Pilot</div>
+      <a data-view="questions">Questions for Kayleigh <span class="badge" id="qbadge"></span></a>
+      <a data-view="settings">Settings and data</a>
+      <a data-view="roadmap">Coming next</a>
+    </nav>
+    <div class="side-foot">Pilot reading the account tracker.<br><a href="/">← SDI Intelligence portal</a></div>
+  </aside>
+  <main>
+    <div class="top">
+      <span class="crumb" id="crumb">Monday2Friday</span><span class="sp"></span>
+      <label class="muted" for="asof">As of</label><input type="month" id="asof">
+      <a class="btn ghost" href="/m2f/guide" target="_blank" rel="noopener">User guide</a>
+      <a class="btn ghost" href="/m2f/architecture" target="_blank" rel="noopener">Architecture</a>
+    </div>
+    <div id="view"></div>
+  </main>
+</div>
+<div class="drawer" id="drawer"><div class="panel" id="drawerPanel"></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  // ── Plumbing ─────────────────────────────────────────────────────────────
+  const USER = "m2f_user";
+  const store = {
+    get: k => { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} },
+  };
+  const state = { view: "dashboard", labels: {}, people: [], projects: null, freezes: [], me: null };
+
+  const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const num = v => Number(v || 0);
+  const gbp = v => "£" + num(v).toLocaleString("en-GB", {maximumFractionDigits: 0});
+  const short = v => { const n = num(v), a = Math.abs(n);
+    return (n < 0 ? "-" : "") + (a >= 1e6 ? "£" + (a / 1e6).toFixed(2) + "m" : a >= 1e3 ? "£" + Math.round(a / 1e3) + "k" : "£" + Math.round(a)); };
+  const signed = v => (num(v) > 0 ? "+" : "") + short(v);
+  const STATUSES = ["Invoiced", "Confirmed", "TBC", "Risk", "Unclassified"];
+  const label = s => state.labels[s] || s;
+  const $ = id => document.getElementById(id);
+  const asof = () => $("asof").value || "";
+  const signedIn = () => !!(state.me && state.me.kind === "user");
+  const user = () => signedIn() ? state.me.name : store.get(USER);
+
+  function toast(msg) { const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 3500); }
+
+  function signIn() { location.href = "/auth/login?next=" + encodeURIComponent("/m2f" + location.hash); }
+
+  async function api(path, opts = {}) {
+    const headers = Object.assign({}, opts.headers || {});
+    if (opts.json !== undefined) { headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(opts.json); }
+    // Same-origin: the Entra session cookie goes with every call. Tokens never reach this page.
+    const r = await fetch(path, {method: opts.method || "GET", headers, body: opts.body, credentials: "same-origin"});
+    if (r.status === 401) { const err = new Error("Your sign-in has expired."); err.status = 401; throw err; }
+    if (!r.ok) { let d = await r.text(); try { d = JSON.parse(d).detail; } catch (e) {} const err = new Error(typeof d === "string" ? d : JSON.stringify(d)); err.status = r.status; throw err; }
+    return r.json();
+  }
+  const withAsof = p => asof() ? p + (p.includes("?") ? "&" : "?") + "asof=" + asof() : p;
+
+  function needUser() {
+    if (user()) return user();   // signed in: the server records your name itself
+    const n = prompt("Your name, so changes show who made them:");
+    if (n) store.set(USER, n.trim());
+    return user();
+  }
+
+  // ── Shared pieces ────────────────────────────────────────────────────────
+  function statusCard(c, note) {
+    const total = num(c.total) || 1;
+    const segs = STATUSES.map(s => `<span class="s-${s}" style="width:${Math.max(0, num(c.by_status[s]) / total * 100)}%" title="${esc(label(s))}: ${gbp(c.by_status[s])}"></span>`).join("");
+    const cells = STATUSES.map(s => `<div><div class="k"><span class="dot s-${s}"></span>${esc(label(s))}</div><div class="v">${short(c.by_status[s])}</div></div>`).join("");
+    return `<div class="card kpi"><div class="lab">${esc(c.label)}</div><div class="big">${short(c.total)}</div>
+      <div class="bar">${segs}</div><div class="split">${cells}</div>${note ? `<div class="note" style="margin-top:8px">${note}</div>` : ""}</div>`;
+  }
+  const cardsRow = cards => `<div class="grid3">${statusCard(cards.this_month)}${statusCard(cards.next_month)}${statusCard(cards.full_year)}</div>`;
+  const people = list => (list || []).map(esc).join(", ");
+
+  function riskList(items, empty) {
+    if (!items.length) return `<div class="empty">${empty}</div>`;
+    return items.map(r => `<div class="item click" data-pid="${esc(r.pid)}" style="cursor:pointer">
+      <span class="amt">${short(r.amount)} · ${esc(r.months.join(", "))}</span>
+      <div class="t">${esc(r.project)}</div><div class="muted">${esc(r.account)}${r.am ? " · AM " + esc(r.am) : ""}${r.pms.length ? " · PM " + people(r.pms) : ""}</div>
+      <div class="act wrap">${r.next_step ? esc(r.next_step) : "No next step recorded in the tracker"}</div></div>`).join("");
+  }
+
+  function projectTable(rows, opts = {}) {
+    if (!rows.length) return `<div class="empty">${opts.empty || "No projects."}</div>`;
+    return `<table><thead><tr><th>Project</th><th>Account</th>${opts.pm ? "" : "<th>PM</th>"}${opts.am ? "" : "<th>AM</th>"}<th>Stage</th><th>Next step</th><th>PO</th><th class="num">Forecast</th></tr></thead><tbody>
+      ${rows.map(p => `<tr class="click" data-pid="${esc(p.pid)}"><td><b>${esc(p.name)}</b>${p.hidden ? ' <span class="tag">hidden</span>' : ""}${p.at_risk ? ' <span class="tag Risk">at risk</span>' : ""}${p.billing_soon ? ' <span class="tag info">billing soon</span>' : ""}${p.issues ? ` <span class="tag warn" title="Flagged by the import">${p.issues} to check</span>` : ""}</td>
+        <td class="dim">${esc(p.account)}</td>${opts.pm ? "" : `<td>${people(p.pms) || '<span class="muted">—</span>'}</td>`}${opts.am ? "" : `<td>${esc(p.am || "") || '<span class="muted">—</span>'}</td>`}
+        <td>${esc(p.stage || "") || '<span class="muted">—</span>'}</td><td class="wrap" style="max-width:340px">${esc(p.next_step || "") || '<span class="muted">—</span>'}</td>
+        <td class="dim" style="max-width:140px;word-break:break-all">${esc(p.po_ref || "")}</td><td class="num">${short(p.forecast_total)}</td></tr>`).join("")}</tbody></table>`;
+  }
+
+  function personPicker(id, role, current) {
+    const list = state.people.filter(p => role === "pm" ? p.pm_projects : (p.am_projects || p.accounts.length));
+    const opts = list.map(p => `<option ${p.name === current ? "selected" : ""}>${esc(p.name)}</option>`).join("");
+    return `<select id="${id}"><option value="">Choose…</option>${opts}</select>`;
+  }
+
+  async function loadPeople() { state.people = (await api("/api/m2f/people")).people; }
+  async function loadProjects(force) { if (!state.projects || force) state.projects = (await api("/api/m2f/projects")).projects; return state.projects; }
+
+  // ── Views ────────────────────────────────────────────────────────────────
+  const views = {};
+
+  views.dashboard = async el => {
+    const d = await api(withAsof("/api/m2f/dashboard"));
+    state.labels = d.labels;
+    const groups = {};
+    d.accounts.forEach(a => { const g = a.parent || a.account; (groups[g] = groups[g] || []).push(a); });
+    let rows = "";
+    Object.entries(groups).forEach(([g, list]) => {
+      const kids = list.filter(a => a.parent);
+      if (kids.length) {
+        const sum = k => kids.reduce((s, a) => s + num(a[k]), 0);
+        rows += `<tr class="group"><td>${esc(g)} group</td><td class="num">${short(sum("this"))}</td><td class="num">${short(sum("next"))}</td><td class="num">${short(sum("year"))}</td></tr>`;
+        rows += kids.map(a => `<tr class="child"><td>${esc(a.account)}</td><td class="num">${short(a.this)}</td><td class="num">${short(a.next)}</td><td class="num">${short(a.year)}</td></tr>`).join("");
+      } else {
+        rows += list.map(a => `<tr><td>${esc(a.account)}</td><td class="num">${short(a.this)}</td><td class="num">${short(a.next)}</td><td class="num">${short(a.year)}</td></tr>`).join("");
+      }
+    });
+    const fz = d.latest_freeze;
+    el.innerHTML = `<h1>Forecast and project risks</h1>
+      <p class="sub">What's landing this month, what's coming next and where the year is heading, straight from the account tracker. Budget comparison switches on once Kayleigh confirms the FY27 budget.</p>
+      ${cardsRow(d.cards)}
+      <div class="grid2"><div class="card"><h2>Forecast by account</h2>
+        <table><thead><tr><th>Account</th><th class="num">${esc(d.periods.this_label)}</th><th class="num">${esc(d.periods.next_label)}</th><th class="num">${esc(d.periods.year_label)}</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="empty">No forecast in these months.</td></tr>'}</tbody></table>
+        <p class="muted" style="margin-top:10px">Includes rows hidden in the tracker, as the tracker's own totals do.</p></div>
+      <div class="card"><h2>Needs a decision</h2><p class="muted">Forecast marked ${esc(label("Risk"))} in ${esc(d.periods.this_label)} or ${esc(d.periods.next_label)}.</p>
+        ${riskList(d.needs_decision, "Nothing marked at risk in these two months.")}
+        <div class="row" style="margin-top:12px"><a class="btn ghost small" data-go="review">${fz ? "Open weekly review" : "Freeze the forecast to start weekly reviews"}</a></div></div></div>`;
+  };
+
+  views.am = async el => {
+    await loadPeople();
+    const chosen = store.get("m2f_am");
+    el.innerHTML = `<h1>My forecast and projects</h1><p class="sub">An AM's forecast, what moved since the last freeze, and their live projects. Ownership comes from the account owners set in Settings, or an AM named on the project.</p>
+      <div class="row" style="margin-bottom:16px"><span class="muted">AM</span>${personPicker("amPick", "am", chosen)}<a class="btn ghost small" data-go="settings">Set account owners</a></div><div id="amBody"></div>`;
+    $("amPick").onchange = () => { store.set("m2f_am", $("amPick").value); renderAm(); };
+    renderAm();
+  };
+  async function renderAm() {
+    const name = $("amPick").value, body = $("amBody");
+    if (!name) { body.innerHTML = `<div class="notice">${state.people.some(p => p.accounts.length) ? "Choose an AM above." : "No account owners are set yet. Kayleigh's answer on ownership sets them, in Settings → Account owners."}</div>`; return; }
+    const d = await api(withAsof("/api/m2f/am/" + encodeURIComponent(name)));
+    state.labels = d.labels;
+    const moved = d.moved.length ? `<table><thead><tr><th>Project</th><th>What moved</th><th>Reason</th><th>Next action</th></tr></thead><tbody>${d.moved.map(m => `<tr class="click" data-pid="${esc(m.pid)}"><td><b>${esc(m.project)}</b></td><td>${esc(m.summary)}</td><td>${esc(m.reason || "") || '<span class="muted">—</span>'}</td><td>${esc(m.next_action || "") || '<span class="muted">—</span>'}</td></tr>`).join("")}</tbody></table>` : `<div class="empty">Nothing has moved since the last freeze, or no freeze yet.</div>`;
+    body.innerHTML = `${d.accounts.length ? `<p class="muted" style="margin-bottom:10px">Owns: ${d.accounts.map(esc).join(", ")}</p>` : ""}${cardsRow(d.cards)}
+      <div class="card"><h2>What moved this week</h2>${moved}</div>
+      <div class="card"><h2>Needs a decision</h2>${riskList(d.needs_decision, "Nothing marked at risk this month or next.")}</div>
+      <div class="card"><h2>My live projects</h2>${projectTable(d.projects, {am: true, empty: "No live projects."})}${d.hidden_projects ? `<p class="muted" style="margin-top:8px">${d.hidden_projects} more are hidden in the tracker.</p>` : ""}</div>`;
+  }
+
+  views.pm = async el => {
+    await loadPeople();
+    el.innerHTML = `<h1>My projects</h1><p class="sub">The jobs a PM runs, at-risk and billing-soon first. Taken from the PM column of the tracker; hidden rows are left out.</p>
+      <div class="row" style="margin-bottom:16px"><span class="muted">PM</span>${personPicker("pmPick", "pm", store.get("m2f_pm"))}</div><div id="pmBody"></div>`;
+    $("pmPick").onchange = () => { store.set("m2f_pm", $("pmPick").value); renderPm(); };
+    renderPm();
+  };
+  async function renderPm() {
+    const name = $("pmPick").value, body = $("pmBody");
+    if (!name) { body.innerHTML = `<div class="notice">Choose a PM above.</div>`; return; }
+    const d = await api(withAsof("/api/m2f/pm/" + encodeURIComponent(name)));
+    const k = (t, v, n) => `<div class="card kpi"><div class="lab">${t}</div><div class="big">${v}</div><div class="note">${n}</div></div>`;
+    body.innerHTML = `<div class="grid4">${k("Live projects", d.counts.live, "Visible in the tracker")}${k("At risk", d.counts.at_risk, "Forecast marked " + esc(label("Risk")))}${k("Billing soon", d.counts.billing_soon, esc(d.periods.this_label) + " or " + esc(d.periods.next_label))}${k("No next step", d.counts.no_next_step, "Next key steps is blank")}</div>
+      <div class="card">${projectTable(d.projects, {pm: true})}${d.hidden_projects ? `<p class="muted" style="margin-top:8px">${d.hidden_projects} more are hidden in the tracker.</p>` : ""}</div>`;
+  }
+
+  views.projects = async el => {
+    const rows = await loadProjects(true);
+    el.innerHTML = `<h1>All projects</h1><p class="sub">Every project row in the live tracker tabs. Click a project to see its forecast by month, what the import flagged, and its variations.</p>
+      <div class="row" style="margin-bottom:14px"><input id="pq" placeholder="Search name, PO, next step…" style="flex:1;min-width:220px">
+      <select id="pa"><option value="">All accounts</option>${[...new Set(rows.map(r => r.account))].sort().map(a => `<option>${esc(a)}</option>`).join("")}</select>
+      <label class="muted"><input type="checkbox" id="ph"> include hidden rows</label></div><div class="card" id="plist"></div>`;
+    const draw = () => {
+      const q = $("pq").value.toLowerCase(), a = $("pa").value, h = $("ph").checked;
+      const list = rows.filter(r => (h || !r.hidden) && (!a || r.account === a) && (!q || [r.name, r.po_ref, r.next_step, r.stage, r.sales_order].join(" ").toLowerCase().includes(q)));
+      $("plist").innerHTML = `<p class="muted" style="margin-bottom:8px">${list.length} of ${rows.length} projects</p>` + projectTable(list.slice(0, 300)) + (list.length > 300 ? `<p class="muted">Showing the first 300; search to narrow.</p>` : "");
+    };
+    ["pq", "pa", "ph"].forEach(i => $(i).oninput = draw); draw();
+  };
+
+  views.review = async el => {
+    state.freezes = (await api("/api/m2f/freezes")).freezes;
+    const opts = state.freezes.map(f => `<option value="${f.id}">${esc(f.label)} · ${esc(f.frozen_at.slice(0, 10))}${f.frozen_by ? " · " + esc(f.frozen_by) : ""}</option>`).join("");
+    el.innerHTML = `<h1>What moved this week?</h1><p class="sub">Freeze the forecast, then compare the live tracker with it: what moved, by how much, why, and who acts next. Changes to agreed scope live in the variations register below.</p>
+      <div class="card"><div class="row"><span class="muted">Compare with</span>${state.freezes.length ? `<select id="fz">${opts}</select>` : '<span class="dim">No freeze yet.</span>'}<span style="flex:1"></span>
+      <input id="fzLabel" placeholder="Name for a new freeze, e.g. Forecast freeze 5 Mar"><button class="btn" id="fzBtn">Freeze forecast now</button></div></div><div id="rvBody"></div>`;
+    $("fzBtn").onclick = async () => {
+      const by = needUser(); $("fzBtn").disabled = true;
+      try { await api("/api/m2f/freezes", {method: "POST", json: {label: $("fzLabel").value, by}}); toast("Forecast frozen."); views.review(el); }
+      catch (e) { toast(e.message); $("fzBtn").disabled = false; }
+    };
+    if ($("fz")) { $("fz").onchange = renderReview; renderReview(); }
+  };
+  async function renderReview() {
+    const id = $("fz").value, d = await api(withAsof("/api/m2f/review/" + id));
+    const cmp = c => `<div class="card kpi"><div class="lab">${esc(c.label)}</div><div class="big">${short(c.now)}</div><div class="note">At freeze ${short(c.at_freeze)} · <b style="color:${num(c.change) < 0 ? "var(--fail)" : num(c.change) > 0 ? "var(--ok)" : "var(--ink-dim)"}">${num(c.change) ? signed(c.change) : "no change"}</b></div></div>`;
+    const mv = d.movements.length ? `<table><thead><tr><th>Account / project</th><th>Movement</th><th class="num">Net</th><th>Reason</th><th>Next action</th><th>Owner</th><th></th></tr></thead><tbody>${d.movements.map((m, i) => `<tr>
+        <td><a class="click" data-pid="${esc(m.pid)}" style="cursor:pointer"><b>${esc(m.project)}</b></a><div class="muted">${esc(m.account)}${m.removed_from_tracker ? " · no longer in the tracker" : ""}</div></td>
+        <td>${esc(m.summary)}</td><td class="num">${signed(m.net)}</td>
+        <td><input data-n="reason" data-i="${i}" value="${esc(m.reason || "")}" placeholder="Why it moved"></td>
+        <td><input data-n="next_action" data-i="${i}" value="${esc(m.next_action || "")}" placeholder="What happens next"></td>
+        <td><input data-n="owner" data-i="${i}" value="${esc(m.owner || m.am || (m.pms || [])[0] || "")}" style="width:110px"></td>
+        <td><button class="btn small ghost" data-save="${i}">Save</button></td></tr>`).join("")}</tbody></table>` : `<div class="empty">Nothing has moved since this freeze.</div>`;
+    $("rvBody").innerHTML = `<div class="grid3">${cmp(d.compare.this_month)}${cmp(d.compare.next_month)}${cmp(d.compare.full_year)}</div>
+      <div class="card"><h2>Forecast movements since ${esc(d.freeze.label)}</h2>${mv}</div>
+      <div class="card"><div class="row"><h2 style="margin:0">Open variations and approvals</h2><span style="flex:1"></span><a class="btn ghost small" data-go="variations">Variations register</a></div>${variationTable(d.variations, true)}</div>`;
+    $("rvBody").querySelectorAll("[data-save]").forEach(b => b.onclick = async () => {
+      const i = b.dataset.save, m = d.movements[i], val = n => $("rvBody").querySelector(`[data-n="${n}"][data-i="${i}"]`).value;
+      try { await api(`/api/m2f/review/${id}/notes/${encodeURIComponent(m.pid)}`, {method: "PUT", json: {reason: val("reason"), next_action: val("next_action"), owner: val("owner"), by: needUser()}}); toast("Saved."); }
+      catch (e) { toast(e.message); }
+    });
+  }
+
+  const VSTAT = ["To price", "Awaiting PO", "Decision needed", "Approved", "Rejected"];
+  function variationTable(list, compact) {
+    if (!list.length) return `<div class="empty">No variations logged yet.</div>`;
+    return `<table><thead><tr><th>Change</th><th>Project</th><th class="num">Sell</th><th>Margin</th><th>CPA impact</th><th>Approval / PO</th><th>Owner and action</th>${compact ? "" : "<th></th>"}</tr></thead><tbody>${list.map(v => `<tr>
+      <td><b>${esc(v.title)}</b></td><td>${v.pid ? `<a class="click" data-pid="${esc(v.pid)}" style="cursor:pointer">${esc(v.project)}</a>` : '<span class="muted">—</span>'}<div class="muted">${esc(v.account || "")}</div></td>
+      <td class="num">${v.sell_value ? gbp(v.sell_value) : "TBC"}</td><td>${esc(v.margin_pct ? v.margin_pct + "%" : "TBC")}</td><td>${esc(v.cpa_impact || "")}</td>
+      <td><span class="tag ${esc((v.approval_status || "").split(" ")[0])}">${esc(v.approval_status)}</span>${v.po_ref ? `<div class="muted">PO ${esc(v.po_ref)}</div>` : ""}</td>
+      <td>${esc(v.owner || "")}<div class="muted">${esc(v.next_action || "")}${v.due_date ? " · by " + esc(v.due_date) : ""}</div></td>
+      ${compact ? "" : `<td><button class="btn small ghost" data-edit="${v.id}">Edit</button></td>`}</tr>`).join("")}</tbody></table>`;
+  }
+
+  views.variations = async el => {
+    const [list, projects] = [(await api("/api/m2f/variations")).variations, await loadProjects()];
+    el.innerHTML = `<h1>Decisions, variations and approvals</h1><p class="sub">Every change to agreed scope, linked to its project, with its commercial and CPA impact and who acts next. This is the AM's list of what to price, approve or chase.</p>
+      <div class="card" id="vform"></div><div class="card">${variationTable(list)}</div>
+      <datalist id="plistdl">${projects.filter(p => !p.hidden).map(p => `<option value="${esc(p.name)} · ${esc(p.account)}"></option>`).join("")}</datalist>`;
+    const byLabel = Object.fromEntries(projects.map(p => [p.name + " · " + p.account, p.pid]));
+    const form = (v = {}) => {
+      $("vform").innerHTML = `<h2>${v.id ? "Edit variation" : "Log a variation"}</h2><div class="form">
+        <label class="full">What changed<input id="v_title" value="${esc(v.title || "")}" placeholder="e.g. Additional artwork requested"></label>
+        <label class="full">Project<input id="v_proj" list="plistdl" value="${v.pid ? esc((v.project || "") + " · " + (v.account || "")) : ""}" placeholder="Start typing a project name"></label>
+        <label>Sell value (£)<input id="v_sell" value="${esc(v.sell_value || "")}" inputmode="decimal"></label>
+        <label>Margin %<input id="v_margin" value="${esc(v.margin_pct || "")}" inputmode="decimal"></label>
+        <label>CPA impact<input id="v_cpa" value="${esc(v.cpa_impact || "")}" placeholder="e.g. Release held, +1 install night"></label>
+        <label>Approval status<select id="v_status">${VSTAT.map(s => `<option ${s === (v.approval_status || "To price") ? "selected" : ""}>${s}</option>`).join("")}</select></label>
+        <label>PO reference<input id="v_po" value="${esc(v.po_ref || "")}"></label>
+        <label>Owner<input id="v_owner" value="${esc(v.owner || "")}"></label>
+        <label>Next action<input id="v_next" value="${esc(v.next_action || "")}"></label>
+        <label>Due<input id="v_due" type="date" value="${esc(v.due_date || "")}"></label></div>
+        <div class="row" style="margin-top:12px"><button class="btn" id="v_save">${v.id ? "Save changes" : "Add variation"}</button>${v.id ? '<button class="btn ghost" id="v_cancel">Cancel</button>' : ""}</div>`;
+      $("v_save").onclick = async () => {
+        const proj = $("v_proj").value.trim();
+        if (proj && !byLabel[proj]) { toast("Pick the project from the list so it links correctly."); return; }
+        const body = {title: $("v_title").value, pid: byLabel[proj] || null, sell_value: $("v_sell").value, margin_pct: $("v_margin").value, cpa_impact: $("v_cpa").value,
+          approval_status: $("v_status").value, po_ref: $("v_po").value, owner: $("v_owner").value, next_action: $("v_next").value, due_date: $("v_due").value, by: needUser()};
+        try { await api("/api/m2f/variations" + (v.id ? "/" + v.id : ""), {method: v.id ? "PATCH" : "POST", json: body}); toast(v.id ? "Variation updated." : "Variation added."); views.variations(el); }
+        catch (e) { toast(e.message); }
+      };
+      if ($("v_cancel")) $("v_cancel").onclick = () => form();
+    };
+    form();
+    el.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => { form(list.find(v => v.id == b.dataset.edit)); window.scrollTo(0, 0); });
+  };
+
+  views.accounts = async el => {
+    const d = await api(withAsof("/api/m2f/accounts"));
+    const rows = d.accounts.map(a => `<tr class="${a.parent ? "child" : ""}"><td>${esc(a.account)}${a.parent ? "" : ""}</td><td>${esc(a.owner || "") || '<span class="muted">not set</span>'}</td><td class="num">${a.live_projects}</td><td class="num">${short(a.this)}</td><td class="num">${short(a.next)}</td><td class="num">${short(a.year)}</td></tr>`).join("");
+    const brands = d.brands.map(b => `<tr><td><b>${esc(b.brand)}</b></td><td>${esc(b.sector || "")}</td><td>${esc(b.account || "")}</td><td class="dim">${esc(b["job title"] || "")}</td><td class="wrap">${esc(b["next key steps"] || "")}</td><td>${(b.emails || []).map(esc).join("<br>")}</td></tr>`).join("");
+    el.innerHTML = `<h1>Accounts</h1><p class="sub">Boots as a group with its divisions, plus the brand accounts, with live projects and forecast. Account owners are set in Settings.</p>
+      <div class="card"><table><thead><tr><th>Account</th><th>Owner</th><th class="num">Live projects</th><th class="num">${esc(d.periods.this_label)}</th><th class="num">${esc(d.periods.next_label)}</th><th class="num">${esc(d.periods.year_label)}</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="card"><h2>Brands and target accounts</h2><p class="muted" style="margin-bottom:8px">From the Brands - Accounts tab. Credit limits are not shown here.</p>
+      <table><thead><tr><th>Brand</th><th>Sector</th><th>Account</th><th>Contact role</th><th>Next step</th><th>Email</th></tr></thead><tbody>${brands || '<tr><td colspan="6" class="empty">No brands tab in this tracker.</td></tr>'}</tbody></table></div>`;
+  };
+
+  views.questions = async el => {
+    const qs = (await api("/api/m2f/questions")).questions;
+    const done = qs.filter(q => q.decision).length;
+    el.innerHTML = `<h1>Questions for Kayleigh</h1><p class="sub">Decisions only the account director can make before the tracker moves into the system. Each comes with the evidence from the tracker. Answers are saved here and change how the boards read straight away where they can (the status names, for example).</p>
+      <div class="notice">${done} of ${qs.length} answered.</div>
+      ${qs.map(q => `<div class="card q ${q.decision ? "done" : ""}"><div class="topic">${esc(q.topic)}</div><div class="ask">${esc(q.question)}</div><div class="dim">${esc(q.why)}</div>
+        ${q.evidence.length ? `<details ${q.evidence.length <= 6 ? "open" : ""}><summary>What the tracker shows (${q.evidence.length})</summary><ul>${q.evidence.map(e => `<li>${e.startsWith("#") ? `<span class="swatch" style="background:${esc(e.slice(0, 7))}"></span>` : ""}${esc(e)}</li>`).join("")}</ul></details>` : ""}
+        ${q.decision ? `<div class="notice" style="margin:8px 0">Answered${q.decision.choice ? ": <b>" + esc(q.decision.choice) + "</b>" : ""}${q.decision.decided_by ? " by " + esc(q.decision.decided_by) : ""} on ${esc(q.decision.decided_at.slice(0, 10))}.${q.decision.answer ? `<div class="wrap" style="margin-top:4px">${esc(q.decision.answer)}</div>` : ""}</div>` : ""}
+        <div class="row" style="margin-top:8px">${(q.choices || []).map(c => `<label class="muted"><input type="radio" name="c_${q.id}" value="${c}" ${q.decision && q.decision.choice === c ? "checked" : ""}> ${c}</label>`).join("")}</div>
+        <textarea id="a_${q.id}" placeholder="Answer or notes">${esc(q.decision ? q.decision.answer || "" : "")}</textarea>
+        <div class="row" style="margin-top:8px"><button class="btn small" data-q="${q.id}">${q.decision ? "Update answer" : "Save answer"}</button></div></div>`).join("")}`;
+    el.querySelectorAll("[data-q]").forEach(b => b.onclick = async () => {
+      const id = b.dataset.q, c = el.querySelector(`input[name="c_${id}"]:checked`);
+      try { await api("/api/m2f/questions/" + id, {method: "PUT", json: {choice: c ? c.value : null, answer: $("a_" + id).value, by: needUser()}}); toast("Answer saved."); views.questions(el); updateBadge(); }
+      catch (e) { toast(e.message); }
+    });
+  };
+
+  views.settings = async el => {
+    const s = await api("/api/m2f/status");
+    let ppl = {people: [], assignments: {account_am: {}, alias: {}, deputy: {}}}, accounts = [];
+    if (s.ready) { ppl = await api("/api/m2f/people"); accounts = (await api("/api/m2f/accounts")).accounts; }
+    const recon = (s.reconciliation || []).map(r => { const d = num(r.difference); return `<tr><td>${esc(r.label)}</td><td class="num">${r.reported === null ? "—" : gbp(r.reported)}</td><td class="num">${gbp(r.ours)}</td><td class="num" style="color:${Math.abs(d) < .005 ? "var(--ok)" : "var(--warn)"}">${r.difference === undefined ? "—" : Math.abs(d) < .005 ? "matches" : signed(d)}</td><td class="muted">${esc([...new Set(r.parts.filter(p => p.problem).map(p => p.problem))].join("; "))}</td></tr>`; }).join("");
+    const names = ppl.people.map(p => p.name);
+    const dl = `<datalist id="names">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist>`;
+    const ownerRows = accounts.map(a => `<tr><td>${a.parent ? "&nbsp;&nbsp;" : ""}${esc(a.account)}</td><td><input list="names" data-kind="account_am" data-subject="${esc(a.account)}" value="${esc(ppl.assignments.account_am[a.account] || "")}" placeholder="${a.parent ? "inherits from " + esc(a.parent) : "AM"}"></td></tr>`).join("");
+    const raw = s.summary ? Object.keys(ppl.assignments.alias || {}) : [];
+    const spellings = [...new Set(ppl.people.map(p => p.name).concat(raw))];
+    const aliasRows = spellings.map(n => `<tr><td>${esc(n)}</td><td><input list="names" data-kind="alias" data-subject="${esc(n.toLowerCase())}" value="${esc(ppl.assignments.alias[n.toLowerCase()] || "")}" placeholder="same person as…"></td><td><input list="names" data-kind="deputy" data-subject="${esc(n)}" value="${esc(ppl.assignments.deputy[n] || "")}" placeholder="deputy"></td></tr>`).join("");
+    el.innerHTML = `<h1>Settings and data</h1><p class="sub">Where Monday2Friday gets its data, how closely it matches the tracker's own totals, and who owns what.</p>
+      ${s.error ? `<div class="notice bad">${esc(s.error)}</div>` : ""}
+      <div class="grid2"><div class="card"><h2>Tracker</h2><div class="kv">
+        <div>Source</div><div>${esc(s.source || "none")} ${s.source_kind ? `<span class="tag">${esc(s.source_kind)}</span>` : ""}</div>
+        <div>File last saved</div><div>${esc((s.source_modified || "").replace("T", " ").slice(0, 16))}</div>
+        <div>Read by Monday2Friday</div><div>${esc((s.loaded_at || "").replace("T", " ").slice(0, 16))}</div>
+        ${s.summary ? `<div>Projects</div><div>${s.summary.projects} (${s.summary.projects_hidden} hidden)</div>
+        <div>Forecast cells</div><div>${s.summary.forecast_cells}, ${s.summary.forecast_cells_classified} with a legend status</div>
+        <div>Flagged by the import</div><div>${Object.values(s.summary.issues_by_code).reduce((a, b) => a + b, 0)} items, see Questions for Kayleigh</div>` : ""}
+        <div>Pilot store</div><div class="muted" style="word-break:break-all">${esc(s.store)}</div></div>
+        <div class="row"><input type="file" id="up" accept=".xlsx"><button class="btn" id="upBtn">Load this tracker</button></div>
+        <p class="muted" style="margin-top:8px">The configured tracker (M2F_TRACKER_PATH) is re-read automatically whenever it's saved. Loading a file here is for testing a copy; the newer of the two is used.</p></div>
+      <div class="card"><h2>You</h2>${signedIn() ? `<div class="kv"><div>Signed in as</div><div>${esc(state.me.name)}<div class="muted">${esc(state.me.email || "")}</div></div></div><p class="muted">Freezes, notes, variations and answers are recorded under this name.</p><div class="row" style="margin-top:8px"><a class="btn small ghost" href="/auth/logout">Sign out</a></div>`
+          : `<div class="kv"><div>Your name</div><div><input id="me" value="${esc(user())}" placeholder="Shown on freezes, notes and answers"></div></div><button class="btn small ghost" id="meSave">Save name</button><p class="muted" style="margin-top:8px">${esc((state.me && state.me.name) || "Not signed in")}: changes are recorded under the name you type here.</p>`}</div></div>
+      <div class="card"><h2>Does it match the tracker?</h2><p class="muted" style="margin-bottom:8px">Each monthly total on the tracker's Forcasting Total sheet, re-added from the imported lines.</p>
+        <table><thead><tr><th>Month</th><th class="num">Tracker says</th><th class="num">Monday2Friday</th><th class="num">Difference</th><th>Notes</th></tr></thead><tbody>${recon || '<tr><td colspan="5" class="empty">No totals sheet found.</td></tr>'}</tbody></table></div>
+      ${dl}<div class="grid2"><div class="card"><h2>Account owners</h2><p class="muted" style="margin-bottom:8px">The AM for each account. A division inherits the group's owner unless set.</p><table><tbody>${ownerRows}</tbody></table></div>
+      <div class="card"><h2>People</h2><p class="muted" style="margin-bottom:8px">Names as the tracker spells them. Join spellings of the same person, and set each person's deputy for cover.</p><table><thead><tr><th>In the tracker</th><th>Same person as</th><th>Deputy</th></tr></thead><tbody>${aliasRows}</tbody></table></div></div>`;
+    $("upBtn").onclick = async () => {
+      const f = $("up").files[0]; if (!f) { toast("Choose the tracker .xlsx first."); return; }
+      $("upBtn").disabled = true;
+      try { await api("/api/m2f/tracker", {method: "PUT", body: await f.arrayBuffer(), headers: {"Content-Type": "application/octet-stream"}}); toast("Tracker loaded."); state.projects = null; views.settings(el); updateBadge(); }
+      catch (e) { toast(e.message); $("upBtn").disabled = false; }
+    };
+    if ($("meSave")) $("meSave").onclick = () => { store.set(USER, $("me").value.trim()); toast("Name saved in this browser."); };
+    el.querySelectorAll("input[data-kind]").forEach(inp => inp.onchange = async () => {
+      try { await api("/api/m2f/assignments", {method: "PUT", json: {kind: inp.dataset.kind, subject: inp.dataset.subject, person: inp.value.trim() || null, by: needUser()}}); toast("Saved."); }
+      catch (e) { toast(e.message); }
+    });
+  };
+
+  views.roadmap = async el => {
+    const items = [
+      ["Project CPA and client PDF", "Phase 1", "Standard CPA templates from Studio, Technical and the PMs. Until then the PM overview uses the tracker's stage and next step."],
+      ["Team capacity, four weeks", "Phase 2", "Booked effort per brief or a complexity band, plus leave. BrightHR is already connected to SDI Intelligence for the leave side."],
+      ["Finance queue for Debbie", "Phase 2", "Sage X3 sales orders, POs and invoices. A posted invoice will flip the forecast line to Invoiced."],
+      ["Budget against forecast", "Phase 1", "Kayleigh's answer on the FY27 budget."],
+      ["Account plans and QBR packs", "Phase 2", "Revenue against budget from Sage X3, plus the account plan fields agreed with Kayleigh."],
+      ["New-business funnel and AM growth review", "Phase 2", "Deal values and stages for the brands; quarterly targets per AM."],
+      ["Holiday cover view", "Phase 1", "Deputies (set in Settings) plus leave dates."],
+      ["Morning WhatsApp brief", "Phase 3", "A WhatsApp Business account with Meta-approved templates."],
+      ["Meeting notes to follow-up and estimating", "Phase 3", "Teams recording consent and a retention policy; links into the SDI estimating engine."],
+    ];
+    el.innerHTML = `<h1>Coming next</h1><p class="sub">The rest of the 12-screen mock-up, and what each screen needs before it can be built on real data rather than made-up figures.</p>
+      <div class="card"><table><thead><tr><th>Screen</th><th>Phase</th><th>Waiting on</th></tr></thead><tbody>${items.map(i => `<tr><td><b>${esc(i[0])}</b></td><td><span class="tag">${esc(i[1])}</span></td><td class="dim">${esc(i[2])}</td></tr>`).join("")}</tbody></table></div>`;
+  };
+
+  // ── Project drawer ───────────────────────────────────────────────────────
+  async function openProject(pid) {
+    const p = await api("/api/m2f/projects/" + encodeURIComponent(pid));
+    const lines = p.lines.map(l => `<tr><td>${esc(l.period_label || "undated")}</td><td class="num">${l.amount === null ? `<span style="color:var(--warn)">${esc(l.raw)}</span>` : gbp(l.amount)}</td><td>${l.status ? `<span class="tag ${esc(l.status)}">${esc(label(l.status))}</span>` : `<span class="tag"><span class="swatch" style="background:#${esc(l.fill)}"></span>unclassified</span>`}</td><td class="muted">${esc(l.cell)}</td></tr>`).join("");
+    const f = p.fields, kv = [["Account", p.account + (p.parent ? " (" + p.parent + ")" : "")], ["AM", p.am], ["PM", (p.pms || []).join(", ")], ["Stage", p.stage], ["Contact", p.contact], ["Next step", p.next_step],
+      ["PO", p.po_ref], ["Sales order", p.sales_order], ["Project code", p.project_code], ["Sell value", f.sell_value ? gbp(f.sell_value) : null], ["Margin", f.margin_pct], ["To do", p.am_todo], ["Client to do", p.client_todo],
+      ["In the tracker", `${p.tab}, row ${p.row}${p.hidden ? " (hidden)" : ""}`]].filter(x => x[1] !== null && x[1] !== undefined && x[1] !== "");
+    const extra = Object.entries(p.extra || {});
+    $("drawerPanel").innerHTML = `<div class="row"><span class="crumb">${esc(p.account)}</span><span style="flex:1"></span><button class="btn ghost small" id="dClose">Close</button></div>
+      <h1 style="margin:8px 0 4px">${esc(p.name)}</h1>
+      <div class="kv">${kv.map(([k, v]) => `<div>${esc(k)}</div><div class="wrap">${esc(v)}</div>`).join("")}</div>
+      <h2>Forecast by month</h2><table><thead><tr><th>Month</th><th class="num">Amount</th><th>Status</th><th>Cell</th></tr></thead><tbody>${lines || '<tr><td colspan="4" class="empty">No forecast on this project.</td></tr>'}</tbody></table>
+      ${p.issues.length ? `<h2 style="margin-top:18px">Flagged by the import</h2>${p.issues.map(i => `<div class="item"><span class="tag ${i.severity === "decision" ? "fail" : "warn"}">${esc(i.severity)}</span> ${esc(i.message)} <span class="muted">${esc(i.cell)}</span></div>`).join("")}` : ""}
+      <h2 style="margin-top:18px">Variations</h2>${variationTable(p.variations, true)}
+      ${extra.length ? `<details style="margin-top:14px"><summary>Every other column in the tracker (${extra.length})</summary><div class="kv">${extra.map(([k, v]) => `<div>${esc(k)}</div><div class="wrap">${esc(v)}</div>`).join("")}</div></details>` : ""}`;
+    $("drawer").classList.add("open");
+    $("dClose").onclick = () => $("drawer").classList.remove("open");
+  }
+  $("drawer").onclick = e => { if (e.target.id === "drawer") $("drawer").classList.remove("open"); };
+  document.addEventListener("keydown", e => { if (e.key === "Escape") $("drawer").classList.remove("open"); });
+
+  // ── Navigation ───────────────────────────────────────────────────────────
+  async function updateBadge() {
+    try { const qs = (await api("/api/m2f/questions")).questions; const open = qs.filter(q => !q.decision).length; $("qbadge").textContent = open || ""; } catch (e) {}
+  }
+
+  async function show(view) {
+    state.view = views[view] ? view : "dashboard";
+    try { history.replaceState(null, "", "#" + state.view); } catch (e) {}
+    document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("active", a.dataset.view === state.view));
+    $("crumb").textContent = "Monday2Friday / " + document.querySelector(`#nav a[data-view="${state.view}"]`).childNodes[0].textContent.trim();
+    const el = $("view");
+    el.innerHTML = `<div class="empty">Loading…</div>`;
+    try { await views[state.view](el); }
+    catch (e) {
+      if (e.status === 401) {
+        el.innerHTML = `<h1>Sign in to continue</h1><p class="sub">${esc(e.message)} Sign in with your SDI Microsoft account to carry on where you were.</p><button class="btn" id="signInBtn">Sign in</button>`;
+        $("signInBtn").onclick = signIn;
+      }
+      else if (e.status === 409) el.innerHTML = `<h1>No tracker loaded yet</h1><p class="sub">${esc(e.message)}</p><div class="notice">Go to <a data-go="settings" style="color:var(--accent);cursor:pointer">Settings and data</a> to load the account tracker, or ask James to set M2F_TRACKER_PATH on the server.</div>`;
+      else el.innerHTML = `<div class="notice bad">Couldn't load this view: ${esc(e.message)}</div>`;
+    }
+  }
+
+  document.addEventListener("click", e => {
+    const nav = e.target.closest("[data-view]"), go = e.target.closest("[data-go]"), pid = e.target.closest("[data-pid]");
+    if (nav && nav.closest("#nav")) { e.preventDefault(); show(nav.dataset.view); }
+    else if (go) { e.preventDefault(); show(go.dataset.go); }
+    else if (pid && !e.target.closest("input,button")) { openProject(pid.dataset.pid).catch(err => toast(err.message)); }
+  });
+  $("asof").value = store.get("m2f_asof") || new Date().toISOString().slice(0, 7);
+  $("asof").onchange = () => { store.set("m2f_asof", asof()); show(state.view); };
+  fetch("/api/me", {credentials: "same-origin"}).then(r => r.ok ? r.json() : null).catch(() => null)
+    .then(me => { state.me = me; show((location.hash.slice(1).split("?")[0]) || "dashboard"); updateBadge(); });
+})();
+</script>
+</body>
+</html>

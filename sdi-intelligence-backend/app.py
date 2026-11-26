@@ -186,7 +186,7 @@ app.add_middleware(
     # POST is required by /api/estimate. With GET only, the browser's preflight
     # fails and the run is refused before any handler sees it — which reads as
     # "the button does nothing" rather than as a permissions error.
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "PATCH"],   # PUT/PATCH: Monday2Friday edits
     allow_headers=["X-SDI-Key", "Content-Type"],
     # So browser JS on the portal can READ the version header, not just devtools/curl.
     expose_headers=["X-SDI-Commit"],
@@ -868,6 +868,10 @@ app.include_router(auth.router)
 
 from voicecrm import router as voicecrm_router
 app.include_router(voicecrm_router)
+
+# ── Monday2Friday (Kayleigh's account and delivery workspace, intranet only) ──
+from m2f_routes import router as m2f_router
+app.include_router(m2f_router)
 
 if not auth.ENABLED:
     print("[WARN] Entra SSO is NOT configured — every visitor is anonymous. "
