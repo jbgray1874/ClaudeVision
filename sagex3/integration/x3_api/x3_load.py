@@ -569,8 +569,11 @@ def plan(run_dir, c=None):
             # 26 Nov: X3 (We are SDI) lets the connection create products but not BOMs or routings yet. Rather than
             # refuse the whole estimate, the product is created and the BOM / route is imported by hand from the
             # saved file - the same import Estimating does today (Usage -> Imports).
-            tpl = {"bom": "YA00408BOM", "route": "ZSDIROU2"}[what]
-            fname = next((f for f in run.get("load_files") or [] if tpl in f), f"..._{tpl}.txt")
+            # 26 Nov: the X3 import template for BOMs is YA004BOMP ("Bill of Materials Essentials", object BOD - the
+            # one Ethan's migration runs load with); YA00408BOM is only the migration pack's file name for it.
+            tpl = {"bom": "YA004BOMP", "route": "ZSDIROU2"}[what]
+            stem = {"bom": "YA00408BOM", "route": "ZSDIROU2"}[what]
+            fname = next((f for f in run.get("load_files") or [] if stem in f), f"..._{stem}.txt")
             folder = (run.get("published") or {}).get("folder") or "the run's saved folder"
             rec.update(action="manual", template=tpl, file=fname, folder=folder,
                        why=f"X3 doesn't let the connection create this yet - import it by hand: Usage -> Imports, "
