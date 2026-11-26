@@ -163,6 +163,75 @@ def import_lines(c, pool, template, lines):
             "messages": p["messages"], "raw": None if p["status"] == "1" else text[:4000]}
 
 
+def _num(v):
+    try:
+        return float(str(v).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def _same(a, b):
+    x, y = _num(a), _num(b)
+    return abs(x - y) < 1e-6 if x is not None and y is not None else str(a or "").strip() == str(b or "").strip()
+
+
+def current(c, what, part):
+    """What X3 holds now for this part, read live: {key: (component / work centre, qty / times...)}, or None."""
+    path, _, forms = x3_load.EXISTS[what]
+    sel = ("bomCode { _id } sequence componentProduct { code } linkQuantity parentProduct { code }" if what == "bom" else
+           "operationNumber mainWorkCenter { code } setupTime runTime operationDescription product { code }")
+    lit = part.replace("\\", "\\\\").replace("'", "\\'")
+    for form in forms:
+        q = ("query { " + " { ".join(path) + f" {{ query(first: 500, filter: {json.dumps(form.format(c=lit))}) "
+             f"{{ edges {{ node {{ {sel} }} }} }} " + "}" * len(path) + " }")
+        try:
+            d = x3_api.gql(c, q)
+        except SystemExit:
+            continue
+        for p in path + ["query", "edges"]:
+            d = (d or {}).get(p) if isinstance(d, dict) else d
+        out = {}
+        for e in d or []:
+            n = e.get("node") or {}
+            if what == "bom":
+                if ((n.get("parentProduct") or {}).get("code")) != part:
+                    continue
+                alt = str((n.get("bomCode") or {}).get("_id") or "").split("|")[-1].split("~")[-1]
+                out[(alt, str(n.get("sequence")))] = ((n.get("componentProduct") or {}).get("code"), n.get("linkQuantity"))
+            else:
+                if ((n.get("product") or {}).get("code")) != part:
+                    continue
+                out[str(n.get("operationNumber"))] = ((n.get("mainWorkCenter") or {}).get("code"), n.get("setupTime"),
+                                                      n.get("runTime"))
+        return out
+    return None
+
+
+def from_file(what, lines):
+    out = {}
+    for ln in lines:
+        f = ln.split(";") + [""] * 12
+        if what == "bom":       # ITMREF BOMALT USESTA BOHSTRDAT BOHENDDAT BASQTY QTYCOD BOMSEQ CPNITMREF CPNTYP LIKQTY
+            out[(f[1], f[7])] = (f[8], f[10])
+        else:                   # ITMREF ROUALT FCY USESTA TIMUOMCOD WORTYP OPENUM WST ROODES SETTIM OPETIM
+            out[f[6]] = (f[7], f[9], f[10])
+    return out
+
+
+def differences(what, now, new):
+    """Lines: what the import would change, in words. Empty when the file matches X3."""
+    out = []
+    for k in sorted(set(now) | set(new), key=lambda k: [int(x) if str(x).isdigit() else 0 for x in (k if isinstance(k, tuple) else (k,))]):
+        lab = f"line {k[1]}" if what == "bom" else f"operation {k}"
+        if k not in now:
+            out.append(f"NEW      {lab}: {' / '.join(str(x) for x in new[k])}")
+        elif k not in new:
+            out.append(f"X3 ONLY  {lab}: {' / '.join(str(x) for x in now[k])}  (not in the file - X3 may keep it)")
+        elif not all(_same(x, y) for x, y in zip(now[k], new[k])):
+            out.append(f"CHANGE   {lab}: {' / '.join(str(x) for x in now[k])}  ->  {' / '.join(str(x) for x in new[k])}")
+    return out
+
+
 def do_import(a):
     c = x3_load.guard(x3_api.for_env(x3_load.load_conf(), a.env))
     what, stem = TEMPLATES[a.template]
@@ -177,6 +246,16 @@ def do_import(a):
     has_product, has_it = x3_load.exists(c, "product", part), x3_load.exists(c, what, part)
     print(f"X3 now: product {part} {'exists' if has_product else 'NOT FOUND' if has_product is False else 'could not check'}; "
           f"{what} {'EXISTS' if has_it else 'none' if has_it is False else 'could not check'}")
+    if has_it:
+        now = current(c, what, part)
+        if now is None:
+            print("   (couldn't read X3's lines to compare)")
+        else:
+            diff = differences(what, now, from_file(what, lines))
+            print(f"Compared with X3 ({len(now)} {'lines' if what == 'bom' else 'operations'} in X3, {len(lines)} in the file; "
+                  f"{'component / link qty' if what == 'bom' else 'work centre / set-up / run'}):")
+            for d_ in diff or ["no difference - an --update would re-save the same values"]:
+                print("   " + d_)
     stop = []
     if not has_product:
         stop.append(f"the product {part} must be in X3 first (the portal creates it before the BOM and route)")
