@@ -151,3 +151,65 @@ def test_a_product_submitted_by_someone_else_meanwhile_is_not_submitted_again(tm
         assert "elsewhere (queued); not submitted again" in out and svc.posts == 1
     finally:
         svc.close()
+
+
+def _finished_book(path: Path, drawing: str) -> None:
+    """A made-up finished estimate, laid out as the engine lays its workbook out."""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    est = wb.active
+    est.title = "Estimate"
+    est["C5"], est["D5"] = "Drawing No.", drawing
+    est["H6"] = "DRAFT — 2 item(s) to confirm"
+    est["C200"], est["H200"] = "Total Material Cost", 90.5
+    est["C223"], est["H223"] = "Total Labour Cost (Including  Downtime)", 20.25
+    est["C225"], est["H225"] = "Total Unit Cost Price", 110.75
+    est["C284"] = "OUTSTANDING ESTIMATOR INPUTS (1) — questions from the drawings"
+    est["C285"] = "1.  MARGIN  —  MARGIN NOT SET"
+    ai = wb.create_sheet("AI Explanation")
+    ai.append(["FOR THE ESTIMATOR TO CONFIRM"])
+    ai.append(["#", "Kind", "Decision", "Part", "Current assumption", "Action", "£ at stake"])
+    ai.append([1, "Market figure", "BI-X rests on a market price", "BI-X", "web", "replace it", "£40.00"])
+    ai.append([2, "Indicative rate", "PACKAGING indicative", "PACKAGING", "house", "verify", "£10.00"])
+    ai.append([None])
+    ai.append(["- What does a unit cost, and of what? £110.75 — material £90.50 + labour £20.25"])
+    wb.save(str(path))
+
+
+def test_the_review_writes_one_schedule_and_a_pack_per_family_from_the_finished_books(tmp_path):
+    import openpyxl
+    _pack(tmp_path / "pack")
+    signs = tmp_path / "pack" / "Drawing" / "Signage & Graphics"
+    signs.mkdir(parents=True)
+    (signs / "01. SHOP FRONT SIGN.pdf").write_bytes(b"x")
+    env = dict(os.environ, HC_SERVICES="http://127.0.0.1:9,http://127.0.0.1:9")
+    _run("plan", str(tmp_path / "pack"), str(tmp_path), env=env)
+    plan_file = next(tmp_path.glob("Hotel Chocolat plan *.json"))
+    plan = json.loads(plan_file.read_text("utf-8"))
+    standard = next(p for p in plan["products"] if "standard" in p["title"])
+    books = tmp_path / "books"
+    books.mkdir()
+    _finished_book(books / "one.xlsx", standard["drawing"])
+    out = _run("review", str(plan_file), str(tmp_path / "review"), "books=" + str(books), env=env)
+    assert "2 products: 1 priced, 1 not yet" in out and "Nothing was submitted or re-priced." in out
+
+    master = openpyxl.load_workbook(next((tmp_path / "review").glob("*master price schedule*")))
+    rows = [r for r in master["Price schedule"].iter_rows(min_row=5, values_only=True) if r[3] is not None]
+    assert [(r[1], r[3], r[4], r[5], r[8], r[9]) for r in rows] == \
+        [(standard["drawing"], 110.75, 90.5, 20.25, 2, 50.0)]
+    assert [r[1] for r in master["Signage"].iter_rows(min_row=4, values_only=True)] == ["01. SHOP FRONT SIGN.pdf"]
+    assert "Not yet priced" in master.sheetnames
+
+    pack = openpyxl.load_workbook(next((tmp_path / "review").glob("*review pack 2 Perimeter shelving*")))
+    tab = pack[next(n for n in pack.sheetnames if n.startswith(standard["drawing"]))]
+    text = " ".join(str(v) for r in tab.iter_rows(values_only=True) for v in r if v is not None)
+    assert "BI-X rests on a market price" in text and "MARGIN NOT SET" in text and "£110.75" in text
+
+
+def test_the_planner_survives_being_saved_as_ascii():
+    """The wrapper is fetched with Set-Content -Encoding ASCII: a pound sign in the planner
+    becomes '?', and the review could no longer find the '£ at stake' column."""
+    wrapper = PLANNER.with_name("hc_estimates.ps1").read_text("utf-8")
+    assert PLANNER.read_text("utf-8").isascii() and wrapper.isascii()
+    planner = PLANNER.read_text("utf-8").rstrip("\n")
+    assert wrapper[wrapper.index("@'\n") + 3:wrapper.index("\n'@ | Set-Content")] == planner

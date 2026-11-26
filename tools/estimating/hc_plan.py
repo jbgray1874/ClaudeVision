@@ -2,6 +2,10 @@
 
 plan  : reads the pack and the estimating service's run list (GET only), writes a readable
         plan and a JSON plan. Submits nothing and writes nothing to the share.
+review: reads THAT JSON plan, each product's finished run and its workbook, and writes the review
+        packs (one workbook per pack, a tab per product), the master price schedule and the signage
+        schedule to the output folder. Reads workbooks only: nothing is re-priced, submitted or
+        written to the share.
 queue : reads THAT JSON plan, re-checks every product's source fingerprint, skips products
         already estimated (unless rerun), and submits the rest in plan order. A product with a
         run queued or running is never submitted again, rerun or not. since=<YYYY-MM-DD HH:MM>
@@ -49,6 +53,9 @@ if mode == 'plan':
     only = set(a.strip().upper().replace('.', '').replace('-', '') for a in _only.split(',') if a.strip())
     # How many files the share holds by another reader's count (PowerShell's), to hold this one to.
     expected = next((int(a[7:]) for a in _rest if a.startswith('expect=') and a[7:].isdigit()), None)
+elif mode == 'review':
+    plan_file, out_dir = pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
+    books_dir = next((a[6:] for a in sys.argv[4:] if a.startswith('books=') and a[6:]), '')
 else:
     plan_file, rerun = pathlib.Path(sys.argv[2]), (len(sys.argv) > 3 and sys.argv[3] == 'rerun')
     _since = next((a[6:].strip() for a in sys.argv[4:] if a.startswith('since=')), '')
@@ -383,7 +390,7 @@ if mode == 'plan':
     print('\n'.join(lines))
     print('\nPlan saved: %s\nJSON plan:  %s' % (base.with_suffix('.txt'), json_path))
     print('Nothing was submitted.')
-else:
+elif mode == 'queue':
     data = json.loads(plan_file.read_text(encoding='utf-8'))
     if data.get('files_expected') is not None and data['files_expected'] != data.get('files_read'):
         print('NOT QUEUED: this plan read %s of the %s files on the share, so products may be missing. '
@@ -460,3 +467,244 @@ else:
                       'before queueing again; queueing again skips it if it appears.' % (label, e), flush=True)
                 unsure += 1
     print('%d queued, %d already run or in flight, %d held or refused, %d unsure' % (sent, done, held, unsure))
+
+else:
+    # -- REVIEW: eight packs and one schedule, instead of 35 workbooks --
+    import openpyxl
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    data = json.loads(plan_file.read_text(encoding='utf-8'))
+    stamp = datetime.datetime.now().strftime('%Y-%m-%d %H%M')
+    runs = existing_runs()
+
+    def compact(ref):
+        return re.sub(r'[^A-Z0-9]', '', str(ref or '').upper())
+
+    def finished_run(fp):
+        """The newest run of this product that finished with a workbook."""
+        done = [r for r in runs.get(fp, []) if str(r.get('status')).lower() in ('done', 'complete', 'completed')]
+        return max(done, key=lambda r: float(r.get('queued_at') or 0)) if done else None
+
+    shelf = {}
+    if books_dir:
+        for b in pathlib.Path(long_path(books_dir)).rglob('*.xlsx'):
+            if b.name.startswith('~$'):
+                continue
+            try:
+                wb = openpyxl.load_workbook(str(b), data_only=True, read_only=True)
+                drg = wb['Estimate']['D5'].value if 'Estimate' in wb.sheetnames else None
+                wb.close()
+            except Exception:
+                continue
+            if drg:
+                key = compact(drg)
+                if key not in shelf or b.stat().st_mtime > shelf[key].stat().st_mtime:
+                    shelf[key] = b
+
+    def cell_after(ws, label, width=40):
+        """The first value to the right of the cell whose text starts with label."""
+        for row in ws.iter_rows(max_col=width):
+            for i, c in enumerate(row):
+                if isinstance(c.value, str) and c.value.strip().startswith(label):
+                    for d in row[i + 1:]:
+                        if d.value not in (None, ''):
+                            return d.value
+        return None
+
+    def read_book(path):
+        wb = openpyxl.load_workbook(long_path(path), data_only=True)
+        est = wb['Estimate'] if 'Estimate' in wb.sheetnames else None
+        out = {'unit': None, 'material': None, 'labour': None, 'status': '', 'confirm': [], 'inputs': [],
+               'summary': ''}
+        if est is not None:
+            out['unit'] = cell_after(est, 'Total Unit Cost Price')
+            out['material'] = cell_after(est, 'Total Material Cost')
+            out['labour'] = cell_after(est, 'Total Labour Cost')
+            out['status'] = str(est['H6'].value or '')
+            taking = False
+            for row in est.iter_rows(values_only=True):
+                text = [str(v) for v in row if v not in (None, '')]
+                if not text:
+                    continue
+                if text[0].startswith('OUTSTANDING ESTIMATOR INPUTS'):
+                    taking = True
+                    continue
+                if taking and re.match(r'^\d+\.\s', text[0]):
+                    out['inputs'].append(' | '.join(text))
+        if 'AI Explanation' in wb.sheetnames:
+            ai = wb['AI Explanation']
+            rows = list(ai.iter_rows(values_only=True))
+            head = next((i for i, r in enumerate(rows)
+                         if r and str(r[0] or '').strip() == '#' and 'Kind' in [str(v) for v in r]), None)
+            if head is not None:
+                cols = [str(v or '') for v in rows[head]]
+                for r in rows[head + 1:]:
+                    if not r or r[0] in (None, '') or not str(r[0]).strip().isdigit():
+                        break
+                    out['confirm'].append({cols[k]: r[k] for k in range(len(cols)) if cols[k]})
+            for r in rows:
+                if r and str(r[0] or '').startswith('- What does a unit cost'):
+                    out['summary'] = str(r[0])[2:]
+                    break
+        wb.close()
+        return out
+
+    def money(v):
+        try:
+            return round(float(v), 2)
+        except (TypeError, ValueError):
+            return None
+
+    products = []
+    for item in data['products']:
+        run = finished_run(item['fingerprint'])
+        book, why = None, ''
+        if run and run.get('output_path') and os.path.exists(long_path(run['output_path'])):
+            book = run['output_path']
+        elif compact(item['drawing']) in shelf:
+            book = short_path(shelf[compact(item['drawing'])])
+        live = [r for r in runs.get(item['fingerprint'], []) if str(r.get('status')).lower() in ('queued', 'running')]
+        if not book:
+            why = ('still %s' % live[0]['status']) if live else ('no finished run' if not run else 'workbook not found')
+        facts = {}
+        if book:
+            try:
+                facts = read_book(book)
+            except Exception as e:
+                why = 'workbook unreadable: %s' % e
+                book = None
+        if run and facts.get('unit') is None:
+            for k, how in (('engine_price_gbp', 'the run record (engine price)'), ('llm_price_gbp', 'the run record (brief price)')):
+                if run.get(k) not in (None, ''):
+                    facts['unit'] = run[k]
+                    facts['status'] = (facts.get('status') or '') + ' Price read from %s; its workbook gave none.' % how
+                    break
+        warn = [w for w in item.get('warnings', []) if 'no drawing names it: kept here' not in w]
+        missing = [w.split(':', 1)[1].split('(')[0].strip() for w in warn if w.startswith('named by its drawings but not in the pack')]
+        products.append({'item': item, 'run': run, 'book': book, 'why': why, 'facts': facts, 'warn': warn,
+                         'missing': missing, 'basis': 'allowance from brief' if item.get('brief') else 'drawings'})
+
+    hdr_font, hdr_fill = Font(bold=True, color='FFFFFF'), PatternFill('solid', fgColor='4F4F4F')
+    def table(ws, top, headers, rows, widths=None):
+        for j, h in enumerate(headers, 1):
+            c = ws.cell(row=top, column=j, value=h)
+            c.font, c.fill = hdr_font, hdr_fill
+        for i, r in enumerate(rows, top + 1):
+            for j, v in enumerate(r, 1):
+                c = ws.cell(row=i, column=j, value=v)
+                c.alignment = Alignment(wrap_text=True, vertical='top')
+        for j, w in enumerate(widths or [], 1):
+            ws.column_dimensions[get_column_letter(j)].width = w
+        return top + len(rows) + 1
+
+    def at_stake(p):
+        total = 0.0
+        for c in p['facts'].get('confirm', []):
+            m = re.search(r'[\d,]+\.\d+', str(c.get('\u00a3 at stake') or ''))
+            total += float(m.group(0).replace(',', '')) if m else 0.0
+        return round(total, 2)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # 1. The master price schedule.
+    master = openpyxl.Workbook()
+    ws = master.active
+    ws.title = 'Price schedule'
+    ws['A1'] = 'Hotel Chocolat: master price schedule, %s' % stamp
+    ws['A1'].font = Font(bold=True, size=14)
+    ws['A2'] = ('Engine estimates for review, not quotations. Each price is the finished run\'s own unit cost; '
+                'every assumption and open point is in its review pack.')
+    rows = []
+    for p in sorted(products, key=lambda p: (p['item']['pack'], p['item']['drawing'])):
+        f = p['facts']
+        rows.append([p['item']['pack'], p['item']['drawing'], p['item']['title'], money(f.get('unit')),
+                     money(f.get('material')), money(f.get('labour')), p['basis'],
+                     (f.get('status') or p['why'] or '')[:200], len(f.get('confirm', [])), at_stake(p) or None,
+                     '; '.join(p['missing']) or None,
+                     ', '.join(sorted({x['ref'] for x in p['item']['files'] if x.get('ref')})[:40]) or None,
+                     (p['run'] or {}).get('run_id'), p['book']])
+    end = table(ws, 4, ['Pack', 'Drawing', 'Product', 'Unit price \u00a3', 'Material \u00a3', 'Labour \u00a3', 'Basis', 'Status',
+                        'Items to confirm', '\u00a3 at stake', 'Drawings named but not in the pack',
+                        'Source drawings', 'Run', 'Workbook'], rows,
+                [30, 10, 44, 12, 11, 11, 18, 50, 10, 11, 24, 40, 14, 60])
+    priced = [r for r in rows if r[3] is not None]
+    ws.cell(row=end + 1, column=3, value='%d of %d products priced' % (len(priced), len(rows))).font = Font(bold=True)
+    ws.freeze_panes = 'A5'
+
+    sig = master.create_sheet('Signage')
+    sig['A1'] = 'Signage and graphics: a separate schedule, grouped by folder. Not estimated by the engine.'
+    sig['A1'].font = Font(bold=True)
+    signage = data.get('accounting', {}).get('signage (separate signage schedule)', [])
+    table(sig, 3, ['Group', 'File', 'Price \u00a3', 'Supplier / basis', 'Notes'],
+          [[str(pathlib.PureWindowsPath(r).parent.name), pathlib.PureWindowsPath(r).name, None, None, None]
+           for r in sorted(signage)], [40, 60, 10, 30, 40])
+    ctx = master.create_sheet('Context')
+    ctx['A1'] = 'Context and layout drawings: roll-ups of the products above, not costed themselves.'
+    ctx['A1'].font = Font(bold=True)
+    table(ctx, 3, ['File'], [[r] for r in data.get('accounting', {}).get('context / layout (not priced)', [])], [120])
+    waiting = [p for p in products if not p['book']]
+    if waiting:
+        wt = master.create_sheet('Not yet priced')
+        table(wt, 1, ['Pack', 'Drawing', 'Product', 'Why'],
+              [[p['item']['pack'], p['item']['drawing'], p['item']['title'], p['why']] for p in waiting],
+              [30, 10, 50, 40])
+    master_path = out_dir / ('Hotel Chocolat master price schedule %s.xlsx' % stamp)
+    master.save(str(master_path))
+
+    # 2. One review pack per pack, a tab per product.
+    written = [master_path]
+    for pack in sorted({p['item']['pack'] for p in products}):
+        members = sorted((p for p in products if p['item']['pack'] == pack), key=lambda p: p['item']['drawing'])
+        wb = openpyxl.Workbook()
+        sm = wb.active
+        sm.title = 'Summary'
+        sm['A1'] = 'Hotel Chocolat review pack: %s (%s)' % (pack, stamp)
+        sm['A1'].font = Font(bold=True, size=14)
+        table(sm, 3, ['Drawing', 'Product', 'Unit price \u00a3', 'Basis', 'Items to confirm', '\u00a3 at stake', 'Status'],
+              [[p['item']['drawing'], p['item']['title'], money(p['facts'].get('unit')), p['basis'],
+                len(p['facts'].get('confirm', [])), at_stake(p) or None,
+                (p['facts'].get('status') or p['why'] or '')[:200]] for p in members],
+              [10, 50, 12, 18, 10, 11, 70])
+        used_names = {'Summary'}
+        for p in members:
+            name = re.sub(r'[\[\]:*?/\\]', '', '%s %s' % (p['item']['drawing'], p['item']['title']))[:31]
+            while name in used_names:
+                name = name[:28] + '~%d' % len(used_names)
+            used_names.add(name)
+            t = wb.create_sheet(name)
+            f = p['facts']
+            t['A1'] = '%s  %s' % (p['item']['drawing'], p['item']['title'])
+            t['A1'].font = Font(bold=True, size=13)
+            facts = [('Unit price \u00a3', money(f.get('unit'))), ('Material \u00a3', money(f.get('material'))),
+                     ('Labour \u00a3', money(f.get('labour'))), ('Basis', p['basis']),
+                     ('What a unit costs', f.get('summary') or None),
+                     ('Status', f.get('status') or p['why'] or None), ('Run', (p['run'] or {}).get('run_id')),
+                     ('Workbook', p['book'])]
+            for i, (k, v) in enumerate(facts, 3):
+                t.cell(row=i, column=1, value=k).font = Font(bold=True)
+                t.cell(row=i, column=2, value=v).alignment = Alignment(wrap_text=True, vertical='top')
+            if p['book']:
+                t.cell(row=10, column=2).hyperlink = p['book']
+            row = 13
+            t.cell(row=row - 1, column=1, value='FOR THE ESTIMATOR TO CONFIRM').font = Font(bold=True)
+            conf = f.get('confirm', [])
+            heads = ['#', 'Kind', 'Decision', 'Part', 'Current assumption', 'Action', '\u00a3 at stake']
+            row = table(t, row, heads, [[c.get(h) for h in heads] for c in conf] or [['', 'none listed']],
+                        [26, 18, 60, 14, 40, 40, 11]) + 1
+            t.cell(row=row, column=1, value='OUTSTANDING ESTIMATOR INPUTS').font = Font(bold=True)
+            row = table(t, row + 1, ['Input'], [[x] for x in f.get('inputs', [])] or [['none listed']]) + 1
+            t.cell(row=row, column=1, value='FROM THE PLAN (the drawing pack itself)').font = Font(bold=True)
+            row = table(t, row + 1, ['Note'], [[w] for w in p['warn']] or [['nothing to note']]) + 1
+            if p['item'].get('brief'):
+                t.cell(row=row, column=1, value='BRIEF (no readable drawings)').font = Font(bold=True)
+                t.cell(row=row + 1, column=1, value=p['item']['brief']).alignment = Alignment(wrap_text=True)
+                row += 3
+            t.cell(row=row, column=1, value='SOURCE FILES').font = Font(bold=True)
+            table(t, row + 1, ['File', 'Drawing'], [[x['name'], x.get('ref')] for x in p['item']['files']])
+        path = out_dir / ('Hotel Chocolat review pack %s %s.xlsx' % (pack, stamp))
+        wb.save(str(path))
+        written.append(path)
+    print('%d products: %d priced, %d not yet' % (len(products), len(products) - len(waiting), len(waiting)))
+    for w in written:
+        print('Written: %s' % w)
+    print('Nothing was submitted or re-priced.')
