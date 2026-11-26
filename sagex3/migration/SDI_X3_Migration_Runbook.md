@@ -5188,3 +5188,12 @@ Keep this up to date with every setting we choose. **Never write the secret here
   2. Run setup as above.
   3. Run `x3_load.py mutations --env uat` (read-only) and send Claude the output.
   4. Make a first test load of one estimate into We are SDI.
+- **26 Nov, afternoon – James: "update the user guide to the side and make the functional estimate space directly under the Estimate → Sage X3 section".**
+  - **Done.** The user guide is now a panel that slides in from the right.
+    - It opens with 📖 User guide (or `?view=guide`).
+    - It closes with ✕, Esc or a click outside.
+    - Ask the guide is inside the panel.
+  - **The workspace** (add, pre-check, publish, plus Earlier runs) now sits straight under the heading.
+  - **First use:** the panel opens by itself once, on the first ever visit.
+  - **The heading text** now describes the several-estimates flow.
+  - **Deploy:** pull, robocopy, then the installer with `--apply`. No restart.
