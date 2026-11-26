@@ -67,6 +67,9 @@ def part_number_from_dxf_path(path: Path) -> Optional[str]:
         except Exception:
             pass
     stem = path.stem.upper().replace("_", "-")
+    # A CUT FILE NAMED BY ITS DRAWING REFERENCE ("nc1-b33579.DXF", Hotel Chocolat). Asked
+    # last so every SDI and customer convention above keeps the file it already claims.
+    from drawing_reference import reference_in_file_name as _ref_in_name
     cfg = getattr(config, "DRAWING_JOB_DISCOVERY", {}) or {}
     patterns: Sequence[str] = cfg.get(
         "part_number_from_dxf_patterns",
@@ -81,7 +84,7 @@ def part_number_from_dxf_path(path: Path) -> Optional[str]:
         match = re.search(pattern, stem, flags=re.IGNORECASE)
         if match:
             return match.group("pn").upper().replace(" ", "")
-    return None
+    return _ref_in_name(stem)
 
 
 def job_prefix_from_path(path: Path) -> Optional[str]:

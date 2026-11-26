@@ -214,6 +214,8 @@ PART_NUMBER_PATTERN = r"\b(?:\d{4,6}[A-Z]?|[A-Z]{1,6}\d{1,4}|FIXING\d*)(?:-[A-Z0
 PART_NUMBER_PATTERNS = [
     PART_NUMBER_PATTERN,
     r"\b[A-Z]{1,4}\s*-\s*\d{2,}\b",
+    # A one-letter, five-digit drawing reference with a dot (Hotel Chocolat: DRG No. B.34082).
+    r"\b[A-Z]\.\d{5}\b",
 ]
 DATE_PATTERN = r"\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b"
 REVISION_PATTERN = r"\bREV(?:ISION)?\s*[:.\-]?\s*([A-Z0-9]+)\b"

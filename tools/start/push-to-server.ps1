@@ -83,6 +83,7 @@ param(
         "src/estimator_confirmed.py",
         "src/json_normaliser.py",
         "src/extractor_patterns.py",
+        "src/drawing_reference.py",
         "src/source_precedence.py",
         "src/department_codes.py",
         "src/supplier_reference.py",

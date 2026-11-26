@@ -89,6 +89,38 @@ def is_drawing_furniture(code: str, description: str) -> bool:
     return True
 
 
+def number_drawing_members(rows: List[Dict[str, Any]]) -> int:
+    """One drawing reference on several lines of one table, each a different thing.
+
+    1050MM HIGH PLINTH lists its top x1, sides x4 and base x1, all against drawing B.34495:
+    three panels of three sizes drawn on one sheet. Keyed on the drawing alone they became
+    one part of six. Each distinct description becomes a member of the drawing (B34495-1,
+    -2, -3) in the order the table prints them; the drawing reference stays on every line.
+    The same description twice is one part listed twice, and is left to add up.
+    """
+    groups: Dict[Any, List[Dict[str, Any]]] = {}
+    for row in rows:
+        ref = row.get("drawing_reference")
+        if ref and row.get("part_number") == ref:
+            groups.setdefault((row.get("bom_parent"), ref), []).append(row)
+    renamed = 0
+    for (_parent, ref), members in groups.items():
+        order: List[str] = []
+        for row in members:
+            key = re.sub(r"\s+", " ", str(row.get("description") or "").strip().upper())
+            if key not in order:
+                order.append(key)
+        if len(order) < 2:
+            continue
+        for row in members:
+            key = re.sub(r"\s+", " ", str(row.get("description") or "").strip().upper())
+            from drawing_reference import compact as _compact_ref
+            row["part_number"] = f"{_compact_ref(ref)}-{order.index(key) + 1}"
+            row["drawing_member_of"] = ref
+            renamed += 1
+    return renamed
+
+
 def _norm_code(raw: Any) -> str:
     """Canonicalise a BOM code, but ONLY for formal codes (SDI refs and letter-prefix
     catalogue codes). Descriptions keep their spacing so fuzzy bought-in reconciliation
@@ -150,7 +182,12 @@ def reconciled_bom_rows_for_job(
         parent = pg.get("label")
         _parent_known = pg.get("parent_known", True)
         for r in pg.get("rows", []):
-            code = _norm_code(r.get("part_number") or r.get("part_ref") or "")
+            _raw_code = r.get("part_number") or r.get("part_ref") or ""
+            # A STOCK CODE AND A DRAWING REFERENCE IN ONE CELL (drawing_reference): the line
+            # is the drawing it names, and keeps its stock code beside it.
+            from drawing_reference import split_line_code as _split_line_code
+            _ident, _stock, _ref = _split_line_code(_raw_code)
+            code = _ident if (_stock or _ref) else _norm_code(_raw_code)
             desc = str(r.get("description") or "").strip()
             try:
                 qty = int(r.get("quantity"))
@@ -204,6 +241,10 @@ def reconciled_bom_rows_for_job(
             # space and the parent merge folded that reading in (D-687): its code, its words
             # and the sheet it came off. Only on a line that has one, so every other row is
             # byte-identical.
+            if _stock:
+                _row_out["finished_part_no"] = _stock
+            if _ref:
+                _row_out["drawing_reference"] = _ref
             if r.get("also_read_as"):
                 _row_out["bom_also_read_as"] = [dict(x) for x in r["also_read_as"]
                                                 if isinstance(x, dict)]
@@ -234,6 +275,7 @@ def reconciled_bom_rows_for_job(
                         _row_out["length_mm"] = _lv
                         break
             flat.append(_row_out)
+    number_drawing_members(flat)
     findings_extra.extend(reconcile_one_stray_letter(flat, pdf_paths))
     # A reader that did not run is the only failure this module cannot see in its output:
     # the rows simply are not there, and a job read by one path looks exactly like a job

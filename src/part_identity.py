@@ -48,6 +48,10 @@ def normalize_part_code(raw: Any) -> str:
     s = str(raw or "").strip().upper()
     if not s:
         return ""
+    # B.33579, B-33579 and B33579 are one drawing (Hotel Chocolat prints all three).
+    from drawing_reference import compact as _compact_ref, is_drawing_reference as _is_ref
+    if _is_ref(s):
+        return _compact_ref(s)
     s = re.sub(r"\s*-\s*", "-", s)
     s = re.sub(r"\s+", " ", s).strip()
     # "1450 - GA" / "1450 GA" -> 1450-GA

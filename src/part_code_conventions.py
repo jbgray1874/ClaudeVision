@@ -217,6 +217,9 @@ def looks_like_a_drawing_number(text: str) -> bool:
     drawing (D-584): "DIN7991-M3X10", "RAL7024-SATIN".
     """
     token = str(text or "").strip()
+    from drawing_reference import is_drawing_reference as _is_ref
+    if _is_ref(token):
+        return token[0].upper() not in _refused_prefixes()
     if not _DRAWING_NUMBER_SHAPE.match(token):
         return False
     _pre = _LETTER_PREFIX.match(token)
