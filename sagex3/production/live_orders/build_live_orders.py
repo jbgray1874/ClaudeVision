@@ -108,10 +108,10 @@ def read_products(path):
             ITMDES1=["ITMDES1", "localizedDescription1", "description1", "description", "Description"],
             ITMDES2=["ITMDES2", "localizedDescription2", "description2"],
             ITMDES3=["ITMDES3", "localizedDescription3", "description3"],
-            STU=["STU", "stockUnit.code", "stockUnit"]).items()}
+            STU=["STU", "stockUnit.code", "stockUnit"], MADE=["isManufactured"]).items()}
         g = lambda r, k: str(r.get(c[k]) or "").strip() if c[k] else ""
         return {g(r, "ITMREF"): dict(cat=g(r, "TCLCOD"), des=g(r, "ITMDES1"), des2=g(r, "ITMDES2"), des3=g(r, "ITMDES3"),
-                                     unit=g(r, "STU"))
+                                     unit=g(r, "STU"), made=g(r, "MADE").lower() in ("true", "1", "yes"))
                 for r in rows if g(r, "ITMREF")}
     ws = load_workbook(path, read_only=True)["Data with Headings"]
     rows = ws.iter_rows(values_only=True)
@@ -441,6 +441,10 @@ def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, le
     else:
         hist = history(grids["POH"])
     po_sug = suggest(wos, stock, pos, on_wo, prods, hist, today, CALL_OFF)
+    # Late POs (Purchasing), Order lookup (Customer Services), Go-live data checks (26 Nov) - read-only lists
+    from daily_lists import data_checks, late_pos, order_lookup
+    lists = dict(lpo=late_pos(grids["POH"], wos, prods, today), sol=order_lookup(grids["SOH"], wos, sug, prods, today))
+    lists["dchk"], dchk_n = data_checks(prods, boms, routes, wcnames)
 
     compare = compare_dave(dave, wos) if dave else None
     out = Path(out_dir)
@@ -453,15 +457,17 @@ def build(extract, out_dir, products_path, boms_path, routes_path, dave=None, le
                 sug_red=sum(not (s["bom"] and s["route"]) for s in sug), stale_so=len(stale),
                 overdue=sum(1 for w in wos if w["due"] and w["due"] < today),
                 hours=round(sum(sum(w["hours"].values()) for w in wos), 1),
-                po_sug=len(po_sug), po_now=sum(s["status"] in ("LATE", "NOW") for s in po_sug))
+                po_sug=len(po_sug), po_now=sum(s["status"] in ("LATE", "NOW") for s in po_sug),
+                po_late=sum(x["status"] == "LATE" for x in lists["lpo"]), so_lines=len(lists["sol"]),
+                so_late=sum(x["late"] for x in lists["sol"]), data_checks=dchk_n)
     name = f"SDI_Live_Orders_{stamp[:10]}"
     # Production's notes: a workbook to read them from, or already merged with the portal's (run_x3, 25 Nov)
     carried = carry if isinstance(carry, dict) else (read_carry(carry) if carry else {})
     for w in wos:
         w["carry"] = carried.get(w["wo"], {})
     meta["carried"] = sum(1 for w in wos if w["carry"])
-    write_xlsx(out / f"{name}.xlsx", meta, wos, wc_cols, wcnames, load, sug, checks, compare, po_sug)
-    write_html(out / f"{name}.html", meta, wos, wc_cols, wcnames, load, sug, compare, po_sug)
+    write_xlsx(out / f"{name}.xlsx", meta, wos, wc_cols, wcnames, load, sug, checks, compare, po_sug, lists)
+    write_html(out / f"{name}.html", meta, wos, wc_cols, wcnames, load, sug, compare, po_sug, lists)
     return dict(meta=meta, files=[f"{name}.xlsx", f"{name}.html", f"{name}.json"], compare=compare and compare["summary"], wos=wos, wcnames=wcnames)
 
 
@@ -518,11 +524,11 @@ def wc_label(wc, wcnames):
     return "/".join(wcnames.get(wc, [])) or wc
 
 
-def write_xlsx(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, po_sug=None):
+def write_xlsx(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, po_sug=None, lists=None):
     """Production's workbook (live_orders_xlsx.py, 20 Nov). The older plain writer is kept below as write_xlsx_plain."""
     import live_orders_xlsx
     live_orders_xlsx.write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_label, drawing_of, STALE_DAYS,
-                           po_sug or [])
+                           po_sug or [], lists or {})
 
 
 def write_xlsx_plain(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare):
@@ -625,7 +631,7 @@ def stock_of(w):
 
 
 # ---------------------------------------------------------------- HTML
-def write_html(path, meta, wos, wc_cols, wcnames, load, sug, compare, po_sug=None):
+def write_html(path, meta, wos, wc_cols, wcnames, load, sug, compare, po_sug=None, lists=None):
     data = dict(meta=meta, wcs=[[c, wc_label(c, wcnames), family(c)] for c in wc_cols],
                 wos=[dict(due=w["due"].isoformat() if w["due"] else "", cd=w["cust_date"].isoformat() if w["cust_date"] else w["cust_note"],
                           wo=w["wo"], lv=w["level"], so=w["so"], ac=w["account"], p=w["code"], d=w["des"], rev=w["rev"],
@@ -644,6 +650,7 @@ def write_html(path, meta, wos, wc_cols, wcnames, load, sug, compare, po_sug=Non
                       "order_by": s["order_by"].isoformat() if s["order_by"] else "",
                       "next_po": s["next_po"].isoformat() if s["next_po"] else "",
                       "last_order": s["last_order"].isoformat() if s["last_order"] else ""} for s in (po_sug or [])],
+                **(lists or {}),                                # lpo, sol, dchk (26 Nov)
                 cmp=compare["summary"] if compare else None)
     page = TEMPLATE.replace("__DATA__", json.dumps(data, default=str).replace("</", "<\\/")).replace("__ASAT__", html.escape(meta["as_at"]))
     Path(path).write_text(page, encoding="utf-8")

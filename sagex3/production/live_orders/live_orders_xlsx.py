@@ -79,7 +79,8 @@ def week_of(d):
 
 
 # ---------------------------------------------------------------- the workbook
-def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_label, drawing_of, stale_days, po_sug=()):
+def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_label, drawing_of, stale_days, po_sug=(),
+          lists=None):
     wb = Workbook()
     as_at = meta["as_at"]
     sub = f"as at {as_at} · {meta['wos']} works orders still to make · from Sage X3 · nothing typed except the ✎ columns"
@@ -114,7 +115,8 @@ def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_labe
         fam = {"M": "Metal", "J": "Joinery", "A": "Acrylics"}.get(c[:1])
         if fam:
             lo.cell(H, i).fill = F(FAMILY[fam])
-    first, last = H + 1, H + len(wos)
+    nweeks = sum(1 for i, w in enumerate(wos) if i == 0 or week_of(w["due"]) != week_of(wos[i - 1]["due"]))
+    first, last = H + 1, H + len(wos) + nweeks                      # + a band row per week (26 Nov)
     lo.cell(5, ix["Part code"], "Totals (follow the filter):").font = Font(bold=True, color=MUTED, size=9)
     for col in [ix["QTY"], ix["Booked in"], ix["Balance"]] + list(range(first_wc, len(heads) + 1)):
         L = get_column_letter(col)
@@ -123,36 +125,60 @@ def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_labe
     W = CL["WO Num"]
     lo.cell(5, ix["WO Num"], f"=SUBTOTAL(103,{W}{first}:{W}{max(last, first)})&\" works orders\"").font = Font(bold=True, size=9)
 
-    bom_first, prev_week = {}, "start"
-    rows_by_wo = {}
+    # 26 Nov (Dave): split into weekly sections, as his sheet - a band row above each week with its works orders,
+    # hours and red count, and that week's hours per work centre (SUBTOTAL: follows the filter, and the totals in
+    # row 5 skip it, so nothing is counted twice)
+    bom_first, rows_by_wo, data_rows = {}, {}, []
     wrap = {ix["Description"], *range(e0, e1 + 1)} - {ix["Prog"], ix["Tube req"]}
-    for i, w in enumerate(wos):
-        r = first + i
-        cr = w.get("carry", {})
+    this_week = week_of(dt.date.today())
+    groups = []
+    for w in wos:
         wk = week_of(w["due"])
-        vals = [wk, w["due"], w["wo"], w["level"], w["parent"], w["so"], w["account"], w["code"], w["des"],
-                drawing_of(w["code"]), w["rev"], w["status"], w["qty"], w["done"], w["bal"],
-                *[f[:1] if f in w["families"] else "" for f in ("Metal", "Joinery", "Acrylics")],
-                *[cr.get(k, "") for k in CARRY_KEYS]]
-        vals += [round(w["hours"][c], 2) if w["hours"].get(c) else None for c in wc_cols]
-        for j, v in enumerate(vals, 1):
-            cell = lo.cell(r, j, v)
-            cell.font = Font(size=9)
-            cell.alignment = Alignment(vertical="top", wrap_text=j in wrap)
-        rows_by_wo[w["wo"]] = r
-        for fam in ("Metal", "Joinery", "Acrylics"):
-            lo.cell(r, ix[fam]).font = Font(bold=True, color=FAMILY[fam], size=10)
-            lo.cell(r, ix[fam]).alignment = Alignment(horizontal="center", vertical="top")
-        for j in range(e0, e1 + 1):
-            lo.cell(r, j).fill = EDIT_FILL
-        if w["level"] != "Top":
-            lo.cell(r, ix["Part code"]).alignment = Alignment(indent=1, vertical="top")
-        if wk != prev_week:                                          # Dave's weekly break line
-            for j in range(1, len(heads) + 1):
-                lo.cell(r, j).border = Border(top=thick)
-            prev_week = wk
+        if not groups or groups[-1][0] != wk:
+            groups.append((wk, []))
+        groups[-1][1].append(w)
+    r = first
+    for wk, ws_ in groups:
+        band, a0, a1 = r, r + 1, r + len(ws_)
+        hrs = sum(sum(w["hours"].values()) for w in ws_)
+        red = sum(w["status"] == "RED" for w in ws_)
+        lab = ("No due date" if wk is None else f"Week commencing {wk:%d/%m/%y}" + (" - overdue" if wk < this_week else ""))
+        lo.cell(band, 1, f"{lab}  ·  {len(ws_)} works order{'s' if len(ws_) != 1 else ''}  ·  {hrs:,.1f} hours"
+                         + (f"  ·  {red} red" if red else "")).font = Font(bold=True, size=10, color=INK)
+        for j in range(1, len(heads) + 1):
+            lo.cell(band, j).fill = F("FFF1C7" if wk is not None and wk < this_week else "EFEFEA")
+            lo.cell(band, j).border = Border(top=thick)
+        for j in range(first_wc, len(heads) + 1):
+            L = get_column_letter(j)
+            c = lo.cell(band, j, f"=SUBTOTAL(109,{L}{a0}:{L}{a1})")
+            c.font = Font(bold=True, size=9)
+        lo.row_dimensions[band].height = 18
+        r += 1
+        for w in ws_:
+            cr = w.get("carry", {})
+            vals = [wk, w["due"], w["wo"], w["level"], w["parent"], w["so"], w["account"], w["code"], w["des"],
+                    drawing_of(w["code"]), w["rev"], w["status"], w["qty"], w["done"], w["bal"],
+                    *[f[:1] if f in w["families"] else "" for f in ("Metal", "Joinery", "Acrylics")],
+                    *[cr.get(k, "") for k in CARRY_KEYS]]
+            vals += [round(w["hours"][c], 2) if w["hours"].get(c) else None for c in wc_cols]
+            for j, v in enumerate(vals, 1):
+                cell = lo.cell(r, j, v)
+                cell.font = Font(size=9)
+                cell.alignment = Alignment(vertical="top", wrap_text=j in wrap)
+            rows_by_wo[w["wo"]] = r
+            data_rows.append(r)
+            for fam in ("Metal", "Joinery", "Acrylics"):
+                lo.cell(r, ix[fam]).font = Font(bold=True, color=FAMILY[fam], size=10)
+                lo.cell(r, ix[fam]).alignment = Alignment(horizontal="center", vertical="top")
+            for j in range(e0, e1 + 1):
+                lo.cell(r, j).fill = EDIT_FILL
+            if w["level"] != "Top":
+                lo.cell(r, ix["Part code"]).alignment = Alignment(indent=1, vertical="top")
+            r += 1
+    last = r - 1
     for r in range(first, last + 1):
-        lo.cell(r, 1).number_format = lo.cell(r, 2).number_format = "dd/mm/yy"
+        if r in rows_by_wo.values():
+            lo.cell(r, 1).number_format = lo.cell(r, 2).number_format = "dd/mm/yy"
         for j in range(first_wc, len(heads) + 1):
             lo.cell(r, j).number_format = "0.0;;"
     if wos:
@@ -161,7 +187,13 @@ def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_labe
         lo.conditional_formatting.add(f"B{first}:B{last}", FormulaRule(formula=[f"AND(ISNUMBER(B{first}),B{first}<TODAY())"],
                                                                          font=Font(bold=True, color=RAG["RED"][0])))
         if wc_cols:
-            rng = f"{get_column_letter(first_wc)}{first}:{get_column_letter(len(heads))}{last}"
+            runs = []                                                 # the works-order rows, week by week
+            for x in data_rows:
+                if not runs or x != runs[-1][1] + 1:
+                    runs.append([x, x])
+                else:
+                    runs[-1][1] = x
+            rng = " ".join(f"{get_column_letter(first_wc)}{x0}:{get_column_letter(len(heads))}{x1}" for x0, x1 in runs)
             lo.conditional_formatting.add(rng, ColorScaleRule(start_type="num", start_value=0, start_color="FFFFFF",
                                                               mid_type="percentile", mid_value=60, mid_color="FFE7A3",
                                                               end_type="percentile", end_value=98, end_color="F28C28"))
@@ -339,6 +371,51 @@ def write(path, meta, wos, wc_cols, wcnames, load, sug, checks, compare, wc_labe
             Font(italic=True, color=MUTED)
     ps.freeze_panes = "E6"
     _print(ps, 5)
+
+    # ---------- Late POs, Order lookup, Go-live data checks (26 Nov) - plain lists, read-only
+    lists = lists or {}
+    def plain(title, idx, colour, sub, heads, widths, rows, dates=(), wraps=(), empty=""):
+        sh = wb.create_sheet(title, idx)
+        sh.sheet_properties.tabColor = colour
+        _banner(sh, title, sub, len(heads))
+        _header(sh, 5, heads, widths)
+        for i, row in enumerate(rows, 6):
+            for j, v in enumerate(row, 1):
+                c = sh.cell(i, j, v)
+                c.font = Font(size=9)
+                c.alignment = Alignment(vertical="top", wrap_text=j in wraps)
+                if j in dates and v:
+                    c.value, c.number_format = dt.date.fromisoformat(v), "dd/mm/yy"
+        if rows:
+            sh.auto_filter.ref = f"A5:{get_column_letter(len(heads))}{5 + len(rows)}"
+        elif empty:
+            sh.cell(6, 1, empty).font = Font(italic=True, color=MUTED)
+        sh.freeze_panes = "B6"
+        _print(sh, 5)
+        return sh
+    n = len(wb.sheetnames)
+    plain("Late POs", min(4, n), "B06D00", "open purchase-order lines past their expected date, and those due in the "
+               "next 7 days, with the works orders waiting on each part · read-only",
+               ["Status", "Days late", "Expected", "Supplier", "PO", "Line", "Part", "Description", "Open qty", "Unit",
+                "Ordered", "Works orders waiting", "Of them red", "First WO due", "Works orders"],
+               [9, 8, 10, 12, 14, 6, 20, 32, 9, 6, 10, 9, 8, 10, 40],
+               [[{"LATE": "Late", "SOON": "Due this week", "NODATE": "No date"}[x["status"]], x["days_late"], x["expected"],
+                 x["supplier"], x["po"], x["line"], x["part"], x["des"], x["qty"], x["unit"], x["ordered"], x["wos_n"],
+                 x["red"], x["first_due"], ", ".join(x["wos"])] for x in lists.get("lpo", [])],
+               dates=(3, 11, 14), wraps=(8, 15), empty="No open purchase-order lines are late or due this week.")
+    plain("Order lookup", min(5, n + 1), "1E8E3E", "every open sales-order line, with the works orders making it - for "
+          "Customer Services · read-only",
+          ["Sales order", "Line", "Account", "Customer ref", "Part", "Description", "Open qty", "Unit", "Customer date",
+           "Ordered", "Where it is", "Status", "Works orders (status, due, balance)"],
+          [14, 6, 10, 16, 20, 32, 9, 6, 11, 10, 30, 8, 50],
+          [[x["so"], x["line"], x["account"], x["ref"], x["part"], x["des"], x["qty"], x["unit"], x["requested"],
+            x["ordered"], x["state"], x["status"], "; ".join(f"{w[0]} {w[1]} due {w[2] or '-'} bal {w[3]:g}" for w in x["wos"])]
+           for x in lists.get("sol", [])],
+          dates=(9, 10), wraps=(6, 11, 13), empty="No open sales-order lines.")
+    plain("Go-live data checks", len(wb.sheetnames), "C5221F", f"Sage X3 master data to fix before go-live (4 Jan): "
+          f"{meta.get('data_checks', 0)} to look at" + (" - the first 5,000 listed" if meta.get("data_checks", 0) > 5000 else ""),
+          ["Check", "Part / code", "Description", "Detail"], [36, 22, 36, 70], lists.get("dchk", []), wraps=(3, 4),
+          empty="Nothing found.")
 
     # ---------- Dashboard (first tab)
     db = wb.create_sheet("Dashboard", 0)

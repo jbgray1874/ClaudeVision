@@ -24,7 +24,7 @@
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--t);font:14px/1.45 'Segoe UI','Helvetica Neue',Arial,sans-serif}
 header{background:radial-gradient(1200px 300px at 85% -40%,rgba(245,217,71,.22),transparent 60%),linear-gradient(135deg,#1b1c1b,#2b2c2a);color:#fff;border-bottom:4px solid var(--y)}
-.w{max-width:1560px;margin:0 auto;padding:0 18px}
+.w{max-width:2400px;margin:0 auto;padding:0 18px}
 .hd{padding-top:18px;padding-bottom:14px;display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;justify-content:space-between}
 .brand{color:var(--y);font-weight:800;letter-spacing:.3px;font-size:13px}h1{margin:2px 0 2px;font-size:28px;letter-spacing:-.3px}
 .sub{color:#cfd1ce;font-size:13px}.chip{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:99px;font-size:11px;font-weight:700;background:var(--y);color:#1c1c1c;vertical-align:2px}
@@ -38,7 +38,7 @@ nav.tabs button.on{background:var(--ink);color:#fff}nav.tabs button:hover:not(.o
 main{padding:18px 0 48px}
 .view{display:none;animation:fade .25s ease}.view.on{display:block}
 /* 23 Nov: no data for this environment = no figures from the last one (James: the tiles showed SDI Mig's 892 under We are SDI) */
-body.nodata #v-ov,body.nodata #v-lo,body.nodata #v-ld,body.nodata #v-sh,body.nodata #v-po,body.nodata #v-sg,body.nodata #v-cu,body.nodata #v-tr,body.nodata #x3rep{display:none!important}@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+body.nodata #v-ov,body.nodata #v-lo,body.nodata #v-ld,body.nodata #v-sh,body.nodata #v-po,body.nodata #v-lp,body.nodata #v-ol,body.nodata #v-dc,body.nodata #v-sg,body.nodata #v-cu,body.nodata #v-tr,body.nodata #x3rep{display:none!important}@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:var(--sh);position:relative;overflow:hidden}
 .tile b{display:block;font-size:30px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums}.tile span{color:var(--muted);font-size:12px}
@@ -73,6 +73,12 @@ td.ed.w{min-width:150px}td.ed:hover{outline:1px dashed var(--a);outline-offset:-
 td.ed.saved{animation:flash 1.2s ease}@keyframes flash{from{background:var(--gb)}}
 td.ed textarea{width:100%;min-width:140px;min-height:52px;font:inherit;font-size:13px;padding:4px 6px;border:2px solid var(--y);border-radius:6px;resize:vertical}
 th.ed{background:#5a4d00}
+/* 26 Nov (Dave): weekly sections on Live Orders; zoom out and use the whole screen */
+tr.wkh td{background:color-mix(in srgb,var(--y) 22%,var(--card));font-weight:800;cursor:pointer;border-top:2px solid var(--ink);white-space:normal}
+tr.wkh.od td{background:color-mix(in srgb,var(--r) 14%,var(--card))}tr.wkh td .muted{font-weight:600}tr.wkh .tw{display:inline-block;width:14px}
+.zoom{display:inline-flex;align-items:center;border:1px solid rgba(255,255,255,.35);border-radius:99px;overflow:hidden}.zoom button{border:0;border-radius:0;background:transparent;color:#fff;font-weight:800;padding:6px 10px}
+.zoom span{color:#e9eae7;font-size:12px;min-width:38px;text-align:center}.zoom button:hover{background:rgba(255,255,255,.12)}
+#t1{max-height:var(--t1h,calc(100vh - 250px));min-height:300px}
 /* Ask the guide (25 Nov) */
 .ask{border-left:4px solid var(--y);background:var(--soft);border-radius:10px;padding:12px 14px;margin:8px 0 6px}
 .qa{margin-top:10px}.qa .q{font-weight:700}.qa .q::before{content:"You: ";color:var(--muted);font-weight:600}
@@ -105,12 +111,12 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
 <header><div class="w hd">
   <div><div class="brand">we.are.sdi · Production</div><h1>Live Orders</h1><div class="sub"><span id="asat">No data loaded</span><span id="envb" class="envb hide"></span><span id="viewing"></span></div></div>
   <div class="bar" style="margin:0" id="filebar"><label class="sub" for="file">Data file</label><input type="file" id="file" accept=".json,application/json"></div>
-  <div class="bar hide" style="margin:0" id="portalbar"><span class="envsw" id="envsw" title="Which Sage X3 environment to read"><button data-env="mig">SDI Mig (test)</button><button data-env="uat">We are SDI (UAT)</button></span><span id="rstat"></span><button id="ugbtn" class="ghost" title="How to use Live Orders">📖 User guide</button><button id="wbbtn" class="ghost" title="Every Live Orders spreadsheet in Production's folder">📂 Workbooks</button><button id="regen" class="y" title="Pull fresh data from Sage X3, build, and save a new workbook">↻ Regenerate</button></div>
+  <div class="bar hide" style="margin:0" id="portalbar"><span class="envsw" id="envsw" title="Which Sage X3 environment to read"><button data-env="mig">SDI Mig (test)</button><button data-env="uat">We are SDI (UAT)</button></span><span id="rstat"></span><span class="zoom" title="Make everything smaller to see more (remembered on this PC)"><button id="zout" aria-label="Zoom out">−</button><span id="zval">100%</span><button id="zin" aria-label="Zoom in">+</button></span><button id="fullbtn" class="ghost" title="Use the whole screen (opens Live Orders in its own tab)">⛶ Full screen</button><button id="ugbtn" class="ghost" title="How to use Live Orders">📖 User guide</button><button id="wbbtn" class="ghost" title="Every Live Orders spreadsheet in Production's folder">📂 Workbooks</button><button id="regen" class="y" title="Pull fresh data from Sage X3, build, and save a new workbook">↻ Regenerate</button></div>
 </div></header>
 <nav class="tabs hide" id="tabs"><div class="w">
   <button data-v="ov" class="on">Overview</button><button data-v="lo">Live Orders</button><button data-v="ld">Work-centre load</button>
-  <button data-v="sh">Shortages</button><button data-v="po">PO Suggestions</button><button data-v="sg">WO Suggestions</button><button data-v="cu">Customers</button>
-  <button data-v="tr">Trends</button><button data-v="ug">User guide</button><button data-v="hw">How it works</button><button data-v="wb">Workbooks</button>
+  <button data-v="sh">Shortages</button><button data-v="po">PO Suggestions</button><button data-v="lp">Late POs</button><button data-v="sg">WO Suggestions</button><button data-v="ol">Order lookup</button><button data-v="cu">Customers</button>
+  <button data-v="tr">Trends</button><button data-v="dc">Data checks</button><button data-v="ug">User guide</button><button data-v="hw">How it works</button><button data-v="wb">Workbooks</button>
 </div></nav>
 <main class="w">
   <div id="drop"><b>Choose or drop a Live Orders data file</b><br><span class="muted">SDI_Live_Orders_&lt;date&gt;.json, written beside each workbook</span></div>
@@ -161,6 +167,17 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
       <input id="pq" placeholder="Search part, description or supplier" size="30"><button id="csv3">Export CSV</button><span class="muted" id="pcount"></span></div>
     <div class="tbl" id="t7"></div></div></section>
 
+  <section class="view" id="v-lp"><div class="card">
+    <h2>Late POs</h2><p class="note">Open purchase-order lines past their expected date, and those due in the next 7 days, with the works orders waiting on each part. Pick a supplier for chase text to copy into an email. <b>Nothing is sent from here.</b></p>
+    <div class="bar"><select id="lst"><option value="LATE">Late</option><option value="">Late and due this week</option></select><select id="lsup"><option value="">All suppliers</option></select>
+      <input id="lq" placeholder="Search PO, part or supplier" size="26"><button id="lchase" disabled title="Pick a supplier first">✉ Copy chase text</button><button id="csv4">Export CSV</button><span class="muted" id="lcount"></span></div>
+    <div class="tbl" id="t8"></div></div></section>
+
+  <section class="view" id="v-ol"><div class="card">
+    <h2>Order lookup</h2><p class="note">For Customer Services: every open sales-order line - search by sales order, customer order reference, account or part - with the works orders making it, their status and due date. Red date = the works order is due after the customer's date.</p>
+    <div class="bar"><input id="oq" placeholder="Sales order, customer ref, account or part" size="40" style="font-size:15px"><select id="ost"><option value="">All open lines</option><option value="late">Due after the customer's date</option><option value="nowo">No works order yet</option></select><button id="csv5">Export CSV</button><span class="muted" id="ocount"></span></div>
+    <div class="tbl" id="t9"></div></div></section>
+
   <section class="view" id="v-sg"><div class="card">
     <h2>WO Suggestions</h2><p class="note">Sales-order lines for made parts that no works order or stock covers. Red = no BOM or no route. Lines due over 60 days ago are left out for Customer Services to close.</p>
     <div class="tbl" id="t4"></div></div></section>
@@ -176,6 +193,11 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
       <div class="card"><h2>Material status over time</h2><p class="note" id="trnote">From every saved generation.</p><div class="legend" id="lg6"></div><div id="c6"></div></div>
       <div class="card"><h2>Hours still to do over time</h2><p class="note">Total route hours on open works orders at each generation.</p><div id="c7"></div></div>
     </div></section>
+
+  <section class="view" id="v-dc"><div class="card">
+    <h2>Go-live data checks</h2><p class="note">Sage X3 master data to fix before go-live on 4 January: made parts with no BOM or route, BOM components that aren't products, route work centres Live Orders doesn't know, products with no description. Click a check to see its list.</p>
+    <div class="bar" id="dcsum"></div><div class="bar"><input id="dq" placeholder="Search part or detail" size="28"><button id="csv6">Export CSV</button><span class="muted" id="dcount"></span></div>
+    <div class="tbl" id="t10"></div></div></section>
 
   <section class="view" id="v-ug"><div class="card guide">
     <h2>User guide</h2><p class="note">Live Orders in the SDI Intelligence portal - for Production, Purchasing and Customer Services. Written 20 Nov 2026, updated 25 Nov (notes typed here, Simon's and Dave's changes).</p>
@@ -194,17 +216,32 @@ table.gt{margin:6px 0 10px}table.gt td,table.gt th{white-space:normal;vertical-a
     <h3>2. The views</h3>
     <table class="gt"><tr><th>Tab</th><th>What it shows</th><th>For</th></tr>
       <tr><td>Overview</td><td>The headline numbers, red / amber / green, works orders by due week, hours by week and shop, the busiest work centres, the biggest shortages, what's due in the next 14 days and why it isn't green.</td><td>Everyone</td></tr>
-      <tr><td>Live Orders</td><td>One line per works order, as Production's sheet. Filter by status, shop, week or level; search by part, WO, SO, account or any note. <b>Click a line</b> for why it's red or amber and its exploded BOM (stock, on order, next PO date). <b>Click a yellow ✎ cell</b> to type a note. Export CSV.</td><td>Production</td></tr>
+      <tr><td>Live Orders</td><td>One line per works order, as Production's sheet, <b>in weekly sections</b> - each week's band shows its works orders, balance, hours by shop and red count (click a band to fold that week). Filter by status, shop, week or level; search by part, WO, SO, account or any note. <b>Click a line</b> for why it's red or amber and its exploded BOM (stock, on order, next PO date). <b>Click a yellow ✎ cell</b> to type a note. Export CSV.</td><td>Production</td></tr>
       <tr><td>Work-centre load</td><td>Hours still to do per work centre, by the week each order is due. Darker = busier.</td><td>Production</td></tr>
       <tr><td>Shortages</td><td>Every bought-in component the open works orders need, against stock, on order and on works orders - what's short and which orders it holds up.</td><td>Purchasing</td></tr>
       <tr><td>PO Suggestions</td><td>Bought-in parts to order: how many, when they're needed, when to order by, and who they were bought from last, at what price. Read-only - you raise the order in Sage X3. See below.</td><td>Purchasing</td></tr>
+      <tr><td>Late POs</td><td>Open purchase-order lines past their expected date (and those due this week), with the works orders waiting on each part. Pick a supplier for chase text to copy into an email.</td><td>Purchasing</td></tr>
       <tr><td>WO Suggestions</td><td>Sales-order lines for made parts that no works order or stock covers. Red = no BOM or no route.</td><td>Production, Customer Services</td></tr>
+      <tr><td>Order lookup</td><td>Every open sales-order line: search by sales order, customer order reference, account or part to see the works orders making it, their status and due date.</td><td>Customer Services</td></tr>
       <tr><td>Customers</td><td>Works orders, red count, overdue and hours by account. Click an account to see its orders.</td><td>Customer Services</td></tr>
       <tr><td>Trends</td><td>Red / amber / green and hours across every saved run.</td><td>Managers</td></tr>
+      <tr><td>Data checks</td><td>Sage X3 master data to fix before go-live: made parts with no BOM or route, BOM components that aren't products, unknown work centres, products with no description.</td><td>James, Estimating, Production</td></tr>
       <tr><td>Workbooks</td><td>Every spreadsheet in the Live Orders folder (also the <b>📂 Workbooks</b> button).</td><td>Everyone</td></tr></table>
     <h3>Red, amber, green - and the shop letters</h3>
     <p><b>Material status:</b> <span class="st GREEN">GREEN</span> all material in stock · <span class="st AMBER">AMBER</span> covered by a PO or works order due in time, or a call-off material · <span class="st RED">RED</span> short with nothing due in time, or no BOM. Click the line to see which material and why.</p>
     <p><b>Shops:</b> <span class="shop" style="color:var(--m)">M</span> Metal · <span class="shop" style="color:var(--j)">J</span> Joinery · <span class="shop" style="color:var(--ac)">A</span> Acrylics - from the work centres on the part's route. <b>Level:</b> Top = the works order for the sales order; Sub = a sub-assembly made for it.</p>
+    <h3>See more on the screen</h3>
+    <ul><li><b>− 100% +</b> (top bar) makes everything smaller or bigger - 70% or 80% shows many more lines at once. It's remembered on this PC.</li>
+      <li><b>⛶ Full screen</b> opens Live Orders in its own browser tab, using the whole window (no portal menu). In that tab, F11 hides the browser's own bars too.</li>
+      <li>The Live Orders table fills the screen below the tabs: scroll the page down a little to use all of it. The column headings stay at the top as you scroll the table.</li></ul>
+    <h3>Late POs and chasing suppliers</h3>
+    <ol><li>Open <b>Late POs</b>. It shows the open purchase-order lines past their expected date, most overdue first; choose <b>Late and due this week</b> to see what's coming up too.</li>
+      <li><b>WOs waiting</b> are the open works orders that need that part (and how many of them are red) - chase those first.</li>
+      <li>Pick a supplier and press <b>✉ Copy chase text</b>: it copies an email listing that supplier's late lines. Paste it into a new email to the supplier, check it, and send it yourself. One email per supplier - if you ever write to several suppliers at once, put them in <b>BCC</b>, never To or CC.</li></ol>
+    <h3>Order lookup - "where's my order?"</h3>
+    <p>Type a sales order, the customer's order reference, an account or a part. Each open line shows the works orders making it, their status (red / amber / green), and their due date - in red if it's after the customer's date. "No works order yet - on WO Suggestions" means Production still needs to raise one.</p>
+    <h3>Data checks before go-live</h3>
+    <p>The <b>Data checks</b> tab lists Sage X3 master data that will cause problems: made parts with no BOM (their works orders show red) or no route (no hours), BOM components that aren't products, route work centres Live Orders doesn't know, products with no description. Click a check to see its list; Export CSV to share it. It updates with every Regenerate, so the list shrinks as things are fixed.</p>
     <h3>PO Suggestions - what Purchasing should order</h3>
     <ol><li>Open the <b>PO Suggestions</b> tab. It starts on <b>Order now (and late)</b>; choose <b>All</b> to see everything coming up.</li>
       <li>Each line is a bought-in part the open works orders are short of. <b>To order</b> = what all the open works orders need, less what's in stock, on open purchase orders and on works orders - the same figure as Shortages.</li>
@@ -347,7 +384,7 @@ function render(data){
   $('#soon').innerHTML=soon.length?`<div class="tbl"><table><tr><th>Due</th><th>WO</th><th>Part</th><th>Status</th><th>Why</th></tr>`+soon.map(w=>`<tr><td>${dd(w.due)}</td><td>${esc(w.wo)}</td><td>${esc(w.p)}</td><td><span class="st ${esc(w.st)}">${esc(w.st)}</span></td><td class="wrap">${esc(w.mt)}</td></tr>`).join('')+'</table></div>':'<p class="muted">Nothing amber or red due in the next 14 days.</p>';
   // filters
   $('#fwk').innerHTML='<option value="">All weeks</option><option value="od">Overdue</option>'+[...new Set(D.wos.map(w=>w.wk).filter(Boolean))].sort().map(k=>`<option value="${k}">w/c ${dd(k)}</option>`).join('');
-  table();loadView();shortView();poView();sugView();custView();trends();howView()}
+  table();loadView();shortView();poView();lateView();orderView();dcView();sugView();custView();trends();howView()}
 
 function howView(){const L=D.logic||[];$('#hwlive').innerHTML=D.live?`<b>Live data.</b> ${esc(D.live)}`:'<span class="muted">This data file is from before the logic was added - press Regenerate.</span>';
   $('#t6').innerHTML=L.length?`<table><thead><tr><th>What</th><th>The rule</th><th>Access SupplyChain / Production's sheet</th><th>Where it comes from in Sage X3</th><th>Reconciled to Access (16 Nov)</th></tr></thead><tbody>`+
@@ -371,9 +408,21 @@ function filtered(){const st=$('#fst').value,fam=$('#ffam').value,wk=$('#fwk').v
 const LOH=['Due','WO','Level','SO','Account','Part','Description','Rev','Status','Qty','Made','Balance','Shops','Hours',...NK.map(x=>x[1])];
 function table(){const rows=filtered();$('#count').textContent=`${fmtN(rows.length)} of ${fmtN(D.wos.length)}`;
   $('#t1').innerHTML=`<table><thead><tr><th>Due</th><th>WO</th><th>Level</th><th>SO</th><th>Account</th><th>Part</th><th>Description</th><th>Rev</th><th>Status</th><th class="n">Qty</th><th class="n">Made</th><th class="n">Balance</th><th title="M Metal · J Joinery · A Acrylics">Shops</th><th class="n">Hours</th>${NK.map(([k,l])=>`<th class="ed" title="Production's column - click a cell to type">✎ ${l}</th>`).join('')}</tr></thead><tbody>`+
-    rows.slice(0,1000).map(w=>{const od=w.due&&w.due<today;
-      return `<tr class="main" data-wo="${esc(w.wo)}"><td style="${od?'color:var(--r);font-weight:700':''}">${dd(w.due)}</td><td>${esc(w.wo)}</td><td>${w.lv==='Top'?'Top':'<span class="muted">Sub</span>'}</td><td>${esc(w.so)}</td><td>${esc(w.ac)}</td><td><b>${esc(w.p)}</b></td><td class="wrap">${esc(w.d)}</td><td>${esc(w.rev)}</td><td><span class="st ${esc(w.st)}">${esc(w.st)}</span></td><td class="n">${fmtN(w.q,0)}</td><td class="n">${fmtN(w.b,0)}</td><td class="n"><b>${fmtN(w.bal,0)}</b></td><td>${dots(w.F)}</td><td class="n">${fmtN(w.H,1)}</td>${NK.map(([k])=>edCell(w,k)).join('')}</tr>`}).join('')+'</tbody></table>'+
+    weekly(rows.slice(0,1000)).map(w=>{if(w.band)return w.band;const od=w.due&&w.due<today;
+      return `<tr class="main" data-wo="${esc(w.wo)}" data-wk="${esc(w.wk||'none')}"${WKHIDE.has(w.wk||'none')?' style="display:none"':''}><td style="${od?'color:var(--r);font-weight:700':''}">${dd(w.due)}</td><td>${esc(w.wo)}</td><td>${w.lv==='Top'?'Top':'<span class="muted">Sub</span>'}</td><td>${esc(w.so)}</td><td>${esc(w.ac)}</td><td><b>${esc(w.p)}</b></td><td class="wrap">${esc(w.d)}</td><td>${esc(w.rev)}</td><td><span class="st ${esc(w.st)}">${esc(w.st)}</span></td><td class="n">${fmtN(w.q,0)}</td><td class="n">${fmtN(w.b,0)}</td><td class="n"><b>${fmtN(w.bal,0)}</b></td><td>${dots(w.F)}</td><td class="n">${fmtN(w.H,1)}</td>${NK.map(([k])=>edCell(w,k)).join('')}</tr>`}).join('')+'</tbody></table>'+
     (rows.length>1000?`<p class="note" style="padding:8px">Showing the first 1,000 - filter to narrow it down.</p>`:'')}
+// Weekly sections (26 Nov, Dave: "split into weekly sections as per the current one"): a band above each week with
+// its works orders, balance, hours by shop and red count - for the lines shown (they follow the filters). Click to fold.
+const WKHIDE=new Set();
+function weekly(rows){const out=[],wk0=monday(today),famOf={};(D.wcs||[]).forEach(c=>famOf[c[0]]=(c[2]||'').charAt(0));let cur=null;
+  const groups=[];rows.forEach(w=>{const k=w.wk||'none';if(!cur||cur.k!==k){cur={k,ws:[]};groups.push(cur)}cur.ws.push(w)});
+  groups.forEach(g=>{const hs={M:0,J:0,A:0,'':0};let tot=0;g.ws.forEach(w=>Object.entries(w.h||{}).forEach(([c,h])=>{hs[famOf[c]||'']=(hs[famOf[c]||'']||0)+h;tot+=h}));
+    const red=g.ws.filter(w=>w.st==='RED').length,od=g.k!=='none'&&g.k<wk0,hid=WKHIDE.has(g.k);
+    const lab=g.k==='none'?'No due date':`Week commencing ${dd(g.k)}${od?' - overdue':g.k===wk0?' - this week':''}`;
+    const shops=['M','J','A'].filter(f=>hs[f]>0).map(f=>`${dots([f])}${fmtN(hs[f],1)}`).join(' ');
+    out.push({band:`<tr class="wkh${od?' od':''}" data-wkh="${esc(g.k)}"><td colspan="${LOH.length}"><span class="tw">${hid?'▸':'▾'}</span>${lab} <span class="muted">· ${g.ws.length} works order${g.ws.length==1?'':'s'} · balance ${fmtN(g.ws.reduce((a,w)=>a+(+w.bal||0),0))} · ${fmtN(tot,1)} hours</span> ${shops}${red?` <span class="st RED">${red} red</span>`:''}</td></tr>`});
+    g.ws.forEach(w=>out.push(w))});
+  return out}
 function noteCells(){if(!D)return;const by=Object.fromEntries(D.wos.map(w=>[w.wo,w]));
   $$('#t1 tr.main').forEach(tr=>{const w=by[tr.dataset.wo];if(!w)return;tr.querySelectorAll('td.ed').forEach(td=>{if(td.querySelector('textarea'))return;
     const c=nv(w,td.dataset.k);if(td.textContent!==c.v||(c.by&&!td.title.startsWith(c.by)))td.outerHTML=edCell(w,td.dataset.k)})})}
@@ -391,7 +440,8 @@ function editNote(td){if(td.querySelector('textarea')||!canEdit())return;const w
       .catch(e=>{alert('Not saved: '+e.message);put()})};
   ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();finish(true)}else if(e.key==='Escape'){finish(false)}});
   ta.addEventListener('blur',()=>finish(true))}
-$('#t1').addEventListener('click',e=>{const ed=e.target.closest('td.ed');if(ed){editNote(ed);return}
+$('#t1').addEventListener('click',e=>{const wh=e.target.closest('tr.wkh');if(wh){const k=wh.dataset.wkh;WKHIDE.has(k)?WKHIDE.delete(k):WKHIDE.add(k);table();return}
+  const ed=e.target.closest('td.ed');if(ed){editNote(ed);return}
   const t=e.target.closest('tr.main');if(!t)return;const n=t.nextElementSibling;if(n&&n.classList.contains('x')){n.remove();return}
   const w=D.wos.find(x=>x.wo===t.dataset.wo);const x=document.createElement('tr');x.className='x';
   x.innerHTML=`<td colspan="${LOH.length}">${w.mt?`<p style="margin:0 0 6px"><b>Material:</b> <span class="st ${esc(w.st)}">${esc(w.st)}</span> ${esc(w.mt)}</p>`:''}${(w.x||[]).length?`<b>Exploded BOM · ${esc(w.p)} × ${fmtN(w.bal,0)}</b><table style="margin-top:6px"><tr><th>Level</th><th>Component</th><th>Description</th><th class="n">Required</th><th class="n">In stock</th><th class="n">On PO</th><th>Next PO</th><th class="n">On WO</th><th>Make / buy</th></tr>`+
@@ -433,6 +483,44 @@ function poView(){if(!D.pos){$('#t7').innerHTML='<p class="muted" style="padding
 ['#pst','#pco'].forEach(x=>$(x).onchange=poView);$('#pq').oninput=poView;
 $('#csv3').onclick=()=>csv(`PO_Suggestions_${today}.csv`,['Status','Order by','Needed by','Part','Description','To order','Unit','Call-off','Last supplier','Last price','Currency','Per','Est. value','Lead time (days)','Lead time from','Last ordered','In stock','On PO','Next PO','Needed (all WOs)','Works orders'],
   poRows().map(x=>[x.label,x.order_by,x.needed_by,x.part,x.des,x.short,x.unit,x.call_off?'Yes':'',x.supplier,x.price,x.cur,x.pu,x.value,x.lead,x.lead_from,x.last_order,x.stock,x.on_po,x.next_po,x.need,x.wos.join(' ')]));
+// ---------------------------------------------------------------- Late POs, Order lookup, Data checks (26 Nov, read-only)
+const old=k=>`<p class="muted" style="padding:10px">This data file is from before ${k} was added - press Regenerate.</p>`;
+function lateRows(){const st=$('#lst').value,sup=$('#lsup').value,q=$('#lq').value.trim().toLowerCase();
+  return (D.lpo||[]).filter(x=>(!st||x.status===st)&&(!sup||x.supplier===sup)&&(!q||[x.po,x.part,x.des,x.supplier].some(v=>String(v||'').toLowerCase().includes(q))))}
+function lateView(){if(!D.lpo){$('#t8').innerHTML=old('Late POs');$('#lcount').textContent='';return}
+  const sups=[...new Set(D.lpo.map(x=>x.supplier).filter(Boolean))].sort(),cur=$('#lsup').value;
+  $('#lsup').innerHTML='<option value="">All suppliers</option>'+sups.map(v=>`<option${v===cur?' selected':''}>${esc(v)}</option>`).join('');
+  const R=lateRows();$('#lcount').textContent=`${fmtN(R.length)} of ${fmtN(D.lpo.length)} lines`;$('#lchase').disabled=!$('#lsup').value;
+  $('#t8').innerHTML=R.length?`<table><thead><tr><th>Status</th><th class="n">Days late</th><th>Expected</th><th>Supplier</th><th>PO</th><th>Line</th><th>Part</th><th>Description</th><th class="n">Open qty</th><th>Unit</th><th>Ordered</th><th class="n">WOs waiting</th><th>First WO due</th><th>Works orders</th></tr></thead><tbody>`+
+    R.map(x=>`<tr><td><span class="st ${x.status==='LATE'?'RED':'AMBER'}">${x.status==='LATE'?'Late':x.status==='SOON'?'This week':'No date'}</span></td><td class="n">${x.days_late>0?`<b style="color:var(--r)">${x.days_late}</b>`:''}</td><td>${dd(x.expected)}</td><td>${esc(x.supplier)}</td><td>${esc(x.po)}</td><td>${esc(x.line)}</td><td><b>${esc(x.part)}</b></td><td class="wrap">${esc(x.des)}</td><td class="n">${fmtN(x.qty,2)}</td><td>${esc(x.unit)}</td><td>${dd(x.ordered)}</td><td class="n">${x.wos_n||''}${x.red?` <span class="st RED">${x.red} red</span>`:''}</td><td style="${x.first_due&&x.first_due<today?'color:var(--r);font-weight:700':''}">${dd(x.first_due)}</td><td class="wrap">${x.wos.slice(0,5).map(w=>`<span class="pill">${esc(w)}</span>`).join('')}${x.wos_n>5?` <span class="muted">+${x.wos_n-5}</span>`:''}</td></tr>`).join('')+'</tbody></table>'
+    :'<p class="muted" style="padding:10px">Nothing late for this filter.</p>'}
+['#lst','#lsup'].forEach(x=>$(x).onchange=lateView);$('#lq').oninput=lateView;
+$('#lchase').onclick=()=>{const sup=$('#lsup').value,L=(D.lpo||[]).filter(x=>x.supplier===sup&&x.status!=='NODATE');if(!L.length)return;
+  const t=`Subject: Overdue order lines - please confirm delivery\n\nHello,\n\nThe following lines on our purchase orders ${L.some(x=>x.status==='LATE')?'were due and haven\'t arrived yet':'are due this week'}. Please could you confirm when they will be delivered?\n\n`+
+    L.map(x=>`${x.po} line ${x.line} - ${x.part}${x.des?' ('+x.des+')':''} - ${fmtN(x.qty,2)} ${x.unit} - due ${dd(x.expected)}`).join('\n')+`\n\nThank you,\n`;
+  (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(()=>{$('#lchase').textContent='Copied ✓';setTimeout(()=>$('#lchase').textContent='✉ Copy chase text',1500)}).catch(()=>prompt('Copy the chase text:',t))};
+$('#csv4').onclick=()=>csv(`Late_POs_${today}.csv`,['Status','Days late','Expected','Supplier','PO','Line','Part','Description','Open qty','Unit','Ordered','WOs waiting','Of them red','First WO due','Works orders'],
+  lateRows().map(x=>[x.status,x.days_late,x.expected,x.supplier,x.po,x.line,x.part,x.des,x.qty,x.unit,x.ordered,x.wos_n,x.red,x.first_due,x.wos.join(' ')]));
+function orderRows(){const q=$('#oq').value.trim().toLowerCase(),st=$('#ost').value;
+  return (D.sol||[]).filter(x=>(!st||(st==='late'?x.late:!x.wos.length&&/Suggestions/.test(x.state)))&&(!q||[x.so,x.ref,x.account,x.part,x.des,...x.wos.map(w=>w[0])].some(v=>String(v||'').toLowerCase().includes(q))))}
+function orderView(){if(!D.sol){$('#t9').innerHTML=old('Order lookup');$('#ocount').textContent='';return}
+  const R=orderRows();$('#ocount').textContent=`${fmtN(R.length)} of ${fmtN(D.sol.length)} open lines`+(R.length>500?' - showing the first 500, search to narrow it':'');
+  $('#t9').innerHTML=R.length?`<table><thead><tr><th>Sales order</th><th>Line</th><th>Account</th><th>Customer ref</th><th>Part</th><th>Description</th><th class="n">Open qty</th><th>Customer date</th><th>Where it is</th><th>Works orders</th></tr></thead><tbody>`+
+    R.slice(0,500).map(x=>`<tr><td><b>${esc(x.so)}</b></td><td>${esc(x.line)}</td><td>${esc(x.account)}</td><td>${esc(x.ref)}</td><td><b>${esc(x.part)}</b></td><td class="wrap">${esc(x.des)}</td><td class="n">${fmtN(x.qty,2)} <span class="muted">${esc(x.unit)}</span></td><td style="${x.overdue?'color:var(--r);font-weight:700':''}">${dd(x.requested)}</td><td class="wrap">${x.status?`<span class="st ${esc(x.status)}">${esc(x.status)}</span> `:''}${esc(x.state)}</td><td class="wrap">${x.wos.map(w=>`<span class="pill" title="balance ${w[3]}">${esc(w[0])} · <span style="color:var(--${w[1]==='RED'?'r':w[1]==='AMBER'?'a':'g'})">${esc(w[1])}</span> · due <b style="${x.requested&&w[2]>x.requested?'color:var(--r)':''}">${dd(w[2])||'-'}</b></span>`).join(' ')}</td></tr>`).join('')+'</tbody></table>'
+    :'<p class="muted" style="padding:10px">No open sales-order line matches.</p>'}
+$('#oq').oninput=orderView;$('#ost').onchange=orderView;
+$('#csv5').onclick=()=>csv(`Order_lookup_${today}.csv`,['Sales order','Line','Account','Customer ref','Part','Description','Open qty','Unit','Customer date','Ordered','Where it is','Status','Works orders'],
+  orderRows().map(x=>[x.so,x.line,x.account,x.ref,x.part,x.des,x.qty,x.unit,x.requested,x.ordered,x.state,x.status,x.wos.map(w=>`${w[0]} ${w[1]} due ${w[2]}`).join('; ')]));
+let DCK='';
+function dcRows(){const q=$('#dq').value.trim().toLowerCase();return (D.dchk||[]).filter(r=>(!DCK||r[0]===DCK)&&(!q||r.slice(1).join(' ').toLowerCase().includes(q)))}
+function dcView(){if(!D.dchk){$('#t10').innerHTML=old('Data checks');$('#dcsum').innerHTML='';$('#dcount').textContent='';return}
+  const by={};D.dchk.forEach(r=>by[r[0]]=(by[r[0]]||0)+1);
+  $('#dcsum').innerHTML=[['',`All (${fmtN(D.dchk.length)})`],...Object.entries(by).map(([k,n])=>[k,`${k} (${fmtN(n)})`])].map(([k,l])=>`<button data-dck="${esc(k)}" class="${k===DCK?'y':''}">${esc(l)}</button>`).join('');
+  const R=dcRows(),tot=(D.meta||{}).data_checks;$('#dcount').textContent=`${fmtN(R.length)} shown`+(tot>D.dchk.length?` - ${fmtN(tot)} in all, the first ${fmtN(D.dchk.length)} listed`:'');
+  $('#t10').innerHTML=R.length?`<table><thead><tr><th>Check</th><th>Part / code</th><th>Description</th><th>Detail</th></tr></thead><tbody>`+R.slice(0,1500).map(r=>`<tr><td>${esc(r[0])}</td><td><b>${esc(r[1])}</b></td><td class="wrap">${esc(r[2])}</td><td class="wrap">${esc(r[3])}</td></tr>`).join('')+'</tbody></table>'
+    :'<p class="muted" style="padding:10px">Nothing to fix here.</p>'}
+$('#dcsum').addEventListener('click',e=>{const b=e.target.closest('button[data-dck]');if(b){DCK=b.dataset.dck;dcView()}});$('#dq').oninput=dcView;
+$('#csv6').onclick=()=>csv(`Go_live_data_checks_${today}.csv`,['Check','Part / code','Description','Detail'],dcRows());
 function sugView(){const S=D.sug||[];
   $('#t4').innerHTML=S.length?`<table><thead><tr><th>Part</th><th>Description</th><th>Sales order</th><th class="n">To make</th><th>Suggested start</th><th>SO due</th><th>BOM</th><th>Route</th><th>Shops</th><th>Account</th></tr></thead><tbody>`+
     S.map(s=>{const bad=!(s[5]&&s[6]);return `<tr style="${bad?'background:var(--rb)':''}"><td><b>${esc(s[0])}</b></td><td class="wrap">${esc(s[1])}</td><td>${esc(s[2])}</td><td class="n">${fmtN(s[3],0)}</td><td style="${s[8]&&s[8]<today?'color:var(--r);font-weight:700':''}">${dd(s[8])}</td><td>${dd(s[4])}</td><td>${s[5]?'✓':'<b style="color:var(--r)">No</b>'}</td><td>${s[6]?'✓':'<b style="color:var(--r)">No</b>'}</td><td>${dots(s[9])}</td><td>${esc(s[7])}</td></tr>`}).join('')+'</tbody></table>':'<p class="muted" style="padding:10px">No suggestions - every sales-order line for a made part is covered.</p>'}
@@ -557,6 +645,15 @@ function askGuide(){const q=$('#askq').value.trim();if(!q)return;$('#askq').valu
     .then(r=>r.json().then(j=>{if(!r.ok)throw new Error(j.detail||r.status);return j})).then(show)
     .catch(e=>show({why:`The chat couldn't answer (${e.message}) - from the guide:`})).finally(()=>{$('#askgo').disabled=false;$('#askq').focus()})}
 $('#askgo').onclick=askGuide;$('#askq').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();askGuide()}});
+// Zoom and full screen (26 Nov, Dave: "zoom less than 100% and make the viewable area larger")
+let ZOOM=1;try{ZOOM=Math.min(1.3,Math.max(0.5,+localStorage.getItem('loZoom')||1))}catch(e){}
+// the Live Orders table fills the screen below the tabs at any zoom (scroll the page down a little to use all of it)
+function fitTable(){const nav=$('nav.tabs').getBoundingClientRect().height||50;document.documentElement.style.setProperty('--t1h',Math.max(300,(innerHeight-nav-20)/ZOOM)+'px')}
+function setZoom(z){ZOOM=Math.round(Math.min(1.3,Math.max(0.5,z))*10)/10;document.body.style.zoom=ZOOM;$('#zval').textContent=Math.round(ZOOM*100)+'%';try{localStorage.setItem('loZoom',ZOOM)}catch(e){}fitTable()}
+addEventListener('resize',fitTable);
+$('#zout').onclick=()=>setZoom(ZOOM-0.1);$('#zin').onclick=()=>setZoom(ZOOM+0.1);setZoom(ZOOM);
+$('#fullbtn').onclick=()=>{if(window.top!==window.self){window.open(location.pathname+'?env='+ENV+(sdiKey?'#key='+encodeURIComponent(sdiKey):''),'_blank');return}
+  if(document.fullscreenElement)document.exitFullscreen();else if(document.documentElement.requestFullscreen)document.documentElement.requestFullscreen().catch(()=>{})};
 $('#ugbtn').onclick=()=>{$('#tabs').classList.remove('hide');go('ug');window.scrollTo({top:0,behavior:'smooth'})};
 $('#wbbtn').onclick=()=>{$('#tabs').classList.remove('hide');$('#drop').classList.add('hide');go('wb');loadHistory().catch(()=>{})};
 let pollEnv=null;

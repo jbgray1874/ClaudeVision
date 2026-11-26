@@ -78,6 +78,18 @@ LOGIC = [
      "BOM lines, stock, PO lines open and closed (purchaseOrderLine: supplier, order date, expected receipt, gross "
      "price, currency, purchase unit), works orders.",
      "New (26 Nov) - to agree with Purchasing."),
+    ("Late POs",
+     "Open PO lines (quantity still to receive) past their expected receipt date, and those due in the next 7 days; "
+     "the works orders waiting = the open works orders whose BOM (any level) uses the part.",
+     "Purchasing checked by hand.",
+     "PO lines (expectedReceiptDate, remaining quantity), BOM lines, works orders.",
+     "New (26 Nov)."),
+    ("Order lookup",
+     "Every open sales-order line (quantity still to deliver), with the works orders made for it - same order and part, "
+     "else the same order - their status and due date; flagged when a works order is due after the customer's date.",
+     "Customer Services asked Production.",
+     "Sales order lines (requestedDeliveryDate, customerOrderReference), works orders' salesOrder.",
+     "New (26 Nov)."),
     ("Exploded BOM",
      "Every works order's BOM at every level (up to 8) x balance, against stock, on PO (and the next PO date), on WO, "
      "make / buy. Short bought-in parts in red. Click a part code to jump to it.",
