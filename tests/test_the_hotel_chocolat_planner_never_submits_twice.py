@@ -232,3 +232,38 @@ def test_a_drawing_whose_pdf_has_no_text_names_its_parts_through_its_dxf(tmp_pat
     assert plinth["drawing"] == "B.34493"
     assert "nc1-d34496.pdf" in [f["name"] for f in plinth["files"]]
     assert not any("top drawing chosen" in w for w in plinth["warnings"])
+
+
+def test_the_review_finds_each_finished_runs_workbook_from_the_run_record(tmp_path):
+    """27 Nov 2026: all 35 products finished and the review said "0 priced, 35 not yet". It
+    dropped the run record's output path and price, and an output path that is a folder was
+    taken for a workbook."""
+    import openpyxl
+    _pack(tmp_path / "pack")
+    svc = _Service(slow=0)
+    env = dict(os.environ, HC_SERVICES=svc.urls)
+    try:
+        _run("plan", str(tmp_path / "pack"), str(tmp_path), env=env)
+        plan_file = next(tmp_path.glob("Hotel Chocolat plan *.json"))
+        plan = json.loads(plan_file.read_text("utf-8"))
+        standard = next(p for p in plan["products"] if "standard" in p["title"])
+        narrow = next(p for p in plan["products"] if "narrow" in p["title"])
+        folder = tmp_path / "filed" / "run1"
+        folder.mkdir(parents=True)
+        _finished_book(folder / "B34466 estimate v1.xlsx", standard["drawing"])
+        (folder / "notes.xlsx").write_bytes(b"not a workbook")
+        svc.runs += [
+            {"run_id": "run1", "client": "Hotel Chocolat", "status": "done", "queued_at": time.time(),
+             "job_title": "%s [hc:%s]" % (standard["title"], standard["fingerprint"]),
+             "output_path": str(folder), "deliverables": [{"name": "B34466 estimate v1.xlsx"}],
+             "engine_price_gbp": 110.75},
+            {"run_id": "run2", "client": "Hotel Chocolat", "status": "done", "queued_at": time.time(),
+             "job_title": "%s [hc:%s]" % (narrow["title"], narrow["fingerprint"]),
+             "output_path": str(tmp_path / "gone"), "llm_price_gbp": 42.5}]
+        out = _run("review", str(plan_file), str(tmp_path / "review"), env=env)
+        assert "2 products: 2 priced, 0 not yet (1 priced from the run record, workbook not read)" in out
+        master = openpyxl.load_workbook(next((tmp_path / "review").glob("*master price schedule*")))
+        prices = {r[1]: r[3] for r in master["Price schedule"].iter_rows(min_row=5, values_only=True) if r[1]}
+        assert prices[standard["drawing"]] == 110.75 and prices[narrow["drawing"]] == 42.5
+    finally:
+        svc.close()

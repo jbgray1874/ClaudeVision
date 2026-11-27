@@ -97,7 +97,13 @@ def existing_runs():
                 lst = found.setdefault(m.group(1), [])
                 if all(e['run_id'] != r.get('run_id') for e in lst):
                     lst.append({'run_id': r.get('run_id'), 'status': r.get('status'),
-                                'queued_at': r.get('queued_at') or 0})
+                                'queued_at': r.get('queued_at') or 0,
+                                # What the review reads (27 Nov 2026: it was dropped here, and every
+                                # finished product came out "not yet priced").
+                                'output_path': r.get('output_path') or '', 'job_folder': r.get('job_folder') or '',
+                                'deliverables': r.get('deliverables') or [],
+                                'engine_price_gbp': r.get('engine_price_gbp'),
+                                'llm_price_gbp': r.get('llm_price_gbp')})
     return found
 
 def ref_of(p):
@@ -515,6 +521,39 @@ else:
                 if key not in shelf or b.stat().st_mtime > shelf[key].stat().st_mtime:
                     shelf[key] = b
 
+    def is_estimate(path):
+        try:
+            wb = openpyxl.load_workbook(long_path(path), read_only=True)
+            ok = 'Estimate' in wb.sheetnames
+            wb.close()
+            return ok
+        except Exception:
+            return False
+
+    def workbook_of(run):
+        """The run's estimate workbook: its output path when that is the workbook; otherwise,
+        inside its output folder or job folder, the workbook the run lists as its deliverable,
+        else the newest workbook there with an Estimate sheet."""
+        named = {str((d or {}).get('name') if isinstance(d, dict) else d or '').lower()
+                 for d in run.get('deliverables') or []}
+        named = {pathlib.PureWindowsPath(n).name for n in named if n.endswith(('.xlsx', '.xlsm'))}
+        for where in (run.get('output_path'), run.get('job_folder')):
+            if not where:
+                continue
+            p = pathlib.Path(long_path(where))
+            try:
+                if p.is_file() and p.suffix.lower() in ('.xlsx', '.xlsm') and is_estimate(p):
+                    return short_path(p)
+                if p.is_dir():
+                    books = [b for b in p.rglob('*.xls[xm]') if not b.name.startswith('~$')]
+                    mine = [b for b in books if b.name.lower() in named and is_estimate(b)]
+                    pool = mine or [b for b in books if is_estimate(b)]
+                    if pool:
+                        return short_path(max(pool, key=lambda b: b.stat().st_mtime))
+            except OSError:
+                continue
+        return None
+
     def cell_after(ws, label, width=40):
         """The first value to the right of the cell whose text starts with label."""
         for row in ws.iter_rows(max_col=width):
@@ -573,9 +612,9 @@ else:
     for item in data['products']:
         run = finished_run(item['fingerprint'])
         book, why = None, ''
-        if run and run.get('output_path') and os.path.exists(long_path(run['output_path'])):
-            book = run['output_path']
-        elif compact(item['drawing']) in shelf:
+        if run:
+            book = workbook_of(run)
+        if not book and compact(item['drawing']) in shelf:
             book = short_path(shelf[compact(item['drawing'])])
         live = [r for r in runs.get(item['fingerprint'], []) if str(r.get('status')).lower() in ('queued', 'running')]
         if not book:
@@ -655,7 +694,7 @@ else:
     ctx['A1'] = 'Context and layout drawings: roll-ups of the products above, not costed themselves.'
     ctx['A1'].font = Font(bold=True)
     table(ctx, 3, ['File'], [[r] for r in data.get('accounting', {}).get('context / layout (not priced)', [])], [120])
-    waiting = [p for p in products if not p['book']]
+    waiting = [p for p in products if not p['book'] and p['facts'].get('unit') is None]
     if waiting:
         wt = master.create_sheet('Not yet priced')
         table(wt, 1, ['Pack', 'Drawing', 'Product', 'Why'],
@@ -717,7 +756,9 @@ else:
         path = out_dir / ('Hotel Chocolat review pack %s %s.xlsx' % (pack, stamp))
         wb.save(str(path))
         written.append(path)
-    print('%d products: %d priced, %d not yet' % (len(products), len(products) - len(waiting), len(waiting)))
+    print('%d products: %d priced, %d not yet (%d priced from the run record, workbook not read)'
+          % (len(products), len(products) - len(waiting), len(waiting),
+             sum(1 for p in products if not p['book'] and p['facts'].get('unit') is not None)))
     for w in written:
         print('Written: %s' % w)
     print('Nothing was submitted or re-priced.')
