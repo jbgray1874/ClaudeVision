@@ -351,6 +351,18 @@ def prepare(summary):
                     part.setdefault('owned_board_displaced_bends',features.get('bend_count'))
                     features['bend_count']=0
                     features['fold_required']=False
+                    # The same dashed lines feed costing's fold resolver as its weakest proxy;
+                    # withdraw them there too, keeping the readings for the audit.
+                    roll=part.get('geometry_rollup') if isinstance(part.get('geometry_rollup'),dict) else {}
+                    geo=part.get('normalized_geometry') if isinstance(part.get('normalized_geometry'),dict) else {}
+                    held={k:roll.get(k) for k in ('dashed_long_axis_lines','estimated_bend_line_count') if roll.get(k)}
+                    if geo.get('bend_count'):
+                        held['normalized_geometry.bend_count']=geo.get('bend_count')
+                    if held:
+                        part.setdefault('owned_board_dashed_lines_displaced',held)
+                    for k in ('dashed_long_axis_lines','estimated_bend_line_count'):
+                        if k in roll:roll[k]=0
+                    if 'bend_count' in geo:geo['bend_count']=0
                     part.setdefault('review_flags',[]).append('Dashed drawing lines are not press-brake folds on this own-sheet raw-board panel; CNC/bench and spray remain costed.')
         if (not owned or part.get('canonical_kind')=='assembly' or part.get('is_sub_assembly')
                 or part.get('assembly_children')):

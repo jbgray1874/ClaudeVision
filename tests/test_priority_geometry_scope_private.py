@@ -98,6 +98,9 @@ def test_cash_gap_is_own_sheet_raw_sprayed_mdf_not_inherited_laminate(fresh):
     assert 'folding' not in part.get('inferred_operations',[])+part.get('textual_operations',[])
     # 18 mm (material note) against the 6 printed on its section: kept as a review item.
     assert part['owned_thickness_conflict']['printed_mm']==[6]
+    # ...and costing does not read the ruled-out dashed lines back as press-brake folds.
+    import estimator
+    assert 'folding' not in estimator.estimate_process_times(copy.deepcopy(part),1).get('setup_times_min',{})
     assert audit['priced'] is False
 
 

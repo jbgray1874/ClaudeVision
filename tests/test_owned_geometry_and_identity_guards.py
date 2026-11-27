@@ -277,3 +277,22 @@ def test_a_groove_depth_or_a_sheet_whose_sections_print_the_note_is_not_a_confli
     assert 'owned_thickness_conflict' not in groove
     agreed=_board_panel('18\n6\n500 CUT\n300 CUT\nFRONT PANEL\n18MM MR MDF 3050X1220\nSPRAY BROWN\n18\n')
     assert 'owned_thickness_conflict' not in agreed
+
+
+def test_dashed_lines_ruled_out_as_folds_are_not_charged_as_folds_at_costing():
+    # The owned pass says dashed lines on this raw-board panel are not press-brake folds;
+    # the costing's fold resolver must not read the same dashed lines back as six folds.
+    import estimator
+    page=sheet();page['pypdf_text']='500 CUT\n300 CUT\nFRONT PANEL\n18MM MR MDF 3050X1220\nSPRAY BROWN'
+    p={'part_number':'C.45678','quantity':1,
+       'manufacturing_features':{'bend_count':6,'bend_count_source':'inferred_dashed_lines','fold_required':True},
+       'geometry_rollup':{'dashed_long_axis_lines':6,'estimated_bend_line_count':6},
+       'normalized_geometry':{'bend_count':6}}
+    prepare({'pages':[page],'manufacturing_writeup':{'parts':[p]}})
+    assert p['owned_board_displaced_bends']==6
+    times=estimator.estimate_process_times(copy.deepcopy(p),1)
+    assert 'folding' not in (times.get('setup_times_min') or {})
+    assert 'folding' not in estimator.estimate_process_times(p,1).get('run_times_min',{})
+    assert p['geometry_rollup']['dashed_long_axis_lines']==0
+    assert p['owned_board_dashed_lines_displaced']=={'dashed_long_axis_lines':6,'estimated_bend_line_count':6,
+                                                     'normalized_geometry.bend_count':6}
