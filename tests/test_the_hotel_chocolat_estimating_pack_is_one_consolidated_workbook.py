@@ -15,7 +15,7 @@ import openpyxl
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-_spec = importlib.util.spec_from_file_location('hc_handover', ROOT / 'tools' / 'estimating' / 'hc_handover.py')
+_spec = importlib.util.spec_from_file_location('hc_estimating_pack', ROOT / 'tools' / 'estimating' / 'hc_estimating_pack.py')
 hh = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(hh)
 
@@ -29,7 +29,16 @@ def _book(path: Path, drawing: str, unit: float):
     est['C20'], est['H20'] = 'MDF 18mm sheet', 12.5
     est['C20'].font = openpyxl.styles.Font(bold=True)
     est['C225'], est['M225'] = 'Total Unit Cost Price', unit
+    est['C147'], est['M147'] = 'Total Material Cost', round(unit * 0.5, 2)
+    est['C223'], est['M223'] = 'Total Labour Cost (Including  Downtime)', round(unit * 0.45, 2)
+    est['C60'], est['D60'], est['E60'], est['F60'], est['G60'], est['M60'] = 'C-33497  WOC BOX BASE SPACER', 150, 359.3, 234.6, 1.5, 215.28
+    est['C154'], est['M154'] = 'Laser (Metal)', 73.48
     est.merge_cells('C2:F2')
+    ai = wb.create_sheet('AI Explanation')
+    ai.append(['FOR THE ESTIMATOR TO CONFIRM'])
+    ai.append(['#', 'Kind', 'Decision', 'Part', 'Current assumption', 'Action', '\u00a3 at stake'])
+    ai.append([1, 'Market figure', 'EDGE rests on a market price', 'EDGE', 'web', 'replace', '\u00a3666.43'])
+    ai.append([2, 'Quantity check', 'C-33490: BOM states 1, sheet costs 150', 'C-33490', '150', 'rule', '\u00a31,862.50'])
     wb.save(path)
 
 
@@ -92,9 +101,9 @@ def setup(tmp_path, monkeypatch):
     ws.append(['title'])
     ws.append([])
     ws.append([])
-    ws.append(['Product', 'Description', 'Original unit price (GBP)', 'Adjustment (GBP)', 'Revised unit price (GBP)'])
-    ws.append(['B.34487', '750MM HIGH PLINTH', 730.94, -300.57, 430.37])
-    ws.append(['A.33446', 'WALL', 137675.71, None, None])
+    ws.append(['Product', 'Description', 'Original unit price (GBP)', 'Adjustment (GBP)', 'Revised unit price (GBP)', 'Basis / notes'])
+    ws.append(['B.34487', '750MM HIGH PLINTH', 730.94, -300.57, 430.37, 'Ballast as plates, panels restored'])
+    ws.append(['A.33446', 'WALL', 137675.71, None, None, None])
     sched.create_sheet('Adjustment lines').append(['Product', 'Line', 'Change'])
     sched.create_sheet('Gaps and confirmations').append(['Item'])
     sched.create_sheet('Basis statement').append(['BASIS'])
@@ -110,6 +119,14 @@ def setup(tmp_path, monkeypatch):
     svc.close()
 
 
+def _has_docx():
+    try:
+        import docx  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def test_one_consolidated_workbook_with_detail_tabs_family_folders_and_checked_links(setup):
     tmp, args, _ = setup
     out = tmp / 'handover'
@@ -117,11 +134,17 @@ def test_one_consolidated_workbook_with_detail_tabs_family_folders_and_checked_l
     pack = next(out.glob('Hotel Chocolat estimating pack *.xlsx'))
     wb = openpyxl.load_workbook(pack)
     rows = {r[1]: r for r in wb['Price schedule'].iter_rows(min_row=5, values_only=True) if r[1]}
-    assert rows['A.33446'][4] == 21000.00 and rows['A.33446'][9] == 'wall-new'          # verified rerun
-    assert 'RERUN on verified build c4ad620' in rows['A.33446'][7]
-    assert (rows['B.34487'][4], rows['B.34487'][5], rows['B.34487'][6]) == (730.94, -300.57, 430.37)
-    assert rows['A.33324'][6] == 410.00 and 'unchanged' in rows['A.33324'][7]
-    assert {'6 A.33446', '8 B.34487', '1 A.33324', 'Adjustments', 'Gaps and confirmations'} <= set(wb.sheetnames)
+    assert rows['A.33446'][3] == 21000.00 and rows['A.33446'][13] == 'wall-new'          # verified rerun
+    assert rows['A.33446'][8].startswith('DRAWING (rerun c4ad620')
+    assert (rows['B.34487'][3], rows['B.34487'][6], rows['B.34487'][7]) == (730.94, -300.57, 430.37)
+    assert rows['B.34487'][8].startswith('PROVISIONAL') and rows['A.33324'][7] == 410.00 and rows['A.33324'][8] == 'DRAWING'
+    assert rows['A.33446'][10] == 2 and rows['A.33446'][11] == 666.43
+    assert {'Wall of Chocolate', 'Review items', '6 A.33446', '8 B.34487', '1 A.33324', 'Adjustments', 'Gaps and confirmations'} <= set(wb.sheetnames)
+    woc = [r for r in wb['Wall of Chocolate'].iter_rows(values_only=True) if r[0]]
+    assert any(r[0] == 'A.33446' and r[2] == 137675.71 and r[3] == 21000.00 for r in woc)
+    assert any(r[0] == 'C-33497  WOC BOX BASE SPACER' and r[1] == 150 for r in woc)
+    review = [r for r in wb['Review items'].iter_rows(min_row=4, values_only=True) if r[0]]
+    assert review[0][0] == 1862.5 and 'C-33490' in review[0][3] and {r[1] for r in review} == {'A.33446', 'B.34487', 'A.33324'}
     assert wb['6 A.33446']['M225'].value == 21000.00 and wb['6 A.33446']['C20'].font.bold
     assert (out / '6 Wall of Chocolate layouts' / 'A.33446' / 'A.33446_20261127_120000.xlsx').exists()
     assert (out / '_Superseded' / 'A.33446' / 'wall-old' / 'A.33446_20261127_120000.xlsx').exists()
@@ -131,12 +154,13 @@ def test_one_consolidated_workbook_with_detail_tabs_family_folders_and_checked_l
     index = (out / 'index.html').read_text()
     assert 'withheld' in index and 'walkthrough/wall-new' in index and 'walkthrough/wall-old' not in index
     assert (out / 'schedule.xlsx').exists() and (out / 'manifest.csv').exists()
+    assert (out / 'Handover note.docx').exists() or not _has_docx()
 
 
 def test_a_wall_without_a_run_on_the_verified_build_builds_nothing(setup):
     tmp, args, svc = setup
     svc.runs[:] = [r for r in svc.runs if r['run_id'] != 'wall-new']
-    with pytest.raises(SystemExit, match='no finished run on the verified build'):
+    with pytest.raises(SystemExit, match='no finished run since the verified release'):
         hh.main(args + ['--out', str(tmp / 'h2')])
     assert not (tmp / 'h2').exists()
 
