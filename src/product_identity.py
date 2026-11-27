@@ -125,6 +125,10 @@ def names_the_product(declared: Any, identity: Any) -> bool:
     the kit's general arrangement. A trailing revision and ONE sheet-role token are set
     aside on both sides and the rest must match exactly, ignoring spaces and dashes. Nothing
     looser: "11650-06" must never name 11650-06-SA01, which is a part OF the product."""
+    from drawing_reference import compact, is_drawing_reference
+    if (is_drawing_reference(declared) and is_drawing_reference(identity)
+            and compact(declared) == compact(identity)):
+        return True
     d, i = _key(declared), _key(identity)
     if bool(d) and d == i:
         return True

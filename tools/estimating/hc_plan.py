@@ -21,7 +21,10 @@ drawing and nothing in this product names it, or its sheet lives only in another
 that names it. Every file in the pack is accounted for at the end.
 """
 import sys, os, re, json, hashlib, pathlib, urllib.request, urllib.error, collections, datetime, time
-import fitz
+try:
+    import pymupdf as fitz
+except ImportError:
+    import fitz  # Older installed PyMuPDF versions expose only this name.
 
 # PATHS OVER 260 CHARACTERS (26 Nov 2026). Three shelving folders sit 260-261 characters deep on
 # the share; PowerShell lists them, Windows' classic file calls do not, and the plan silently came
@@ -86,9 +89,11 @@ def get_json(url):
 def existing_runs():
     """Every Hotel Chocolat run either service still knows, keyed by source fingerprint."""
     found = {}
+    answered = 0
     for s in SERVICES:
         try:
             runs = get_json(s + '/api/estimate?limit=500').get('runs', [])
+            answered += 1
         except Exception:
             continue
         for r in runs:
@@ -96,14 +101,11 @@ def existing_runs():
             if m and str(r.get('client') or '').lower().startswith('hotel'):
                 lst = found.setdefault(m.group(1), [])
                 if all(e['run_id'] != r.get('run_id') for e in lst):
-                    lst.append({'run_id': r.get('run_id'), 'status': r.get('status'),
-                                'queued_at': r.get('queued_at') or 0,
-                                # What the review reads (27 Nov 2026: it was dropped here, and every
-                                # finished product came out "not yet priced").
-                                'output_path': r.get('output_path') or '', 'job_folder': r.get('job_folder') or '',
-                                'deliverables': r.get('deliverables') or [],
-                                'engine_price_gbp': r.get('engine_price_gbp'),
-                                'llm_price_gbp': r.get('llm_price_gbp')})
+                    # Review needs the actual price, deliverables and output folder, not
+                    # just the three fields queue deduplication happened to consume.
+                    lst.append(dict(r))
+    if not answered and (mode == 'queue' or (mode == 'review' and not books_dir)):
+        raise SystemExit('NOT PROCESSED: neither service run list is reachable. No submission or review export was made.')
     return found
 
 def ref_of(p):
@@ -159,14 +161,16 @@ if mode == 'plan':
             by_ref[i['ref']].append(p)
 
     text_cache = {}
+    page_text = {}
     def mentions_of_file(p):
         if p not in text_cache:
             found = set()
             if p.suffix.lower() == '.pdf' and info[p]['size']:
                 try:
-                    for pg in fitz.open(short_path(p) if len(short_path(p)) < TOO_LONG else str(p)):
-                        for m in TEXT_REF.finditer(pg.get_text()):
-                            found.add(m.group(1).upper() + m.group(2))
+                    with fitz.open(short_path(p) if len(short_path(p)) < TOO_LONG else str(p)) as doc:
+                        page_text[p] = '\n'.join(pg.get_text() for pg in doc)
+                    for m in TEXT_REF.finditer(page_text[p]):
+                        found.add(m.group(1).upper() + m.group(2))
                 except Exception:
                     pass
             # A DRAWING WHOSE PDF HAS NO TEXT LAYER STILL NAMES ITS PARTS IN ITS DXF (26 Nov 2026).
@@ -183,6 +187,21 @@ if mode == 'plan':
                     pass
             text_cache[p] = found
         return text_cache[p]
+    # A shelf's assembly lists its members by stock number, not drawing number.
+    # Read each PDF once, then join ONLY a unique own-part code from its title.
+    stock_claims = collections.defaultdict(set)
+    for p in every:
+        if info[p]['category'] == 'drawing' and p.suffix.lower() == '.pdf':
+            mentions_of_file(p)
+            head = page_text.get(p, '').split('ITEM NO.')[0]
+            codes = set(re.findall(r'(?i)(?:FINISHED\s+)?PART\s+NO\.?\s*[:\-\s]*(\d{7,8})(?!\d)', head))
+            if len(codes) == 1:
+                stock_claims[next(iter(codes))].add(info[p]['ref'])
+    for p, text in page_text.items():
+        for stock in set(re.findall(r'(?<!\d)\d{7,8}(?!\d)', text)):
+            refs = stock_claims.get(stock, set())
+            if len(refs) == 1:
+                text_cache[p].update(refs)
     def mentions_of_ref(r):
         out = set()
         for p in by_ref.get(r, []):
@@ -521,39 +540,6 @@ else:
                 if key not in shelf or b.stat().st_mtime > shelf[key].stat().st_mtime:
                     shelf[key] = b
 
-    def is_estimate(path):
-        try:
-            wb = openpyxl.load_workbook(long_path(path), read_only=True)
-            ok = 'Estimate' in wb.sheetnames
-            wb.close()
-            return ok
-        except Exception:
-            return False
-
-    def workbook_of(run):
-        """The run's estimate workbook: its output path when that is the workbook; otherwise,
-        inside its output folder or job folder, the workbook the run lists as its deliverable,
-        else the newest workbook there with an Estimate sheet."""
-        named = {str((d or {}).get('name') if isinstance(d, dict) else d or '').lower()
-                 for d in run.get('deliverables') or []}
-        named = {pathlib.PureWindowsPath(n).name for n in named if n.endswith(('.xlsx', '.xlsm'))}
-        for where in (run.get('output_path'), run.get('job_folder')):
-            if not where:
-                continue
-            p = pathlib.Path(long_path(where))
-            try:
-                if p.is_file() and p.suffix.lower() in ('.xlsx', '.xlsm') and is_estimate(p):
-                    return short_path(p)
-                if p.is_dir():
-                    books = [b for b in p.rglob('*.xls[xm]') if not b.name.startswith('~$')]
-                    mine = [b for b in books if b.name.lower() in named and is_estimate(b)]
-                    pool = mine or [b for b in books if is_estimate(b)]
-                    if pool:
-                        return short_path(max(pool, key=lambda b: b.stat().st_mtime))
-            except OSError:
-                continue
-        return None
-
     def cell_after(ws, label, width=40):
         """The first value to the right of the cell whose text starts with label."""
         for row in ws.iter_rows(max_col=width):
@@ -570,6 +556,7 @@ else:
         out = {'unit': None, 'material': None, 'labour': None, 'status': '', 'confirm': [], 'inputs': [],
                'summary': ''}
         if est is not None:
+            out['drawing'] = est['D5'].value
             out['unit'] = cell_after(est, 'Total Unit Cost Price')
             out['material'] = cell_after(est, 'Total Material Cost')
             out['labour'] = cell_after(est, 'Total Labour Cost')
@@ -609,11 +596,37 @@ else:
             return None
 
     products = []
+
+    def estimate_workbook(run, drawing):
+        """Find the main, timestamped estimate; output_path is usually a directory."""
+        if not run:
+            return None
+        candidates = []
+        for deliverable in run.get('deliverables') or []:
+            if not isinstance(deliverable, dict):
+                continue
+            path = deliverable.get('path')
+            if path and re.search(r'_\d{8}_\d{6}\.xlsx$', str(path), re.I):
+                candidates.append(path)
+        output = run.get('output_path')
+        if output and os.path.isfile(long_path(output)):
+            candidates.append(output)
+        elif output and os.path.isdir(long_path(output)):
+            matches = [short_path(p) for p in pathlib.Path(long_path(output)).glob('*.xlsx')
+                       if re.search(r'_\d{8}_\d{6}\.xlsx$', p.name)
+                       and compact(re.sub(r'_\d{8}_\d{6}\.xlsx$', '', p.name, flags=re.I)) == compact(drawing)]
+            # Do not take an arbitrary workbook from a mixed or multi-version folder.
+            if len(matches) == 1:
+                candidates += matches
+        for path in dict.fromkeys(candidates):
+            if os.path.isfile(long_path(path)):
+                return path
+        return None
+
     for item in data['products']:
         run = finished_run(item['fingerprint'])
         book, why = None, ''
-        if run:
-            book = workbook_of(run)
+        book = estimate_workbook(run, item['drawing'])
         if not book and compact(item['drawing']) in shelf:
             book = short_path(shelf[compact(item['drawing'])])
         live = [r for r in runs.get(item['fingerprint'], []) if str(r.get('status')).lower() in ('queued', 'running')]
@@ -623,15 +636,25 @@ else:
         if book:
             try:
                 facts = read_book(book)
+                if facts.get('drawing') and compact(facts['drawing']) != compact(item['drawing']):
+                    raise ValueError('workbook drawing does not match this product')
             except Exception as e:
                 why = 'workbook unreadable: %s' % e
                 book = None
-        if run and facts.get('unit') is None:
+                facts = {'unit': None, 'material': None, 'labour': None, 'status': '',
+                         'confirm': [], 'inputs': [], 'summary': ''}
+        if run and run.get('price_validated') is True and facts.get('unit') is None:
             for k, how in (('engine_price_gbp', 'the run record (engine price)'), ('llm_price_gbp', 'the run record (brief price)')):
                 if run.get(k) not in (None, ''):
                     facts['unit'] = run[k]
                     facts['status'] = (facts.get('status') or '') + ' Price read from %s; its workbook gave none.' % how
                     break
+        if run:
+            quality = (run.get('quality') or {}).get('label') or (run.get('quality') or {}).get('state')
+            if quality:
+                facts['status'] = str(quality) + '. ' + (facts.get('status') or '')
+        if why:
+            facts['status'] = (facts.get('status') or '') + ' ' + why
         warn = [w for w in item.get('warnings', []) if 'no drawing names it: kept here' not in w]
         missing = [w.split(':', 1)[1].split('(')[0].strip() for w in warn if w.startswith('named by its drawings but not in the pack')]
         products.append({'item': item, 'run': run, 'book': book, 'why': why, 'facts': facts, 'warn': warn,
@@ -694,7 +717,7 @@ else:
     ctx['A1'] = 'Context and layout drawings: roll-ups of the products above, not costed themselves.'
     ctx['A1'].font = Font(bold=True)
     table(ctx, 3, ['File'], [[r] for r in data.get('accounting', {}).get('context / layout (not priced)', [])], [120])
-    waiting = [p for p in products if not p['book'] and p['facts'].get('unit') is None]
+    waiting = [p for p in products if money(p['facts'].get('unit')) is None]
     if waiting:
         wt = master.create_sheet('Not yet priced')
         table(wt, 1, ['Pack', 'Drawing', 'Product', 'Why'],

@@ -891,14 +891,30 @@ def _stock_code_aliases(bom_rows: Any, identities: Iterable[str]) -> Dict[str, s
             if x != target:
                 out[x] = target
     claims: Dict[str, Set[str]] = {}
+    def held_spelling(value):
+        value = clean_part_number(value)
+        if value in held:
+            return out.get(value, value)
+        matches = sorted(i for i in held if compact(i) == compact(value))
+        return out.get(matches[0], matches[0]) if matches else value
     for r in rows:
+        for _stock, _ref in (r.get('sheet_identity_aliases') or {}).items():
+            if is_drawing_reference(_ref):
+                claims.setdefault(clean_part_number(_stock), set()).add(
+                    held_spelling(_ref))
+        _parent_stock = clean_part_number(r.get('parent_finished_part_no'))
+        _parent = clean_part_number(r.get('bom_parent'))
+        if _parent_stock and is_drawing_reference(_parent):
+            claims.setdefault(_parent_stock, set()).add(held_spelling(_parent))
         stock = clean_part_number(r.get("finished_part_no"))
         ident = clean_part_number(r.get("part_number"))
         if stock and ident and r.get("drawing_reference") and stock != ident:
-            claims.setdefault(stock, set()).add(out.get(ident, ident))
+            claims.setdefault(stock, set()).add(held_spelling(ident))
     for stock, targets in claims.items():
         if stock in held and len(targets) == 1:
-            out.setdefault(stock, next(iter(targets)))
+            target = next(iter(targets))
+            if target in held or compact(target) in {compact(i) for i in held}:
+                out.setdefault(stock, out.get(target, target))
     return out
 
 
@@ -1831,6 +1847,10 @@ def build_part_graph(
             if isinstance(_e, Mapping):
                 _hierarchy_codes.add(clean_part_number(_e.get("part_number")))
     _hierarchy_codes.discard("")
+    # A raster GA can have a readable BOM and no text-derived part record.
+    # Its conventional source filename is evidence of the owner, not a guessed root.
+    _hierarchy_codes.update(clean_part_number(r.get('bom_parent')) for r in (bom_rows or [])
+                            if isinstance(r, Mapping) and r.get('bom_parent_from_file'))
     # Native component names can exist only on an edge, not in the PDF part index.
     # They still need aliasing before the graph mints a second node for them.
     _hierarchy_codes.update(_claimed_codes)
@@ -2217,6 +2237,14 @@ def build_part_graph(
     # still wins outright: a wrong parent is worse than a missing one and that has not
     # changed. But two BOM rows naming two owners are not in conflict — they are two
     # assemblies that each use the part, which is the ordinary shape of a fastener.
+    # Source-file-owned tables remain real structure even where their GA was raster
+    # and never yielded a text-derived node (supplier nc1 packs).
+    for _r in bom_rows or []:
+        if isinstance(_r, Mapping) and _r.get('bom_parent_from_file'):
+            _owner = clean_part_number(_r.get('bom_parent'))
+            _owner = aliases.get(_owner, _owner)
+            if _owner:
+                _drawings.add(_owner)
     _claimed_before_bom = set(parents)
     _rejected_parents: List[str] = []
     _several_items: Set[tuple] = set()

@@ -113,6 +113,9 @@ def replay(summary: Dict[str, Any], log=print) -> Dict[str, Any]:
 
     log("[replay] pre-costing passes (the run's own function)")
     file_scan.pre_costing_passes(summary)
+    # Pre-costing can replace the population when it folds aliases or sets aside
+    # another product. Never price the stale list captured before that boundary.
+    parts = summary['manufacturing_writeup']['parts']
     log(f"[replay] estimate_document over {len(parts)} part record(s)")
     summary["estimate_summary"] = estimator.estimate_document(parts, summary=summary)
     if late:

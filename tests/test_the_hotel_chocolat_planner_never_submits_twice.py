@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+import pytest
 from pathlib import Path
 
 PLANNER = Path(__file__).resolve().parents[1] / "tools" / "estimating" / "hc_plan.py"
@@ -234,36 +235,99 @@ def test_a_drawing_whose_pdf_has_no_text_names_its_parts_through_its_dxf(tmp_pat
     assert not any("top drawing chosen" in w for w in plinth["warnings"])
 
 
-def test_the_review_finds_each_finished_runs_workbook_from_the_run_record(tmp_path):
-    """27 Nov 2026: all 35 products finished and the review said "0 priced, 35 not yet". It
-    dropped the run record's output path and price, and an output path that is a folder was
-    taken for a workbook."""
+def test_review_reads_the_actual_workbook_inside_the_run_output_directory(tmp_path):
     import openpyxl
-    _pack(tmp_path / "pack")
+    _pack(tmp_path / 'pack')
     svc = _Service(slow=0)
     env = dict(os.environ, HC_SERVICES=svc.urls)
     try:
-        _run("plan", str(tmp_path / "pack"), str(tmp_path), env=env)
-        plan_file = next(tmp_path.glob("Hotel Chocolat plan *.json"))
-        plan = json.loads(plan_file.read_text("utf-8"))
-        standard = next(p for p in plan["products"] if "standard" in p["title"])
-        narrow = next(p for p in plan["products"] if "narrow" in p["title"])
-        folder = tmp_path / "filed" / "run1"
-        folder.mkdir(parents=True)
-        _finished_book(folder / "B34466 estimate v1.xlsx", standard["drawing"])
-        (folder / "notes.xlsx").write_bytes(b"not a workbook")
-        svc.runs += [
-            {"run_id": "run1", "client": "Hotel Chocolat", "status": "done", "queued_at": time.time(),
-             "job_title": "%s [hc:%s]" % (standard["title"], standard["fingerprint"]),
-             "output_path": str(folder), "deliverables": [{"name": "B34466 estimate v1.xlsx"}],
-             "engine_price_gbp": 110.75},
-            {"run_id": "run2", "client": "Hotel Chocolat", "status": "done", "queued_at": time.time(),
-             "job_title": "%s [hc:%s]" % (narrow["title"], narrow["fingerprint"]),
-             "output_path": str(tmp_path / "gone"), "llm_price_gbp": 42.5}]
-        out = _run("review", str(plan_file), str(tmp_path / "review"), env=env)
-        assert "2 products: 2 priced, 0 not yet (1 priced from the run record, workbook not read)" in out
-        master = openpyxl.load_workbook(next((tmp_path / "review").glob("*master price schedule*")))
-        prices = {r[1]: r[3] for r in master["Price schedule"].iter_rows(min_row=5, values_only=True) if r[1]}
-        assert prices[standard["drawing"]] == 110.75 and prices[narrow["drawing"]] == 42.5
+        _run('plan', str(tmp_path / 'pack'), str(tmp_path), env=env)
+        plan_path = next(tmp_path.glob('Hotel Chocolat plan *.json'))
+        plan = json.loads(plan_path.read_text('utf-8'))
+        item = plan['products'][0]
+        output = tmp_path / 'finished'
+        output.mkdir()
+        main = output / 'B.34466_20261127_003000.xlsx'
+        _finished_book(main, item['drawing'])
+        svc.runs.append(dict(run_id='finished',status='done',client='Hotel Chocolat',
+            job_title=item['title']+' [hc:'+item['fingerprint']+']', queued_at=time.time(),
+            output_path=str(output), engine_price_gbp=110.75, price_validated=True,
+            deliverables=[dict(name=main.name,path=str(main))]))
+        text = _run('review',str(plan_path),str(tmp_path/'review'),env=env)
+        assert '2 products: 1 priced, 1 not yet' in text
+        master=openpyxl.load_workbook(next((tmp_path/'review').glob('*master*')))
+        priced=[r for r in master['Price schedule'].iter_rows(min_row=5,values_only=True)
+                if isinstance(r[3],(int,float))]
+        assert len(priced)==1 and priced[0][3]==110.75
+        assert priced[0][12]=='finished' and priced[0][13]==str(main)
+        assert svc.posts==0
+    finally:
+        svc.close()
+
+
+def test_review_preserves_a_validated_run_price_when_the_share_is_unreachable(tmp_path):
+    import openpyxl
+    item=dict(drawing='A.12345',title='Saved product',pack='1 Panels',fingerprint='123456abcdef',
+              files=[],warnings=[],selected=True,brief=None)
+    plan=tmp_path/'plan.json'
+    plan.write_text(json.dumps(dict(products=[item],accounting={})),encoding='utf-8')
+    svc=_Service(slow=0)
+    env=dict(os.environ,HC_SERVICES=svc.urls)
+    svc.runs.append(dict(run_id='saved',status='done',client='Hotel Chocolat',
+        job_title='Saved product [hc:123456abcdef]',queued_at=time.time(),
+        output_path=str(tmp_path/'unavailable'),engine_price_gbp=0.0,price_validated=True))
+    try:
+        text=_run('review',str(plan),str(tmp_path/'review'),env=env)
+        assert '1 products: 1 priced, 0 not yet' in text
+        wb=openpyxl.load_workbook(next((tmp_path/'review').glob('*master*')))
+        assert wb['Price schedule']['D5'].value==0
+        assert 'workbook not found' in wb['Price schedule']['H5'].value
+        assert svc.posts==0
+    finally:
+        svc.close()
+
+
+def test_stock_number_only_bom_selects_the_shelving_assembly_not_its_panel(tmp_path):
+    import pymupdf
+    folder=tmp_path/'pack'/'Drawing'/'Shelving 800 standard'
+    folder.mkdir(parents=True)
+    sources={
+        'nc1-b34471.pdf':'PART NO. 20126611\nDRG No. B.34471\n800 SHELF PANEL',
+        'nc1-b34473.pdf':'PART NO. 10100900\nDRG No. B.34473\nITEM NO.\n20126611 SHELF PANEL 1\n20125999 BRACKET 2',
+        'nc1-c33383.pdf':'PART NO. 20125999\nDRG No. C.33383\nSHELF BRACKET'}
+    for name,text in sources.items():
+        doc=pymupdf.open()
+        page=doc.new_page()
+        page.insert_text((50,50),text)
+        doc.save(folder/name)
+        doc.close()
+    env=dict(os.environ,HC_SERVICES='http://127.0.0.1:9,http://127.0.0.1:9')
+    _run('plan',str(tmp_path/'pack'),str(tmp_path),env=env)
+    plan=json.loads(next(tmp_path.glob('Hotel Chocolat plan *.json')).read_text())
+    assert len(plan['products'])==1
+    assert plan['products'][0]['drawing']=='B.34473'
+    assert len(plan['products'][0]['files'])==3
+
+
+@pytest.mark.parametrize('validated',[False,True])
+def test_review_never_borrows_another_products_workbook_or_an_unvalidated_price(tmp_path,validated):
+    import openpyxl
+    item=dict(drawing='A.12345',title='Saved product',pack='1 Panels',fingerprint='123456abcdef',
+              files=[],warnings=[],selected=True,brief=None)
+    plan=tmp_path/'plan.json'
+    plan.write_text(json.dumps(dict(products=[item],accounting={})),encoding='utf-8')
+    other=tmp_path/'other.xlsx';_finished_book(other,'B.98765')
+    svc=_Service(slow=0)
+    svc.runs.append(dict(run_id='saved',status='done',client='Hotel Chocolat',
+        job_title='Saved product [hc:123456abcdef]',queued_at=time.time(),
+        output_path=str(other),engine_price_gbp=555,price_validated=validated,
+        quality={'label':'Missing costs'}))
+    try:
+        _run('review',str(plan),str(tmp_path/'review'),env=dict(os.environ,HC_SERVICES=svc.urls))
+        wb=openpyxl.load_workbook(next((tmp_path/'review').glob('*master*')))
+        row=wb['Price schedule']
+        assert row['D5'].value==(555 if validated else None)
+        assert 'does not match' in row['H5'].value and 'Missing costs' in row['H5'].value
+        assert not row['N5'].value and svc.posts==0
     finally:
         svc.close()

@@ -39,6 +39,7 @@ SCHEMA = "engine_discoveries.v1"
 # office, and worth putting in front of them: a missing flat pattern costs more than any
 # warning about a total, because without it a folded part cannot be sized at all.
 _PACK = {
+    "sheet_filename_identity_conflict",  # issued sheet and supplied filename disagree
     "cad_files_not_read",
     "bom_page_not_read_by_both",
     "detail_drawing_missing",

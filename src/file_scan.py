@@ -2973,6 +2973,10 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
                   f"with their counts", flush=True)
     except Exception as _sf_exc:                                      # noqa: BLE001
         print(f"   [stated-features] not attached ({type(_sf_exc).__name__}: {_sf_exc})", flush=True)
+    # Component captions also apply on an offline saved-record replay. After the
+    # evidence passes, so a shared sheet's envelope cannot erase their own axes.
+    from component_caption_blanks import repair as _repair_component_caption_blanks
+    _repair_component_caption_blanks(summary)
     # THE DRAWING LEDGER (SCRUM-194 requirement 2): every fact the drawing's own text gave a
     # made part, captured once the deterministic build is done and before costing, to be held
     # to the calculated workbook after Excel as the LLM read's ledger is.
@@ -3164,6 +3168,8 @@ def _finalize_scan_summary(
         summary["reader_findings"] = {"schema": "reader_findings.v1", "captured": "scan", "items": [],
                                       "error": f"{type(_rf_exc).__name__}: {_rf_exc}"}
     _debug("start build_document_writeup")
+    from supplier_sheet_identity import reconcile_saved_sheet_identities
+    reconcile_saved_sheet_identities(summary)
     summary["manufacturing_writeup"] = build_document_writeup(summary)
     _debug("done build_document_writeup")
 
@@ -5391,6 +5397,8 @@ def _finalize_scan_summary(
         print(f"   [delivery] declaration not read: {type(_dd_err).__name__}: {_dd_err}",
               flush=True)
 
+    from component_caption_blanks import repair as _repair_component_caption_blanks
+    _repair_component_caption_blanks(summary)
     try:
         from route_compiler import apply_canonical_evidence_to_parts, job_drawing_numbers
         # THE BOM'S OWN PARENT EDGES, at the point the classification still changes the

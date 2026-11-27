@@ -125,6 +125,9 @@ def name_lines_by_title_blocks(rows: List[Dict[str, Any]], sheets) -> List[Dict[
     only where one drawing claims the code. Changes rows in place; returns findings."""
     from drawing_reference import compact, drawings_named_by_title_blocks, is_drawing_reference
 
+    from supplier_sheet_identity import reconcile_sheet_identities
+    sheets = list(sheets)
+    owner_findings = reconcile_sheet_identities(rows, sheets)
     label_of: Dict[str, str] = {}
     own_codes: Dict[str, set] = {}
     spelled: Dict[str, str] = {}
@@ -141,7 +144,7 @@ def name_lines_by_title_blocks(rows: List[Dict[str, Any]], sheets) -> List[Dict[
                     own_codes.setdefault(sheet, set()).add(str(c).strip())
     named = drawings_named_by_title_blocks(
         (text, label_of.get(sheet), own_codes.get(sheet, ())) for sheet, text in sheets)
-    found: List[Dict[str, Any]] = []
+    found: List[Dict[str, Any]] = list(owner_findings)
     for r in rows:
         code = str(r.get("part_number") or "").strip()
         ref = named.get(code)
