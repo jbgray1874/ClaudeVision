@@ -16400,6 +16400,8 @@ def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
         try:
             from sheet_view_sizes import apply_sheet_view_sizes as _views_late
             _vs = _views_late(_late, summary)
+            from sheet_view_sizes import apply_sheet_title_facts as _titles_late
+            _titles_late(_late, summary)
             if _vs:
                 print(f"   [detail-geometry] {', '.join(_vs)} (late) sized from their own "
                       f"labelled view on a sheet that draws several parts", flush=True)

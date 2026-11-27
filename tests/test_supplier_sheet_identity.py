@@ -66,3 +66,18 @@ def test_a_filename_hyphen_and_a_printed_dot_are_not_conflicting_stock_claims():
     rows=[{'sheet_identity_aliases':{'10100585':'B-33792'}},
           {'part_number':'B.33792','drawing_reference':'B.33792','finished_part_no':'10100585'}]
     assert _stock_code_aliases(rows,['10100585','B.33792'])['10100585']=='B.33792'
+
+
+def test_a_line_whose_code_is_the_stock_code_joins_the_sheet_that_prints_it():
+    """The 800 shelf's assembly lists "20126611 SHELF PANEL" with no drawing column; sheet
+    B.34471 prints PART NO. :20126611. The line and the sheet were two parts (27 Nov 2026)."""
+    from supplier_sheet_identity import reconcile_sheet_identities
+    rows = [{"part_number": "20126611", "description": "SHELF PANEL 380 X 800", "quantity": 1,
+             "bom_parent": "B.34473", "bom_sheet": "nc1-b34473.pdf#0"},
+            {"part_number": "30001244", "description": "M6 SET", "quantity": 4,
+             "bom_parent": "B.34473", "bom_sheet": "nc1-b34473.pdf#0"}]
+    sheets = [("nc1-b34473.pdf#0", ""),
+              ("nc1-b34471.pdf#0", "SHELF PANEL 380 X 800 PART NO. :20126611 FINISHED PART NO. : - - DRG No. B.34471")]
+    reconcile_sheet_identities(rows, sheets)
+    assert rows[0]["part_number"] == "B.34471" and rows[0]["finished_part_no"] == "20126611"
+    assert rows[1]["part_number"] == "30001244"

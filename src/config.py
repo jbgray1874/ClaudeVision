@@ -244,6 +244,11 @@ PROJECT_TITLE_PATTERN = r"PROJECT\s*TITLE\s*[:\-]?\s*(.+)"
 # keys and the labour block as "MFC DO NOT".
 MATERIAL_PATTERN = (
     r"\b(MILD\s+STEEL|STAINLESS\s+STEEL|ALUMINIUM|ALUMINUM|ALU|ZINTEC"
+    # COLD-ROLLED SHEET IS MILD STEEL UNDER ITS GRADE (27 Nov 2026): "1.5mm CR4 SHEET STEEL"
+    # matched nothing here, so a steel part was read by the page scan as the ACRYLIC its
+    # revision note mentioned. canonical_material names them MILD STEEL.
+    r"|(?:CR[1-4]|DC0[1-6]|CRCA)(?:\s+(?:SHEET|PLATE))?(?:\s+STEEL)?"
+    r"|COLD\s+(?:ROLLED|REDUCED)(?:\s+(?:SHEET|PLATE))?(?:\s+STEEL)?|SHEET\s+STEEL"
     r"|GALVANISED\s+STEEL|GALVANIZED\s+STEEL"
     # MFC is melamine-faced CHIPBOARD and MFMDF is melamine-faced MDF — the facing is not
     # the substrate, and they are different sheets at different prices. Both spellings are

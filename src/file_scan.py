@@ -4996,6 +4996,11 @@ def _finalize_scan_summary(
         try:
             from sheet_view_sizes import apply_sheet_view_sizes
             _views = apply_sheet_view_sizes(_parts_dg, summary)
+            from sheet_view_sizes import apply_sheet_title_facts
+            _titles = apply_sheet_title_facts(_parts_dg, summary)
+            if _titles:
+                print(f"   [detail-geometry] {', '.join(_titles)}: finish / material read from "
+                      f"their own drawing's DXF", flush=True)
             if _views:
                 print(f"   [detail-geometry] {', '.join(_views)} sized from their own labelled "
                       f"view on a sheet that draws several parts", flush=True)

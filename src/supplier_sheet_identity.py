@@ -43,6 +43,11 @@ def reconcile_sheet_identities(rows, sheets):
                if len({compact(r) for r in refs}) == 1}
     for row in rows:
         stock = str(row.get('finished_part_no') or '').strip()
+        # A line whose code IS the stock code (no drawing column read: "20126611 SHELF PANEL")
+        # is the same claim as one that carries it beside a drawing reference (27 Nov 2026:
+        # the 800 shelf's three lines stayed apart from their three sheets).
+        if not stock and re.fullmatch(r'\d{6,10}', str(row.get('part_number') or '').strip()):
+            stock = str(row.get('part_number')).strip()
         ref = aliases.get(stock)
         if ref and compact(ref) != compact(row.get('part_number')):
             original = str(row.get('part_number') or '')
@@ -51,6 +56,7 @@ def reconcile_sheet_identities(rows, sheets):
                 aliases[original] = ref
             row['part_number'] = ref
             row['drawing_reference'] = ref
+            row.setdefault('finished_part_no', stock)
         sheet = str(row.get('bom_sheet') or '')
         owner = identities.get(sheet)
         if owner and compact(owner) != compact(row.get('bom_parent')):

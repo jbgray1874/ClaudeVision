@@ -359,7 +359,21 @@ _TOLERANCE_TABLE_VALUES = frozenset({0.5, 1.0, 1.5, 2.0})
 _MIN_SHEET_THICKNESS_MM = 0.8
 
 
-def _primary_thickness_mm(thicknesses) -> Optional[float]:
+def _callout_gauge_mm(text: str) -> Optional[float]:
+    """The gauge the MATERIAL callout itself states ("MATERIAL:1.5mm CR4 SHEET STEEL"), when
+    it states exactly one. It is the part's own thickness; the sheet's standing notes print
+    others ("2mm PVC EDGING TO RECEIVE A 2mm RADIUS"), which put 2.0 on a 1.5mm shelf panel."""
+    gauges = set()
+    for value in _extract_labeled_values(text or "", r"MATERIAL(?!\s*SPEC)\s*[:\-]",
+                                         TITLE_BLOCK_STOP_LABELS):
+        callout = value.split(";", 1)[0]
+        m = re.match(r"\s*(\d+(?:\.\d+)?)\s*MM\b", callout, re.IGNORECASE)
+        if m and 0 < float(m.group(1)) <= 100:
+            gauges.add(float(m.group(1)))
+    return next(iter(gauges)) if len(gauges) == 1 else None
+
+
+def _primary_thickness_mm(thicknesses, stated: Optional[float] = None) -> Optional[float]:
     """The title block's own stated thickness, with a tolerance table filtered out.
 
     8352's drawing carries a general tolerance table (0.5/1.0/1.5/2.0 by length band). Taking the
@@ -370,6 +384,10 @@ def _primary_thickness_mm(thicknesses) -> Optional[float]:
     decides. What survives, at or above the sheet floor, is the stated gauge; nothing surviving
     means the title block named no thickness of its own, and None is the honest answer.
     """
+    # The MATERIAL callout's own gauge is the part's (_callout_gauge_mm): a standing note's
+    # figures, or a tolerance band, are not.
+    if stated:
+        return float(stated)
     floats = []
     for v in thicknesses or ():
         try:
@@ -396,7 +414,15 @@ def canonical_material(value: Optional[str]) -> Optional[str]:
         "ALUMINUM": "ALUMINIUM",
         "ALU": "ALUMINIUM",
     }
+    # A cold-rolled grade, or plain sheet steel, is mild steel (config.MATERIAL_PATTERN).
+    if _COLD_ROLLED.fullmatch(cleaned):
+        return "MILD STEEL"
     return aliases.get(cleaned, cleaned)
+
+
+_COLD_ROLLED = re.compile(r"(?:CR[1-4]|DC0[1-6]|CRCA)(?:\s+(?:SHEET|PLATE))?(?:\s+STEEL)?"
+                          r"|COLD\s+(?:ROLLED|REDUCED)(?:\s+(?:SHEET|PLATE))?(?:\s+STEEL)?"
+                          r"|SHEET\s+STEEL")
 
 
 def _safe_int(value: Optional[str]) -> Optional[int]:
@@ -562,6 +588,14 @@ def _extract_labeled_value(text: str, label_pattern: str, stop_labels: List[str]
     return [value] if value else []
 
 
+# "SHEET" ENDS A FIELD ONLY AS THE SHEET LABEL ("SHEET 1 OF 2", "SHEET: 2"), NEVER INSIDE A
+# MATERIAL (27 Nov 2026). "MATERIAL:1.5mm CR4 SHEET STEEL 2500X1250 (30000128)" read as
+# "1.5mm CR4", no material word survived, and the page scan took ACRYLIC from a revision note
+# ("WIDTH OF TRAY TO ACCEPT ACRYLIC"): a steel spacer was priced as acrylic.
+_SHEET_STOP = (r"SHEET(?!\s*(?:STEEL|METAL|ALUMINI?UM|STAINLESS|ZINTEC|GALV|BRASS|COPPER"
+               r"|MATERIAL|GAUGE|\d+(?:\.\d+)?\s*MM))")
+
+
 def _extract_labeled_values(text: str, label_pattern: str, stop_labels: List[str]) -> List[str]:
     normalized = normalize_text(text)
     matches: List[str] = []
@@ -569,7 +603,8 @@ def _extract_labeled_values(text: str, label_pattern: str, stop_labels: List[str
         remainder = normalized[match.end():].strip()
         if not remainder:
             continue
-        stop_pattern = r"\b(?:" + "|".join(stop_labels) + r")\b\s*[:\-]?"
+        stop_pattern = (r"\b(?:" + "|".join(_SHEET_STOP if l == "SHEET" else l for l in stop_labels)
+                        + r")\b\s*[:\-]?")
         stop_match = re.search(stop_pattern, remainder, flags=re.IGNORECASE)
         value = remainder[:stop_match.start()].strip() if stop_match else remainder.strip()
         value = normalize_text(value.rstrip(":;- ,"))
@@ -1015,6 +1050,10 @@ def _extract_material_candidates(text: str) -> List[str]:
     )
     out: List[str] = []
     for value in values:
+        # THE CALLOUT ENDS AT ITS SEMICOLON (27 Nov 2026). "MATERIAL:1.5mm CR4 SHEET STEEL
+        # 2500X1250 (30000128); REMOVED." — a wrapped standing note ("...SHARP EDGES / REMOVED")
+        # lands after the callout, and the negation strip then removed the material itself.
+        value = value.split(";", 1)[0]
         # a cramped title block can run the labelled field straight into the legend text,
         # and straight into the sheet's standing notes — "16mm MFC DO NOT SCALE" is one
         # value to the reader and two facts to a person. Truncate at the note, then blank
@@ -1440,6 +1479,18 @@ def fold_note_count(text: str) -> Dict[str, Any]:
     return {"count": len(words), "evidence": words}
 
 
+# A REVISION ROW IS HISTORY, NOT THE PART (27 Nov 2026). "2 22/04/2026 033986 AND WIDTH OF
+# TRAY TO ACCEPT ACRYLIC CAW" is a revision note on a steel spacer's sheet; the page scan read
+# its ACRYLIC as the spacer's material. A line opening with an issue mark and a date is a
+# revision row, whatever the drawing office's table looks like, and the scan skips it.
+_REVISION_ROW = re.compile(r"^\s*[A-Z0-9]{1,3}[.)]?\s+\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}\b", re.I)
+
+
+def _without_revision_rows(text: str) -> str:
+    return normalize_text("\n".join(line for line in str(text or "").splitlines()
+                                     if not _REVISION_ROW.match(line)))
+
+
 def extract_title_block_fields(text: str) -> Dict[str, Any]:
     # THE REVISION TABLE FIRST (D-511): parsed as the drawing's history, then struck from
     # the text every field below reads — a prior issue's number is not a part, and a
@@ -1476,7 +1527,8 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
         # The page scan runs with the specification legend removed as well as the standing
         # phrases: "• 304 - STAINLESS STEEL" and "WHERE SPECIFIED ALL TIMBER-BASED PRODUCTS"
         # are the border's words on every sheet, never this part's (D-402).
-        material_scan_text = _strip_material_boilerplate(strip_specification_legend(normalized_text))
+        material_scan_text = _strip_material_boilerplate(strip_specification_legend(
+            _without_revision_rows(raw_text)))
         materials = [canonical_material(value) for value in _findall_unique(MATERIAL_PATTERN, material_scan_text, flags=re.IGNORECASE)]
     drawing_numbers = _extract_drawing_number_candidates(raw_text) or _findall_unique(DRAWING_NUMBER_PATTERN, normalized_text, flags=re.IGNORECASE)
     # The revision table corroborates and corrects the number: a superseded issue's number
@@ -1544,7 +1596,7 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
         "normalized": {
             "primary_material": _first_or_none(material_values),
             "primary_finish": _first_or_none(finishes),
-            "primary_thickness_mm": _primary_thickness_mm(thicknesses),
+            "primary_thickness_mm": _primary_thickness_mm(thicknesses, stated=_callout_gauge_mm(raw_text)),
         },
         "confidence": {
             "drawing_numbers": _confidence(0.95 if drawing_numbers else 0.0),

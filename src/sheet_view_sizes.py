@@ -180,6 +180,13 @@ def apply_sheet_view_sizes(parts: Sequence[Dict[str, Any]], summary: Any,
         if len(mine) != 1:
             continue
         v = mine[0]
+        had_material = bool(part.get("normalized_material"))
+        _take_view_material(part, v)
+        if not had_material and part.get("normalized_material"):
+            part.setdefault("review_flags", []).append(
+                f"{pn}: material and gauge from its own view's label on drawing {ref}: "
+                f"{v['material']}")
+            sized.append(pn)
         wrote = sp.apply_field(part, "blank_length_mm", v["length_mm"], SOURCE)
         wrote = sp.apply_field(part, "blank_width_mm", v["width_mm"], SOURCE) and wrote
         if not wrote:
@@ -195,5 +202,124 @@ def apply_sheet_view_sizes(parts: Sequence[Dict[str, Any]], summary: Any,
             + f" from its own view on drawing {ref}, labelled '{v['label']}'"
             + (f" ({v['material']})" if v["material"] else "")
             + " — the figures printed on that view; the drawing is a sheet, not a flat pattern")
-        sized.append(pn)
+        if pn not in sized:
+            sized.append(pn)
     return sized
+
+
+def _take_view_material(part: Dict[str, Any], view: Dict[str, Any]) -> None:
+    """A member's material and gauge are the ones on its own view's label (B.34495's panels:
+    "MATERIAL:18mm THICK FR B MDF 3050 X 1220mm (30001651)"). Only where the part has none."""
+    import source_precedence as sp
+    from extractor_patterns import _extract_material_candidates, canonical_material
+
+    found = _extract_material_candidates("MATERIAL: " + str(view.get("material") or ""))
+    if found and not part.get("normalized_material"):
+        sp.apply_field(part, "normalized_material", canonical_material(found[0]), "title_block")
+        part.setdefault("material_text", view.get("material"))
+        if view.get("gauge_mm") and not part.get("normalized_thickness_mm"):
+            sp.apply_field(part, "normalized_thickness_mm", float(view["gauge_mm"]), "title_block")
+
+
+# WHAT A SHEET SAYS ABOUT THE PART IT DRAWS, READ FROM ITS DXF (27 Nov 2026). A drawing exported
+# as outlines has no text layer in its PDF; the same sheet's DXF carries the title block as
+# text. A.34494's "FINISH: SPRAYED TO MATCH SEPIA BROWN RAL 8014 ..." was in its DXF alone, so
+# the plinth tower was priced with no coat at all.
+def sheet_text(dxf_path: Any) -> str:
+    """Every word a drawing-sheet DXF prints: text, block text and block attributes."""
+    try:
+        import ezdxf
+        doc = ezdxf.readfile(str(dxf_path))
+    except Exception:                                                # noqa: BLE001
+        return ""
+    out: List[str] = []
+
+    def take(e, depth=0):
+        kind = e.dxftype()
+        if kind == "TEXT":
+            out.append(str(e.dxf.text or ""))
+        elif kind == "MTEXT":
+            out.append(e.plain_text())
+        elif kind == "INSERT" and depth < 3:
+            out.extend(str(a.dxf.text or "") for a in e.attribs)
+            name = str(e.dxf.name or "")
+            blk = doc.blocks.get(name) if not name.startswith("*") else None
+            for x in (blk or []):
+                take(x, depth + 1)
+    for e in doc.modelspace():
+        take(e)
+    return "\n".join(t for t in out if t)
+
+
+def apply_sheet_title_facts(parts: Sequence[Dict[str, Any]], summary: Any,
+                            dxf_paths: Optional[Sequence[Any]] = None) -> List[str]:
+    """Give the part a drawing-sheet DXF draws the finish, material and gauge its title block
+    prints, where the part has none. The sheet's part is the one its file name's drawing
+    reference or its FINISHED PART NO. names, and exactly one. A gauge is taken only with a
+    material from the same sheet: a sheet's standing notes print thicknesses too."""
+    import source_precedence as sp
+    from drawing_reference import compact, finished_parts_on_sheet, reference_in_file_name
+    from extractor_patterns import extract_title_block_fields
+
+    done: List[str] = []
+    for path in (dxf_paths if dxf_paths is not None else _sheet_dxfs(summary)):
+        ref = reference_in_file_name(Path(str(path)).stem)
+        text = sheet_text(path)
+        if not text:
+            continue
+        stock = finished_parts_on_sheet(text)
+        mine = [p for p in parts or () if isinstance(p, dict) and (
+            (ref and ref in (compact(p.get("part_number")), compact(p.get("drawing_reference"))))
+            or (len(stock) == 1 and (str(p.get("part_number") or "") in stock
+                                     or str(p.get("finished_part_no") or "") in stock)))]
+        if len(mine) != 1:
+            continue
+        part = mine[0]
+        fields = extract_title_block_fields(text)
+        norm = fields.get("normalized") or {}
+        wrote = []
+        finish = norm.get("primary_finish")
+        if finish and not part.get("normalized_finish"):
+            if sp.apply_field(part, "normalized_finish", finish, "title_block"):
+                part.setdefault("surface_finishes", [])
+                if finish not in part["surface_finishes"]:
+                    part["surface_finishes"].append(finish)
+                wrote.append("finish")
+                # THE COAT THE FINISH NAMES IS WORK ON THE PART: "SPRAYED TO MATCH ... RAL 8014"
+                # is the spray booth, in the engine's own finish families (finish_rules).
+                for op in _coat_operations(finish):
+                    ops = part.setdefault("textual_operations", [])
+                    if op not in ops:
+                        ops.append(op)
+                        wrote.append(op)
+        material = norm.get("primary_material")
+        if material and not part.get("normalized_material"):
+            if sp.apply_field(part, "normalized_material", material, "title_block"):
+                wrote.append("material")
+                if norm.get("primary_thickness_mm") and not part.get("normalized_thickness_mm"):
+                    sp.apply_field(part, "normalized_thickness_mm",
+                                   float(norm["primary_thickness_mm"]), "title_block")
+                    wrote.append("gauge")
+        if wrote:
+            pn = str(part.get("part_number") or "")
+            part["sheet_title_facts"] = {"dxf": Path(str(path)).name, "finish": finish,
+                                         "material": material, "took": wrote}
+            part.setdefault("review_flags", []).append(
+                f"{pn}: {', '.join(wrote)} read from its own drawing's DXF ({Path(str(path)).name})"
+                f" — the PDF carries no text" + (f"; finish: {finish}" if finish else ""))
+            done.append(pn)
+    return done
+
+
+def _coat_operations(finish: str) -> List[str]:
+    """The coating operation(s) a stated finish names, through finish_rules' families; none
+    for a finish no family recognises (an unread finish decides nothing)."""
+    try:
+        from finish_rules import _OPERATION_FAMILY, finish_families, states_only_a_process
+    except Exception:                                                # noqa: BLE001
+        return []
+    if states_only_a_process(finish):
+        return []
+    fams = finish_families(finish)
+    return [op for op, fam in _OPERATION_FAMILY.items()
+            if fam in fams and op in ("powder_coating", "wet_spray", "plating", "anodising")]

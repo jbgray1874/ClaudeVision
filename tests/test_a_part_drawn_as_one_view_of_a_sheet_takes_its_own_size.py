@@ -109,3 +109,31 @@ def test_a_sheet_without_labelled_views_sizes_nothing(tmp_path):
     doc.modelspace().add_linear_dim(base=(0, -10), p1=(0, 0), p2=(100, 0), text="300").render()
     doc.saveas(tmp_path / "nc1-a34494.DXF")
     assert views_on_sheet(tmp_path / "nc1-a34494.DXF") == []
+
+
+def test_a_member_takes_its_own_views_material_and_gauge(tmp_path):
+    sheet = _sheet(tmp_path / "nc1-b34495.DXF")
+    parts = _members()
+    apply_sheet_view_sizes(parts, {}, [sheet])
+    assert all(p["normalized_material"] == "MDF" and p["normalized_thickness_mm"] == 18 for p in parts)
+
+
+def test_a_sheets_dxf_gives_its_part_the_finish_and_the_coat_it_names(tmp_path):
+    """A.34494's PDF has no text; its DXF title says FINISH: SPRAYED TO MATCH ... RAL 8014 and
+    FINISHED PART NO. : - 10100892. The plinth tower was priced with no coat at all."""
+    from sheet_view_sizes import apply_sheet_title_facts
+    doc = ezdxf.new("R2010", setup=True)
+    blk = doc.blocks.new(name="SW_BROKEN_VIEW_0")
+    blk.add_mtext("PLINTH TOWER ASSEMBLY\\PFINISHED PART NO. : - 10100892\\P"
+                  "FINISH: SPRAYED TO MATCH SEPIA BROWN RAL 8014")
+    note = doc.blocks.new(name="SW_NOTE_0")
+    note.add_mtext("2mm PVC EDGING TO RECIEVE A 2mm RADIUS")
+    doc.modelspace().add_blockref("SW_BROKEN_VIEW_0", (0, 0))
+    doc.modelspace().add_blockref("SW_NOTE_0", (0, 50))
+    doc.saveas(tmp_path / "nc1-a34494.DXF")
+    tower = {"part_number": "10100892", "description": "PLINTH TOWER ASSEMBLY", "quantity": 1}
+    other = {"part_number": "30000711", "description": "INSERT NUT", "quantity": 4}
+    assert apply_sheet_title_facts([tower, other], {}, [tmp_path / "nc1-a34494.DXF"]) == ["10100892"]
+    assert "SPRAYED" in tower["normalized_finish"] and "wet_spray" in tower["textual_operations"]
+    assert "normalized_thickness_mm" not in tower          # the edging note is not its gauge
+    assert "normalized_finish" not in other

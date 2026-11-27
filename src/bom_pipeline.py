@@ -127,7 +127,18 @@ def name_lines_by_title_blocks(rows: List[Dict[str, Any]], sheets) -> List[Dict[
 
     from supplier_sheet_identity import reconcile_sheet_identities
     sheets = list(sheets)
+    before = [str(r.get("part_number") or "") for r in rows]
     owner_findings = reconcile_sheet_identities(rows, sheets)
+    # A line the sheet-identity join renamed is reported exactly as one renamed below, so the
+    # estimator sees every line that became a drawing and why.
+    for was, r in zip(before, rows):
+        now = str(r.get("part_number") or "")
+        if was and now != was and r.get("drawing_reference"):
+            owner_findings.append({
+                "code": "bom_line_named_by_title_block", "severity": "info",
+                "detail": (f"{r.get('bom_parent')}: line {was} '{r.get('description')}' is "
+                           f"drawing {now} — its own sheet prints its stock code {was}"),
+                "page": r.get("bom_parent")})
     label_of: Dict[str, str] = {}
     own_codes: Dict[str, set] = {}
     spelled: Dict[str, str] = {}

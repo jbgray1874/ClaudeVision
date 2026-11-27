@@ -39,6 +39,7 @@ def prepare(summary, *, scope=None, scope_basis=None, identity_aliases=None, all
         result['declared_product_original'] = result.get('declared_product')
         result['declared_product'] = scope
         result['scope_correction_basis'] = scope_basis
+    reread = reread_title_block_materials(result)
     from document_builder import build_part_index
     writeup = copy.deepcopy(result.get('manufacturing_writeup') or {})
     writeup['parts'] = build_part_index(result)
@@ -88,6 +89,7 @@ def prepare(summary, *, scope=None, scope_basis=None, identity_aliases=None, all
                  for k in sorted(set(before)&set(after))
                  if before[k].get('quantity') != after[k].get('quantity')],
              'issues':graph.get('issues') or [],
+             'title_block_materials_reread':reread,
              'quantities_per_finished_product':{n.part_number:n.qty_per_unit for n in graph['nodes']},
              'note':'Prepared evidence only. Original estimates untouched. No corrected price is claimed.'}
     # A prepared input must not carry stale final prices, cached workbook paths or a
@@ -98,3 +100,41 @@ def prepare(summary, *, scope=None, scope_basis=None, identity_aliases=None, all
     result['parts'] = parts
     result['saved_scope_recovery'] = audit
     return result, audit
+
+
+def reread_title_block_materials(summary):
+    """Read each saved page's material callout again with today's reader, as a fresh run
+    would (27 Nov 2026: "MATERIAL:1.5mm CR4 SHEET STEEL" was cut at SHEET, so 46 steel
+    component sheets had no material and one had the ACRYLIC of a revision note). Only the
+    material fields are refreshed, only where the reading changed. Returns what changed."""
+    from extractor_patterns import extract_title_block_fields
+    changed = []
+    for page in summary.get('pages') or []:
+        text = page.get('pdfplumber_text') or page.get('normalized_text') or ''
+        analysis = page.get('page_analysis')
+        if not text or not isinstance(analysis, dict) or not isinstance(analysis.get('title_block'), dict):
+            continue
+        fresh = extract_title_block_fields(text)
+        block = analysis['title_block']
+        thickness = (fresh.get('normalized') or {}).get('primary_thickness_mm')
+        held = (block.get('normalized') or {}).get('primary_thickness_mm')
+        if fresh.get('materials') == block.get('materials') and (not thickness or thickness == held):
+            continue
+        new_primary = (fresh.get('normalized') or {}).get('primary_material')
+        changed.append({'page': page.get('page_number'), 'sheet': page.get('source_pdf_name'),
+                        'was': block.get('materials'), 'now': fresh.get('materials'),
+                        'gauge_was': held, 'gauge_now': thickness})
+        block['materials'] = fresh.get('materials')
+        block['material_stated_unresolved'] = fresh.get('material_stated_unresolved')
+        block.setdefault('normalized', {})['primary_material'] = new_primary
+        if new_primary and thickness:
+            block['normalized']['primary_thickness_mm'] = thickness
+        primary = analysis.get('primary_fields')
+        if isinstance(primary, dict):
+            # precedence: direct-write ok — refreshing a saved PAGE reading with today's reader
+            # before the part index is rebuilt from it; no part fact is written here.
+            primary['material'] = new_primary
+            primary['normalized_material'] = new_primary  # precedence: direct-write ok — page reading refreshed
+            if new_primary and thickness:
+                primary['thickness_mm'] = primary['normalized_thickness_mm'] = thickness  # precedence: direct-write ok — page reading refreshed
+    return changed

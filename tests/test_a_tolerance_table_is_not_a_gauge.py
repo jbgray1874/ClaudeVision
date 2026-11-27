@@ -54,4 +54,5 @@ def test_the_extractor_uses_the_tolerance_aware_picker():
     """Wired: the title block's primary thickness is chosen by the filter, not first-or-none."""
     src = open(os.path.join(os.path.dirname(__file__), "..", "src", "extractor_patterns.py"),
                encoding="utf-8").read()
-    assert '"primary_thickness_mm": _primary_thickness_mm(thicknesses)' in src
+    # The callout's own gauge goes in as `stated` (27 Nov 2026); the picker still decides.
+    assert '"primary_thickness_mm": _primary_thickness_mm(thicknesses, stated=' in src
