@@ -340,3 +340,38 @@ def test_nothing_is_said_when_everyone_on_inventry_has_a_clocking():
     d = {"no_clocking": [], "not_on_inventry": [], "not_clocked_in": [], "forgotten": [], "notes": [],
          "time": NOW.isoformat(), "last_update": {"time": NOW.isoformat(), "by": "x"}}
     assert not any("not clocked in on BrightHR" in h for h, _, _ in ms.attention(d))
+
+
+def _quiet(**over):
+    d = {"time": NOW.isoformat(), "checked": NOW.isoformat(), "status": "ok", "clocked_in": 2,
+         "people_in": [{"name": "Zoe Test", "manager": "", "since": NOW.isoformat()},
+                       {"name": "Ann Desk", "manager": "", "since": NOW.isoformat()}],
+         "staff_checked": 190, "notes": [], "push": None, "inventry_problem": None, "on_inventry": 2,
+         "at_reception": 0, "automatic": True, "not_on_inventry": [], "just_arrived": [], "not_clocked_in": [],
+         "just_left": [], "forgotten": [], "no_clocking": [], "roll_calls": [], "since": NOW.isoformat(),
+         "last_update": {"time": NOW.isoformat(), "by": "scheduled task", "kind": "update", "status": "ok"}}
+    d.update(over)
+    return d
+
+
+def test_the_other_direction_is_always_shown_so_a_zero_says_it_was_checked():
+    subject, page, text = ms.compose(_quiet(), "https://sdi.example/app")
+    assert "On InVentry, not clocked in on BrightHR: 0" in text
+    assert "No BrightHR clocking" in page
+    assert "Everything is in step. Nothing needs attention." in page
+
+
+def test_things_to_check_are_counted_at_the_top():
+    d = _quiet(no_clocking=["Dee Dunn (signed in 07:41)"], on_inventry=3, at_reception=1)
+    subject, page, text = ms.compose(d, "https://sdi.example/app")
+    assert subject.endswith("1 to check")
+    assert "1 thing to check below" in page and "Dee Dunn (signed in 07:41)" in page
+
+
+def test_every_style_attribute_stays_closed():
+    """A quote inside a style ends the attribute early: Outlook then drops the
+    rest of the styling (it once left the button's text dark on dark)."""
+    import re
+    page = ms.compose(_quiet(no_clocking=["A B (signed in 07:00)"]), "https://sdi.example/app")[1]
+    styles = re.findall(r"style='([^']*)'", page)
+    assert styles and not [s for s in styles if '"' in s]

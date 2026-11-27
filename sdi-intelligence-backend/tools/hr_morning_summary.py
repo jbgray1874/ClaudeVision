@@ -275,100 +275,222 @@ def compose(d: dict, link: str) -> tuple:
     subject = (f"HR morning summary: {d['clocked_in'] if d['clocked_in'] is not None else '?'} clocked in, "
                + (f"{things} to check" if things else "nothing to check"))
     forgot = len(d.get("forgotten") or [])
+    no_clock = len(d.get("no_clocking") or [])
     figures = [("Clocked in on BrightHR", f"{d['clocked_in']} of {d['staff_checked']} staff checked"
                 + (f" (not counting {forgot} forgotten clock-out{'' if forgot == 1 else 's'})" if forgot else "")),
                ("On InVentry's fire list", "InVentry did not answer" if d["on_inventry"] is None else
                 f"{d['on_inventry']}" + (f" ({d['at_reception']} signed in on the console)" if d["at_reception"] else ""))]
+    both = None
     if d["on_inventry"] is not None and d["clocked_in"]:
         # The evidence the two are in step: of everyone clocked in, how many
         # InVentry's list has.
         both = max(0, d["clocked_in"] - len(d["not_on_inventry"]) - len(d.get("just_arrived") or []))
         figures.append(("In step", f"{both} of {d['clocked_in']} clocked in are on InVentry's list "
                                    f"({round(both / d['clocked_in'] * 100)}%)"))
+    if d["on_inventry"] is not None:
+        # The other direction, always shown so a 0 says it was checked.
+        figures.append(("On InVentry, not clocked in on BrightHR", str(no_clock)))
     last = d.get("last_update")
-    figures.append(("InVentry updates",
-                    f"automatic, every 5 minutes (last at {_local(last['time'], '%H:%M')})" if d.get("automatic")
-                    else f"not automatic: last update {_local(last['time'])}" if last
-                    else "not automatic: no update recorded"))
+    updates = (f"automatic, every 5 minutes (last at {_local(last['time'], '%H:%M')})" if d.get("automatic")
+               else f"not automatic: last update {_local(last['time'])}" if last
+               else "not automatic: no update recorded")
+    figures.append(("InVentry updates", updates))
     if push and push.get("status") == "ok":
         figures.append(("InVentry updated", f"{len(push.get('signed_in_names') or [])} signed in, "
                                              f"{len(push.get('signed_out_names') or [])} signed out"))
     head = (f"Checked {_local(d['checked'])}."
             + (" InVentry is updated from BrightHR automatically every 5 minutes." if d.get("automatic") else ""))
 
-    text = [head, ""] + [f"{k}: {v}" for k, v in figures] + [""]
-    page = [f"<p>{html.escape(head)}</p><table cellpadding='4' cellspacing='0'>"
-            + "".join(f"<tr><td><b>{html.escape(k)}</b></td><td>{html.escape(v)}</td></tr>" for k, v in figures)
-            + "</table>"]
-
-    text.append("NEEDS ATTENTION" if todo else "Nothing needs attention.")
-    page.append("<h3>Needs attention</h3>" if todo else "<p><b>Nothing needs attention.</b></p>")
-    for heading, why, names in todo:
+    def trimmed(names):
         more = len(names) - MAX_NAMES
-        names = names[:MAX_NAMES] + ([f"and {more} more: see the app"] if more > 0 else [])
-        text += [f"- {heading}", f"  {why}"] + [f"    {n}" for n in names]
-        page.append(f"<p><b>{html.escape(heading)}</b><br>{html.escape(why)}"
-                    + (f"<br>{html.escape(', '.join(names))}" if names else "") + "</p>")
+        return names[:MAX_NAMES] + ([f"and {more} more: see the app"] if more > 0 else [])
 
+    text = [head, ""] + [f"{k}: {v}" for k, v in figures] + [""]
+    text.append("NEEDS ATTENTION" if todo else "Nothing needs attention.")
+    for heading, why, names in todo:
+        text += [f"- {heading}", f"  {why}"] + [f"    {n}" for n in trimmed(names)]
     if info:
         text += ["", "FOR INFORMATION"]
-        page.append("<h3>For information</h3>")
     for heading, why, names in info:
-        more = len(names) - MAX_NAMES
-        names = names[:MAX_NAMES] + ([f"and {more} more: see the app"] if more > 0 else [])
-        text += [f"- {heading}", f"  {why}"] + [f"    {n}" for n in names]
-        page.append(f"<p><b>{html.escape(heading)}</b><br>{html.escape(why)}"
-                    + (f"<br>{html.escape(', '.join(names))}" if names else "") + "</p>")
+        text += [f"- {heading}", f"  {why}"] + [f"    {n}" for n in trimmed(names)]
 
     text += ["", "ROLL CALLS SINCE THE LAST SUMMARY"]
-    page.append("<h3>Roll calls since the last summary</h3>")
     if not d["roll_calls"]:
         text.append("None.")
-        page.append("<p>None.</p>")
+    calls = []
     for r in d["roll_calls"]:
         line = (f"{_local(r['started'])}: {r['present_count']} present, {r['absent_count']} absent"
                 + (f", started by {r['started_by']}" if r.get("started_by") else ""))
         absent = f"Absent: {', '.join(r['absent'])}" if r["absent"] else "Nobody absent."
         text += [f"- {line}", f"  {absent}"]
-        page.append(f"<p><b>{html.escape(line)}</b><br>{html.escape(absent)}</p>")
+        calls.append((line, absent))
+    where = None
     if d["roll_calls"]:
         import hr_rollcall
         where = f"Each is in Saved roll calls in the app, and as a spreadsheet in {hr_rollcall.folder()}."
         text.append(where)
-        page.append(f"<p>{html.escape(where)}</p>")
 
     # Last, so what needs doing stays at the top: everyone clocked in, by
     # manager where the HR managers list says who that is.
     people_in = d.get("people_in") or []
     text += ["", f"WHO IS CLOCKED IN ON BRIGHTHR ({len(people_in)})"]
-    page.append(f"<h3>Who is clocked in on BrightHR ({len(people_in)})</h3>")
     if not people_in:
         text.append("Nobody.")
-        page.append("<p>Nobody.</p>")
     groups = {}
     for p in people_in:
         groups.setdefault(p["manager"].strip() or "No manager listed", []).append(p)
     named = any(k != "No manager listed" for k in groups)
+    ordered = []
     for mgr in sorted(groups, key=lambda k: (k == "No manager listed", k.lower())):
-        rows = groups[mgr]
-        entries = [f"{p['name']} {_local(p['since'], '%H:%M')}" for p in rows]
+        rows = [(p["name"], _local(p["since"], "%H:%M")) for p in groups[mgr]]
         if named:
             text.append(f"{mgr} ({len(rows)})")
-            page.append(f"<p><b>{html.escape(mgr)} ({len(rows)})</b><br>")
-        else:
-            page.append("<p>")
-        text += [f"  {e}" for e in entries]
-        page.append(html.escape(", ".join(entries)) + "</p>")
+        text += [f"  {n} {t}" for n, t in rows]
+        ordered.append((mgr if named else None, rows))
 
     if link:
         text += ["", f"Open HRInventry Anywhere: {link}", f"The roll call: {link}#roll"]
-        page.append(f"<p><a href='{html.escape(link)}'>Open HRInventry Anywhere</a> &nbsp;·&nbsp; "
-                    f"<a href='{html.escape(link)}#roll'>The roll call</a></p>")
     foot = ("This summary is sent each weekday morning by SDI Intelligence. Names and figures are as at "
             "the check above.")
     text += ["", foot]
-    page.append(f"<p style='color:#666'>{html.escape(foot)}</p>")
-    return subject, "".join(page), "\n".join(text)
+
+    pct = round(both / d["clocked_in"] * 100) if both is not None else None
+    tiles = [
+        ("Clocked in on BrightHR", "?" if d["clocked_in"] is None else str(d["clocked_in"]),
+         f"of {d['staff_checked']} staff" + (f", {forgot} forgotten left out" if forgot else ""), None),
+        ("On InVentry's fire list", "?" if d["on_inventry"] is None else str(d["on_inventry"]),
+         "InVentry did not answer" if d["on_inventry"] is None
+         else f"{d['at_reception']} signed in on the console" if d["at_reception"] else "all signed in by the update",
+         None),
+        ("In step", "?" if pct is None else f"{pct}%",
+         "" if both is None else f"{both} of {d['clocked_in']} clocked in", "ok" if pct == 100 else "warn"),
+        ("No BrightHR clocking", "?" if d["on_inventry"] is None else str(no_clock),
+         "on InVentry, not clocked in", "warn" if no_clock else "ok"),
+    ]
+    page = _email_html(d, subject, things, tiles, updates, todo, info, calls, where, ordered,
+                       len(people_in), link, foot, trimmed)
+    return subject, page, "\n".join(text)
+
+
+# ── the email's look ─────────────────────────────────────────────────────────
+# Tables and inline styles only: Outlook draws mail with Word's engine, which
+# ignores most modern CSS. Colours are the SDI brand (near-black and yellow)
+# around a white body, so it reads the same in light or dark mail clients.
+_INK, _MUTED, _LINE, _PAPER = "#1b1b18", "#5d5d55", "#e3e3dc", "#f3f3ef"
+_BRAND_DARK, _BRAND = "#141412", "#F6D946"
+_OK, _OK_BG, _WARN, _WARN_BG, _INFO, _INFO_BG = "#1d7a45", "#e9f6ee", "#b45d09", "#fdf3e3", "#2457a6", "#edf3fc"
+_FONT = "Segoe UI, Arial, Helvetica, sans-serif"   # unquoted: the styles sit in single-quoted attributes
+
+
+def _e(x) -> str:
+    return html.escape(str(x))
+
+
+def _email_html(d, subject, things, tiles, updates, todo, info, calls, where, groups, n_in,
+                link, foot, trimmed) -> str:
+    t = _parse(d.get("checked"))
+    lt = t.astimezone() if t else None
+    when = f"{lt.strftime('%A')} {lt.day} {lt.strftime('%B')} · checked {lt.strftime('%H:%M')}" if lt else "Not checked"
+
+    def section(title):
+        return (f"<tr><td style='padding:22px 28px 8px;font-family:{_FONT};font-size:12px;font-weight:600;"
+                f"letter-spacing:1px;text-transform:uppercase;color:{_MUTED}'>{_e(title)}</td></tr>")
+
+    def card(heading, why, names, colour, bg):
+        names = trimmed(names)
+        return (f"<tr><td style='padding:0 28px 10px'><table role='presentation' width='100%' cellpadding='0' "
+                f"cellspacing='0'><tr><td bgcolor='{bg}' style='background:{bg};border-left:4px solid {colour};"
+                f"padding:12px 14px;font-family:{_FONT}'>"
+                f"<div style='font-size:15px;font-weight:600;color:{_INK}'>{_e(heading)}</div>"
+                f"<div style='font-size:13px;line-height:19px;color:{_MUTED};padding-top:4px'>{_e(why)}</div>"
+                + (f"<div style='font-size:14px;line-height:21px;color:{_INK};padding-top:8px'>"
+                   + "<br>".join(_e(n) for n in names) + "</div>" if names else "")
+                + "</td></tr></table></td></tr>")
+
+    out = [f"<div style='margin:0;padding:0;background:{_PAPER}'>"
+           f"<table role='presentation' width='100%' cellpadding='0' cellspacing='0' bgcolor='{_PAPER}' "
+           f"style='background:{_PAPER}'><tr><td align='center' style='padding:24px 12px'>"
+           f"<table role='presentation' width='640' cellpadding='0' cellspacing='0' bgcolor='#ffffff' "
+           f"style='width:100%;max-width:640px;background:#ffffff;border:1px solid {_LINE}'>"]
+    # header
+    out.append(f"<tr><td bgcolor='{_BRAND_DARK}' style='background:{_BRAND_DARK};padding:22px 28px;font-family:{_FONT}'>"
+               f"<div style='font-size:12px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;"
+               f"color:{_BRAND}'>SDI Intelligence · HRInventry</div>"
+               f"<div style='font-size:24px;font-weight:600;color:#ffffff;padding-top:6px'>HR morning summary</div>"
+               f"<div style='font-size:14px;color:#c8c8bf;padding-top:4px'>{_e(when)}</div></td></tr>")
+    # status
+    if things:
+        status, colour, bg = (f"{things} thing{'' if things == 1 else 's'} to check below", _WARN, _WARN_BG)
+    else:
+        status, colour, bg = ("Everything is in step. Nothing needs attention.", _OK, _OK_BG)
+    out.append(f"<tr><td style='padding:20px 28px 4px'><table role='presentation' width='100%' cellpadding='0' "
+               f"cellspacing='0'><tr><td bgcolor='{bg}' style='background:{bg};border-left:4px solid {colour};"
+               f"padding:12px 14px;font-family:{_FONT};font-size:15px;font-weight:600;color:{colour}'>"
+               f"{_e(status)}</td></tr></table></td></tr>")
+    # figure tiles
+    cells = []
+    for label, value, sub, tone in tiles:
+        vc = _OK if tone == "ok" else _WARN if tone == "warn" else _INK
+        # One cell per tile in a single row, so all four share the tallest one's height.
+        cells.append(f"<td width='25%' valign='top' style='border:1px solid {_LINE};padding:12px;"
+                     f"font-family:{_FONT}'>"
+                     f"<div style='font-size:11px;line-height:14px;font-weight:600;color:{_MUTED};"
+                     f"text-transform:uppercase;letter-spacing:.5px'>{_e(label)}</div>"
+                     f"<div style='font-size:28px;line-height:34px;font-weight:600;color:{vc};padding-top:6px'>{_e(value)}</div>"
+                     f"<div style='font-size:12px;line-height:16px;color:{_MUTED}'>{_e(sub)}</div></td>")
+    out.append(f"<tr><td style='padding:12px 20px 0'><table role='presentation' width='100%' cellpadding='0' "
+               f"cellspacing='8' style='border-collapse:separate'><tr>{''.join(cells)}</tr></table></td></tr>")
+    out.append(f"<tr><td style='padding:8px 28px 0;font-family:{_FONT};font-size:13px;color:{_MUTED}'>"
+               f"InVentry updates: {_e(updates)}</td></tr>")
+    # needs attention, for information
+    if todo:
+        out.append(section("Needs attention"))
+        for heading, why, names in todo:
+            out.append(card(heading, why, names, _WARN, _WARN_BG))
+    if info:
+        out.append(section("For information"))
+        for heading, why, names in info:
+            out.append(card(heading, why, names, _INFO, _INFO_BG))
+    # roll calls
+    out.append(section("Roll calls since the last summary"))
+    if not calls:
+        out.append(f"<tr><td style='padding:0 28px;font-family:{_FONT};font-size:14px;color:{_MUTED}'>None.</td></tr>")
+    for line, absent in calls:
+        out.append(card(line, absent, [], _LINE, "#fafaf7"))
+    if where:
+        out.append(f"<tr><td style='padding:0 28px;font-family:{_FONT};font-size:13px;color:{_MUTED}'>{_e(where)}</td></tr>")
+    # buttons
+    if link:
+        out.append(f"<tr><td style='padding:22px 28px 4px'><table role='presentation' cellpadding='0' cellspacing='0'><tr>"
+                   f"<td bgcolor='{_BRAND_DARK}' style='background:{_BRAND_DARK};padding:11px 18px'>"
+                   f"<a href='{_e(link)}' style='font-family:{_FONT};font-size:14px;font-weight:600;color:{_BRAND};"
+                   f"text-decoration:none'>Open HRInventry Anywhere</a></td><td width='10'></td>"
+                   f"<td style='border:1px solid {_BRAND_DARK};padding:10px 18px'>"
+                   f"<a href='{_e(link)}#roll' style='font-family:{_FONT};font-size:14px;font-weight:600;color:{_INK};"
+                   f"text-decoration:none'>The roll call</a></td></tr></table></td></tr>")
+    # who is clocked in, three to a row
+    out.append(section(f"Who is clocked in on BrightHR ({n_in})"))
+    if not n_in:
+        out.append(f"<tr><td style='padding:0 28px;font-family:{_FONT};font-size:14px;color:{_MUTED}'>Nobody.</td></tr>")
+    for mgr, rows in groups:
+        if mgr:
+            out.append(f"<tr><td style='padding:10px 28px 4px;font-family:{_FONT};font-size:14px;font-weight:600;"
+                       f"color:{_INK}'>{_e(mgr)} ({len(rows)})</td></tr>")
+        trs = []
+        for i in range(0, len(rows), 3):
+            tds = "".join(
+                f"<td width='33%' style='padding:3px 8px 3px 0;font-family:{_FONT};font-size:13px;color:{_INK};"
+                f"border-bottom:1px solid #f0f0ea'>{_e(n)} <span style='color:{_MUTED}'>{_e(tm)}</span></td>"
+                for n, tm in rows[i:i + 3])
+            tds += "<td width='33%'></td>" * (3 - len(rows[i:i + 3]))
+            trs.append(f"<tr>{tds}</tr>")
+        out.append(f"<tr><td style='padding:0 28px'><table role='presentation' width='100%' cellpadding='0' "
+                   f"cellspacing='0'>{''.join(trs)}</table></td></tr>")
+    # footer
+    out.append(f"<tr><td style='padding:24px 28px;font-family:{_FONT};font-size:12px;line-height:17px;"
+               f"color:{_MUTED};border-top:1px solid {_LINE}'>{_e(foot)}</td></tr>")
+    out.append("</table></td></tr></table></div>")
+    return "".join(out)
 
 
 def send(to, subject, page, text) -> dict:
