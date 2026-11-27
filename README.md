@@ -16,12 +16,23 @@ or board manufacturing route. They do not dispatch on a customer, product number
 folder name or price. Higher-ranked CAD/DXF/human evidence, existing component
 dimensions, explicit buy/by-others decisions and piece quantities are preserved.
 Numeric supplier stock/drawing duplicates merge only on an unambiguous own-sheet
-PART NO.; no fuzzy description matching is used.
+PART NO.; no fuzzy description matching is used. A unique unresolved assembly stock
+line plus a unique disconnected assembly sheet in the submitted product may also
+join provisionally. That decision is recorded separately, not asserted as an exact
+title-block identity; ambiguous candidates are never falsely joined.
 
 Two labelled CUT axes can supply a flat. Where no blank exists, the largest two
 distinct standalone body dimensions can supply a **provisional envelope allowance**,
 excluding MATERIAL stock sizes and title-block text. It is flagged as inference,
 not a measured flat, and must be confirmed against the DXF before quotation.
+The scan also separates printed horizontal/vertical dimension annotations on an
+owned PDF, retaining its hash and page. They can replace an identified stock-sheet
+size or weak assembly envelope, not accepted DXF/model/human geometry. Both the
+active top-level and nested blanks change together, with displaced readings audited.
+Excessive unmeasured drawing-layout cutting is budgeted from the component outline,
+explicitly counted holes and `config.UNREAD_PROFILE_ALLOWANCE_FACTOR` (1.25) for
+unread internal detail. This is a provisional cutting allowance, not a measured
+contour; real CAD contours and piece quantities remain unchanged.
 
 A named wet-coat schedule costs every pass at the ordinary shop area/rate labour
 model, with a setup per distinct stage, without multiplying physical pieces. Its
@@ -29,8 +40,16 @@ consumables are separate, labelled **provisional house-budget lines**, not suppl
 quotes. `config.NAMED_WET_FINISH_CONSUMABLES` states the current assumptions:
 8 m2/litre coverage, 15% waste, GBP 25/litre. These are budgeting assumptions, not
 published market prices, and do not certify specialist/fire-rated coating performance.
-Confirm coverage, exact grade and actual tin prices before a firm quotation. No
-finish schedule is invented for a raster sheet whose text has not been read.
+Confirm coverage, exact grade and actual tin prices before a firm quotation.
+For an unread raster GA with raw-board members and no known finish,
+`config.RASTER_BOARD_FINISH_BUDGET` permits a labelled provisional primer/base/top
+budget, not a transcription of unread ink. An owned raw-board sheet that specifies
+spraying but no coat count uses `config.UNCOUNTED_SPRAY_FINISH_BUDGET` (primer and
+colour). Known no-finish/pre-faced/bought-in/human decisions are not replaced.
+Finish consumable children must not turn a fabricated raw-board panel into an
+assembly that loses its material and CNC cost. Own sprayed raw-board specifications
+also do not inherit laminate from generic border notes. Specialist coating approval
+and contradictory thickness notes remain estimator decisions, not certified facts.
 
 Offline saved-evidence preparation accepts optional `--owned-text <decision.json>`
 alongside the existing `--identity-aliases`, `--scope-basis` and `--allowances` inputs.

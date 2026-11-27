@@ -70,7 +70,8 @@ def prepare(summary, *, scope=None, scope_basis=None, identity_aliases=None, all
     for part in parts:
         old = before.get(compact(part.get('part_number')), {})
         geometry = old.get('normalized_geometry') or {}
-        if str(geometry.get('geometry_source') or '').lower() in ('dxf', 'solidworks', 'solidworks_api'):
+        if (old.get('dxf_augmented') or str(geometry.get('geometry_source') or '').lower()
+                in ('dxf', 'dxf_flat_pattern', 'flat_pattern', 'solidworks', 'solidworks_api', 'model')):
             for key in ('normalized_geometry','geometry_rollup','manufacturing_features',
                         'dxf_augmented','dxf_source','blank_length_mm','blank_width_mm'):
                 if old.get(key) is not None:
@@ -82,6 +83,9 @@ def prepare(summary, *, scope=None, scope_basis=None, identity_aliases=None, all
         add_allowances(result,allowances)
     from route_compiler import apply_canonical_evidence_to_parts, job_drawing_numbers
     from file_scan import assembly_page_owners
+    if result.get('set_aside_outside_product'):
+        result['prior_scope_exclusions']=copy.deepcopy(result['set_aside_outside_product'])
+        result['set_aside_outside_product']=[]
     graph = apply_canonical_evidence_to_parts(parts, result.get('llm_full_extract') or {},
         (result.get('document_analysis') or {}).get('bom_rows') or [],
         job_drawing_numbers(result), assembly_page_owners(result), summary=result)

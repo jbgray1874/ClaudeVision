@@ -71,7 +71,9 @@ def reconcile_sheet_identities(rows, sheets):
         if len(parent_stocks) == 1:
             row['parent_finished_part_no'] = parent_stocks[0]
     if rows and aliases:
-        rows[0]['sheet_identity_aliases'] = aliases
+        standing=dict(rows[0].get('sheet_identity_aliases') or {})
+        standing.update(aliases)
+        rows[0]['sheet_identity_aliases'] = standing
     return findings
 
 
@@ -86,6 +88,8 @@ def reconcile_saved_sheet_identities(summary):
             sheets.append((f'{name}#{number - 1}', text))
     rows = (summary.get('document_analysis') or {}).get('bom_rows') or []
     found = reconcile_sheet_identities(rows, sheets)
+    from assembly_identity_inference import apply as infer_assembly_identity
+    infer_assembly_identity(summary)
     if found:
         summary.setdefault('supplier_identity_findings', []).extend(found)
     return found

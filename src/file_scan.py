@@ -3170,6 +3170,8 @@ def _finalize_scan_summary(
         summary["reader_findings"] = {"schema": "reader_findings.v1", "captured": "scan", "items": [],
                                       "error": f"{type(_rf_exc).__name__}: {_rf_exc}"}
     _debug("start build_document_writeup")
+    from drawing_dimension_evidence import capture as capture_printed_dimension_axes
+    capture_printed_dimension_axes(summary)
     from supplier_sheet_identity import reconcile_saved_sheet_identities
     reconcile_saved_sheet_identities(summary)
     summary["manufacturing_writeup"] = build_document_writeup(summary)

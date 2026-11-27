@@ -7,6 +7,7 @@ import re
 import math
 import hashlib
 import json
+import copy
 from collections import defaultdict
 import source_precedence as sp
 from drawing_reference import compact, reference_in_file_name, sheet_drawing_reference
@@ -76,7 +77,13 @@ def _material(text):
     # A labelled callout, never a material mentioned in a revision or a legend.
     match=re.search(r'(?im)^\s*MATERIAL\s*:\s*([^\n;]+)',text)
     if not match:
-        return None
+        # Some suppliers print the material next to the component rather than
+        # under a MATERIAL heading. Read a complete spec line, not board words
+        # in the border's generic edging/tolerance notes.
+        match=re.search(r'(?im)^\s*(\d+(?:\.\d+)?\s*MM\s+(?:(?:MR|FR|B|THICK)\s+)*'
+                        r'(?:MDF|PLYWOOD|MFC|MFMDF)\b[^\n;]*)',text)
+        if not match:
+            return None
     raw=match.group(1).strip()
     if re.search(r'(?i)REFER|SEE\s+(?:DRAW|COMP|BOM)|BY\s+OTHERS',raw):
         return None
@@ -94,13 +101,17 @@ def _blank_allowance(part, page):
     """An owned detail's CUT axes, or a disclosed envelope until its DXF is read.
 
     Never use the stock size in MATERIAL or title-block dates. The provisional
-    envelope is not a measured flat and is used only when both axes are missing.
-    Existing component/DXF/human dimensions always win.
+    envelope is not a measured flat. A proven stock-sheet/weak assembly envelope
+    may be displaced, but accepted component/DXF/model/human dimensions win.
     """
-    if part.get('blank_length_mm') or part.get('blank_width_mm'):
-        return
     geometry = part.get('normalized_geometry') or {}
-    if str(geometry.get('geometry_source') or '').lower() in ('dxf', 'solidworks', 'solidworks_api'):
+    src=str(geometry.get('geometry_source') or part.get('geometry_source') or '').lower()
+    if src in ('solidworks', 'solidworks_api', 'model', 'mirror_of_measured'):
+        return
+    # A rejected alternate file does not invalidate an accepted measured flat.
+    if src in ('dxf','dxf_flat_pattern','flat_pattern') or part.get('dxf_augmented'):
+        return
+    if any(sp.rank(sp.source_of(part,k))>71 for k in ('blank_length_mm','blank_width_mm')):
         return
     text = text_of(page)
     cut = [float(x) for x in re.findall(r'(?im)^\s*(\d+(?:\.\d+)?)\s+CUT\s*$', text)]
@@ -115,6 +126,10 @@ def _blank_allowance(part, page):
         values = [float(x) for x in after.group(1).split()]
         source = 'drawing_deterministic'
         basis = 'Two standalone flat axes immediately after this component\'s MATERIAL callout.'
+    elif page.get('printed_dimension_axes'):
+        values=list(page['printed_dimension_axes']['axes_mm'])
+        source='geometry_inference'
+        basis=page['printed_dimension_axes']['basis']
     else:
         body = re.split(r'(?im)^\s*(?:FINISHED\s+)?PART\s+NO\.?|^\s*MATERIAL\s*:', text)[0]
         dimensions = sorted({float(x) for x in re.findall(r'(?m)^\s*(\d+(?:\.\d+)?)\s*$', body)
@@ -128,12 +143,83 @@ def _blank_allowance(part, page):
                  'not a measured flat. Confirm against its DXF before quotation.')
     if not all(math.isfinite(v) and 0 < v < 20000 for v in values):
         return
+    current=[part.get('blank_length_mm'),part.get('blank_width_mm')]
+    stock=re.search(r'(?i)MATERIAL[^\n]*?(\d{3,5})\s*[xX]\s*(\d{3,5})',text)
+    is_stock=bool(stock and sorted(float(x) for x in stock.groups())==sorted(float(x or 0) for x in current))
+    old_source=sp.source_of(part,'blank_length_mm')
+    explicit=source=='drawing_deterministic'
+    replace=not all(current) or is_stock or old_source in ('assembly_envelope_allowance','geometry_inference','overall_dimensions')
+    if not replace and not explicit:
+        return
+    if current==values and part.get('owned_blank_basis'):
+        return
+    part.setdefault('owned_blank_displaced',{'axes_mm':current,'source':old_source,
+        'normalized_geometry':copy.deepcopy(geometry)})
     for field, value in zip(('blank_length_mm', 'blank_width_mm'), values):
+        # Withdraw the proven stock/assembly envelope. A measured flat or human
+        # decision returned above. Preserve the displaced reading for the audit.
+        part[field]=None
         sp.apply_field(part, field, value, source, note=basis)
+        geometry[field]=value
+        geometry[field+'_source']=source
+    geometry.update({'bounding_box_flat_mm':{'length':values[0],'width':values[1],
+                                             'height':part.get('normalized_thickness_mm')},
+                     'developed_length_mm':values[0],'developed_width_mm':values[1],
+                     'smallest_enclosing_rectangle_mm':{'length':values[0],'width':values[1]},
+                     'blank_area_m2':values[0]*values[1]/1e6,'blank_basis':'owned_printed_dimension_allowance'})
+    part['normalized_geometry']=geometry
+    part.pop('_blank_capped_to_assembly',None)
+    part.pop('_cut_path_not_bounded',None)
     part['owned_blank_basis'] = {'axes_mm': values, 'page': page.get('page_number'),
                                'provisional': source == 'geometry_inference', 'basis': basis}
     if basis not in part.setdefault('review_flags', []):
         part['review_flags'].append(basis)
+    from detail_page_geometry import bound_cutting_to_blank
+    old_cut=max(float((part.get(h) or {}).get(k) or 0) for h in
+        ('geometry_rollup','normalized_geometry','manufacturing_features') for k in
+        ('estimated_cut_length_mm','cut_length_mm','raw_cut_length_mm'))
+    notes=bound_cutting_to_blank(part,values[0],values[1])
+    if notes:
+        part['drawing_cut_displaced_mm']=old_cut
+        allow=float((part.get('_cut_allowance') or {}).get('cut_mm') or 0)
+        # Printed hole counts are actual evidence, unlike circles from a whole
+        # drawing's vectors. Keep their work, and allow for unread internal detail.
+        explicit_holes=[]
+        for diameter,count in re.findall(r'(?i)(\d+(?:\.\d+)?)\s*mm\s+HOLES?\s*\(\s*[xX]\s*(\d+)\s*\)',text):
+            explicit_holes.append((int(count),float(diameter)))
+        for count,diameter in re.findall(r'(?i)\b(\d+)\s*[xX]\s*[Øø⌀]?\s*(\d+(?:\.\d+)?)\s*(?:mm)?\s+THRU',text):
+            explicit_holes.append((int(count),float(diameter)))
+        explicit_holes=list(dict.fromkeys(explicit_holes))
+        if allow:
+            from config import UNREAD_PROFILE_ALLOWANCE_FACTOR
+            hole_cut=sum(count*math.pi*diameter for count,diameter in explicit_holes)
+            allow=round(max(allow,2*sum(values)+hole_cut)*UNREAD_PROFILE_ALLOWANCE_FACTOR,1)
+            part['_cut_allowance']['cut_mm']=allow
+            part['_cut_allowance']['internal_detail_factor']=UNREAD_PROFILE_ALLOWANCE_FACTOR
+            for holder in ('normalized_geometry','geometry_rollup','manufacturing_features'):
+                h=part.setdefault(holder,{})
+                for k in ('cut_length_mm','raw_cut_length_mm','estimated_cut_length_mm'):
+                    if k in h:h[k]=allow
+            if explicit_holes:
+                count=sum(count for count,_ in explicit_holes)
+                part['owned_stated_holes']={'count':count,'diameter_counts':explicit_holes,'page':page.get('page_number')}
+                for holder in ('normalized_geometry','geometry_rollup','manufacturing_features'):
+                    h=part.setdefault(holder,{})
+                    h['hole_count']=count
+                    if holder=='geometry_rollup':h['estimated_hole_count']=count
+                geometry['pierce_count']=count+1
+            part.setdefault('review_flags',[]).append(
+                f'PROVISIONAL profile budget: owned outline and explicitly counted hole cutting, '
+                f'plus {(UNREAD_PROFILE_ALLOWANCE_FACTOR-1):.0%} for unread internal detail; '
+                f'{allow:g} mm a piece, not the drawing-layout vectors.')
+        # _raw remains an active fallback for some consumers. The original page
+        # vectors belong in the audit, not in a second live path to the price.
+        roll=part.get('geometry_rollup') or {}
+        raw=roll.get('_raw') or {}
+        if allow and raw:
+            part.setdefault('drawing_vector_original',dict(raw))
+            for key in ('estimated_cut_length_mm','raw_cut_length_mm','cut_length_mm'):
+                if key in raw:raw[key]=allow
 
 
 def _apply(part,field,value,page):
@@ -188,6 +274,10 @@ def prepare(summary):
             for stock in re.findall(r'(?im)^\s*(?:FINISHED\s+)?PART\s+NO\.?\s*[:\-\s]*(\d{7,8})(?!\d)',text):
                 stock_claims[stock].add(owner)
     stock_aliases={k:next(iter(v)) for k,v in stock_claims.items() if len(v)==1}
+    rows=(summary.get('document_analysis') or {}).get('bom_rows') or []
+    for stock,ref in ((rows[0].get('sheet_identity_aliases') or {}) if rows else {}).items():
+        if str(stock).isdigit() and _key(ref) in by_owner:
+            stock_aliases.setdefault(stock,_key(ref))
     by_id=defaultdict(list)
     for part in parts:
         key=_key(part.get('part_number'))
@@ -211,7 +301,6 @@ def prepare(summary):
     if folded:
         summary.setdefault('owned_manufacturing_folded_records',[]).extend(folded)
         parts[:]=[p for p in parts if all(p is not old for old in folded)]
-    rows=(summary.get('document_analysis') or {}).get('bom_rows') or []
     if rows:
         aliases=rows[0].setdefault('sheet_identity_aliases',{})
         for stock,owner in stock_aliases.items():
@@ -244,6 +333,25 @@ def prepare(summary):
             part['owned_manufacturing_pages']=[p.get('page_number') for p,_ in specs]
             part['pages']=list(dict.fromkeys(part['owned_manufacturing_pages']))
             part['owned_manufacturing_text']='\n'.join(text_of(p) for p,_ in specs)
+            own_body=re.split(r'(?i)GENERAL\s+DIMENSION|MODIFICATIONS|DISCLAIMER|GENERAL\s+TOLERANCES',
+                              text_of(page))[0]
+            if (re.search(r'MDF|PLYWOOD',spec['material']) and re.search(r'(?i)\bSPRAY\b|\bPAINT',own_body)
+                    and not re.search(r'(?i)LAMINAT|MELAMINE|VENEER|\bHPL\b|\bMFMDF\b|\bMFC\b',own_body)):
+                part['owned_board_construction']={'mode':'raw_board_with_wet_finish',
+                    'basis':'Own component spec names a raw board and sprayed finish; do not inherit laminate from border/other pages.'}
+                _apply(part,'normalized_finish','WET SPRAY',page)
+                _ops(part,['wet_spray'],part['owned_board_construction']['basis'])
+                _flag_section_thickness(part,own_body,spec)
+                features=part.get('manufacturing_features') or {}
+                if (features.get('bend_count_source')=='inferred_dashed_lines' and
+                        not re.search(r'(?i)\bBEND|\bFOLD|\bKERF|\bCURV',own_body)):
+                    for key in ('textual_operations','inferred_operations','operations'):
+                        if isinstance(part.get(key),list):
+                            part[key]=[op for op in part[key] if op not in ('folding','fold')]
+                    part.setdefault('owned_board_displaced_bends',features.get('bend_count'))
+                    features['bend_count']=0
+                    features['fold_required']=False
+                    part.setdefault('review_flags',[]).append('Dashed drawing lines are not press-brake folds on this own-sheet raw-board panel; CNC/bench and spray remain costed.')
         if (not owned or part.get('canonical_kind')=='assembly' or part.get('is_sub_assembly')
                 or part.get('assembly_children')):
             continue
@@ -289,15 +397,40 @@ def prepare(summary):
                     child_counts[child_key]=float(row.get('quantity') or 1)
         board_children=[p for p in children if re.search(r'MDF|PLYWOOD|MFMDF|MFC',str(p.get('normalized_material') or ''))]
         if len(board_children)>1:
+            materials={p.get('normalized_material') for p in board_children if p.get('normalized_material')}
+            if len(materials)==1 and not part.get('normalized_material'):
+                sp.apply_field(part,'normalized_material',next(iter(materials)),'assembly_members')
             _ops(part,['assembly','glue'],'Provisional board-assembly allowance: fit, join and clamp the stated members once at their parent; confirm fixing/joint method.')
         schedules=[(page,finish_schedule(text_of(page))) for page in own]
         schedules=[(page,schedule) for page,schedule in schedules if schedule]
+        if not schedules and own and part.get('owned_board_construction') and not part.get('finish_schedule'):
+            import config
+            rule=config.UNCOUNTED_SPRAY_FINISH_BUDGET
+            schedules=[(own[0],{'operation':'wet_spray','stages':list(rule['stages']),
+                'passes':sum(s['passes'] for s in rule['stages']),
+                'inferred':True,'basis':rule['basis']})]
+        # A raster assembly GA with visible raw-board members must not mean
+        # free finishing. This is a HOUSE ALLOWANCE, not a reading of unread ink.
+        if (not schedules and len(board_children)>1 and
+                all(str(p.get('normalized_material') or '').upper() in ('MDF','PLYWOOD','PLY') for p in board_children) and own and
+                all(not text_of(page).strip() for page in own) and
+                not part.get('normalized_finish') and not part.get('finish_schedule')):
+            import config
+            rule=config.RASTER_BOARD_FINISH_BUDGET
+            if rule.get('enabled'):
+                schedule={'operation':'wet_spray','stages':list(rule['stages']),
+                          'passes':sum(s['passes'] for s in rule['stages']),
+                          'inferred':True,'basis':rule['basis']}
+                schedules=[(own[0],schedule)]
         if len({json.dumps(schedule,sort_keys=True) for _,schedule in schedules})>1:
             flag='Conflicting named coating schedules on owned sheets; confirm the issued finish schedule.'
             if flag not in part.setdefault('review_flags',[]):part['review_flags'].append(flag)
             continue
         for page,schedule in schedules[:1]:
-            _apply(part,'normalized_finish','WET SPRAY',page)
+            if schedule.get('inferred'):
+                sp.apply_field(part,'normalized_finish','WET SPRAY','geometry_inference',note=schedule['basis'])
+            else:
+                _apply(part,'normalized_finish','WET SPRAY',page)
             if str(part.get('normalized_finish') or '').upper() not in ('WET SPRAY','WET_SPRAY'):
                 continue
             part['finish_schedule']=dict(schedule,page=page.get('page_number'))
@@ -310,3 +443,35 @@ def prepare(summary):
     from named_finish_schedule import mint_consumables
     mint_consumables(parts)
     return changed
+
+
+# Common sheet-board gauges. A lone printed number of one of these on a board panel's
+# own sheet may be a section's thickness. Below 6 mm such numbers are usually groove,
+# rebate or edging depths on these sheets, so they are not read as a board thickness.
+_BOARD_GAUGES_MM=(6,9,12,15,18,19,22,25,30)
+
+
+def _flag_section_thickness(part,own_body,spec):
+    """Keep a disagreement between the material note and a section's printed thickness visible.
+
+    The material note stays the provisional thickness; nothing is costed differently.
+    A standalone dimension that is a standard board gauge, and not the stated one, is
+    put to the estimator as a review item rather than silently resolved either way.
+    """
+    stated=spec.get('thickness')
+    if not stated:
+        return
+    lone={float(v) for v in re.findall(r'(?m)^\s*(\d+(?:\.\d+)?)\s*$',own_body)}
+    if float(stated) in lone:
+        return  # its own sections print the stated thickness: no disagreement to raise
+    printed=sorted(v for v in lone if v in _BOARD_GAUGES_MM)
+    if not printed:
+        return
+    shown=[int(v) if v==int(v) else v for v in printed]
+    note=(f"Thickness conflict on its own sheet: the material note says {stated:g} mm, a section "
+          f"prints {', '.join(f'{v:g} mm' for v in shown)}. Priced at {stated:g} mm provisionally; "
+          f"Design/estimator to confirm.")
+    part['owned_thickness_conflict']={'stated_mm':stated,'printed_mm':shown,'basis':note}
+    flags=part.setdefault('review_flags',[])
+    if note not in flags:
+        flags.append(note)

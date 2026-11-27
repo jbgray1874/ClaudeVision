@@ -3782,6 +3782,14 @@ def build_part_graph(
         kids = children.get(identity) or {}
         if not kids:
             return False
+        # A raw-board panel's paint allowance is a non-structural purchase,
+        # not a manufactured child that turns the panel into an assembly.
+        # Keep its own material/CNC route. Actual assembly roles still win.
+        if (record.get('owned_board_construction') and record.get('owned_blank_basis')
+                and 'assembly' not in {str(r).lower() for r in record.get('page_roles') or []}
+                and all((records.get(child) or {}).get('named_finish_consumable')
+                        for child in kids)):
+            return True
         # THE EVIDENCE MUST BELONG TO THE PARENT'S OWN FABRICATED PART (D-522, the
         # reviewer's correction of D-520's wording). "A GA never has fabrication
         # evidence" was too absolute: a DXF matched to an assembly drawing, or geometry

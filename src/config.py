@@ -3390,6 +3390,32 @@ NAMED_WET_FINISH_CONSUMABLES = {
     "budget_gbp_per_litre": 25.0,
 }
 
+# Budgeting, NOT a claim about an unread raster specification. Triggered only
+# for an assembly of raw board whose own GA has no readable finish information.
+# Known raw/no-finish, pre-faced, bought-in and human decisions are not replaced.
+RASTER_BOARD_FINISH_BUDGET = {
+    "enabled": True,
+    "stages": [{"passes": 1, "description": "Provisional primer"},
+               {"passes": 1, "description": "Provisional basecoat"},
+               {"passes": 1, "description": "Provisional topcoat"}],
+    "basis": "PROVISIONAL finishing budget for raw-board assembly with unread raster GA: "
+             "allow primer/base/top coat, normal shop time and consumables. Confirm actual "
+             "finish, exposed surfaces, specialist/fire-rated system and supplier prices. "
+             "This is an estimating assumption, not a transcription or performance certificate.",
+}
+
+UNCOUNTED_SPRAY_FINISH_BUDGET = {
+    "stages": [{"passes": 1, "description": "Provisional primer"},
+               {"passes": 1, "description": "Provisional colour coat"}],
+    "basis": "PROVISIONAL coat-count budget: the owned raw-board sheet says sprayed, "
+             "but gives no coat count. Allow primer and colour coat at normal shop rates "
+             "with consumables; confirm actual preparation, coating system and tin prices.",
+}
+
+# Geometry from an engineering drawing is not a proven manufacturing contour.
+# Keep cutting costed on owned outline/known holes plus this reviewable detail budget.
+UNREAD_PROFILE_ALLOWANCE_FACTOR = 1.25
+
 LABOUR_RULES = {
     "laser_cutting": {
         "setup_min": 3.0,

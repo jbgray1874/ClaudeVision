@@ -5700,6 +5700,8 @@ def _faced_board_promotion(part: Dict[str, Any], material: Optional[str]):
     `laminating` op, a LAMINATE/MELAMINE finish field, a "LAM" token in the cut file's
     name, or the word in the part's description. Plain MDF stays plain MDF.
     """
+    if (part.get('owned_board_construction') or {}).get('mode') == 'raw_board_with_wet_finish':
+        return None, ""
     mat = str(material or "").upper().replace("_", " ")
     if any(t in mat for t in ("MFMDF", "MFC", "MELAMINE", "VENEER", "PRE LAM", "PRE-LAM")):
         return None, ""            # already a faced family — nothing to promote
@@ -13790,7 +13792,9 @@ def _estimate_part_costed(part: Dict[str, Any], job_quantity: Optional[int] = No
         "labour_estimate": labour,
         **{k: part[k] for k in ('finish_schedule', 'finish_schedule_applied',
                                'named_finish_consumable', 'material_specification',
-                               'owned_blank_basis', 'manufacturing_allowance_basis') if k in part},
+                               'owned_blank_basis', 'manufacturing_allowance_basis',
+                               'owned_board_construction', 'owned_blank_displaced',
+                               'drawing_cut_displaced_mm') if k in part},
         "normalized_geometry": part.get("normalized_geometry", {}),
         # THE ROLLUP TRAVELS WITH THE MONEY, TOO.
         #
