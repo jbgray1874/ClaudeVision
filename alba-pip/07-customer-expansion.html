@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Customer Expansion — Alba PIP</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Spectral:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/alba.css">
+</head>
+<!-- Demo script: SCREEN 7.  Source design: Alba screen3.png -->
+<body data-section="intelligence" data-rail="3" data-screen="7">
+
+  <div class="crumb"><b>Intelligence</b> <span>/</span> <b>Opportunity Radar</b> <span>/</span> BrightWave Digital</div>
+
+  <div class="pagehead">
+    <div class="ttl">
+      <h1>Customer Expansion</h1>
+      <div class="sub">Product B cross-sell candidates ranked by observable account signals</div>
+      <div class="meta">BrightWave Digital &nbsp;•&nbsp; B2B Software &nbsp;•&nbsp;
+        <span style="color:var(--ok)">84% opportunity confidence</span></div>
+      <div class="meta">Updated 4 min ago &nbsp;•&nbsp; Salesforce + Product Analytics + Billing</div>
+    </div>
+  </div>
+
+  <div class="kpis k4">
+    <div class="kpi"><div class="lab">Eligible Accounts</div><div class="val">23</div></div>
+    <div class="kpi"><div class="lab">Estimated Upside</div><div class="val ok">$1.8M ARR</div></div>
+    <div class="kpi"><div class="lab">Avg Opportunity Score</div><div class="val">84</div></div>
+    <div class="kpi"><div class="lab">Renewal within 120 Days</div><div class="val">14</div></div>
+  </div>
+
+  <div class="grid g-85">
+
+    <!-- ---------- prioritised accounts ---------- -->
+    <div class="panel">
+      <div class="ph">Prioritised Accounts</div>
+      <table>
+        <thead>
+          <tr><th style="width:52px"></th><th>Account</th><th>Usage Trend</th><th>Products</th>
+              <th>Renewal</th><th>Health</th><th class="n">Score</th><th class="n">Est. ARR</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="rank">1</span></td><td><b>Meridian Retail</b></td>
+            <td><svg class="spark" viewBox="0 0 56 16"><path d="M0,13 L11,12 L22,9 L33,8 L44,4 L56,1"/></svg></td>
+            <td>Product A</td><td>21 Nov</td><td><span class="pill ok">Healthy</span></td>
+            <td class="n"><b>92</b></td><td class="n">$140K</td>
+          </tr>
+          <tr>
+            <td><span class="rank mute">2</span></td><td><b>Atlas Bank</b></td>
+            <td><svg class="spark" viewBox="0 0 56 16"><path d="M0,13 L11,11 L22,11 L33,7 L44,5 L56,2"/></svg></td>
+            <td>Product A</td><td>04 Dec</td><td><span class="pill ok">Healthy</span></td>
+            <td class="n"><b>89</b></td><td class="n">$125K</td>
+          </tr>
+          <tr>
+            <td><span class="rank mute">3</span></td><td><b>Northstar Foods</b></td>
+            <td><svg class="spark" viewBox="0 0 56 16"><path d="M0,12 L11,12 L22,8 L33,8 L44,5 L56,3"/></svg></td>
+            <td>Product A</td><td>18 Dec</td><td><span class="pill ok">Healthy</span></td>
+            <td class="n"><b>87</b></td><td class="n">$110K</td>
+          </tr>
+          <tr>
+            <td><span class="rank mute">4</span></td><td><b>Vantage Logistics</b></td>
+            <td><svg class="spark" viewBox="0 0 56 16"><path d="M0,13 L11,10 L22,10 L33,6 L44,6 L56,3"/></svg></td>
+            <td>Product A</td><td>09 Jan</td><td><span class="pill ok">Healthy</span></td>
+            <td class="n"><b>85</b></td><td class="n">$95K</td>
+          </tr>
+          <tr>
+            <td><span class="rank mute">5</span></td><td><b>Orion Media</b></td>
+            <td><svg class="spark" viewBox="0 0 56 16"><path d="M0,12 L11,11 L22,9 L33,9 L44,5 L56,4"/></svg></td>
+            <td>Product A</td><td>16 Jan</td><td><span class="pill ok">Healthy</span></td>
+            <td class="n"><b>82</b></td><td class="n">$90K</td>
+          </tr>
+          <tr>
+            <td><span class="rank mute">6</span></td><td><b>Harbour Health</b></td>
+            <td><svg class="spark" viewBox="0 0 56 16"><path d="M0,13 L11,12 L22,10 L33,8 L44,7 L56,5"/></svg></td>
+            <td>Product A</td><td>28 Jan</td><td><span class="pill ok">Healthy</span></td>
+            <td class="n"><b>79</b></td><td class="n">$80K</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ---------- selected account ---------- -->
+    <div class="panel">
+      <div class="ph">Selected Account</div>
+      <div style="font-size:19px;font-weight:600">Meridian Retail</div>
+      <div style="display:flex;align-items:center;gap:11px;margin-top:7px">
+        <div style="font-size:19px;font-weight:600;color:var(--ok)">$140K ARR</div>
+        <span class="pill mute">92 / 100</span>
+      </div>
+
+      <div style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);
+                  margin-top:16px">Why this account</div>
+      <div class="deltas">
+        <div class="row"><div class="lbl">Product A usage</div>
+          <div class="v"><span style="color:var(--ok)">+38%</span>
+          <span style="color:var(--ink-faint);margin-left:12px">+25 pts</span></div></div>
+        <div class="row"><div class="lbl">Account health</div>
+          <div class="v">Healthy <span style="color:var(--ink-faint);margin-left:12px">+25 pts</span></div></div>
+        <div class="row"><div class="lbl">Renewal proximity</div>
+          <div class="v">50 days <span style="color:var(--ink-faint);margin-left:12px">+22 pts</span></div></div>
+        <div class="row"><div class="lbl">Peer cross-sell match</div>
+          <div class="v">Strong <span style="color:var(--ink-faint);margin-left:12px">+20 pts</span></div></div>
+        <div class="row"><div class="lbl">Service issues</div>
+          <div class="v">None <span style="color:var(--ink-faint);margin-left:12px">0 pts</span></div></div>
+      </div>
+
+      <div style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);
+                  margin-top:16px">Comparable pattern</div>
+      <p style="color:var(--ink-dim);font-size:12px;margin-top:5px">
+        8 of 11 similar customers adopted Product B within 90 days.
+      </p>
+
+      <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+        <a class="btn primary" href="08-commercial-action-plan.html">Add to Campaign</a>
+        <button class="btn">View Account</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------- scoring model ---------- -->
+  <div class="panel" style="padding:12px 16px">
+    <div style="display:flex;align-items:center;gap:22px;flex-wrap:wrap;font-size:11px;color:var(--ink-faint)">
+      <span style="color:var(--accent);letter-spacing:.12em;text-transform:uppercase;font-size:9.5px">
+        Scoring Model</span>
+      <span>Healthy account</span><span>•</span><span>Increasing usage</span><span>•</span>
+      <span>Suitable size</span><span>•</span><span>Upcoming renewal</span><span>•</span>
+      <span>No major service issues</span>
+    </div>
+    <div class="provenance">
+      <div class="p"><span class="ic">⛉</span>Rules visible</div>
+      <div class="p"><span class="ic">▥</span>Account-level calculation</div>
+      <div class="p"><span class="ic">▤</span>Source data accessible</div>
+      <div class="p"><span class="ic">◔</span>Last refresh 09:40</div>
+    </div>
+  </div>
+
+<script src="assets/alba.js"></script>
+</body>
+</html>

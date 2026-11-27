@@ -20,7 +20,13 @@ from __future__ import annotations
 from typing import Optional
 
 # ---- rate card (rows 115-146): name -> (£/hr, setup_mins, dept_code) -----------------
-RATE_CARD = {
+#
+# THE SET-UP MINUTES BELOW ARE NOT THE OWNER OF THAT NUMBER — config.OPERATION_SETUP_MIN is,
+# and `_with_book_setup` overwrites them from it at import. They are kept spelled out here
+# because this table is also the record of what the template's rate rows say, and a reader
+# comparing the two should see both halves side by side; if they ever differ, config wins and
+# a test says so. See setup_min_for() for the ladder.
+_RATE_CARD_AS_READ_OFF_THE_TEMPLATE = {
     "Assemble/pack (Acrylic)": (25.4257, 15, "PACP"),
     "Assemble/pack (Metal)":   (28.5588, 15, "PACM"),
     "Bench Work Joinery":      (28.7350, 30, "BENC"),
@@ -43,6 +49,58 @@ RATE_CARD = {
     "P.Coat":                  (355.43,  15, "P/C"),
     "Packing Joinery":         (28.7350, 15, "PACJ"),
 }
+
+
+def _with_book_setup(card):
+    """One owner for the minutes. The rate stays on this row; the set-up comes from the book."""
+    try:
+        import config as _cfg
+        _book = getattr(_cfg, "OPERATION_SETUP_MIN", {}) or {}
+    except Exception:
+        return dict(card)
+    return {name: (rate, _book.get(dept, setup), dept)
+            for name, (rate, setup, dept) in card.items()}
+
+
+RATE_CARD = _with_book_setup(_RATE_CARD_AS_READ_OFF_THE_TEMPLATE)
+
+# Department code for a rate-card title, so a caller holding either can ask for a set-up.
+DEPT_BY_TITLE = {name: dept for name, (_r, _s, dept) in RATE_CARD.items()}
+
+
+def setup_min_for(dept_or_title, book_setup_min=None):
+    """Minutes of set-up for a tooling group — the one place that answers it.
+
+    THE LADDER, and it is the same one material uses: the labour book wins where it carries a
+    set-up for this department, config.OPERATION_SETUP_MIN is the offline fallback, and a
+    department in neither returns None — an explicit nil, not a guessed fifteen. No caller
+    writes minutes of its own.
+
+    A BATCH COST, ASKED PER TOOLING GROUP. Quantity is not a parameter and must never become
+    one: one unit and a hundred pay the same minutes, and the per-unit share is the caller's
+    division by order quantity, not a different number here.
+    """
+    if book_setup_min is not None:
+        try:
+            _v = float(book_setup_min)
+            if _v >= 0:
+                return _v
+        except (TypeError, ValueError):
+            pass
+    key = str(dept_or_title or "").strip()
+    if not key:
+        return None
+    try:
+        import config as _cfg
+        _book = getattr(_cfg, "OPERATION_SETUP_MIN", {}) or {}
+    except Exception:
+        return None
+    if key in _book:
+        return _book[key]
+    _dept = DEPT_BY_TITLE.get(key)
+    if _dept is None:
+        _dept = next((d for t, d in DEPT_BY_TITLE.items() if t.lower() == key.lower()), None)
+    return _book.get(_dept) if _dept else None
 
 # ---- laser cutting speed by gauge (rows 38-46): gauge_mm -> mm/sec -------------------
 LASER_SPEED_BY_GAUGE = [
@@ -98,7 +156,17 @@ def powder_qty_kg(length_mm: float, width_mm: float, qty: float = 1.0,
 #       8-10mm         -> 1 m/min    -> 127 bars/hr
 #   Max 5 items per bar. Hang envelope 2200(L) x 1950(H) x 1350(D) mm.
 #   Powder coverage 1 kg per 6 m^2 (confirms POWDER_COVERAGE_M2_PER_KG = 6 above).
-POWDER_PRICE_GBP_PER_KG = 12.50        # standard (special = 16.00)
+# NOT THE LIVE POWDER RATE, AND NOTHING IN src/ IMPORTS THIS MODULE.
+#
+# The rate an estimate actually uses is config.POWDER_COST_PER_KG = 9.73, evidenced from Tim's
+# manual sheets on jobs 1303A and 1304 and applied by wb_populate. powder_total_cost() below has
+# no callers anywhere in the tree.
+#
+# Left in place rather than deleted because the formula it encodes -- area x coverage x rate,
+# with a 16.00 special -- is the record of how powder is costed, and 12.50 may be a real
+# historical standard rate somebody will want to date. But it is NOT what a job is priced at,
+# and reading it as a competing figure has cost an hour more than once.
+POWDER_PRICE_GBP_PER_KG = 12.50        # historical standard (special = 16.00) -- SEE ABOVE
 POWDER_BARS_PER_HOUR = {"standard": 319, "thick_3mm_plus": 191, "thick_8_10mm": 127}
 POWDER_MAX_ITEMS_PER_BAR = 5
 POWDER_HANG_LENGTH_MM = 2200.0

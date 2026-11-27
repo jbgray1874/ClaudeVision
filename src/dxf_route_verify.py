@@ -147,7 +147,7 @@ def read_shapely(dxf):
         try:
             r=float(getattr(e.dxf,"radius",0) or 0)*s
             if r<0.5: continue
-            c=(e.dxf.center.x*s,e.dxf.center.y*s); disc=Point(c).buffer(r,resolution=16)
+            c=(e.dxf.center.x*s,e.dxf.center.y*s); disc=Point(c).buffer(r, 16)
             if outer.contains(disc.representative_point()): net_area=max(0.0,net_area-disc.area)
         except Exception: continue
     fill=(100.0*net_area/bbox_area) if bbox_area>0 else 0.0
@@ -269,7 +269,7 @@ def main():
         stem=d.stem
         pn=None
         import re
-        m=re.match(r"(\d{3,5}[A-Z]?(?:-[A-Z0-9]+)*)", stem)
+        m=re.match(r"(\d{3,6}[A-Z]?(?:-[A-Z0-9]+)*)", stem)
         if m: pn=m.group(1)
         obs=obs_by_part.get(pn or "", [])
         route=implied_route(cur, obs)

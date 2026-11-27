@@ -220,23 +220,19 @@ def read_bom_from_page(page) -> Optional[Dict[str, Any]]:
 # ── Grok known-good oracle (per-parent, code/desc-token -> qty) ──
 # We compare on (item, a recognisable token, qty) so minor desc wording differences
 # don't fail the check — the QUANTITIES and the presence of each item are what matter.
-ORACLE = {
-    "12120-01-GA": [
-        ("1", "SA01", 1), ("2", "103", 1), ("3", "04M", 1),
-        ("4", "THUM620", 4), ("5", "08M", 1), ("6", "FIXINGTBC", 2),
-    ],
-    "12120-01-SA01": [
-        ("1", "101", 1), ("2", "05M", 1),
-    ],
-    "12120-01-101": [
-        ("1", "02M", 1), ("2", "03M", 1),
-        ("3", "PEM", 2), ("4", "CLINCH", 4),
-    ],
-    "12120-01-103": [
-        ("1", "01M", 1), ("2", "06M", 1),
-        ("3", "KEYHOLE", 2),
-    ],
-}
+# The self-test answers for this reader are regression data, not engine code (D-454):
+# tests/fixtures/bom_reader_oracles.json["words_dbg"], read only by verify().
+def _load_oracle(_key: str = "words_dbg"):
+    import json as _json
+    from pathlib import Path as _Path
+    _p = _Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "bom_reader_oracles.json"
+    try:
+        return {k: [tuple(t) for t in v] for k, v in _json.loads(_p.read_text(encoding="utf-8"))[_key].items()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+ORACLE = _load_oracle()
 
 
 def _row_token(row: Dict[str, Any]) -> str:

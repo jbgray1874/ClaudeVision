@@ -32,17 +32,165 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
-def _safe_float(v: Any) -> Optional[float]:
+# Excel COM returns an errored cell (#VALUE!, #REF!, #DIV/0! …) as one of these int sentinels
+# (the CVErr codes). A total that ERRORED — e.g. a material formula referencing a missing
+# dimension cell (L=None) — must NEVER be cast to a float and stamped into the JSON as a real
+# price. On the M&S Horti Crate run this leaked #VALUE! (-2146826273) back as "material £-2.1bn".
+_EXCEL_ERROR_SENTINELS = frozenset({
+    -2146826288,  # xlErrNull   #NULL!
+    -2146826281,  # xlErrDiv0   #DIV/0!
+    -2146826273,  # xlErrValue  #VALUE!
+    -2146826265,  # xlErrRef    #REF!
+    -2146826259,  # xlErrName   #NAME?
+    -2146826252,  # xlErrNum    #NUM!
+    -2146826246,  # xlErrNA     #N/A
+})
+
+# No costing subtotal on this template is ever this large in magnitude; anything beyond it is
+# either an error sentinel that slipped through or a corrupt read — reject rather than stamp.
+_IMPLAUSIBLE_TOTAL = 1e8
+
+
+# EXCEL SAYING "NOT NOW" IS NOT EXCEL SAYING "NO" (D-366). These are the two answers COM gives
+# a caller when Excel is busy: still calculating, still starting, or waiting behind a dialog.
+# RPC_E_SERVERCALL_RETRYLATER literally tells the caller to retry later. The M&S plywood run
+# at 14:12 on 30 Sep treated the first one as final. The read-back gave up, the record lost
+# its totals and the pack went out as DO NOT SEND, even though the same run's last pass
+# through Excel calculated and saved that workbook minutes later.
+_EXCEL_BUSY_HRESULTS = frozenset({
+    -2147417846,  # RPC_E_SERVERCALL_RETRYLATER  "The message filter indicated that the
+                  #                               application is busy."
+    -2147418111,  # RPC_E_CALL_REJECTED          "Call was rejected by callee."
+})
+
+# The waits between attempts, in seconds, on the house retry ladder: five attempts and 30 s
+# of waiting before a busy Excel counts as a failure.
+BUSY_RETRY_WAITS_S: Tuple[float, ...] = (2, 4, 8, 16)
+
+# WHY THE LAST READ-BACK CAME BACK EMPTY, so the run can put the reason on the record (D-366).
+# stamp_real_totals_into_json returns None for half a dozen different reasons, and the record
+# could only ever say "the read-back could not obtain the calculated totals". That is how a
+# busy Excel reached an estimator as "usually a labour row with no throughput".
+EXCEL_BUSY = "excel_busy"
+EXCEL_UNAVAILABLE = "excel_unavailable"
+EXCEL_FAILED = "excel_failed"
+TOTALS_NOT_CALCULATED = "totals_not_calculated"
+WORKBOOK_MISSING = "workbook_missing"
+RECORD_UNREADABLE = "record_unreadable"
+
+_LAST_FAILURE: Dict[str, Any] = {}
+
+
+def last_failure() -> Dict[str, Any]:
+    """Why the most recent read-back returned nothing: {"cause", "detail", ...}, or {}."""
+    return dict(_LAST_FAILURE)
+
+
+def _failed(cause: str, detail: str, **extra: Any) -> None:
+    _LAST_FAILURE.clear()
+    _LAST_FAILURE.update({"cause": cause, "detail": detail, **extra})
+
+
+class ExcelStayedBusy(RuntimeError):
+    """Excel answered busy on every attempt. It is a fault of the machine, not the workbook."""
+
+    def __init__(self, what: str, message: str, attempts: int, waited_s: float):
+        super().__init__(f"{what}: Excel stayed busy ({message}) through {attempts} "
+                         f"attempt(s) over {waited_s:g}s")
+        self.message, self.attempts, self.waited_s = message, attempts, waited_s
+
+
+def _com_message(exc: BaseException) -> str:
+    args = getattr(exc, "args", ()) or ()
+    if len(args) > 1 and isinstance(args[1], str) and args[1].strip():
+        return args[1].strip()
+    return str(exc).strip() or type(exc).__name__
+
+
+def excel_was_busy(exc: BaseException) -> bool:
+    """True when a COM failure is Excel saying "busy, try later" and not a real fault.
+
+    pywintypes.com_error carries the HRESULT as `.hresult` and as args[0]. A busy answer that
+    came through a dispatch call can also carry it as the scode in excepinfo (args[2][5]).
+    Only a COM error is read this way: any other exception is never "busy"."""
+    if not (hasattr(exc, "hresult") or type(exc).__name__ == "com_error"):
+        return False
+    codes: List[Any] = [getattr(exc, "hresult", None)]
+    args = getattr(exc, "args", ()) or ()
+    if args:
+        codes.append(args[0])
+        if len(args) > 2 and isinstance(args[2], tuple) and len(args[2]) > 5:
+            codes.append(args[2][5])
+    return any(isinstance(c, int) and not isinstance(c, bool) and c in _EXCEL_BUSY_HRESULTS
+               for c in codes)
+
+
+def with_busy_retry(fn, what: str, waits: Optional[Tuple[float, ...]] = None, sleep=None):
+    """Run fn(), waiting and running it again for as long as Excel answers busy.
+
+    Returns (result, attempts, waited_s). A failure that is NOT a busy answer is raised on the
+    first attempt, unchanged. Retrying a real fault only delays the report of it. A busy
+    answer on the last attempt raises ExcelStayedBusy, which says how long the engine
+    waited. fn must be safe to repeat: each caller opens, uses and closes its own Excel."""
+    import time
+    waits = BUSY_RETRY_WAITS_S if waits is None else tuple(waits)
+    sleep = time.sleep if sleep is None else sleep
+    waited = 0.0
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return fn(), attempt, waited
+        except Exception as exc:                                     # noqa: BLE001
+            if not excel_was_busy(exc):
+                raise
+            if attempt > len(waits):
+                raise ExcelStayedBusy(what, _com_message(exc), attempt, waited) from exc
+            wait = float(waits[attempt - 1])
+            print(f"   [excel] {what}: Excel is busy (\"{_com_message(exc)}\") — waiting "
+                  f"{wait:g}s and trying again (attempt {attempt + 1} of {len(waits) + 1})",
+                  flush=True)
+            sleep(wait)
+            waited += wait
+
+
+def _cell_value(com_ws, r: int, c: int) -> Any:
+    """One cell's value, or None when the cell cannot be read.
+
+    A BUSY EXCEL IS NOT A BLANK CELL (D-366). Every scan here reads a failed cell as empty,
+    which is right for one odd cell and wrong for an Excel that is not answering. That way a
+    busy Excel reads as a sheet with no totals, which is reported as a workbook fault. The
+    busy answer is raised instead, and with_busy_retry asks again."""
     try:
-        if v is None or v == "":
-            return None
-        return float(v)
-    except (TypeError, ValueError):
+        return com_ws.Cells(r, c).Value
+    except Exception as exc:                                         # noqa: BLE001
+        if excel_was_busy(exc):
+            raise
         return None
 
 
+def _is_excel_error(v: Any) -> bool:
+    """True if a COM cell value is an Excel error sentinel (errored formula), not a real number."""
+    return isinstance(v, int) and not isinstance(v, bool) and v in _EXCEL_ERROR_SENTINELS
+
+
+def _safe_float(v: Any) -> Optional[float]:
+    if _is_excel_error(v):
+        return None
+    try:
+        if v is None or v == "":
+            return None
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f != f or abs(f) >= _IMPLAUSIBLE_TOTAL:  # NaN or absurd magnitude -> not a credible total
+        return None
+    return f
+
+
 # ---- Excel COM open + full calc (mirrors estimate_full_parity_report._open_workbook_excel_com) ----
-def _open_xlsx_excel_com(path: Path, prime_sheet: Optional[str] = None):
+def _open_xlsx_excel_com(path: Path, prime_sheet: Optional[str] = None,
+                         read_only: bool = True):
     if sys.platform != "win32":
         raise RuntimeError("Excel COM readback is only supported on Windows.")
     import win32com.client  # type: ignore
@@ -56,7 +204,17 @@ def _open_xlsx_excel_com(path: Path, prime_sheet: Optional[str] = None):
     except Exception:
         pass
     try:
-        com_wb = excel.Workbooks.Open(p, 0, True)   # UpdateLinks=0, ReadOnly=True
+        # UpdateLinks=0. Opened WRITABLE when the caller wants the calculated values kept:
+        # openpyxl writes formulas with no cached results, so until somebody saves from
+        # Excel, every non-Excel reader — a preview pane, a data_only read-back, the
+        # pre-flight — sees blank money on a sheet that calculates perfectly. A locked
+        # file falls back to read-only so the READ always still happens.
+        try:
+            com_wb = excel.Workbooks.Open(p, 0, read_only)
+        except Exception:
+            if read_only:
+                raise
+            com_wb = excel.Workbooks.Open(p, 0, True)
     except Exception:
         try:
             excel.Quit()
@@ -93,7 +251,35 @@ def _open_xlsx_excel_com(path: Path, prime_sheet: Optional[str] = None):
     return excel, com_wb
 
 
-def _close_excel(excel, com_wb) -> None:
+def _close_excel(excel, com_wb, save: bool = False) -> None:
+    """Close the COM pair; with save=True, first keep the calculated values in the file.
+
+    THE MONEY WAS COMPUTED AND THROWN AWAY. This function closed with SaveChanges=False on
+    every run, so the workbook on disk kept openpyxl's value-less formulas: correct in
+    Excel, blank everywhere else — a preview pane, a data_only read-back, the pre-flight's
+    error-cell scan all saw nothing where the money is. Saving after the full calculation
+    writes Excel's cached results into the same cells the formulas stay in, so the sheet
+    still SHOWS its formulas to the estimator (the estimator asked for exactly that) and
+    every other reader finally sees the numbers.
+
+    Never at the cost of the read: a workbook that arrived read-only (the fallback for a
+    locked file) is reported and left unsaved, and a failed save changes nothing about the
+    totals already read."""
+    if save and com_wb is not None:
+        try:
+            if bool(getattr(com_wb, "ReadOnly", True)):
+                print("   [wep-readback] workbook opened read-only (file locked?) — "
+                      "calculated values NOT saved into it; previews will show blank "
+                      "formulas until it is opened in Excel", flush=True)
+            else:
+                com_wb.Save()
+                print("   [wep-readback] calculated values saved into the workbook — "
+                      "formulas stay live, and previews/non-Excel readers now see the "
+                      "money instead of blanks", flush=True)
+        except Exception as _save_exc:
+            print(f"   [wep-readback] could not save calculated values "
+                  f"({type(_save_exc).__name__}: {_save_exc}) — the read-back is "
+                  f"unaffected; previews will show blank formulas", flush=True)
     try:
         com_wb.Close(SaveChanges=False)
     except Exception:
@@ -112,98 +298,728 @@ _TOTAL_LABELS = {
 }
 
 
-def _scan_total(com_ws, label_needles: Tuple[str, ...], max_row: int, max_col: int) -> Optional[float]:
-    """Find a row whose text contains one of the needles, return the rightmost numeric on that row."""
+def _scan_total_cell(com_ws, label_needles: Tuple[str, ...], max_row: int,
+                     max_col: int) -> Optional[Tuple[int, int]]:
+    """The CELL a labelled total lives in, not just its value — so its FORMULA can be read."""
     for r in range(1, max_row + 1):
-        row_has_label = False
+        _has = False
         for c in range(1, min(max_col, 16) + 1):
-            try:
-                v = com_ws.Cells(r, c).Value
-            except Exception:
-                v = None
-            if isinstance(v, str):
-                low = v.lower()
-                if any(n in low for n in label_needles):
-                    row_has_label = True
-                    break
-        if not row_has_label:
+            v = _cell_value(com_ws, r, c)
+            if isinstance(v, str) and any(n in v.lower() for n in label_needles):
+                _has = True
+                break
+        if not _has:
             continue
-        # rightmost numeric on this row = the computed subtotal
-        best = None
+        # A TOTAL OF EXACTLY ZERO IS A TOTAL. This read `f is not None and f != 0` and
+        # returned None for a genuinely nil subtotal, so the caller stamped material=None
+        # and two reconciliation checks reported "verified nothing" on a job whose material
+        # really was zero. 11650-05 hit it the moment the phantom powder line was removed:
+        # every material row became estimator-to-price, the subtotal computed 0.00, and the
+        # sheet's own correct answer was read back as an absence.
+        #
+        # Zero and missing are different facts everywhere else in this codebase -- it is
+        # what the MISSING sentinel exists for -- and they must not resolve the same way
+        # here either. An EMPTY cell still reads as no value: Excel returns None for empty
+        # and 0.0 for a zero, so the two are distinguishable at the source.
+        best = best_zero = None
         for c in range(1, max_col + 1):
-            try:
-                v = com_ws.Cells(r, c).Value
-            except Exception:
-                v = None
+            v = _cell_value(com_ws, r, c)
             f = _safe_float(v)
-            if f is not None and f != 0:
-                best = f
-        if best is not None:
-            return best
+            if f is None:
+                continue
+            if f != 0:
+                best = (r, c)
+            else:
+                # A CELL HOLDING ZERO. No "and v is not None" guard: _safe_float already
+                # returns None for None and for an empty string, so anything reaching here
+                # with f == 0 really did hold a zero. A mutation proved the extra check
+                # could only ever agree with the one above it and never fired -- the second
+                # such redundancy found this week, and both were removed rather than kept
+                # as a thing to hold in step with no way to notice when it drifts.
+                best_zero = (r, c)
+        if best or best_zero:
+            return best or best_zero
     return None
+
+
+def read_unit_price_composition(com_ws, material: Optional[float], labour: Optional[float],
+                                unit: Optional[float], max_row: int,
+                                max_col: int) -> Dict[str, Any]:
+    """What does the template add between the subtotals and the unit price — and can we NAME it?
+
+    On 12120 material + labour came to GBP 25.73 against a unit price of GBP 27.67: an uplift
+    of 7.54%, identical to four decimal places on a second run with a different material
+    total. So it is a multiplier, not a missing cost line.
+
+    THE RESIDUAL IS NOT AN ANSWER. Stamping other_gbp = unit - material - labour would make
+    the reconciliation invariant tautological: it could never fail again, which is worse than
+    not having it. The uplift has to be UNDERSTOOD, so this reads the unit cell's own FORMULA,
+    pulls out its numeric constants and the cells it references, and reconstructs the price
+    from material + labour + those. Only a reconstruction that lands on the sheet's own figure
+    is declared.
+
+    Reading the formula rather than trusting a constant in config also catches the case that
+    is already true here: config documents the divisor as 0.92, which yields GBP 27.97 on this
+    job. The live template is not doing what the comment says.
+
+    Returns {other_gbp, basis, formula, absorption_divisor, rebate_fraction, explained}.
+    `explained` False means the uplift was observed but not attributed — and other_gbp is
+    then absent, so the invariant still fires.
+    """
+    out: Dict[str, Any] = {"explained": False, "other_gbp": None, "basis": None,
+                           "formula": None, "absorption_divisor": None,
+                           "rebate_fraction": None}
+    if material is None or labour is None or unit is None:
+        return out
+    _sub = material + labour
+    if _sub <= 0:
+        return out
+    if abs(unit - _sub) <= 0.01:
+        out.update(explained=True, other_gbp=0.0, basis="none — the unit price is the sum "
+                                                        "of its subtotals")
+        return out
+
+    cell = _scan_total_cell(com_ws, _TOTAL_LABELS["unit"], max_row, max_col)
+    if not cell:
+        return out
+    # WHERE THE UNIT COST LIVES, recorded rather than assumed. `publishable_total` refuses to
+    # publish a job total with no cell behind it, and hard-coding "Estimate!G6" there would be
+    # the same guess this read-back exists to avoid. This function has just FOUND the cell.
+    try:
+        from openpyxl.utils import get_column_letter as _cl            # noqa: PLC0415
+        out["unit_cell"] = f"Estimate!{_cl(int(cell[1]))}{int(cell[0])}"
+        # AND WHAT IT HELD, from the same read. A cell reference recorded without its value
+        # lets a renderer pair any amount with any citation — "£149.87, Estimate!M105" with
+        # nothing establishing that M105 holds £149.87. A wrong citation is worse than none:
+        # an unsourced number invites checking and a cited one stops it.
+        out["unit_cell_value"] = _safe_float(com_ws.Cells(cell[0], cell[1]).Value)
+    except Exception:                                                  # noqa: BLE001
+        pass
+    try:
+        formula = str(com_ws.Cells(cell[0], cell[1]).Formula or "")
+    except Exception:
+        formula = ""
+    out["formula"] = formula or None
+
+    # The constants written into the formula, and the values of the cells it references.
+    _consts = [float(x) for x in re.findall(r"(?<![A-Za-z0-9_.])(\d*\.\d+)", formula)]
+    _refs: Dict[str, float] = {}
+    for _ref in set(re.findall(r"\$?([A-Z]{1,3})\$?(\d{1,5})", formula.upper())):
+        try:
+            _v = _safe_float(com_ws.Range(f"{_ref[0]}{_ref[1]}").Value)
+        except Exception:
+            _v = None
+        if _v is not None:
+            _refs[f"{_ref[0]}{_ref[1]}"] = _v
+
+    # Candidate reconstructions, in the shape the template documents:
+    #   unit = (material + labour) / (1 - rebate) / absorption
+    # Each candidate names what it used, so a match is an explanation rather than a fit.
+    _fracs = [(None, 0.0)] + [(k, v) for k, v in _refs.items() if 0.0 < v < 0.5]
+    _divs = [(None, 1.0)] + [(f"literal {c:g}", c) for c in _consts if 0.5 < c < 1.0]
+    for _rk, _rv in _fracs:
+        for _dk, _dv in _divs:
+            try:
+                _calc = _sub / (1.0 - _rv) / _dv
+            except ZeroDivisionError:
+                continue
+            if abs(_calc - unit) <= max(0.01, 0.0005 * abs(unit)):
+                _parts = []
+                if _rk:
+                    _parts.append(f"rebate {_rv:.4g} from {_rk}")
+                if _dk:
+                    _parts.append(f"absorption divisor {_dv:g} written into the formula")
+                out.update(explained=True,
+                           other_gbp=round(unit - _sub, 4),
+                           absorption_divisor=(_dv if _dk else None),
+                           rebate_fraction=(_rv if _rk else None),
+                           basis=("; ".join(_parts) or "unattributed")
+                                 + f" — (material + labour) {_sub:.2f} -> {unit:.2f}")
+                return out
+    return out
+
+
+def _scan_total(com_ws, label_needles: Tuple[str, ...], max_row: int, max_col: int) -> Optional[float]:
+    """Find a row whose text contains one of the needles, return the rightmost numeric on that row.
+
+    ONE READER FOR WHERE A TOTAL LIVES. _scan_total_cell learnt on 11650-05 that a total of
+    exactly zero is a total; this copy kept its own `f != 0` and went on returning None for a
+    nil subtotal. On 12675-01 (8 Oct 2026) a sheet with no labour rows computed Total Labour
+    Cost 0.00, this read it as missing, the record said "Excel returned as null (an error cell
+    is missing data, never zero)" about a cell holding a zero, the composition reader had no
+    labour to work with and the unit cost went out as "PENDING — NOT TRACEABLE TO A WORKBOOK
+    CELL" on a sheet whose unit cell held a figure (D-409). The same rule written twice and
+    corrected once — the shape dxf_can_rule_out_folding was written to end. The cell finder is
+    the one reader now; this returns what the cell it found holds.
+    """
+    cell = _scan_total_cell(com_ws, label_needles, max_row, max_col)
+    if not cell:
+        return None
+    return _safe_float(_cell_value(com_ws, cell[0], cell[1]))
 
 
 def _used_bounds(com_ws) -> Tuple[int, int]:
     try:
         ur = com_ws.UsedRange
         return int(ur.Rows.Count) + 5, int(ur.Columns.Count) + 2
-    except Exception:
+    except Exception as exc:
+        if excel_was_busy(exc):
+            raise
         return 240, 34
 
 
-def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[Dict[str, float]]:
-    """Open the populated .xlsx via Excel COM, calc, read the three authoritative totals."""
+# ── the FINAL rows, as Excel calculated them ────────────────────────────────────────
+# wb_populate can only record what it PUT IN — quantities, throughputs, the department it
+# chose. Hours, rates, costs and values are Excel formulas that do not evaluate until the
+# file is opened, so a snapshot taken at write time carries none of them. Anything
+# describing the finished estimate from that snapshot is describing the input, not the
+# result. These are read AFTER calculation, from the sheet itself.
+#
+# Columns are located by HEADER TEXT, not by index: the estimators' template shifts rows and
+# columns when the BOM block grows, and a hardcoded column would go quietly stale rather
+# than fail. Same reasoning as _find_wb_sell_price_ref scanning for its label.
+_LABOUR_HEADER_KEYS = {
+    "operation": "operation", "part description": "description", "dept": "department",
+    # The labour block's own part-number column, where the template has one (Dave, 28 Sep).
+    "part no": "part_numbers",
+    # Named for what they CONTAIN, not what the template's headers say. On this sheet
+    # "Rate Per Hour" is a THROUGHPUT (99 pieces/hour) and "Labour Cost" is the department's
+    # HOURLY RATE (GBP 25.43/hr) - only "Total Value" is a per-unit cost. Carrying the header
+    # wording into a JSON contract would hand an ERP integration two fields whose names say
+    # the opposite of their contents.
+    "qty per unit": "qty_per_unit", "rate per hour": "throughput_per_hour",
+    "total hours": "batch_hours", "labour cost": "dept_rate_gbp_per_hour",
+    "set up": "setup_minutes", "total value": "total_value_gbp",
+}
+_MATERIAL_HEADER_KEYS = {
+    "bill of materials": "description", "part code": "part_code", "supplier": "supplier",
+    "price": "unit_price_gbp", "qty per unit": "qty_per_unit", "scrap": "scrap_pct",
+    "total value": "total_value_gbp",
+}
+# The fabricated blocks are NOT the BOM and do not share its columns. Each names its value
+# column differently — "Cost" on tube, "Cost Per Part" on steel and other-sheet — so mapping
+# them all through the BOM's "Total Value" returned rows carrying no value, which is why the
+# material rows could not sum to the sheet's own Total Material Cost.
+_TUBE_HEADER_KEYS = {
+    "part description": "description", "qty per unit": "qty_per_unit", "gauge": "gauge",
+    "length": "length_mm", "price per m": "price_per_m_gbp", "kgs": "mass_kg",
+    "scrap": "scrap_pct", "cost": "total_value_gbp",
+}
+_SHEET_HEADER_KEYS = {
+    "part description": "description", "qty per unit": "qty_per_unit",
+    "part length": "length_mm", "part width": "width_mm", "gauge": "gauge",
+    "thickness": "thickness_mm", "qty per sheet": "qty_per_sheet", "scrap": "scrap_pct",
+    "cost per part": "total_value_gbp",
+    # THE SHEET-PRICE BASIS, where the template's header carries it (D-582): the stock
+    # sheet's size and price are what the material contract needs to check the arithmetic of
+    # a blank's charge; where a header is absent the field is simply not read, and the
+    # contract reports the basis unverified rather than dividing the charge backwards.
+    "cost per sheet": "sheet_price_gbp", "sheet length": "sheet_length_mm",
+    "sheet width": "sheet_width_mm",
+}
+
+
+def _header_map(com_ws, header_row: int, keys: Dict[str, str],
+                max_col: int) -> Dict[str, int]:
+    """{normalised field name: column index} by matching header text on one row."""
+    found: Dict[str, int] = {}
+    for c in range(1, max_col + 1):
+        v = _cell_value(com_ws, header_row, c)
+        if not isinstance(v, str):
+            continue
+        t = " ".join(v.split()).strip().lower()
+        if not t:
+            continue
+        for needle, field in keys.items():
+            if field not in found and needle in t:
+                found[field] = c
+                break
+    return found
+
+
+def _find_header_row(com_ws, first_data_row: int, needles: Tuple[str, ...],
+                     max_col: int) -> Optional[int]:
+    """The header row for a block: search upward from its first data row."""
+    for r in range(max(1, first_data_row - 6), first_data_row + 1):
+        row_text = ""
+        for c in range(1, min(max_col, 24) + 1):
+            v = _cell_value(com_ws, r, c)
+            if isinstance(v, str):
+                row_text += " " + v.lower()
+        if all(n in row_text for n in needles):
+            return r
+    return None
+
+
+def _read_block(com_ws, first_row: int, last_row: int, keys: Dict[str, str],
+                needles: Tuple[str, ...], id_field: str, max_col: int,
+                block_name: str = "", problems: Optional[list] = None,
+                value_field: str = "total_value_gbp") -> list:
+    """Rows of one workbook block, as calculated. Blank identity = end of the used rows;
+    an Excel error is carried through as None rather than a number, because a cell showing
+    #DIV/0! is missing data and must not be read as zero.
+
+    A BLOCK THAT CANNOT BE READ SAYS SO. Returning [] for a missing header is indistinguish-
+    able from a block that is genuinely empty, and the two mean opposite things: one is "no
+    tube on this job", the other is "the template moved and we are now under-reporting the
+    material total". That silence is what let the fabricated blocks go missing from the
+    read-back — nothing failed, the rows were simply absent, and the total was quietly 43p
+    short. Every unreadable block is appended to `problems` for the caller to surface.
+    """
+    def _problem(code: str, message: str, **detail) -> list:
+        if problems is not None:
+            problems.append({"block": block_name or "?", "code": code,
+                             "message": message, "detail": detail})
+        return []
+
+    hr = _find_header_row(com_ws, first_row, needles, max_col)
+    if hr is None:
+        return _problem(
+            "header_row_not_found",
+            f"No header row for the '{block_name}' block above row {first_row} carrying "
+            f"{list(needles)}. The template layout has moved or the block was renamed; its "
+            f"rows are NOT in this read-back and any total built from it is short.",
+            searched_above_row=first_row, needles=list(needles))
+    cols = _header_map(com_ws, hr, keys, max_col)
+    if id_field not in cols:
+        return _problem(
+            "identity_column_not_found",
+            f"The '{block_name}' block header at row {hr} has no column matching "
+            f"'{id_field}', so its rows cannot be identified and were not read.",
+            header_row=hr, mapped=sorted(cols))
+    if value_field and value_field not in cols:
+        # Rows without their value column read back as identity-only and silently contribute
+        # nothing to the total — exactly the tube/steel/other-sheet defect.
+        _problem("value_column_not_found",
+                 f"The '{block_name}' block header at row {hr} has no value column "
+                 f"(expected one matching {[k for k, v in keys.items() if v == value_field]}). "
+                 f"Its rows carry no cost and will not reconcile to the sheet total.",
+                 header_row=hr, mapped=sorted(cols))
+    out = []
+    try:
+        from openpyxl.utils import get_column_letter as _col_letter      # noqa: PLC0415
+    except Exception:                                                 # noqa: BLE001
+        _col_letter = None                                            # type: ignore[assignment]
+    for r in range(first_row, last_row + 1):
+        ident = _cell_value(com_ws, r, cols[id_field])
+        if ident is None or not str(ident).strip():
+            continue
+        row: Dict[str, Any] = {"workbook_row": r}
+        # ── THE CELL THE MONEY WAS READ FROM, RECORDED WHERE IT IS KNOWN ────────────
+        #
+        # James Gray, 18 Sep 2026: "Record the actual charged cell when the workbook writer
+        # writes it; don't infer `Estimate!M<row>`, even if M is correct in today's template."
+        #
+        # He is right, and the reason is this afternoon's record: the steel comparator gate
+        # was keyed twice on a value that looked obviously correct and was not — the engine's
+        # cost_method, then the block's display label. Inferring the money COLUMN from the
+        # template's current shape is the same bet. This function has just located that column
+        # by reading the header, so the answer is known here and nowhere else; anything
+        # downstream would be guessing from a layout that has already moved once
+        # ("header_row_not_found" exists because it did).
+        _vc = cols.get(value_field) if value_field else None
+        if _vc and _col_letter is not None:
+            try:
+                row["charged_cell"] = f"Estimate!{_col_letter(int(_vc))}{r}"
+            except Exception:                                         # noqa: BLE001
+                pass
+        # AND EVERY INPUT CELL THE SAME WAY (D-582): the located column of each field this
+        # row was read from, so the material contract can hold the saved file's own cached
+        # cell against the figure the read-back carried, field by field, instead of guessing
+        # a column letter later from a layout that has already moved once.
+        if _col_letter is not None:
+            try:
+                row["evidence_cells"] = {f: f"Estimate!{_col_letter(int(c))}{r}"
+                                         for f, c in cols.items()}
+            except Exception:                                         # noqa: BLE001
+                pass
+        for field, c in cols.items():
+            v = _cell_value(com_ws, r, c)
+            if _is_excel_error(v):
+                row[field] = None
+            elif isinstance(v, str):
+                row[field] = " ".join(v.split()).strip()
+            else:
+                row[field] = _safe_float(v) if isinstance(v, (int, float)) else v
+        out.append(row)
+    return out
+
+
+def should_stamp_final_estimate(final_rows: Optional[Dict[str, Any]]) -> bool:
+    """Is there anything worth recording from this read-back?
+
+    STAMP EVEN WHEN EVERY ROW IS EMPTY, provided the adapter reported why. The condition used
+    to be simply "we read some rows", which discards the record in the one case it exists
+    for: if every header has moved, no block yields rows, adapter_problems lists exactly what
+    could not be read — and the whole structure was thrown away with it, leaving a job with
+    no final_estimate and no explanation. Downstream that is indistinguishable from a
+    read-back that never ran, which is the failure this record was added to make visible.
+    """
+    if not isinstance(final_rows, dict):
+        return False
+    return bool(final_rows.get("labour_rows") or final_rows.get("material_rows")
+                or final_rows.get("adapter_problems"))
+
+
+def read_final_rows(com_ws, max_col: int) -> Dict[str, list]:
+    """The Estimate sheet's calculated labour and BOM rows.
+
+    Block bounds come from wb_populate's own CELL_MAP so the two cannot disagree about
+    where the blocks are; falls back to the known defaults if that import is unavailable."""
+    bom_first, bom_last, lab_first, lab_last = 11, 50, 96, 167
+    try:
+        from wb_populate import CELL_MAP as _CM
+        bom_first = int(_CM["bom"]["first_row"]); bom_last = int(_CM["bom"]["last_row"])
+        lab_first = int(_CM["labour"]["first_row"]); lab_last = int(_CM["labour"]["last_row"])
+    except Exception:
+        pass
+    # EVERY material block, not just the bought-in BOM. Reading rows 11-50 alone omitted the
+    # wire, sheet-steel and other-sheet blocks, so the snapshot's material rows could not sum
+    # to the sheet's Total Material Cost - on 12120 it was GBP 9.64 of a GBP 10.07 total,
+    # with the missing 43p being exactly the fabricated material. A snapshot that does not
+    # reconcile to its own total is not a snapshot anyone can build an ERP export on.
+    # Block names come from CELL_MAP itself. Asking for "wire" when the map defines "tube"
+    # skipped the block silently — nothing failed, the rows were simply absent.
+    _blocks = [("bom", bom_first, bom_last, ("bill of materials", "total value"),
+                _MATERIAL_HEADER_KEYS)]
+    _missing_blocks = []
+    try:
+        from wb_populate import CELL_MAP as _CM2
+        for _name, _needles, _keys in (
+                ("tube", ("gauge", "price per m"), _TUBE_HEADER_KEYS),
+                ("steel", ("part length", "cost per part"), _SHEET_HEADER_KEYS),
+                ("other_sheet", ("thickness", "cost per part"), _SHEET_HEADER_KEYS)):
+            _b = _CM2.get(_name)
+            if _b:
+                _blocks.append((_name, int(_b["first_row"]), int(_b["last_row"]),
+                                _needles, _keys))
+            else:
+                # A block this adapter expects but the template no longer defines. Silence
+                # here is what made the tube block vanish from the read-back.
+                _missing_blocks.append(_name)
+    except Exception as _exc:
+        _missing_blocks.append(f"CELL_MAP unavailable ({_exc}) — only the BOM was read")
+
+    problems: list = [{"block": b, "code": "block_not_in_cell_map",
+                       "message": f"CELL_MAP defines no '{b}' block, so nothing was read from "
+                                  f"it and the material total may be short.", "detail": {}}
+                      for b in _missing_blocks]
+
+    mats = []
+    for _name, _f, _l, _needles, _keys in _blocks:
+        for _r in _read_block(com_ws, _f, _l, _keys, _needles, "description", max_col,
+                              block_name=_name, problems=problems):
+            _r["block"] = _name
+            mats.append(_r)
+
+    return {
+        "labour_rows": _read_block(com_ws, lab_first, lab_last, _LABOUR_HEADER_KEYS,
+                                   ("operation", "total hours"), "operation", max_col,
+                                   block_name="labour", problems=problems),
+        "material_rows": mats,
+        # Surfaced, not swallowed. The caller stamps these onto the job so an invariant can
+        # fail on them instead of a total quietly coming up short.
+        "adapter_problems": problems,
+    }
+
+
+def _read_totals_once(xlsx_path: Path, sheet_name: str) -> Optional[Dict[str, Any]]:
+    """One attempt: open the populated .xlsx via Excel COM, calc, read the totals, close."""
     excel = com_wb = None
     try:
+        # READ-ONLY, AND DELIBERATELY SO. Caching the calculated values into the file is a
+        # real need, but it cannot be done here: the explanation tab and AI Provenance are
+        # written through openpyxl AFTER this runs, and every openpyxl save discards Excel's
+        # stored results. A save at this point is overwritten minutes later and buys nothing
+        # but a file lock during the read. The cache is written by a final pass, once
+        # nothing else will touch the workbook — see quantity_sweep.recache_workbooks.
         excel, com_wb = _open_xlsx_excel_com(xlsx_path, prime_sheet=sheet_name)
         try:
             com_ws = com_wb.Worksheets(sheet_name)
-        except Exception:
+        except Exception as _wexc:
+            if excel_was_busy(_wexc):
+                raise
             com_ws = com_wb.ActiveSheet
         max_row, max_col = _used_bounds(com_ws)
-        out: Dict[str, float] = {}
+        out: Dict[str, Any] = {}
         for key, needles in _TOTAL_LABELS.items():
             val = _scan_total(com_ws, needles, max_row, max_col)
             if val is not None:
                 out[key] = round(val, 4)
+        # Same COM session, same calculated state: opening Excel twice would be slow and
+        # could read a differently-calculated file. Failure here must not lose the totals.
+        # A BUSY answer is the exception: it is raised so the whole read is tried again.
+        # Totals kept without their rows never become a final_estimate, so the record would
+        # still read as "no money", just without saying why.
+        try:
+            out["_final_rows"] = read_final_rows(com_ws, max_col)
+        except Exception as _rexc:
+            if excel_was_busy(_rexc):
+                raise
+            print(f"   [wep-readback] calculated rows not read ({_rexc}) — totals kept.",
+                  flush=True)
+        # What the template adds between the subtotals and the price, read from the unit
+        # cell's own formula. Same COM session, same calculated state.
+        try:
+            out["_composition"] = read_unit_price_composition(
+                com_ws, out.get("material"), out.get("labour"), out.get("unit"),
+                max_row, max_col)
+        except Exception as _cexc:
+            if excel_was_busy(_cexc):
+                raise
+            print(f"   [wep-readback] unit-price composition not read ({_cexc}).", flush=True)
         return out or None
-    except Exception as exc:
-        print(f"   [wep-readback] Excel COM read failed ({type(exc).__name__}: {exc}) — JSON left unchanged.", flush=True)
-        return None
     finally:
         if excel is not None:
             _close_excel(excel, com_wb)
 
 
+def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[Dict[str, float]]:
+    """Open the populated .xlsx via Excel COM, calc, read the three authoritative totals.
+
+    A busy Excel is waited for and asked again (with_busy_retry). Anything else is reported
+    once. Either way, last_failure() says what went wrong, in words the covering note can use."""
+    _LAST_FAILURE.clear()
+    try:
+        out, attempts, waited = with_busy_retry(
+            lambda: _read_totals_once(xlsx_path, sheet_name),
+            "reading the calculated totals")
+        if attempts > 1:
+            print(f"   [wep-readback] Excel answered on attempt {attempts}, after {waited:g}s "
+                  f"of waiting", flush=True)
+        return out
+    except ExcelStayedBusy as exc:
+        _failed(EXCEL_BUSY,
+                f"Excel was busy — it answered \"{exc.message}\" on all {exc.attempts} "
+                f"attempts, over {exc.waited_s:g} seconds",
+                attempts=exc.attempts, waited_s=exc.waited_s, excel_said=exc.message)
+        print(f"   [wep-readback] Excel stayed busy through {exc.attempts} attempts over "
+              f"{exc.waited_s:g}s (\"{exc.message}\") — JSON left unchanged.", flush=True)
+        return None
+    except Exception as exc:
+        if isinstance(exc, ImportError) or "only supported on Windows" in str(exc):
+            _failed(EXCEL_UNAVAILABLE, f"this machine cannot run Excel ({exc})")
+        else:
+            _failed(EXCEL_FAILED, f"Excel failed while opening or calculating the workbook "
+                                  f"({type(exc).__name__}: {_com_message(exc)})")
+        print(f"   [wep-readback] Excel COM read failed ({type(exc).__name__}: {exc}) — JSON left unchanged.", flush=True)
+        return None
+
+
 # ---- write the real totals into the JSON's WEP + cost_breakdown ----
+def _row_key(row: Dict[str, Any]) -> str:
+    """The identity a read-back row can be joined on.
+
+    The BOM block has a Part code column; the fabricated blocks do not, and write the part
+    number as the first word of the description ("11650-01-01M  LH UPRIGHT — costed in Sheet
+    Steel below"). Reading only the code column joins the BOM and silently leaves every
+    fabricated line unexplained — which is the majority of them.
+    """
+    code = str(row.get("part_code") or "").strip()
+    if code:
+        return code.upper()
+    # THE HAND IS PART OF THE IDENTITY: "11350-01-02 MIR  RIGHT ARM" keys as
+    # "11350-01-02 MIR", not as its left-hand twin's code. Kept in step with
+    # costed_facts._material_row_key — the two copies of this rule must agree.
+    toks = str(row.get("description") or "").strip().split()
+    if not toks:
+        return ""
+    key = toks[0].upper()
+    if len(toks) > 1 and toks[1].upper() in ("MIR", "MIRROR"):
+        key += " " + toks[1].upper()
+    return key
+
+
+# WHAT THE SHEET ALREADY SAYS ABOUT ITSELF. Four rows on 11650 came back UNEXPLAINED —
+# STD PART, FIXINGTBC, MAG CATCH, YIREE LOCK ASSEMBLY — because no part record matched them:
+# they are bought-in stubs minted late and they never reach part_estimates under those codes.
+#
+# But the row is not silent. wb_populate has already written the reason into its DESCRIPTION,
+# from input_note_for_line, and that sentence is the engine's own statement rather than a
+# guess about it. Reading it back is not inference — it is the same fact, from the only place
+# on this row that still carries it.
+_ROW_SAYS = (
+    # The engine refused to price it because the drawing does not state a quantity.
+    ("NOT YET PRICED", "not_measured",
+     "the quantity is not stated on the drawing, so the engine withheld a price"),
+    # A rate nobody holds. The estimator's, and a supplier question.
+    ("MATERIAL UNPRICED", "no_price_source",
+     "no catalogue row, price file or quote was found for this item"),
+    # Blank on purpose: the money is on another line.
+    ("SAME ARTICLE AS", "not_applicable", "the same article is costed on another line"),
+    ("COSTED IN ", "not_applicable",
+     "the material is costed in the Sheet Steel / Other Sheet / Wire block"),
+)
+
+
+def _reason_from_the_row_itself(row: Dict[str, Any]) -> Dict[str, Any]:
+    """The row's own description, read back. UNEXPLAINED only when it really says nothing."""
+    import price_provenance as _pp
+    text = str(row.get("description") or "").upper()
+    for marker, category, detail in _ROW_SAYS:
+        if marker in text:
+            return _pp.unpriced_reason(category, detail)
+    return _pp.unpriced_reason(
+        _pp.UNEXPLAINED,
+        "no part record on this job matches this row and its description says nothing "
+        "about why it carries no price")
+
+
+def _explain_unpriced_rows(rows: List[Dict[str, Any]], es: Dict[str, Any]) -> int:
+    """Stamp a reason on every material row the sheet priced at nothing. Returns how many.
+
+    A ROW NOBODY CAN MATCH STILL GETS A REASON. Falling silent for a row whose part record
+    cannot be found reproduces exactly the failure this exists to end — a blank that says
+    nothing — so an unmatched row is recorded as UNEXPLAINED, which the invariant reports
+    loudly. That is the honest answer: we did not price it and we cannot say why.
+    """
+    try:
+        from estimator_inputs import unpriced_reason_for_row
+        import price_provenance as _pp
+    except Exception:
+        return 0
+    parts = es.get("part_estimates")
+    by_key: Dict[str, Any] = {}
+    for p in (parts if isinstance(parts, list) else []):
+        if isinstance(p, dict) and str(p.get("part_number") or "").strip():
+            by_key.setdefault(str(p["part_number"]).strip().upper(), p)
+    stamped = 0
+    by_owner: Dict[str, int] = {}
+    unexplained = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if not _pp.row_is_unpriced(row):
+            continue
+        part = by_key.get(_row_key(row))
+        reason = (unpriced_reason_for_row(part) if part is not None
+                  else _reason_from_the_row_itself(row))
+        row["unpriced_reason"] = reason
+        stamped += 1
+        if isinstance(reason, dict):
+            owner = str(reason.get("owner") or "engine")
+            by_owner[owner] = by_owner.get(owner, 0) + 1
+            if reason.get("category") == _pp.UNEXPLAINED:
+                unexplained += 1
+    if stamped:
+        # THREE OWNERS, THREE COUNTS. This line used to read "(N for the estimator, M
+        # correctly nil or ours)", which merged the two remaining owners into one bucket --
+        # and UNEXPLAINED, the category that means NO REASON WAS RECORDED, is owned by the
+        # engine and so landed inside the words "correctly nil". On 11650 that printed
+        # "4 correctly nil or ours" for four bought-in lines nobody had explained at all.
+        # A console sentence is read far more often than the invariant report, and this one
+        # dressed the failure it exists to expose as a clean result.
+        _bits = ", ".join(f"{by_owner[o]} {label}"
+                          for o, label in (("estimator", "for the estimator"),
+                                           ("engine", "ours to fix"),
+                                           ("nobody", "correctly nil"))
+                          if by_owner.get(o))
+        print(f"   [wep-readback] {stamped} unpriced material row(s): {_bits}", flush=True)
+        if unexplained:
+            print(f"   [wep-readback] {unexplained} of those carry NO REASON AT ALL — "
+                  f"a blank with nothing behind it reads as free.", flush=True)
+    return stamped
+
+
 def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str = "Estimate") -> Optional[Dict[str, Any]]:
     xp, jp = Path(xlsx_path), Path(json_path)
+    _LAST_FAILURE.clear()
     if not xp.exists():
+        _failed(WORKBOOK_MISSING, f"the workbook was not found at {xp}")
         print(f"   [wep-readback] xlsx not found: {xp} — skipped.", flush=True)
         return None
     if not jp.exists():
+        _failed(RECORD_UNREADABLE, f"the estimate record was not found at {jp}")
         print(f"   [wep-readback] json not found: {jp} — skipped.", flush=True)
         return None
 
     totals = read_real_totals(xp, sheet_name=sheet_name)
     if not totals or "unit" not in totals:
+        if not _LAST_FAILURE:
+            # Excel opened and calculated the book and answered every question; the price
+            # cell was simply blank or an error. That one IS a fault in the workbook.
+            _failed(TOTALS_NOT_CALCULATED,
+                    "Excel calculated the workbook, but its Total Unit Cost Price came back "
+                    "blank or as an error (#DIV/0!, #VALUE!)")
         print("   [wep-readback] could not read authoritative unit cost — JSON left unchanged (old WEP retained).", flush=True)
         return None
 
     material = totals.get("material")
     labour = totals.get("labour")
     unit = totals.get("unit")
+    _final_rows = totals.pop("_final_rows", None) or {}
+    _comp = totals.pop("_composition", None) or {}
 
     try:
         summary = json.loads(jp.read_text(encoding="utf-8"))
     except Exception as exc:
+        _failed(RECORD_UNREADABLE, f"the estimate record could not be read ({exc})")
         print(f"   [wep-readback] JSON read failed ({exc}) — skipped.", flush=True)
         return None
 
     es = summary.get("estimate_summary")
     if not isinstance(es, dict):
+        _failed(RECORD_UNREADABLE, "the estimate record has no estimate_summary to stamp")
         print("   [wep-readback] JSON has no estimate_summary — skipped.", flush=True)
         return None
+
+    # ── final_estimate.v1 — the one post-Excel contract ──────────────────────────────
+    # Totals AND rows, read from the same calculated sheet. Everything downstream (sheets,
+    # HTML, comparison CSV, ERP export) should describe the estimate from this and nothing
+    # else: it is the only structure that reflects what the workbook actually computed,
+    # rather than what was handed to it. wb_populate's workbook_labour remains as the
+    # accepted INPUT grouping — useful for provenance, but it has no hours, rates or values
+    # and must not be mistaken for the result.
+    # ── EVERY BLANK PRICE SAYS WHICH KIND OF NOTHING IT IS ──────────────────────────
+    # price_provenance has carried this vocabulary since it was written and invariants has
+    # read row["unpriced_reason"] for as long, and NOTHING ANYWHERE SET IT — so the check
+    # that exists to stop a blank reading as free reported on no line of any job. Built is
+    # not wired, pointing the other way for once.
+    #
+    # Stamped here because this is where the rows exist: they are read back off the
+    # calculated sheet, so the reason has to be joined to them from the records the engine
+    # holds. Joined on the row's part code, or on the leading token of its description where
+    # the fabricated blocks carry no code column.
+    _explain_unpriced_rows(_final_rows.get("material_rows") or [], es)
+
+    if should_stamp_final_estimate(_final_rows):
+        summary["final_estimate"] = {
+            "schema": "final_estimate.v2",
+            "source": "excel_calculated",
+            "note": ("Rows as the Estimate sheet calculated them. Authoritative for what the "
+                     "job contains and what each line costs. Excel errors are carried as "
+                     "null, never as zero — a cell showing #DIV/0! is missing data."),
+            "totals": {
+                "material_gbp": material, "labour_gbp": labour, "unit_gbp": unit,
+                # WHERE THE UNIT COST LIVES, recorded rather than assumed. `publishable_total`
+                # refuses to publish a job total with no cell behind it, and hard-coding
+                # "Estimate!G6" there would be the same guess this read-back exists to avoid.
+                **({"unit_cell": _comp["unit_cell"]} if (_comp or {}).get("unit_cell") else {}),
+                **({"unit_cell_value": _comp["unit_cell_value"]}
+                   if (_comp or {}).get("unit_cell_value") is not None else {}),
+                # DECLARED, not residual. Present only when the unit cell's formula
+                # accounted for the gap; absent when it did not, so the reconciliation
+                # invariant still fires rather than being satisfied by its own arithmetic.
+                **({"other_gbp": _comp.get("other_gbp")} if _comp.get("explained") else {}),
+            },
+            "unit_price_composition": _comp or None,
+            "labour_rows": _final_rows.get("labour_rows") or [],
+            "material_rows": _final_rows.get("material_rows") or [],
+            # Blocks this adapter could not read. Present and empty means "we checked".
+            "adapter_problems": _final_rows.get("adapter_problems") or [],
+        }
+        if _comp.get("explained") and _comp.get("other_gbp"):
+            print(f"   [wep-readback] unit price uplift GBP {_comp['other_gbp']:.2f} "
+                  f"attributed: {_comp.get('basis')}", flush=True)
+        elif _comp and not _comp.get("explained") and unit is not None:
+            print(f"   [wep-readback] the unit price is NOT the sum of its subtotals and the "
+                  f"formula did not account for the difference — left undeclared so the "
+                  f"reconciliation check reports it.", flush=True)
+        for _p in (_final_rows.get("adapter_problems") or []):
+            print(f"   [wep-readback] BLOCK NOT READ — {_p.get('message')}", flush=True)
+        print(f"   [wep-readback] final_estimate.v2 stamped — "
+              f"{len(_final_rows.get('labour_rows') or [])} calculated labour row(s), "
+              f"{len(_final_rows.get('material_rows') or [])} BOM row(s)", flush=True)
 
     wep = es.get("workbook_equivalent_pricing")
     if not isinstance(wep, dict):
@@ -239,6 +1055,7 @@ def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str 
     try:
         jp.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     except Exception as exc:
+        _failed(RECORD_UNREADABLE, f"the estimate record could not be written ({exc})")
         print(f"   [wep-readback] JSON write failed ({exc}) — JSON left unchanged.", flush=True)
         return None
 

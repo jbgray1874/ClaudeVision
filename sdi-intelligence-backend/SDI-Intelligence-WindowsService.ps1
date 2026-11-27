@@ -1,6 +1,6 @@
 # ==============================================================================
 # SDI-Intelligence-WindowsService.ps1
-# SDI Intelligence Portal — Intune Platform Script
+# SDI Intelligence Portal - Intune Platform Script
 #
 # PURPOSE: Downloads NSSM, registers the SDI Intelligence portal as a
 #          Windows Service that auto-starts on reboot.
@@ -9,7 +9,7 @@
 # RUN AS:    SYSTEM
 # 64-BIT:    Yes
 #
-# SAFE TO RE-RUN: yes — checks if service is already running correctly first
+# SAFE TO RE-RUN: yes - checks if service is already running correctly first
 # ==============================================================================
 
 $ServiceName = "SDIIntelligence"
@@ -27,28 +27,28 @@ function Write-Log($msg) {
 }
 
 try {
-    # ── Check if already running correctly ────────────────────────────────────
+    # ?? Check if already running correctly ????????????????????????????????????
     $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if ($svc -and $svc.Status -eq "Running") {
         $startType = (Get-WmiObject Win32_Service -Filter "Name='$ServiceName'").StartMode
         if ($startType -eq "Auto") {
-            Write-Log "Service already running and set to auto-start — no change needed"
+            Write-Log "Service already running and set to auto-start - no change needed"
             Exit 0
         }
     }
 
-    # ── Verify prerequisites ──────────────────────────────────────────────────
+    # ?? Verify prerequisites ??????????????????????????????????????????????????
     if (-not (Test-Path $PythonExe)) {
-        Write-Log "ERROR: Python venv not found at $PythonExe — aborting"
+        Write-Log "ERROR: Python venv not found at $PythonExe - aborting"
         Exit 1
     }
     if (-not (Test-Path $AppScript)) {
-        Write-Log "ERROR: app.py not found at $AppScript — aborting"
+        Write-Log "ERROR: app.py not found at $AppScript - aborting"
         Exit 1
     }
     Write-Log "Prerequisites verified"
 
-    # ── Download NSSM if needed ───────────────────────────────────────────────
+    # ?? Download NSSM if needed ???????????????????????????????????????????????
     if (-not (Test-Path $NssmExe)) {
         Write-Log "Downloading NSSM..."
         New-Item -ItemType Directory -Path "C:\tools" -Force | Out-Null
@@ -62,11 +62,11 @@ try {
     }
 
     if (-not (Test-Path $NssmExe)) {
-        Write-Log "ERROR: NSSM not found after download — aborting"
+        Write-Log "ERROR: NSSM not found after download - aborting"
         Exit 1
     }
 
-    # ── Remove existing service if present ────────────────────────────────────
+    # ?? Remove existing service if present ????????????????????????????????????
     $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if ($existing) {
         Write-Log "Removing existing service..."
@@ -78,7 +78,7 @@ try {
         Start-Sleep -Seconds 2
     }
 
-    # ── Install and configure service ─────────────────────────────────────────
+    # ?? Install and configure service ?????????????????????????????????????????
     Write-Log "Installing service..."
     & $NssmExe install     $ServiceName $PythonExe $AppScript
     & $NssmExe set         $ServiceName AppDirectory  $AppDir
@@ -98,11 +98,11 @@ try {
         & $NssmExe set $ServiceName AppRotateSeconds 86400
     }
 
-    Write-Log "Service configured — starting..."
+    Write-Log "Service configured - starting..."
     Start-Service -Name $ServiceName -ErrorAction Stop
     Start-Sleep -Seconds 5
 
-    # ── Verify ────────────────────────────────────────────────────────────────
+    # ?? Verify ????????????????????????????????????????????????????????????????
     $svc = Get-Service -Name $ServiceName -ErrorAction Stop
     if ($svc.Status -eq "Running") {
         $portCheck = Test-NetConnection -ComputerName 127.0.0.1 -Port 8071 -WarningAction SilentlyContinue

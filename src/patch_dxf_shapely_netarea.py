@@ -74,7 +74,7 @@ INJECT = '''def _shapely_net_area_mm2(cut_lines, cut_arcs, cut_circs, scale, bbo
             if r < 0.5:
                 continue
             c = (e.dxf.center.x * scale, e.dxf.center.y * scale)
-            disc = Point(c).buffer(r, resolution=16)
+            disc = Point(c).buffer(r, 16)
             if outer.contains(disc.representative_point()):
                 net_area = max(0.0, net_area - disc.area)
         except Exception:

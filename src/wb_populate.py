@@ -24,8 +24,21 @@ LAYOUT CHANGES: every cell address lives in CELL_MAP below. If the estimators ha
 Requires openpyxl.
 """
 from __future__ import annotations
+import math as _math
 import os, json, re, shutil, sys
 from datetime import datetime
+
+# THE MODULE ITSELF, not just names lifted out of it.
+#
+# Everything below imports individual settings as `from config import X as _X`, so the bare
+# name `config` was never bound here. A later `getattr(config, ...)` therefore raised
+# NameError at run time, in the middle of populate_workbook, on every job -- and the whole
+# fixture suite passed, because not one fixture CALLS populate_workbook. See
+# test_every_module_resolves_the_names_it_uses.
+try:
+    import config
+except Exception:                                  # pragma: no cover - config must import
+    config = None                                  # getattr(None, x, default) still returns default
 
 # Powder material rate (£/kg). Single source of truth is config.py — the Excel
 # template carries only a static default, which we overwrite on every populate.
@@ -51,12 +64,238 @@ try:
 except Exception:
     _THROUGHPUT_SIZE_BANDS = {}
     _THROUGHPUT_AREA_EDGES = (0.05, 0.15, 0.40)
-from typing import Any, Dict, List, Optional
+try:
+    from config import BOOK_MANM_INSERT_LABOUR as _BOOK_MANM_INSERT_LABOUR
+    from config import MANM_INSERT_SECONDS_EACH as _MANM_INSERT_SECONDS_EACH
+    from config import MANM_INSERT_PART_TOKENS as _MANM_INSERT_PART_TOKENS
+except Exception:
+    _BOOK_MANM_INSERT_LABOUR = True
+    _MANM_INSERT_SECONDS_EACH = 15.0
+    _MANM_INSERT_PART_TOKENS = ["CLINCH", "PEM"]
+try:
+    # When a fabricated part has no usable blank dims (blank L/W or gauge), the template's
+    # per-row material formula errors (#VALUE!/#DIV/0!) and the plain SUM in Total Material
+    # Cost propagates that error into Unit and Sell — one missing dim blanks the whole total.
+    # With this on, the material total sums with AGGREGATE(9,6,…) which IGNORES errored rows,
+    # so the sheet computes a PARTIAL total from the credible lines and self-completes as the
+    # estimator fills the flagged dims. Non-regressive: AGGREGATE(9,6,r) == SUM(r) when there
+    # are no errors (so 12120/1282 are unchanged). Lever in config for full reversibility.
+    from config import MATERIAL_TOTAL_ERROR_TOLERANT as _MATERIAL_TOTAL_ERROR_TOLERANT
+except Exception:
+    _MATERIAL_TOTAL_ERROR_TOLERANT = True
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+
+# The one module that answers "do we make this or buy it". Identity-only and
+# dependency-free, so it is safe to ask anywhere — including inside the finish gate,
+# which used to answer it privately and disagreed with the rest of the engine.
+import bought_in_policy as _bought_in_policy
+import costed_facts as _costed_facts
+
+# What goes next to a price nobody can reproduce. Short enough for a spreadsheet cell and
+# blunt enough that it cannot be read as a supplier quote.
+_INDICATIVE_TAG = "[AI ESTIMATE - INDICATIVE, NOT A QUOTE]"
+
+# The engine that answered, named. A provider this map has not met yet still names itself
+# from what the lookup recorded, so switching provider needs no edit here.
+_LLM_PROVIDER_NAMES = {
+    "xai": "xAI Grok LLM",
+    "anthropic": "Anthropic Claude LLM",
+    "openai": "OpenAI LLM",
+}
+
+
+def _llm_engine_name(block: Dict[str, Any]) -> str:
+    raw = str(block.get("llm_provider") or "").strip().lower()
+    if not raw or raw == "none":
+        return "AI ESTIMATE"
+    return _LLM_PROVIDER_NAMES.get(raw, f"{raw} LLM")
+
+# How each kind of source is named in the supplier column, so an estimator reading the sheet
+# can see at a glance which lines are firm. Keyed on the source CLASS, never on a part code,
+# so a job nobody has seen yet is labelled by the same rule.
+_ORIGIN_LABELS = {
+    "ai_estimate": "AI ESTIMATE - INDICATIVE",
+    "web_catalog": "Web listing - verify",
+    # CATALOGUE AND CONFIG NO LONGER RENDER BLANK, and the reason the earlier rule gave for
+    # the blank was sound as far as it went: a real catalogue row needs no warning beside it,
+    # and a warning on every line is a warning on none.
+    #
+    # What it missed is that `catalogue` is four systems wearing one word — SDI Live UDEF,
+    # a supplier's file, estimating history harvested out of old workbooks, and a figure in
+    # this repository — and they carry very different weight. Naming which one answered adds
+    # no warning; it answers a different question, the one an estimator actually asks about
+    # a number before standing behind it. The INDICATIVE and verify tags are untouched.
+    #
+    # None means "ask price_provenance.source_system_label for the system's own name", which
+    # is how a connector added next week names itself with no edit here.
+    "catalogue": None,
+    "config": None,
+    "unpriced": "NO PRICE FOUND - estimator to price",
+    # A DESCRIPTION MATCH AGAINST OLD QUOTES IS NOT A CATALOGUE ROW. It is the best price
+    # available and it is a resemblance, not an account: the line it matched may be a pack
+    # where this is one piece, or a different item sharing words. 12422-24 priced a
+    # 3.5x16mm wood screw at GBP 1.06 this way, beside an M6 flange button head at GBP 0.05
+    # from a real supplier, and the two rendered identically.
+    "historical_quote_material_line": "Historical quote match - verify",
+    "historical_quote": "Historical quote match - verify",
+}
+
+# NOTHING RENDERS SILENTLY ANY MORE, and this set is kept empty rather than deleted so the
+# emptiness is a decision somebody made and not an omission.
+#
+# The old rule let `catalogue` and `config` render blank on the reasoning that a real
+# catalogue row needs no warning. True — but blank was doing two jobs: "no warning" and
+# "no answer to where this came from". A price with no supplier name then rendered exactly
+# like a UDEF row, which is how a fuzzy description match against a five-year-old quote came
+# to sit on 12422-24 at GBP 1.06 for a wood screw beside a real supplier line at GBP 0.05.
+# Every price now names its system; only the warning words vary.
+_SILENT_ORIGIN_CLASSES: set = set()
+
+
+def _supplier_cell(supplier: Any, origin: Any) -> str:
+    """WHO sells it and WHICH system priced it, in one narrow column.
+
+    The old rule was `if origin and not supplier` — a supplier name suppressed the origin
+    entirely. That is backwards for the question this column is being asked to answer: a
+    name like "Elite Sourcing" tells an estimator who supplies the part and nothing at all
+    about whether the figure beside it came off UDEF, out of a supplier file, or off an old
+    estimating sheet. Both facts, or whichever one we have.
+    """
+    _s = str(supplier or "").strip()
+    _o = str(origin or "").strip()
+    if not _o:
+        return _s
+    if not _s:
+        return _o
+    if _o.lower() in _s.lower():
+        return _s
+    return f"{_s} ({_o})"
+
+
+def _price_is_reproducible(pe: Dict[str, Any]) -> bool:
+    """True when every stamp that puts money on this line will repeat next run."""
+    try:
+        import price_provenance
+    except ImportError:
+        return False
+    stamps = [b for _p, b in price_provenance.iter_price_stamps(pe)
+              if price_provenance.stamp_affects_total(b)]
+    ai = [b for b in stamps if price_provenance.stamp_source_class(b) == "ai_estimate"]
+    if not ai:
+        return True          # nothing generated here; catalogue rates repeat by nature
+    return all(price_provenance.stamp_is_reproducible(b) for b in ai)
+
+
+def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
+    """(label for the supplier column, is this an unrepeatable guess?) for one BOM line.
+
+    Reads the price stamps the estimator wrote rather than re-deciding anything here: one
+    module owns the question of what a price source IS, so the sheet, the report, the quote
+    and the invariants cannot disagree about the same line.
+    """
+    try:
+        import price_provenance
+    except ImportError:
+        return "", False
+    # THE RESCUER'S FIGURE IS THE MONEY ON ITS LINE (D-357). apply_last_resort_prices
+    # writes the line's only price into material_estimate, but the stamps of the chain that
+    # failed first stay on the record — and one of them won the loop below. M&S's lid hinge,
+    # 30 Sep 11:00: an AI figure of £3.25 wore "SDI Live" in the supplier column, the
+    # provenance tab called it a config default, and the report called it researched: three
+    # names for one guess. Where the rescuer priced the line, its mark decides the label.
+    best = None
+    _me_lr = pe.get("material_estimate") if isinstance(pe.get("material_estimate"), dict) else {}
+    # A SECTION ON THE CONFIG HOLD IS NOT AN SDI LIVE PRICE (D-390). 12173-03-04M / 05M were
+    # priced at config.SECTION_STOCK_PRICE_GBP_PER_KG and the BOM row's source column read
+    # "SDI Live": the stamp that won below was the £/kg lookup the branch ASKED of SDI Live
+    # and did not use. The cost method names the rate that put the money on the line.
+    _cm_sec = str(_me_lr.get("cost_method") or "")
+    if _cm_sec in ("section_stock_config_rate", "section_stock_flat_rate"):
+        return ("SDI config section rate - verify" if _cm_sec == "section_stock_config_rate"
+                else "flat-product rate - UNDER-READS section", False)
+    _lr = str(_me_lr.get("cost_method") or "") == "last_resort_market_indication"
+    if _lr:
+        # The rescue's own stamp names the source that answered it (D-358) — a market
+        # estimate, or a catalogue row the first pass never asked. Without one, it is a guess.
+        if not isinstance(_me_lr.get("price_source"), dict):
+            return "AI ESTIMATE - INDICATIVE", not _price_is_reproducible(pe)
+        best = _me_lr["price_source"]
+    # THE LABEL FOLLOWS THE MONEY, and the record says which branch put the money on.
+    #
+    # The 16:07 10975-02 book charged the tape at £0.09 a piece — 200 mm of the £—
+    # 10 m roll UDEF holds, to the penny — and the supplier column said
+    # "xAI Grok LLM - INDICATIVE" with NOT A QUOTE stamped on the description. Two stamps
+    # were on the record: an LLM answer from the bought-in chain, and the roll-goods stamp
+    # whose figure is the one on the sheet. The preference below picks the system_cost path
+    # first because ordinarily the bought-in unit cost IS the line's price — but when the
+    # material branch superseded it, that preference labels the line with the price that
+    # LOST. A warning tag on a catalogue-priced figure is not caution, it is a wrong answer:
+    # it tells the estimator to distrust the one number on the job that came off UDEF.
+    _mat_charged = str(((pe.get("material_estimate") or {}).get("cost_method")) or "")\
+        .startswith("roll_goods")
+    for _path, block in ([] if _lr else price_provenance.iter_price_stamps(pe)):
+        if not price_provenance.stamp_affects_total(block):
+            continue
+        if _mat_charged and "material_estimate" in _path:
+            best = block
+            break
+        # The bought-in unit cost is the line's price; a material rate on the same record is
+        # not what the BOM row is charging for.
+        if "system_cost" in _path and not _mat_charged:
+            best = block
+            break
+        if best is None:
+            best = block
+    if best is None:
+        # THE RESCUER'S MARK IS A STAMP TOO. apply_last_resort_prices writes its market
+        # figure into material_estimate with cost_method "last_resort_market_indication"
+        # and does not always leave an affects-total price stamp behind — the record's
+        # price_source can still read "unpriced" from the failed chain that ran first. So
+        # the one question this function exists to answer ("is this figure a guess?")
+        # said "no stamp, no opinion" about exactly the lines that are ALL guess: on
+        # 0359342 every Corian panel carried a £62–£996 market indication and not one
+        # would have worn the INDICATIVE tag. The cost_method IS the rescuer's stamp;
+        # read it before concluding the line has no origin to declare.
+        _lr_mark = (str(((pe.get("material_estimate") or {}).get("cost_method")) or "")
+                    + " " + str(pe.get("costing_basis") or ""))
+        if "last_resort_market_indication" in _lr_mark:
+            return "AI ESTIMATE - INDICATIVE", not _price_is_reproducible(pe)
+        return "", False
+    cls = price_provenance.stamp_source_class(best)
+    if cls == "ai_estimate":
+        # Indicative either way. The second value asks the narrower question the price
+        # column turns on: is this figure the SAME next run? An unrepeatable one is kept
+        # off the total; a stored one prices the line, tagged.
+        return (f"{_llm_engine_name(best)} - INDICATIVE",
+                not price_provenance.stamp_is_reproducible(best))
+    # A RESEMBLANCE IS CLASSED `catalogue` — a row somebody can look up again — and its
+    # warning is keyed by SOURCE. Read by class alone, "Historical quote match - verify" was
+    # unreachable and 12645's £0.26 hinge read "Historical quote" like an account price (D-323).
+    _src = str(price_provenance.stamp_source_name(best) or "").strip().lower()
+    label = _ORIGIN_LABELS[_src] if _ORIGIN_LABELS.get(_src) else _ORIGIN_LABELS.get(cls, "")
+    if label is None:
+        # A LOOKED-UP PRICE NAMES ITS SYSTEM. No warning word — there is nothing wrong with
+        # the line — just which of the four things called "catalogue" answered it.
+        label = price_provenance.source_system_label(
+            price_provenance.stamp_source_name(best))
+    if not label:
+        # An unrecognised class is not a silent one. Prefer the source's own name where it
+        # has one; otherwise say what the class was, so the cell is never blank by accident.
+        label = (price_provenance.source_system_label(best.get("source_name"))
+                 or f"{cls or 'unknown source'} - verify")
+    return label, False
 
 try:
     import openpyxl
+    # The estimator-input surfacing SHADES cells and writes coloured banners, so it needs
+    # these by name. Imported at module scope rather than inside the writer: that writer is
+    # failure-isolated, so a NameError there would have been swallowed into a flag saying
+    # the block "could not be written" — the block silently doing nothing while reporting
+    # itself as merely unlucky.
+    from openpyxl.styles import Font, PatternFill, Border, Side
 except ImportError:
     openpyxl = None
+    Font = PatternFill = Border = Side = None
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CELL MAP — the ONE place to edit if the WB layout changes.
@@ -78,41 +317,61 @@ CELL_MAP = {
 
     # Header input cells (row, col) or "A1" style
     "header": {
-        "customer":   "C3",
-        "drawing_no": "C5",
+        # The VALUE cells. C3 and C5 hold the template's own "Customer" and "Drawing No."
+        # labels; 11650-06-GA went out with "Boots" and "11650-06-GA" written over them
+        # (Dave, 28 Sep). Written beside the label when the label is found — see
+        # write_header_value_beside_label — and at these addresses only when it is not.
+        "customer":   "D3",
+        "drawing_no": "D5",
         "order_qty":  "D6",   # drives $D$6 everywhere — critical
     },
 
     # BOM / Standard Materials block. Engine writes desc, code, PRICE, qty, scrap.
     # Columns from the dump: C=desc, H=code, I=supplier, J=price, K=qty, L=scrap.
     "bom": {
-        "first_row": 11, "last_row": 50,          # 40 slots  (_CELLMAP_WIDENED_BOM40: was 11..25 = 15; widened in Excel 2026-07-13 after 1282 silently dropped its 16th BOM part)
+        "title": "Bill of Materials",
+        "first_row": 11, "last_row": 50,         # 40 slots  (_CELLMAP_WIDENED_BOM40: was 11..25 = 15; widened in Excel 2026-07-13 after 1282 silently dropped its 16th BOM part)
         "col_desc": 3, "col_code": 8, "col_supplier": 9,
         "col_price": 10, "col_qty": 11, "col_scrap": 12,
     },
 
     # Tube / Wire block. Engine writes desc, qty, gauge, length.
     # Header row 27: C=desc, E=qty, F=gauge, G=length (H..M are formula-driven).
+    # THE KEY IS "tube"; THE TEMPLATE CALLS THE BLOCK "Wire" (its label two rows above the
+    # span, which derive_cellmap_from_template checks and now keeps as the title). 12173-02's
+    # notes said "costed by length on the Tube block" for the riser and the hook arm, beside
+    # rows the sheet labels "costed in Wire below" — and Tube is also a LABOUR department.
+    # Every surface names a block by block_title(key), never from the key.
     "tube": {
-        "first_row": 53, "last_row": 60,          # 8 slots (+25: BOM widened)
+        "title": "Wire",
+        "first_row": 53, "last_row": 60,         # 8 slots (+25: BOM widened)
         "col_desc": 3, "col_qty": 5, "col_gauge": 6, "col_length": 7,
     },
 
     # Sheet Steel block. Engine writes desc, qty, length, width, gauge.
     # Header row 37: C=desc, E=qty, F=len, G=wid, H=gauge, I=sheetL, J=sheetW (K..=formula).
     "steel": {
-        "first_row": 63, "last_row": 81,          # 19 slots (+25: BOM widened 2026-07-13)
+        "title": "Sheet Steel",
+        "first_row": 63, "last_row": 81,         # 19 slots (+25: BOM widened 2026-07-13)
         "col_desc": 3, "col_qty": 5, "col_length": 6, "col_width": 7, "col_gauge": 8,
         "col_sheet_l": 9, "col_sheet_w": 10,      # optional; WB defaults if blank
         "col_holes": 19, "col_internal_cut": 20,  # S/T: laser-calc inputs (No of holes / Internal Cutting Distance)
+        "first_formula_col": 11,                  # K: Qty Per Sheet onwards — see _clean_error_cells
     },
 
     # Other Sheet Material (board/acrylic/HIPS). desc, qty, length, width, thickness.
     # Header row 50: C=desc, D=qty, E=len, F=wid, G=thick, H=sheetL, I=sheetW.
     "other_sheet": {
-        "first_row": 84, "last_row": 91,          # 8 slots (+25: BOM widened 2026-07-13)
+        "title": "Other Sheet Material",
+        "first_row": 84, "last_row": 91,         # 8 slots (+25: BOM widened 2026-07-13)
         "col_desc": 3, "col_qty": 4, "col_length": 5, "col_width": 6, "col_thick": 7,
         "col_sheet_l": 8, "col_sheet_w": 9, "col_cost_per_sheet": 12,
+        # J, ONE LEFT OF SHEET STEEL'S. Other Sheet has no gauge column, so its whole
+        # formula region is shifted one column left and its Qty Per Sheet lands on J(10)
+        # where Sheet Steel's lands on K(11). _clean_error_cells used to start at 11 for
+        # both, which is why 11650's PETG side panels shipped a visible #VALUE! in Qty Per
+        # Sheet while an equally undimensioned steel row showed a clean blank.
+        "first_formula_col": 10,
     },
 
     # Labour block. Engine writes operation-name (C), qty (H), and THROUGHPUT (I).
@@ -124,6 +383,12 @@ CELL_MAP = {
     "labour": {
         "first_row": 96, "last_row": 167,         # 72 slots (+25: BOM widened 2026-07-13)
         "col_operation": 3, "col_desc": 4, "col_qty": 8, "col_throughput": 9,
+        # J and L are the template's own columns: J is the row's hours formula and it reads
+        # L/60, where L is the set-up minutes the template looks up from the operation name
+        # (verified on a produced book: J96 = (...)*$D$6)+((L96/60)). The engine writes L
+        # ONLY to allocate one department set-up across laser rows that nest on one sheet —
+        # and only after checking this row's J really does read this row's L.
+        "col_hours": 10, "col_setup": 12,
     },
 }
 
@@ -141,23 +406,91 @@ OP_NAME_MAP = {
     "powder_coat":    "P.Coat",
     "welding":        "Weld (CO2)",
     "weld":           "Weld (CO2)",
+    "dress_welds":    "Dress Welds",   # DRES dept — dress/linish the CO2 weld bead
+    "dress":          "Dress Welds",
     "punch":          "Punch",
     "punching":       "Punch",
     "handling":       "Assemble/pack (Metal)",   # engine 'handling' -> WB assemble/pack metal
     "assembly":       "Assemble/pack (Metal)",
     "assemble":       "Assemble/pack (Metal)",
+    # The pack that sends a part OUT to the plater — same PACM department and rate-table
+    # row title, its own operation so it lands as its own row beside the final pack
+    # ("Two separate Operations this job" — Howard Thurley, 7332-01).
+    "plater_pack":    "Assemble/pack (Metal)",
+    "plater_final_pack": "Assemble/pack (Metal)",   # the pack BACK — its own row, same bench
     "robomac":        "Robomac",   # WB dept ROBO £31.45/hr — EXACT string or LOOKUP returns 0
     "wire_forming":   "Robomac",
     "tube_cutting":   "Tube",
     "tube":           "Tube",
     "saw":            "Saw",
     "sawing":         "Saw",
+    # Deburr / linish — a quick hand finishing pass. It was unmapped, so the WB fuzzy-matched it
+    # to CNCJ (£64.07/hr) and, with no throughput default, billed ~22 hrs. Map it to its real
+    # dept so it costs at the deburr rate, not CNC joinery. (Throughput default added above.)
+    # GRIN IS NOT IN THE RATE TABLE. These four pointed at "Grinding / Deburr" and the
+    # workbook has no such row (H173:K204), so every deburr and every linish on every job
+    # LOOKUPed to zero — priced at nothing, and indistinguishable on the sheet from work
+    # nobody found. BENC and DRES are the rows that exist.
+    "deburr":         "Manual labour (Metal)",
+    "linisher":       "Dress Welds",
+    # Diamond polish (acrylic edge finish). Unmapped it fell through to a raw op name with no
+    # throughput default → ~0.67/hr / £52 on a single diffuser. (Metal DPOL is gated out upstream.)
+    "diamond_polish": "Diamond Polish",
+    # Timber / joinery operations. These map to the estimators' own route titles
+    # (config.SDI_OPERATION_CODES). If a title does not match a row in the WB rate table the
+    # WB LOOKUP returns 0 for that line — the run will show which the template actually carries,
+    # then we finalise the strings. Rates all exist engine-side (SAW/CNCJ/GLUE/SPRY).
+    "cnc_routing":    "CNC Joinery",
+    "cnc":            "CNC Joinery",
+    "cnc_joinery":    "CNC Joinery",
+    "glue":           "Glue",
+    "gluing":         "Glue",
+    "wet_spray":      "Wet Spray",
+    "spray":          "Wet Spray",
+    "bench_work":     "Manual labour (Metal)",
+    "hardware_insertion": "Manual labour (Metal)",
+    # THE METAL TWIN, WHICH WAS THE ONLY ONE MISSING. OP_NAME_MAP_ACRYLIC has carried
+    # "manual_labour_acrylic" since the acrylic split, and the metal map never gained its
+    # opposite number — so the two rules that emit this key, the shop's brushing before
+    # plating (config.BRUSH_BEFORE_PLATE) and MANM insert labour, reached the sheet only
+    # through the last-resort department_codes lookup at the bottom of _wb_op_name. That
+    # path resolves it today, which is why the row appears at all; it also means a stated
+    # shop time was riding on a fallback built for a model's free English. A rule with a
+    # named operation belongs in the map, next to the rest.
+    "manual_labour_metal": "Manual labour (Metal)",
+    # Brushing before plating: the MANM bench, but its own operation and its own row, so
+    # the shop's stated 40 minutes a unit is never pooled with the rest of manual metal.
+    "brush_before_plate": "Manual labour (Metal)",
     "spotweld":       "Spotweld",
     "spot_weld":      "Spotweld",
+    # The engine's OWN name for it — the estimator times `spot_welding`, the rate table and
+    # the route compiler both carry it — and the one spelling this map lacked, so a spot weld
+    # read off 12527-22-101's sheet reached the Labour block as a row called "spot_welding"
+    # with no department and no rate.
+    "spot_welding":   "Spotweld",
+    "resistance_welding": "Spotweld",
     "roll":           "Roll",
     "rolling":        "Roll",
     "guillotine":     "Guillotine",
     "linebend":       "Linebend",
+    # ── the words the extract prompts ask for, which had no department ──────────────
+    # llm_full_extract.ROUTE_OPERATIONS is the vocabulary we TELL the model to use. Five of
+    # its words were missing here, so the model returned exactly what it was asked for and
+    # the workbook did not know what department it belonged to. tube_cut is the operation
+    # M&S 2085's two tubes need: it was on the asking side of the contract and absent from
+    # the paying side, so the route could never have been costed however well it was read.
+    # A fixture now cross-checks the two lists.
+    "tube_cut":       "Tube",              # same department as tube_cutting
+    "tube_bending":   "Tubebend",          # SDI bends tube on a tube-bender, not a press
+    "tubebend":       "Tubebend",
+    "edge_banding":   "Edge Banding",
+    # Drilling and tapping share a bench and share the rate table's DRIL row. The previous
+    # commit sent them to "Manual labour (Metal)" on my own guess; the rate table
+    # (H173:K204) carries DRIL "Drill (Acrylic)", so that is where they go.
+    "hole_machining": "Drill (Acrylic)",
+    "tapping":        "Drill (Acrylic)",
+    "deburring":      "Manual labour (Metal)",
+    "linishing":      "Dress Welds",
 }
 
 # Acrylic/board parts use DIFFERENT (cheaper) labour operations than metal.
@@ -176,8 +509,72 @@ OP_NAME_MAP_ACRYLIC = {
     "handling":       "Assemble/pack (Acrylic)",
     "assembly":       "Assemble/pack (Acrylic)",
     "assemble":       "Assemble/pack (Acrylic)",
-    "manual":         "Manual labour (Acrylic)",
-    "manual_labour":  "Manual labour (Acrylic)",
+    "manual":              "Manual labour (Acrylic)",
+    "manual_labour":       "Manual labour (Acrylic)",
+    "manual_labour_acrylic": "Manual labour (Acrylic)",   # engine emits the _acrylic-suffixed key
+    "diamond_polish":      "Diamond Polish",
+    # SCRAPING IS NOT METAL BENCH WORK. 10975-02-A01's SCRAPED EDGES inferred a deburr,
+    # and with no acrylic entry it fell through to Manual labour (Metal) — a £31.18/hr
+    # metal bench row on an all-acrylic job, sitting BESIDE the acrylic manual row the
+    # route also booked. Mapped to the same acrylic hand department, the two share one
+    # tooling group: one row, one set-up, nothing duplicated and the scrape still paid for.
+    "deburr":              "Manual labour (Acrylic)",
+    "deburring":           "Manual labour (Acrylic)",
+}
+
+# TIMBER AND BOARD HAVE THEIR OWN DEPARTMENTS, AND THE RATE CARD HAS ALWAYS CARRIED THEM.
+#
+# _is_board() lumps timber in with acrylic because neither is sheet metal, which is right for
+# choosing the cost stream and wrong for naming a department — so a 3mm MDF tray came back
+# reading "Assemble/pack (Acrylic) — 3mm MDF", a line that contradicts itself on the face of
+# it. The note beside _is_timber said the template had no joinery equivalent and the acrylic
+# hand rate was the nearest available; that was not true. sheet_steel_costing.RATE_CARD, read
+# off the sheet's own rate card rows, carries "Packing Joinery" (PACJ, £28.735) and "Bench
+# Work Joinery" (BENC, £28.735) — both confirmed titles that have come back from a sheet with
+# a live rate. Timber was being packed at the acrylic rate, £25.43, for want of asking.
+#
+# Cutting: SDI routs board, it does not profile it on the acrylic laser. A laser operation
+# arriving on a timber part is sent to the router and the substitution is flagged, exactly as
+# a fold on a tube is sent to the tube-bender.
+OP_NAME_MAP_JOINERY = {
+    "handling":       "Packing Joinery",
+    "assembly":       "Packing Joinery",
+    "assemble":       "Packing Joinery",
+    "packing":        "Packing Joinery",
+    "manual":                "Bench Work Joinery",
+    "manual_labour":         "Bench Work Joinery",
+    "manual_labour_acrylic": "Bench Work Joinery",
+    "bench_work":            "Bench Work Joinery",
+    "laser":          "CNC Joinery",
+    "laser_cutting":  "CNC Joinery",
+    "laser_metal":    "CNC Joinery",
+    # BOARD IS ROUTED ON THE JOINERY ROUTER, AND IT HAS TO SAY SO HERE.
+    #
+    # `cnc_routing` was in neither this map nor the acrylic one, so board and acrylic alike fell
+    # through to OP_NAME_MAP and both landed on CNCJ — which was right for the MDF packer by
+    # accident and wrong for the acrylic by GBP 21/hr. Sending acrylic to CNC without naming
+    # board here would have moved the packer TOO, because _is_board lumps timber in with acrylic
+    # and this map is the only thing that separates them. The test caught it; the point is that
+    # the joinery branch has to claim the operation explicitly rather than rely on a fall-through
+    # that is about to be taken away from it.
+    "cnc_routing":    "CNC Joinery",
+    "cnc":            "CNC Joinery",
+    "cnc_joinery":    "CNC Joinery",
+    # SAW AND SPINDLE. Tony's MC J — the department has always been on the rate card and
+    # nothing ever emitted the operation, which is his "no machining saw/spindle" in one
+    # line. Minted only where the drawing calls up a rebate, groove, mortice, tenon,
+    # moulding or profile (document_builder), so a plain panel still gets no such row.
+    "machining_joinery": "Machines Joinery",
+    # HOLES AND EDGES ON BOARD ARE JOINERY WORK, NEVER THE ACRYLIC BENCH. With no entry here
+    # they fell through to the acrylic map and OP_NAME_MAP: 12173-03's MDF panels came back
+    # with "Drill (Acrylic)" and "Manual labour (Acrylic)" rows. The estimator rules both out
+    # on a CNC-routed board (the holes are in the CNC program; board is not deburred); this is
+    # the department for whatever is left — a sawn panel drilled on the joinery machines.
+    "hole_machining":    "Machines Joinery",
+    "drilling":          "Machines Joinery",
+    "drill":             "Machines Joinery",
+    "deburring":         "Bench Work Joinery",
+    "deburr":            "Bench Work Joinery",
 }
 
 # Tube/section bending: SDI bends RHS tube on a tube-bender, NOT a press-brake.
@@ -186,27 +583,783 @@ OP_NAME_MAP_ACRYLIC = {
 _TUBE_OP_REMAP = {
     "folding": "Tubebend",
     "fold":    "Tubebend",
+    # A TUBE IS STILL CUT. IT IS JUST NOT CUT ON A FLAT-BED LASER.
+    #
+    # laser/guillotine on a tube used to be DROPPED as spurious, which is half right and
+    # expensively so: a tube has no flat blank, so it is not profile-lasered -- but it is
+    # sawn to length, and deleting the operation left the cut costing nothing. 2085's tubes
+    # came out of that change with no cutting operation of any kind on the sheet.
+    #
+    # Remapped, not dropped, exactly as fold is. The route said "this part gets cut"; the
+    # stock form says the cut happens in the tube department, not on the laser. Punch stays
+    # spurious below: putting a hole through a tube wall is not cutting it to length, and
+    # hole work has its own operation.
+    "laser":         "Tube",
+    "laser_cutting": "Tube",
+    "laser_metal":   "Tube",
+    "guillotine":    "Tube",
+    "tube_cut":      "Tube",
+    "tube_cutting":  "Tube",
+    "saw":           "Saw",
 }
 
 
-def _map_operation(op: str, is_acrylic: bool, stock_form: str = "") -> Optional[str]:
+
+
+
+def pin_lines_that_price_themselves(bom_parts: List[Dict[str, Any]], n_rows: int
+                                    ) -> List[Dict[str, Any]]:
+    """Keep the lines whose price is the SHEET'S arithmetic inside the template's rows.
+
+    The BOM block spills its tail to the 'BOM Overflow' sheet when a job has more lines than
+    rows, and that sheet lists a unit price and a quantity — the shape of a bought-in. The
+    POWDER line is not that shape: it is written as kilos times a rate on the Estimate sheet
+    and priced by `_price_explicitly_withheld`, so `_bom_line_price` has nothing to say
+    about it. Appended last, it was the first thing to spill, and on 12567-01's 16:48 book
+    the powder reached the overflow sheet with no price and its money left the total
+    (D-273). A cross-reference row ("priced on line N") is the same shape of line. Those
+    stay on the sheet; plain bought-ins spill.
+
+    AND THE MONEY STAYS WHERE AN ESTIMATOR READS. Which plain lines spilled used to be
+    arrival order, and on 12567-01's 15:33 book the two dearest lines on the whole bill —
+    the customer's 49-inch display at a researched £750 and its antenna, both recovered
+    late by the table reader — arrived last, spilled, and sat inside one consolidated
+    £778.19 row while 3p fixings held their own rows on the sheet. Every consolidated
+    figure is still in the total, but Tim reads the sheet, and the sheet showed him the
+    fixings and hid the display. So the spill takes the CHEAPEST lines first: the rows the
+    sheet keeps are the rows carrying the money, at any template size. Equal-value lines
+    keep their arrival order (the sort is stable), and unpriced lines rank as carrying
+    nothing — an unpriced line's place is the overflow sheet, where it is itemised in full,
+    not a row that reads as free beside priced ones (D-298).
+    """
+    if len(bom_parts) <= n_rows:
+        return list(bom_parts)
+
+    def _stays(p: Dict[str, Any]) -> bool:
+        return bool(p.get("_consumable_qty_unknown") or p.get("_bom_cross_reference")
+                    or p.get("_bom_overflow_consolidated"))
+
+    def _money(p: Dict[str, Any]) -> float:
+        _u = _bom_line_price(p)
+        return (float(_u) * float(_safe(p.get("quantity"), 1) or 1)) if _u is not None else 0.0
+
+    pinned = [p for p in bom_parts if _stays(p)]
+    rest = sorted((p for p in bom_parts if not _stays(p)), key=_money, reverse=True)
+    head = max(0, n_rows - 1 - len(pinned))
+    return rest[:head] + pinned + rest[head:]
+
+
+def _own_size_mm(pe: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    """The two largest plausible dimensions a part's own record holds (its blank, its overall,
+    or its model's extents), or None. Never a sheet size and never a guess."""
+    ng = pe.get("normalized_geometry") if isinstance(pe.get("normalized_geometry"), dict) else {}
+    for pair in ((pe.get("blank_length_mm"), pe.get("blank_width_mm")),
+                 (ng.get("blank_length_mm"), ng.get("blank_width_mm")),
+                 (pe.get("overall_length_mm"), pe.get("overall_width_mm"))):
+        vals = [_safe(v, 0) for v in pair]
+        if all(5.0 <= v <= 3000.0 for v in vals):
+            return (max(vals), min(vals))
+    bbox = sorted([_safe(v, 0) for v in (ng.get("bbox_mm") or [])], reverse=True)[:2]
+    if len(bbox) == 2 and all(5.0 <= v <= 3000.0 for v in bbox):
+        return (bbox[0], bbox[1])
+    return None
+
+
+def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
+    """Best-available unit price for a BOM line. Withheld/unpriced -> None.
+
+    THE ONE PRICE CHAIN. The per-row writer calls this; so does the overflow sum. See
+    _bom_line_price_traced for why it also has to be able to EXPLAIN itself.
+    """
+    return _bom_line_price_traced(_pe)[0]
+
+
+def _bom_line_price_traced(_pe: Dict[str, Any]) -> Tuple[Optional[float], List[str]]:
+    """The price, and every field consulted on the way to it.
+
+    WHY A TRACE. 11650-05-02M SLIDER came back at GBP 9.73 after a fix that refused exactly
+    that figure. The refusal DID fire -- it nulled the whole-part number the engine had
+    declined -- and the same GBP 9.73 walked back in through the next field in the waterfall.
+    Diagnosing that took a guess, because nothing could say WHICH of five fields supplied a
+    price, and the diagnostic tool re-implementing the chain would have been a second rule
+    for one question: the very defect this codebase keeps paying for.
+
+    So the function that decides explains itself, and the tool asks it. The explanation
+    cannot drift from the decision because it IS the decision.
+    """
+    _t: List[str] = []
+    if _pe.get("_price_explicitly_withheld"):
+        _t.append("_price_explicitly_withheld -> withheld, no price")
+        return None, _t
+    _me = _pe.get("material_estimate") or {}
+    # WHAT THE PART IS DECIDES WHICH FIELDS CAN PRICE IT.
+    #
+    # An assembly has no material line of its own — its material is its children's, and
+    # M92 already sums them. A fabricated LEAF is priced from its material estimate or from
+    # the Sheet Steel block, never from a whole-part figure: that chain is how one alias's
+    # AI market estimate became the right arm's "material" at 97% of the job.
+    _canonical_kind = str(_pe.get("_canonical_kind") or "").strip().lower()
+    if _canonical_kind == "assembly":
+        _t.append("_canonical_kind=assembly -> priced by its children, no line of its own")
+        return None, _t
+    if _canonical_kind == "leaf":
+        _p = _safe(_me.get("unit_material_cost_gbp") or _me.get("cost_per_part_gbp"))
+        _t.append(f"leaf: material_estimate.unit_material_cost_gbp="
+                  f"{_me.get('unit_material_cost_gbp')!r} / cost_per_part_gbp="
+                  f"{_me.get('cost_per_part_gbp')!r} -> {_p!r}")
+    else:
+        # A PRICE THE ENGINE APPLIED IS THE PRICE OF THIS LINE. The mirror of the refusal
+        # below: estimator stamps applied_to_total True when a bought-in's resolved unit cost
+        # reached the total, and this chain never read that figure — it read a top-level
+        # unit_cost_gbp estimate_part does not write, then the material block, then unit
+        # total less labour, which is the buy plus the fitting uplift less the handling
+        # already booked: £0.97 for a £0.35 magnet, and nothing at all for a pressed insert
+        # cheaper than its handling, which then read on the sheet as a price the engine had
+        # refused (D-293). One rule for both directions: the stamp says whether the buy
+        # reached the total, and where it did, the buy is the line.
+        _sc_blk = ((_pe.get("cost_breakdown") or {}).get("system_cost")
+                   if isinstance(_pe.get("cost_breakdown"), dict) else None)
+        if isinstance(_sc_blk, dict) and _sc_blk.get("applied_to_total") is True:
+            _sc_price = _safe(_sc_blk.get("unit_cost_gbp"))
+            if _sc_price is not None and _sc_price > 0:
+                _t.append(f"cost_breakdown.system_cost.unit_cost_gbp={_sc_price!r} "
+                          f"applied_to_total=True -> taken (the buy price the estimator applied)")
+                return _sc_price, _t
+        # A PRICE THE ENGINE FOUND AND DECIDED NOT TO APPLY IS NOT A PRICE FOR THIS LINE.
+        #
+        # estimator stamps  applied_to_total = bought_in_candidate and system_unit_cost is
+        # not None  — so False here with a price present means a figure was resolved and
+        # DELIBERATELY not added, because the part is not a bought-in. stamp_affects_total's
+        # docstring says exactly this: "a bought-in unit cost can be resolved and then not
+        # added, because the part was costed as a fabrication instead."
+        #
+        # Nothing asked. This read unit_cost_gbp straight off the part, so 11650-05-02M
+        # SLIDER — page_roles ['assembly'], no detail drawing in the pack, applied_to_total
+        # FALSE — was charged at GBP 9.73 x 2 = GBP 20.24, which is 38% of that job's entire
+        # material cost. The same run's invariants said "Nothing read those parts, so nothing
+        # costed them". Both cannot be true, and the sheet followed the component that had
+        # decided not to decide.
+        #
+        # Only an EXPLICIT False refuses. A record written before the flag existed has no
+        # opinion, and treating a missing flag as a refusal would zero every bought-in on
+        # every older job.
+        # The figure is refused here and OFFERED in the row's note, from the one reader:
+        # price_provenance.declined_whole_part_price. A missing detail drawing is the normal
+        # case and must not cost us evidence we hold -- see that function for why silently
+        # dropping it is the same fault as charging it.
+        import price_provenance as _pp_decl
+        _declined = _pp_decl.declined_whole_part_price(_pe)
+        _whole_part = _safe(_pe.get("unit_cost_gbp"))
+        _t.append(f"unit_cost_gbp={_whole_part!r}"
+                  + (f"  DECLINED by the engine (£{_declined['gbp']:.2f} from "
+                     f"{_declined['source']})" if _declined else ""))
+        if _declined and _whole_part is not None and _whole_part == _declined["gbp"]:
+            _whole_part = None
+        # THE SAME FIGURE MUST NOT WALK BACK IN BY THE NEXT DOOR. Refusing the whole-part
+        # number and then accepting an identical one from a material field prices the line
+        # at exactly the amount that was just refused -- which is what happened on
+        # 11650-05-02M after the first fix, and read on the sheet as no fix at all. The
+        # refusal is a verdict on the FIGURE, so it holds wherever that figure appears.
+        _fallbacks = [("part.unit_material_cost_gbp", _pe.get("unit_material_cost_gbp")),
+                      ("material_estimate.unit_material_cost_gbp",
+                       _me.get("unit_material_cost_gbp"))]
+        _alt = None
+        for _name, _raw in _fallbacks:
+            _v = _safe(_raw)
+            if _v is None:
+                continue
+            if _declined and _v == _declined["gbp"]:
+                _t.append(f"{_name}={_v!r}  REFUSED: same figure the engine declined")
+                continue
+            _t.append(f"{_name}={_v!r} -> taken")
+            _alt = _v
+            break
+        _p = _whole_part if _whole_part is not None else _alt
+    if _p is None:
+        # THE BOM PRICE COLUMN IS A MATERIAL COLUMN.
+        #
+        # This fell back to extended_total_cost_gbp, which is the part's WHOLE unit cost
+        # -- material AND labour. On a fabricated part with no material price that puts
+        # its labour in the material column: M&S 2085's tubes showed GBP 19.25 each,
+        # which is GBP 17.80 of powder-coating labour, GBP 0.71 weld, GBP 0.33 dress and
+        # GBP 0.42 handling. Not one penny of it is tube.
+        #
+        # It read as an impossible material price -- 60 metres of stock per bracket --
+        # and it is about to become worse than misleading: now that a routed operation
+        # reaches the labour block, those same operations get their own rows and the
+        # labour is counted twice.
+        #
+        # Material only. A part whose material nobody could price is UNPRICED, and says
+        # so, which is the honest answer and the one an estimator can act on.
+        _ext_mat = _safe(_pe.get("extended_material_cost_gbp")
+                         or _me.get("extended_material_cost_gbp"))
+        _q = int(_safe(_pe.get("quantity"), 1) or 1)
+        if _ext_mat is not None and _q > 0:
+            _cand = round(_ext_mat / _q, 4)
+            if _declined_here(_pe) and _cand == _declined_here(_pe)["gbp"]:
+                _t.append(f"extended_material_cost_gbp/{_q}={_cand!r}  REFUSED: same figure "
+                          f"the engine declined")
+            else:
+                _p = _cand
+                _t.append(f"extended_material_cost_gbp={_ext_mat!r} / qty {_q} -> {_p!r}")
+        elif _canonical_kind != "leaf":
+            # "HAS NO LABOUR" IS NOT THE SAME CONDITION AS "IS A BOUGHT-IN".
+            #
+            # The first version kept the whole-total fallback only for a part with no labour
+            # at all, reasoning that a bought-in has none. But a bought-in DOES carry
+            # handling — bought_in_policy deliberately leaves it, because fitting a purchased
+            # component is real bench time — so a fixing with a handling cost would have lost
+            # its price entirely and shown blank on the sheet.
+            #
+            # The arithmetic answers it without classifying anything: material is the unit
+            # total less the labour on it. That holds for a bought-in and a fabricated part
+            # alike, and it is why the tubes come out unpriced — their total IS their labour,
+            # so the remainder is nothing.
+            _unit_total = _safe(_pe.get("unit_total_cost_gbp"))
+            if _unit_total is None:
+                _ext = _safe(_pe.get("extended_total_cost_gbp"))
+                if _ext is not None and _q > 0:
+                    _unit_total = _ext / _q
+            _lab = (_pe.get("labour_estimate") or {}).get("costs_gbp") or {}
+            _lab_total = sum(_safe(v) or 0.0 for v in _lab.values())
+            if _unit_total is not None:
+                _material = _unit_total - _lab_total
+                # A rounding tail is not a price. At or below a penny, the arithmetic is
+                # saying there was no material here.
+                _cand = round(_material, 4) if _material > 0.01 else None
+                _d = _declined_here(_pe)
+                if _cand is not None and _d and _cand == _d["gbp"]:
+                    _t.append(f"unit_total - labour = {_cand!r}  REFUSED: same figure the "
+                              f"engine declined")
+                else:
+                    _p = _cand
+                    _t.append(f"unit_total {_unit_total!r} - labour {_lab_total!r} -> {_p!r}")
+    if _p is None:
+        _t.append("no field supplied a material price -> UNPRICED")
+    return _p, _t
+
+
+def _declined_here(_pe: Dict[str, Any]):
+    """The figure this part's own record says was found and not applied. See
+    price_provenance.declined_whole_part_price -- one rule, every reader."""
+    try:
+        import price_provenance as _pp
+        return _pp.declined_whole_part_price(_pe)
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
+def bom_line_pricing(part: Dict[str, Any], is_indicative: bool,
+                     price_gbp: Any) -> Dict[str, Any]:
+    """The ONE decision behind a BOM line's Price column and its description.
+
+    A GUESS THAT CHANGES EVERY RUN IS NOT A PRICE. Job 11350's right arm came back at
+    GBP 79.04 on one run and GBP 86.04 on the next — 82% and then 95% of the whole material
+    total, on a part with a measured flat we could have costed as sheet steel. The invariant
+    correctly refused to call the job firm, but the Estimate tab still showed a total built
+    on it, and nothing on that tab distinguishes the figure from a catalogue rate.
+
+    This matters MORE as search degrades: with a programmatic provider exhausted or
+    unconfigured the lookup falls straight through to the LLM, so EVERY missing price
+    becomes a figure like this one rather than an obvious gap.
+
+    The number is not thrown away — it moves into the description as a hint, where it
+    informs without being summed, and the line becomes the estimator input it always was.
+
+    WHY THIS IS A FUNCTION AND NOT FOUR LINES IN THE ROW LOOP. Nothing can call
+    populate_workbook in a fixture — it needs the network template — so a decision made
+    inside that loop is a decision no test can drive. Four times this session a fix passed
+    its fixture while the caller went on doing the old thing. The loop keeps only the call;
+    everything that could be wrong is here, where it can be driven directly.
+    """
+    from estimator_inputs import (indicative_price_to_withhold as _withhold,
+                                  indicative_price_note as _note_for,
+                                  canonical_pricing_status, UNPRICED)
+    # A DELIBERATE BLANK IS NOT A GAP. A cross-reference row is costed in the Sheet Steel
+    # block; an assembly has no material line of its own. Two of job 11350's six outstanding
+    # inputs asked for rates on parts the sheet had already costed from measured blanks.
+    # Asked with NO price, so the answer is the row's CATEGORY rather than a verdict on a
+    # figure: a cross-reference, an assembly, or an ordinary row whose price stands or does
+    # not. Conflating the two says an AI-priced line is "priced" and needs nothing.
+    _status = canonical_pricing_status(part, None)
+    guess = _withhold(part, is_indicative, price_gbp) if _status == UNPRICED else None
+    if not guess:
+        return {"part": part, "withheld_gbp": None, "note": None, "status": _status}
+    # A DECISION ABOUT A LINE HAS TO LIVE ON THE LINE.
+    #
+    # These two markers were set on a COPY, and the copy was used to write the spreadsheet
+    # row and then dropped. So the sheet said "an AI market estimate of GBP 3.12 was kept off
+    # the price column" while the record every check and every report reads carried nothing at
+    # all -- and estimator_inputs.unpriced_reason_for_row, which exists to classify exactly
+    # this case as POLICY_WITHHELD, fell through to UNEXPLAINED.
+    #
+    # 11650-04 showed it as a contradiction on one screen: the sheet explaining BI-SCREW, and
+    # the invariants reporting "1 line(s) carry no price and no reason: BI-SCREW". Both were
+    # reading the same line and only one had been told.
+    #
+    # So the original is marked too. Not the price -- the price is deliberately withheld and
+    # stays withheld -- only the fact that a decision was taken and why, which is the thing a
+    # blank cell cannot say for itself.
+    part["_price_explicitly_withheld"] = True
+    part["_ai_indicative_gbp"] = guess
+    # The row that goes on the sheet is still a copy, so nothing downstream can edit the
+    # record by editing a spreadsheet row. The two markers above are on both.
+    row = dict(part)
+    return {"part": row, "withheld_gbp": guess, "status": _status,
+            "note": {"kind": "ai_estimate_unconfirmed", "note": _note_for(guess)}}
+
+
+def cut_list_text(stock_estimate: Any) -> str:
+    """"cut 2 × 300 + 1 × 1,272 = 1,872 mm" for a section costed as its cut list, else "".
+
+    The line said the goalpost's name and its price; the length bought was only in the record,
+    so a book could not show whether the column was read and the price was not (D-429)."""
+    se = stock_estimate if isinstance(stock_estimate, dict) else {}
+    pieces = [p for p in (_safe(x) for x in (se.get("cut_lengths_mm") or [])) if p and p > 0]
+    if len(pieces) < 2:
+        return ""
+    counts: Dict[float, int] = {}
+    for p in pieces:
+        counts[round(p, 1)] = counts.get(round(p, 1), 0) + 1
+    parts = " + ".join(f"{n} × {L:,.6g}" for L, n in sorted(counts.items()))
+    return f"cut {parts} = {sum(pieces):,.6g} mm"
+
+
+def unresolved_reading_note(pe: Dict[str, Any]) -> str:
+    """The words a BOM line carries when its figure rests on a reading nobody has confirmed.
+
+    PRICED, MARKED, QUOTE BLOCKED (D-432). The figure stays in the price cell — a blank would
+    total a lighter unit with nothing saying it is incomplete — and the line says the reading
+    is open, so nobody reads the working figure as settled."""
+    mark = (pe or {}).get("_price_unresolved")
+    if not isinstance(mark, dict):
+        return ""
+    units = " and ".join(str(u) for u in (mark.get("units") or []))
+    inferred = str(mark.get("inferred_text") or "").strip()
+    return ("UNRESOLVED READING" + (f" ({units} in one size)" if units else "")
+            + (f": read as {inferred}, priced at that reading, a working figure" if inferred
+               else ": priced as printed, a working figure")
+            + " — customer quote blocked until confirmed")
+
+
+def reconcile_price_stamp_with_sheet(pe: Dict[str, Any], price: Any,
+                                     summary: Optional[Dict[str, Any]] = None) -> bool:
+    """When the sheet writes no price on a bought-in line, its record says so too.
+
+    ONE FACT, TWO WRITERS. estimator stamps system_cost.applied_to_total = True the moment a
+    bought-in price is resolved; the workbook decides, several branches later, what the cell
+    actually carries. Where the two part company — a figure found and then not written — the
+    record went on reading as money in the total. The 21:57 12567 book showed both halves on
+    one screen: eleven settle rows "held at £0, no stake", and a consistency check saying
+    those same lines reached the total as AI prices (D-284).
+
+    Only a bought-in unit price the record claims REACHED the total is reconciled, and only
+    when the cell is empty or nought. A fabricated leaf's £0 line is priced in the Sheet Steel
+    block and its stamps say so already; an assembly's £0 is its children's. Returns True when
+    a stamp was changed.
+    """
+    if not isinstance(pe, dict):
+        return False
+    try:
+        _p = float(price) if price is not None else 0.0
+    except (TypeError, ValueError):
+        _p = 0.0
+    if _p > 0:
+        return False
+    _sc = ((pe.get("cost_breakdown") or {}).get("system_cost")
+           if isinstance(pe.get("cost_breakdown"), dict) else None)
+    if not isinstance(_sc, dict) or not _sc.get("applied_to_total"):
+        return False
+    if not (_safe(_sc.get("unit_cost_gbp")) or 0) > 0:
+        return False
+    try:
+        import price_provenance as _pp
+        _changed = _pp.mark_withheld(
+            _sc, reason="the sheet wrote no price on this line; the figure the record "
+                        "holds did not reach the total")
+    except Exception:                                                # noqa: BLE001
+        _changed = 0
+    _sc["applied_to_total"] = False
+    _sc["sheet_price_gbp"] = _p
+    _code = str(pe.get("part_number") or "").strip().upper()
+    if _code and isinstance(summary, dict):
+        _wl = summary.setdefault("withheld_price_lines", [])
+        if _code not in _wl:
+            _wl.append(_code)
+    return True
+
+
+def route_operations_by_part(summary: Dict[str, Any]) -> Dict[str, List[str]]:
+    """part number -> the operations on its RAW record.
+
+    THE ROUTE AND THE COST LIVE ON DIFFERENT RECORDS, AND THE SHEET ONLY READS ONE.
+
+    estimator.estimate_part builds a costed part_estimate and never copies
+    textual_operations onto it, so estimate_summary.part_estimates — which is what
+    wb_populate walks — has no route at all. The route stays on summary["parts"] and
+    summary["manufacturing_writeup"]["parts"].
+
+    That is why 2085's tube_cut was visible to the invariant and invisible to the sheet:
+    invariants._parts falls through to summary["parts"] and found it, wb_populate read
+    part_estimates and found nothing. Both were right about the record they were looking at.
+    It is the same wrong-record shape as _parts() returning geometry to a price check, and
+    the same shape as the bom/parts bridge — the third time in this job.
+    """
+    out: Dict[str, List[str]] = {}
+    if not isinstance(summary, dict):
+        return out
+    _sources = [summary.get("parts"),
+                (summary.get("manufacturing_writeup") or {}).get("parts")]
+    for _src in _sources:
+        if not isinstance(_src, list):
+            continue
+        for _p in _src:
+            if not isinstance(_p, dict):
+                continue
+            _pn = str(_p.get("part_number") or "").strip().upper()
+            if not _pn:
+                continue
+            _bucket = out.setdefault(_pn, [])
+            for _k in ("textual_operations", "operations", "inferred_operations"):
+                _v = _p.get(_k)
+                if not isinstance(_v, list):
+                    continue
+                for _o in _v:
+                    _os = str(_o).strip().lower()
+                    if _os and _os not in _bucket:
+                        _bucket.append(_os)
+            # A ruling by measurement travels with the route, or the sheet would re-add
+            # exactly what the measurement removed.
+            for _ro in (_p.get("operations_ruled_out") or {}):
+                _ros = str(_ro).strip().lower()
+                if _ros in _bucket:
+                    _bucket.remove(_ros)
+    return out
+
+
+
+def tube_part_numbers(summary: Dict[str, Any]) -> set:
+    """Part numbers that are section/tube stock, on the evidence rather than on a price.
+
+    material_estimate.stock_form is only stamped where the material successfully COSTED, so
+    a tube nobody could price does not carry it — which makes every stock-form rule silently
+    skip the parts that most need it. The durable evidence is section_stock, written by
+    document_builder when it reads a profile off the drawing, and material_family, read off
+    the BOM. Both live on the RAW records.
+
+    Deliberately structured evidence only. A description containing "TUBE" would catch
+    2085's parts and also a purchased TUBE CLAMP, and this set gates whether an operation is
+    dropped — so it stays on facts the readers established, not on a word.
+    """
+    out = set()
+    if not isinstance(summary, dict):
+        return out
+    _sources = [summary.get("parts"),
+                (summary.get("manufacturing_writeup") or {}).get("parts"),
+                (summary.get("estimate_summary") or {}).get("part_estimates")]
+    for _src in _sources:
+        if not isinstance(_src, list):
+            continue
+        for _p in _src:
+            if not isinstance(_p, dict):
+                continue
+            _pn = str(_p.get("part_number") or "").strip().upper()
+            if not _pn:
+                continue
+            if (_p.get("section_stock")
+                    or str(_p.get("material_family") or "").strip().lower() == "tube"
+                    or str((_p.get("material_estimate") or {}).get("stock_form") or "").lower() == "tube"):
+                out.add(_pn)
+    return out
+
+
+
+def operation_scope_for(pe: Dict[str, Any], op: str,
+                        scope_by_op: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """"part" or "assembly" for one operation on one part, or None if nobody said.
+
+    Module-level so it can be driven. The first version lived inline in the group loop and
+    its mutation passed clean — the fourth time today a check has verified source text
+    instead of behaviour.
+
+    A CHAINED OPERATION INHERITS THE SCOPE OF WHAT SPAWNED IT. estimator.py adds dress_welds
+    automatically wherever it finds welding, so that row has no route line of its own and
+    therefore no scope. It is the same event: if the weld happens once per assembly, so does
+    dressing it. Without this the weld would be charged once and its dressing three times,
+    which is worse than either answer applied consistently.
+    """
+    _o = str(op or "").strip().lower()
+    if not _o:
+        return None
+    _own = (pe or {}).get("operation_scope") or {}
+    _job = scope_by_op or {}
+    for _key in (_o, _CHAINED_FROM.get(_o)):
+        if not _key:
+            continue
+        _v = _own.get(_key) or _job.get(_key)
+        if _v in ("part", "assembly"):
+            return _v
+    return None
+
+
+def section_coated_area_m2(part: Dict[str, Any]) -> float:
+    """Powder-coated surface of one SECTION-STOCK part (tube, box, angle, flat bar), m2.
+
+    The coated-area sum had exactly two contributors: sheet (L x W x 2) and wire (pi x d x L).
+    Section stock matched neither. The sheet loop excludes it twice over -- once on stock_form,
+    once on a "TUBE" description guard added to stop garbled view geometry inventing 24 m2 of
+    phantom blank -- and nothing put the real cylinder surface back. So every powder-coated
+    tube, box section and angle on every job has been contributing ZERO coated area, which is
+    an under-charge that grows with how much section the job contains.
+
+    The wall is irrelevant: powder lands on the OUTSIDE. So the coated surface is the outer
+    perimeter times the cut length.
+
+        round / CHS      pi x D
+        everything else  2 x (a + b)
+
+    2(a+b) is right for a closed box and also right for an open angle or channel, where powder
+    reaches both faces of both legs: two legs of width a and b, coated top and bottom, is the
+    same number. A flat bar is that with b = t. The end faces are ignored -- on a 34 mm tube
+    they are under 1% and counting them would imply a precision this does not have.
+
+    Returns 0.0 when the profile or the length is missing, because an unmeasured tube is not a
+    zero-area one and inventing a size here would be worse than the gap it fills.
+    """
+    _p = part or {}
+    _ss = _p.get("section_stock") or {}
+    if not _ss:
+        return 0.0
+    # ONE ANSWER TO "CAN THIS BE COATED". This used to hold its own five-name set and
+    # compare the material by EXACT equality, so "PETG OR PC" and every other spelling
+    # of a plastic tube contributed coated area.
+    if part_cannot_be_powder_coated(_p):
+        return 0.0          # a plastic section is polished or left as-is, never coated
+    _a = _safe(_ss.get("a"))
+    _b = _safe(_ss.get("b"))
+    if not _a:
+        return 0.0
+    _me = _p.get("material_estimate") or {}
+    _len = _safe((_me.get("stock_estimate") or {}).get("section_length_mm")) or _safe(_ss.get("length_mm"))
+    if not _len or _len <= 0:
+        return 0.0
+    # ONE PERIMETER FOR EVERY READER THAT COATS A SECTION (D-532): section_profile's, shared
+    # with the costing's own coated area so the sheet and the record agree.
+    from section_profile import section_outer_perimeter_mm, section_form
+    _perim_mm = section_outer_perimeter_mm(_a, _b, section_form(_ss)) or 0.0
+    _q = _safe(_p.get("quantity"), 1) or 1
+    return (_perim_mm / 1000.0) * (_len / 1000.0) * float(_q)
+
+
+def template_path() -> str:
+    """The estimate template to populate.
+
+    CELL_MAP pins a UNC path on the estimating share, which is right when the engine runs
+    on the SDI network and a dead end when it does not: populate_workbook returns None, and
+    every job silently falls back to the xlsx_output builder -- which looks identical and
+    is not route-grouped.
+
+    SDI_WB_TEMPLATE overrides it with a local copy. The share stays the default, so nothing
+    changes for a normal run; an operator off the network gets a way through instead of a
+    fallback sheet they have no reason to distrust.
+    """
+    _env = str(os.environ.get("SDI_WB_TEMPLATE") or "").strip().strip('"')
+    return _env or CELL_MAP["template_path"]
+
+
+def assembly_scoped_qty(group: Dict[str, Any]) -> int:
+    """How many times an ASSEMBLY-scoped operation is charged per finished product.
+
+    Normally once -- that is what assembly scope MEANS. But qty_per_unit on the route line
+    says how many times the operation happens per unit, and a product containing two welded
+    frames is two weldings even though each is assembly-level. The route fold stores it;
+    without this it would be a field the schema asks the LLM for, the fold carries, and
+    nothing ever reads -- which reads as consumed and is not.
+
+    Never below 1: an assembly-scoped operation that reached this point is on the route, and
+    a route line that happens zero times would not be there.
+    """
+    _q = _safe((group or {}).get("qty_per_unit_by_scope") or None, 1) or 1
+    try:
+        return max(1, int(_q))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _bom_row_quantity(pe: Dict[str, Any]):
+    """The quantity a BOM row writes to its cell: a count floors, a continuous unit keeps
+    its fraction (D-520).
+
+    Module-level and pure for the same reason routed_operations_without_cost is: the floor
+    lived inline, the estimator's D-518 repair could not reach it, and the one test that
+    would have caught it had nothing to call. A record that declares a continuous unit of
+    measure (config.CONTINUOUS_UNITS_OF_MEASURE) — or is the minted edging line — writes
+    its own positive value; everything else stays the integer count it always was.
+    """
+    _uom = str(pe.get("unit_of_measure") or "").strip().lower()
+    if _uom in getattr(config, "CONTINUOUS_UNITS_OF_MEASURE", ()) or pe.get("_edging_line"):
+        _f = _safe(pe.get("quantity"))
+        if _f is not None and float(_f) > 0:
+            return float(_f)
+    return int(_safe(pe.get("quantity"), 1) or 1)
+
+
+def routed_operations_without_cost(pe: Dict[str, Any], costs: Any = None,
+                                   extra_ops: Any = None) -> List[str]:
+    """Fabrication operations on a part's ROUTE that the estimator put no cost against.
+
+    Module-level and pure so it can actually be driven. The first version of this lived
+    inline in the middle of a six-hundred-line function, and the fixture written for it
+    mirrored the logic instead of calling it — so the mutation that deleted the guard passed.
+    That is the same defect shape as the bug it was testing.
+
+    Only FABRICATION operations count. Handling and assembly without a cost are not a
+    missing row: bought_in_policy deliberately leaves those on purchased parts, and treating
+    them as missing work is how BI-ADHESIVECABLE got an Assemble/pack line it never earned.
+    """
+    try:
+        from bought_in_policy import FABRICATION_OPS as _FAB
+    except Exception:
+        return []
+    if not isinstance(pe, dict):
+        return []
+    if costs is None:
+        costs = (pe.get("labour_estimate") or {}).get("costs_gbp") or {}
+    _costed = {str(k).strip().lower() for k in (costs or {})}
+    # An operation a MEASUREMENT ruled out is not a missing row — it is an answered
+    # question. Belt and braces with the route fold, which already refuses to re-add one:
+    # this is the last gate before a labour row, and it is the one that spends money.
+    _ruled = {str(k).strip().lower() for k in (pe.get("operations_ruled_out") or {})}
+    out: List[str] = []
+    _pools = [pe.get(k) for k in ("textual_operations", "operations", "inferred_operations")]
+    # extra_ops carries the route off the RAW record, which the costed part_estimate does
+    # not have. Without it this function can only ever see an empty list on a real job.
+    _pools.append(list(extra_ops or []))
+    for vals in _pools:
+        if not isinstance(vals, list):
+            continue
+        for o in vals:
+            os_ = str(o).strip().lower()
+            if (os_ and os_ not in _costed and os_ not in out and os_ not in _ruled
+                    and os_ in _FAB):
+                out.append(os_)
+    return out
+
+
+def _group_material_family(candidate_ids, estimates, raw,
+                           material: str = "") -> tuple:
+    """(material, is_acrylic) for a labour decision, from EVERY part it covers.
+
+    THE REPRESENTATIVE IS NOT THE GROUP. An assembly-scope decision took its material from
+    whichever single participant happened to be found first — on 10975-02 that was the bay
+    root with no material at all, so an all-acrylic job's pack row priced as Assemble/pack
+    (Metal). The family belongs to the parts the work is done ON: no sheet metal among
+    them and at least one board/acrylic part means the acrylic bench, any sheet-metal
+    member means the metal one, exactly as a person would call it. A single-part decision
+    with a stated material keeps its own answer untouched.
+    """
+    mats = []
+    for cid in candidate_ids or []:
+        pe = estimates.get(cid) or {}
+        rp = raw.get(cid) or {}
+        m = str(pe.get("normalized_material")
+                or (pe.get("material_estimate") or {}).get("material")
+                or rp.get("normalized_material") or "").strip()
+        if m:
+            mats.append(m)
+    material = str(material or "").strip()
+    if not material and mats:
+        material = mats[0]
+    is_acrylic = _is_board(material)
+    if len(candidate_ids or []) > 1 and mats:
+        is_acrylic = (not any(_is_sheet_metal(m) for m in mats)
+                      and any(_is_board(m) for m in mats))
+    return material, is_acrylic
+
+
+_CUT_REMAPPED_TO_TUBE = frozenset({"laser", "laser_cutting", "laser_metal", "guillotine"})
+
+
+def _sawn_to_length(pid: str, estimates: Dict[str, Any], raw: Dict[str, Any]) -> bool:
+    """The part is already cut to length on the saw (D-531): it carries the estimator's saw
+    pieces, or the saw among its own operations."""
+    for rec in (estimates.get(pid) or {}, raw.get(pid) or {}):
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("_saw_cut_list_pieces"):
+            return True
+        for field in ("inferred_operations", "textual_operations", "operations"):
+            if "saw" in {str(o).strip().lower() for o in (rec.get(field) or [])
+                         if isinstance(o, str)}:
+                return True
+    return False
+
+
+def _map_operation(op: str, is_acrylic: bool, stock_form: str = "",
+                   material: Any = "") -> Optional[str]:
     """Map an engine operation name to the correct WB department name.
 
     Priority:
       1. Tube stock → remap fold/folding to Tubebend (tube-bender, not press-brake)
-      2. Acrylic/board → use acrylic operation variants (Linebend, Laser (Acrylic), etc.)
-      3. Everything else → standard metal mapping
+      2. Timber/board → the joinery departments the rate card carries
+      3. Acrylic → use acrylic operation variants (Linebend, Laser (Acrylic), etc.)
+      4. Everything else → standard metal mapping
+
+    `material` is optional so that every existing caller keeps working; without it a timber
+    part behaves as it did before, which is the state this parameter exists to correct.
     """
     key = str(op).lower()
     sf = str(stock_form or "").lower()
     # Tube bending: the engine assigns 'folding' but SDI uses a tube-bender
     if sf == "tube" and key in _TUBE_OP_REMAP:
         return _TUBE_OP_REMAP[key]
+    # Joinery, BEFORE acrylic: a timber part is board, so it arrives here with is_acrylic set,
+    # and the acrylic map would otherwise name its department after a material it is not.
+    if _is_timber(str(material or "")) and key in OP_NAME_MAP_JOINERY:
+        return OP_NAME_MAP_JOINERY[key]
+    # ── ACRYLIC IS CUT ON THE CNC, NOT ON THE JOINERY ROUTER ─────────────────────────
+    #
+    # The rate card carries both rows and they are different machines for different stock:
+    # CNC at GBP 43.36/hr with a 10-minute set-up, CNC Joinery at GBP 64.07 with 15. Neither map
+    # claimed `cnc_routing`, so board and acrylic alike fell through to OP_NAME_MAP and both
+    # landed on CNCJ — right for the MDF packer by accident, and wrong for the acrylic by about
+    # GBP 21 an hour. On 12349-02 the 5 mm high-impact acrylic front cover was charged at the
+    # same rate as the 6 mm MDF packer, which is the estimator's own point.
+    #
+    # ASKED OF THE MATERIAL, NOT OF THE MAP, because `is_acrylic` is really _is_board: it is true
+    # of MDF too. Putting this in OP_NAME_MAP_ACRYLIC moved the packer as well — the joinery map
+    # does not list `cnc_routing`, so board fell straight through to the acrylic branch.
+    #
+    # AND ONLY WHERE THE MATERIAL IS KNOWN. A caller that names no material cannot be told board
+    # from acrylic, and this function's contract is that such a call behaves as it did before —
+    # so the joinery row stands rather than an unnamed material quietly taking the cheaper
+    # machine.
+    if key in _CNC_ROUTING_KEYS and _is_acrylic_material(material):
+        return "CNC"
     # Acrylic/board operations
     if is_acrylic and key in OP_NAME_MAP_ACRYLIC:
         return OP_NAME_MAP_ACRYLIC[key]
     # Standard metal
-    return OP_NAME_MAP.get(key)
+    _hit = OP_NAME_MAP.get(key)
+    if _hit:
+        return _hit
+
+    # ── LAST RESORT: THE ALIAS TABLE, NOT A SILENT NONE ──────────────────────────
+    # OP_NAME_MAP is keyed on the engine's own operation words. A route now also arrives
+    # from a model, and a model writing about manufacturing produces English — "Cut to
+    # length", "MIG weld", "Laser cut" — or answers with the department code it was asked
+    # for. None of those are engine words, so this returned None and the operation was
+    # dropped without a sound.
+    #
+    # department_codes resolves all of it against the rate table's own closed vocabulary
+    # (H173:K204). Returning None still means "nothing recognises this", which is what the
+    # caller must flag — but it now means it far less often, and never for a word we
+    # ourselves asked the model to use.
+    try:
+        from department_codes import title_for as _title_for
+        return _title_for(op)
+    except Exception:
+        return None
 
 
 # Operations that are genuinely impossible / meaningless for a given stock form
@@ -214,40 +1367,33 @@ def _map_operation(op: str, is_acrylic: bool, stock_form: str = "") -> Optional[
 # NOTE: tube-fold and acrylic-fold are NOT in this list — they are REAL operations
 # (tube-bending and line-bending) that get REMAPPED above, not dropped.
 # Only operations that serve no purpose at all go here.
-_SPURIOUS_OPS_BY_STOCK_FORM = {
-    "tube": {"punch", "punching"},   # tubes are not punched (no flat blank to punch)
-    # A solid round bar has NO FLAT BLANK. It cannot be lasered, folded, punched,
-    # line-bent, guillotined or diamond-polished. It is cut (Robomac / Saw) and welded.
-    # 1310-02 STUD (8mm dia x 65) was carrying Laser £4.91 from the original misread
-    # that treated its DIAMETER as an 8mm sheet THICKNESS.
-    "wire": {
-        "laser", "laser_cutting", "laser_metal",
-        "fold", "folding",
-        "punch", "punching",
-        "linebend", "line_bend",
-        "guillotine",
-        "diamond_polish",
-    },
-}
-# Acrylic doesn't get punched either (laser or CNC cut, not punch press).
-_SPURIOUS_OPS_BY_MATERIAL = {
-    "acrylic": {"punch", "punching"},
+# Operations the engine ADDS from another operation rather than reading from a route. They
+# carry no route line, so they have no scope of their own and inherit their parent's.
+_CHAINED_FROM = {
+    "dress_welds": "welding",
 }
 
+# THE TABLES LIVE IN stock_form_rules SO THE ROUTE COMPILER READS THE SAME ONES.
+#
+# They were defined here, inside the legacy labour loop's reach, and the canonical cutover
+# replaced that loop entirely — so every rule below stopped being applied the moment the
+# cutover was switched on, silently, because a gate nobody asks reports nothing. Aliased
+# rather than moved so existing readers of these names keep working.
+from stock_form_rules import (  # noqa: E402
+    IMPOSSIBLE_OPS_BY_STOCK_FORM as _SPURIOUS_OPS_BY_STOCK_FORM,
+    IMPOSSIBLE_OPS_BY_MATERIAL as _SPURIOUS_OPS_BY_MATERIAL,
+    is_impossible_operation as _stock_form_forbids,
+)
 
 def _is_spurious_operation(op: str, stock_form: str, material: str = "") -> bool:
     """True if this operation is physically impossible for this stock form / material.
-    Note: fold/folding on tubes and acrylic is NOT spurious — it's remapped to the
-    correct WB operation (Tubebend / Linebend) by _map_operation, not dropped here."""
-    key = str(op).lower()
-    sf = str(stock_form or "").lower()
-    if key in _SPURIOUS_OPS_BY_STOCK_FORM.get(sf, set()):
-        return True
-    mat = str(material or "").lower()
-    for mat_key, bad in _SPURIOUS_OPS_BY_MATERIAL.items():
-        if mat_key in mat and key in bad:
-            return True
-    return False
+
+    Note: fold/folding on tubes and acrylic is NOT spurious — it's remapped to the correct
+    WB operation (Tubebend / Linebend) by _map_operation, not dropped here.
+
+    Kept as the legacy loop's entry point; the rules themselves are in stock_form_rules so
+    the route compiler decides from the same table rather than a copy of it."""
+    return _stock_form_forbids(op, stock_form, material)
 
 
 def _safe(v, default=None):
@@ -259,14 +1405,2464 @@ def _safe(v, default=None):
         return default
 
 
+# The stock forms a part we FABRICATE can carry, for size-band voting. Aligned with the Sheet
+# Steel nest routing (STEEL_STOCK_FORMS = sheet, stated_weight) and the coated-area loop, plus
+# the board/plate panels we also cut. "" is deliberately ABSENT: an unknown stock form is not a
+# vote, and reading it as sheet is what let a bought-in vinyl DXF set the band on 11762-02.
+_FABRICATED_SHEET_STOCK_FORMS = frozenset({"sheet", "plate", "board", "stated_weight"})
+_FABRICATED_LINEAR_STOCK_FORMS = frozenset({"wire", "bar"})
+
+
+def powder_bars_per_piece(long_mm: Any, rule: Optional[Mapping[str, Any]] = None) -> Optional[int]:
+    """Hanging bars one piece takes on the powder line, or None when it fits on one bar (the
+    size band governs) or the rule is off. config.POWDER_HANGING has the method and its source."""
+    if rule is None:
+        try:
+            import config as _cfg_ph
+            rule = getattr(_cfg_ph, "POWDER_HANGING", {}) or {}
+        except Exception:                                            # noqa: BLE001
+            rule = {}
+    if not rule or not rule.get("enabled"):
+        return None
+    length = _safe(long_mm)
+    pitch = _safe(rule.get("bar_pitch_mm"))
+    if not length or not pitch or length <= 0 or pitch <= 0:
+        return None
+    span = (length + float(_safe(rule.get("clearance_mm")) or 0.0)) / pitch
+    if span <= 1.0:
+        return None
+    from math import ceil as _ceil_bars
+    whole = _ceil_bars(span - 1e-9) if str(rule.get("rounding")) == "up" else int(round(span))
+    return max(1, whole) + int(_safe(rule.get("spacing_bars")) or 0)
+
+
+def _part_long_length_mm(part: Mapping[str, Any]) -> Optional[float]:
+    """The longest dimension a coated part hangs by: its flat blank's longer side, or its cut
+    length for a linear part."""
+    me = part.get("material_estimate") or {}
+    ng = part.get("normalized_geometry") or {}
+    # A CUT LENGTH IS A LENGTH ONLY FOR A LINEAR PART. On a sheet part or an assembly it is
+    # the total cut path — every edge added up — and 12527-22-101, a 250 mm riser, hung as
+    # 6,168 mm: 16 bars a piece, 20 pieces an hour, £19 of powder on a £36 unit.
+    _form = str(me.get("stock_form") or (part.get("manufacturing_interpretation") or {})
+                .get("stock_form") or "").strip().lower()
+    _keys = ["blank_length_mm", "blank_width_mm", "length_mm"]
+    if _form in _FABRICATED_LINEAR_STOCK_FORMS or _form in ("tube", "section"):
+        _keys.append("cut_length_mm")
+    dims = [_safe(me.get(k) or ng.get(k)) for k in _keys]
+    dims = [d for d in dims if d and d > 0]
+    return max(dims) if dims else None
+
+
+def _part_coated_m2(part: Mapping[str, Any]) -> Optional[float]:
+    """The coated area one piece of this part carries, as the costing stage measured it: its
+    own blank, or its members' blanks for an assembly coated as one. None when unmeasured."""
+    _det = ((part.get("process_estimate") or {}).get("powder_coating_detail") or {})
+    for _v in (_det.get("coated_m2"), part.get("_powder_members_coated_m2"),
+               part.get("_powder_reliable_coated_m2")):
+        _a = _safe(_v)
+        if _a and _a > 0:
+            return float(_a)
+    return None
+
+
+def powder_area_throughput(parts: Sequence[Mapping[str, Any]],
+                           rule: Optional[Mapping[str, Any]] = None
+                           ) -> Optional[Tuple[float, str]]:
+    """(pieces an hour, the working) for a P.Coat row from the area its pieces carry, at the
+    line's square metres an hour (config.LABOUR_RULES['powder_coating']). None when any piece
+    on the row has no measured area — the size band then stands, as before.
+
+    Several parts combine as the true rate: the row's pieces over the hours their total area
+    takes, never an average of separate rates."""
+    if rule is None:
+        try:
+            import config as _cfg_pa
+            rule = (getattr(_cfg_pa, "LABOUR_RULES", {}) or {}).get("powder_coating") or {}
+        except Exception:                                            # noqa: BLE001
+            rule = {}
+    m2_hr = _safe(rule.get("throughput_m2_per_hour"))
+    if not m2_hr or m2_hr <= 0 or not parts:
+        return None
+    pieces, area, shown = 0.0, 0.0, []
+    for p in parts:
+        a = _part_coated_m2(p)
+        if a is None:
+            return None              # one unmeasured piece and the row's area is unknown
+        q = float(_safe(p.get("quantity"), 1) or 1)
+        pieces += q
+        area += q * a
+        shown.append(f"{p.get('part_number')} {a:.3f} m2")
+    if pieces <= 0 or area <= 0:
+        return None
+    rate = float(m2_hr) * pieces / area
+    return rate, (f"{'; '.join(shown)} at {float(m2_hr):g} m2/hr gives {rate:.0f} pieces/hr "
+                  f"(config.LABOUR_RULES powder_coating)")
+
+
+def powder_hanging_throughput(parts: Sequence[Mapping[str, Any]],
+                              rule: Optional[Mapping[str, Any]] = None
+                              ) -> Optional[Tuple[float, str]]:
+    """(pieces an hour, the working) for a P.Coat row by hanging geometry, or None when no
+    part on it is longer than one bar.
+
+    Several parts on one row combine as the true rate: pieces over the bars they occupy
+    together, never an average of their separate rates."""
+    if rule is None:
+        try:
+            import config as _cfg_ph
+            rule = getattr(_cfg_ph, "POWDER_HANGING", {}) or {}
+        except Exception:                                            # noqa: BLE001
+            rule = {}
+    line = _safe(rule.get("line_bars_per_hour"))
+    if not line or not parts:
+        return None
+    pieces, bars, shown, any_long = 0.0, 0.0, [], False
+    for p in parts:
+        q = float(_safe(p.get("quantity"), 1) or 1)
+        L = _part_long_length_mm(p)
+        b = powder_bars_per_piece(L, rule)
+        if b is not None:
+            any_long = True
+            shown.append(f"{p.get('part_number')} {L:g} mm -> {b} bars")
+        pieces += q
+        bars += q * (b if b is not None else 1)
+    if not any_long or bars <= 0:
+        return None
+    rate = float(line) * pieces / bars
+    working = (f"{'; '.join(shown)} on {rule.get('bar_pitch_mm'):g} mm bars "
+               f"(+{rule.get('clearance_mm'):g} mm, +{rule.get('spacing_bars')} spacing) — "
+               f"{line:g} bars/hr gives {rate:.0f} pieces/hr. Method stated by "
+               f"{rule.get('stated_by', 'estimating')}, {rule.get('stated_on', '')}.")
+    return rate, working
+
+
+def steel_row_fits(length: Any, width: Any, sheet_l: Any, sheet_w: Any,
+                   material: Any = "MILD STEEL") -> bool:
+    """Does the Sheet Steel row nest at least one blank on this sheet? Asked of the ONE
+    nesting rule (costed_facts.nest_on_sheet), which is the template's own K formula."""
+    import costed_facts as _cf_nest
+    return _cf_nest.nest_on_sheet(material, length, width, sheet_l, sheet_w) is not None
+
+
+def template_block_sheet(ws, block: Mapping[str, Any]) -> Tuple[float, float]:
+    """The stock sheet the template pre-fills on its Sheet Steel rows, (0, 0) when none does.
+
+    Read from the block's own rows — the most common numeric (length, width) pair — and
+    before any row is written, so an engine-chosen sheet cannot vote. Not a number in the
+    code: rows added to the template in Excel can arrive without the pre-filled sheet (12645,
+    29 Sep: rows 104-128 carried J=1250 and an empty I), and the old `or 2500` assumed a
+    value the cell did not hold (D-342)."""
+    col_l, col_w = block.get("col_sheet_l"), block.get("col_sheet_w")
+    if not col_l or not col_w:
+        return (0.0, 0.0)
+    counts: Dict[Tuple[float, float], int] = {}
+    for r in range(int(block["first_row"]), int(block["last_row"]) + 1):
+        sl = _safe(ws.cell(row=r, column=int(col_l)).value)
+        sw = _safe(ws.cell(row=r, column=int(col_w)).value)
+        if sl and sw and sl > 0 and sw > 0:
+            counts[(float(sl), float(sw))] = counts.get((float(sl), float(sw)), 0) + 1
+    if not counts:
+        return (0.0, 0.0)
+    return max(counts.items(), key=lambda kv: (kv[1], -kv[0][0] * kv[0][1]))[0]
+
+
+def steel_sheet_for_row(length: Any, width: Any, material: Any,
+                        template_sheet: Tuple[Any, Any]) -> Tuple[Optional[Tuple[float, float]], str]:
+    """(sheet to write, or None to leave the template's; why) for one Sheet Steel row.
+
+    12645's back panels, corners and columns are 2,912 to 2,975 mm flats. The row carried the
+    template's 2500 x 1250, its nest formula found no fit and left the cost blank — eight parts
+    at £0 steel while still lasered — although config.STANDARD_SHEET_SIZES_MM stocks 3000 x
+    1500 mild steel and the engine's own costing had already nested them on it. The row now
+    takes the smallest STOCKED sheet its own formula can nest the blank on; a row that fits
+    the template's sheet keeps it, so no existing book moves (D-314)."""
+    if steel_row_fits(length, width, *template_sheet, material=material):
+        return None, ""
+    import costed_facts as _cf_stock
+    sizes = _cf_stock.stocked_sheet_sizes(material)
+    for sl, sw in sorted(sizes, key=lambda s: s[0] * s[1]):
+        if steel_row_fits(length, width, sl, sw, material=material):
+            return (float(sl), float(sw)), (f"{sl:g} x {sw:g} — the template's "
+                                            f"{float(template_sheet[0]):g} x "
+                                            f"{float(template_sheet[1]):g} cannot nest it")
+    largest = max(sizes, key=lambda s: s[0] * s[1]) if sizes else None
+    beyond = ("longer or wider than every stocked sheet"
+              + (f" (largest {largest[0]:g} x {largest[1]:g})" if largest else ""))
+    # A SIZE A STOCKIST LISTS, BEFORE £0 (D-332). 12645's 3,020 mm covers nest two a sheet on
+    # 4000 x 1830: the row takes that sheet and its own formula prices the steel; the caller
+    # raises the make-or-buy question, because SDI does not hold the size.
+    import costed_facts as _cf_os
+    over = _cf_os.oversize_sheet_for(material, length, width)
+    if over:
+        (osl, osw), nest = over
+        return (osl, osw), (f"{OVERSIZE_WHY} {osl:g} x {osw:g} ({nest['parts_per_sheet']} a "
+                            f"sheet) — {beyond}; a size stockists list, not one SDI holds")
+    return None, beyond
+
+
+OVERSIZE_WHY = "OVERSIZE sheet"
+
+
+def is_oversize_sheet(why: str) -> bool:
+    return str(why or "").startswith(OVERSIZE_WHY)
+
+
+def raise_oversize_route(pe: Dict[str, Any], length: Any, width: Any, why: str,
+                         flags: List[str]) -> None:
+    """A blank priced from a sheet SDI does not stock (D-332): the money is on the sheet,
+    PROVISIONAL, and the route is a decision — raised ONE way, row or spilled line."""
+    pn = str(pe.get("part_number") or "")
+    _flag(f"steel {pn}: {length:g} x {width:g} blank priced PROVISIONALLY from an {why}. "
+          f"ESTIMATOR TO CONFIRM the route", flags)
+    if not isinstance(pe.get("route_gap"), dict):
+        pe["route_gap"] = {
+            "issue": (f"{pn} is a {length:g} x {width:g} mm flat; its steel is priced "
+                      f"provisionally from an {why}"),
+            "assumption": "cut and folded in-house in one piece from the larger sheet",
+            "action": ("confirm SDI can cut and fold it in one piece; if it is bought "
+                       "cut-and-folded, replace the in-house laser and fold with the "
+                       "subcontract price, not both. Do not shorten or join it without Design"),
+        }
+
+
+def raise_unnestable_steel(pe: Dict[str, Any], length: Any, width: Any, why: str,
+                           flags: List[str]) -> None:
+    """A Sheet Steel blank no stocked sheet can hold, raised ONE way wherever the part is
+    written: the block row (D-314) and a line the full block spilled to the BOM (D-318)."""
+    pn = str(pe.get("part_number") or "")
+    _flag(f"steel {pn}: {length:g} x {width:g} blank is {why} — its steel cannot be nested "
+          f"and the row charges no material. ESTIMATOR TO DECIDE: plate, a split, or a sheet "
+          f"size we do not list", flags)
+    if not isinstance(pe.get("route_gap"), dict):
+        pe["route_gap"] = {
+            "issue": (f"{pn} is a {length:g} x {width:g} mm flat, {why}, "
+                      f"so its steel is not charged"),
+            "assumption": "no stocked sheet can be nested for it",
+            "action": ("say how it is made: cut from plate or a larger sheet "
+                       "(give the size), or split and joined"),
+        }
+
+
+def spill_from_full_block(ws, block_name: str, block_key: str, block: Mapping[str, Any],
+                          part: Dict[str, Any], flags: List[str]) -> Dict[str, Any]:
+    """The Bill of Materials line for one part a full costing block could not hold (D-318).
+
+    A Sheet Steel part is asked the question its block row would have asked it
+    (steel_sheet_for_row, on the block's own template sheet): a blank no stocked sheet holds
+    raises the same decision the row raises and carries no price, because the row would
+    charge none. Every other spilled line keeps the engine's figure, and the part is marked
+    so the one tally counts it until a person has nested it."""
+    me = part.get("material_estimate") or {}
+    cost = _safe(me.get("cost_per_part_gbp") or me.get("unit_material_cost_gbp"))
+    basis = "net_part_provisional"
+    words = f"{block_name} block full — PROVISIONAL: engine figure, not the block's nest"
+    extra: Dict[str, Any] = {}
+    if block_key == "steel" and block.get("col_sheet_l") and block.get("col_sheet_w"):
+        bd = _costed_facts.blank_dimensions(part)
+        length, width = _safe(bd["length_mm"]), _safe(bd["width_mm"])
+        if length and width:
+            tpl = template_block_sheet(ws, block)
+            mat = part.get("normalized_material") or me.get("material") or "MILD STEEL"
+            sheet, why = steel_sheet_for_row(length, width, mat, tpl)
+            if sheet is None and why:
+                raise_unnestable_steel(part, length, width, why, flags)
+                basis, cost = "no_stocked_sheet", None
+                extra["_price_explicitly_withheld"] = True
+                words = f"{block_name} block full — NOT PRICED: no stocked sheet holds it"
+            elif sheet is not None and is_oversize_sheet(why):
+                raise_oversize_route(part, length, width, why, flags)
+                words = (f"{block_name} block full — PROVISIONAL: oversize "
+                         f"{sheet[0]:g} x {sheet[1]:g} sheet, route to confirm")
+    if basis == "net_part_provisional":
+        _flag(f"{block_name} overflow {part.get('part_number')}: costed on the engine's own "
+              f"figure, not the block's nest — estimator input.", flags)
+    part["block_overflow"] = {"block": block_name, "basis": basis}
+    return dict(part) | extra | {
+        "description": f"{part.get('description') or ''} — {words}",
+        "unit_cost_gbp": cost,
+        "_block_overflow_from": block_name,
+        "_block_overflow_basis": basis,
+    }
+
+
+def waste_already_in_price(pe: Dict[str, Any]) -> bool:
+    """True when the line's unit figure already carries its cut allowance, so the BOM's own
+    4% would charge it twice. Section stock and fixed-each commodities (see the BOM writer),
+    and a line a full block spilled at the engine's own figure (D-318)."""
+    me = pe.get("material_estimate") or {}
+    method = str(me.get("cost_method") or pe.get("cost_source") or "").lower()
+    if bool(me.get("waste_included")) or method in (
+            "standard_commodity_provisional", "subcontract_plating_indicative"):
+        return True
+    # every engine per-part material figure is multiplied by (1 + scrap) before it leaves
+    # the estimator (sheet formula, board yield, per-kilo, wire, bar, area rates)
+    return bool(pe.get("_block_overflow_from"))
+
+
+def _largest_fabricated_part_area(parts):
+    """(area_m2, part_number) of the biggest part we FABRICATE — the size proxy for throughput
+    banding of Assemble/pack and P.Coat.
+
+    Pack and coat speed track the biggest part in the job, not the average. ONLY a part we make
+    votes -- bought_in_policy, the single make/buy authority, keeps purchased lines (a vinyl
+    graphic, a fixing, a print) out -- and only through a stock form we recognise, so an unknown
+    "" form does not count.
+
+    On 11762-02 both gates had failed at once. The sheet branch read stock_form "" as sheet, so
+    a bought-in VINYL graphic with a cutter DXF (858 x 72 = 0.0618 m2) voted as a panel; and it
+    omitted "stated_weight", the form the 1009 x 364 steel shelf (0.367 m2) was routed by, so
+    the real largest part never entered the max. The band followed the graphic -> B -> pack
+    30/hr, where the shelf is C -> 20/hr: pack ~50% too fast and silently under-costed.
+
+    Returns (0.0, None) when nothing qualifies -- the caller falls to the un-banded default
+    rather than guess a band.
+    """
+    try:
+        import bought_in_policy as _bip
+    except Exception:                                    # noqa: BLE001
+        _bip = None
+    best_area, best_pn = 0.0, None
+    for _ap in parts or []:
+        if _bip is not None and _bip.is_bought_in(_ap):
+            continue                              # we buy it, so we do not size a band on it
+        _ame = _ap.get("material_estimate") or {}
+        _asf = str(_ame.get("stock_form") or "").lower()
+        _ang = _ap.get("normalized_geometry") or {}
+        _area = 0.0
+        if _asf in _FABRICATED_SHEET_STOCK_FORMS:
+            _al = _safe(_ame.get("blank_length_mm") or _ang.get("blank_length_mm"))
+            _aw = _safe(_ame.get("blank_width_mm") or _ang.get("blank_width_mm"))
+            if _al and _aw:
+                _area = (_al / 1000.0) * (_aw / 1000.0)
+        elif _asf in _FABRICATED_LINEAR_STOCK_FORMS:
+            _ag = _safe(_ame.get("gauge_mm") or _ame.get("diameter_mm"))
+            _aln = _safe(_ame.get("length_mm") or _ame.get("cut_length_mm"))
+            if _ag and _aln:
+                _area = 3.14159265 * (_ag / 1000.0) * (_aln / 1000.0)
+        if _area > best_area:
+            best_area, best_pn = _area, _ap.get("part_number")
+    return best_area, best_pn
+
+
+def _is_powder_consumable(part) -> bool:
+    """A BOM line that IS the powder itself (the coating consumable), by name or description.
+
+    Keyed on the word POWDER, not on a code, so it catches both the engine's generic 'POWDER'
+    row and a drawing-named one like 'POWDER197' — every powder job, not one pack's spelling."""
+    text = (str((part or {}).get("part_number") or "") + " "
+            + str((part or {}).get("description") or "")).upper()
+    return "POWDER" in text
+
+
+def _powder_consumable_rate(part, engine_rate):
+    """The reproducible £/kg a powder consumable line prices at, or None.
+
+    A drawing-NAMED powder (POWDER197) is read straight off the BOM and never passes through
+    the generic-row branch that stamps _catalogue_rate_gbp, so it reached the consumable pricer
+    rate-less and was withheld at £0 while the engine's own coated mass sat unused. The rate for
+    ANY powder is the same SDI figure the generic row uses — config.POWDER_COST_PER_KG — so a
+    powder line carrying no rate of its own inherits it. A line's OWN catalogue rate always wins,
+    and a non-powder line gets nothing here. Config-controlled, so the resulting price repeats
+    every run — an SDI material rate, not an unrepeatable AI figure."""
+    own = _safe((part or {}).get("_catalogue_rate_gbp"))
+    if own:
+        return own
+    if _is_powder_consumable(part):
+        rate = _safe(engine_rate)
+        if rate:
+            return rate
+    return None
+
+
 def _is_sheet_metal(mat: str) -> bool:
     m = (mat or "").upper()
     return any(k in m for k in ("STEEL", "MILD", "MS", "STAINLESS", "ALUM", "GALV", "CR4"))
 
 
+def _line_is_its_own_section_stock(material_estimate: Any) -> bool:
+    """A material estimate priced as section by length — the config or catalogue section
+    rate over a cut length — is the line's own stock (D-577): the line is written to the
+    bill as a tube line whatever its description calls it."""
+    me = material_estimate if isinstance(material_estimate, dict) else {}
+    method = str(me.get("cost_method") or "").lower()
+    length = (me.get("stock_estimate") or {}).get("section_length_mm") if isinstance(me.get("stock_estimate"), dict) else None
+    return "section_stock" in method and bool(_safe(length))
+
+
+def _has_children_to_carry_it(part_number: str, part_estimates: List[Dict[str, Any]],
+                             summary: Dict[str, Any]) -> bool:
+    """Is there anything in this job that a rollup could roll up INTO?
+
+    Canonical hierarchy first — it is the authority and it knows edges no numbering scheme
+    expresses. Then the numbering convention, for a job whose graph never compiled.
+    """
+    _pn = str(part_number or "").strip().upper()
+    if not _pn:
+        return False
+    _payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+                or summary.get("canonical_route_shadow") or {})
+    for _node in (_payload.get("nodes") or []):
+        if not isinstance(_node, dict):
+            continue
+        if str(_node.get("part_number") or "").strip().upper() == _pn:
+            # A LEAF HAS NOTHING TO ROLL INTO (D-577). A weldment cut from its own pieces
+            # keeps the edges to its cut-list rows in the graph, and the graph calls it a
+            # leaf for that reason; those rows are its pieces, not members that carry its
+            # money. Edges alone made 401918-01-07M a "rollup" and its tube left the sheet.
+            if _node.get("children") and str(_node.get("kind") or "").lower() != "leaf":
+                return True
+    _prefix = _pn + "-"
+    return any(
+        str(p.get("part_number") or "").strip().upper().startswith(_prefix)
+        for p in (part_estimates or []) if isinstance(p, dict))
+
+
+# FIELDS WHOSE ZERO IS A DEFAULT AND NOT A MEASUREMENT — named one at a time, with the
+# line of code that defaults each one, because "zero means unread" is a claim about a
+# specific writer and never a property of geometry in general.
+#
+#   hole_count / estimated_hole_count   document_builder writes
+#                                       `features.get("hole_count", 0)`, so a part nobody
+#                                       measured and a part with no holes arrive identical.
+#                                       The Sheet Steel block already treats that 0 as
+#                                       unread, leaving the cell blank rather than claiming
+#                                       no holes.
+#   cut_length_mm / estimated_...       resolved through an `or` chain whose last candidate
+#                                       can itself be 0. Nothing reaches the profile-cutting
+#                                       calculator that is not being cut, so a zero-length
+#                                       outline is never something a measurement said.
+#
+# EVERYTHING ELSE KEEPS THE CODEBASE'S RULE: an explicit zero is a value and outranks a
+# weaker source. bend counts are the reason this is a list and not a policy — a measured
+# zero bend count is the entire basis of the fold rule-out, and treating it as silence here
+# would hand a flat part its mirror's folds, which is the exact defect _is_blank's docstring
+# in drawing_job_merge exists to prevent. Nothing may be added below without naming the
+# writer that defaults it.
+_ZERO_IS_UNREAD_GEOMETRY_FIELDS = frozenset({
+    "hole_count", "estimated_hole_count",
+    "cut_length_mm", "estimated_cut_length_mm",
+})
+
+
+def part_cannot_be_powder_coated(pe: Dict[str, Any]) -> bool:
+    """Is this part physically incapable of going through the powder oven?
+
+    THE SHARED PHYSICAL RULE, NOT A PRIVATE LIST. stock_form_rules already answers this —
+    it is what stops a P.Coat OPERATION being routed onto a board part — and the coated-area
+    sum that produces the POWDER BOM line carried its own four-plastic set instead. So the
+    operation was correctly refused and the MATERIAL was billed anyway: the two halves of
+    one fact, disagreeing.
+
+    12422-24 is what that costs. The MFC end cap is 1.434 x 0.748, doubled for two faces =
+    2.1453 m2 of the 2.2538 m2 on the powder line. 95% of the powder on that sheet is a
+    melamine-faced panel that is laminated and edged and never sees a booth. The template's
+    own Powder Qty Calculator reads only the Sheet Steel block and totals 0.0131 kg; the BOM
+    line books 0.45075 kg. One sheet, one quantity, two numbers, 34x apart — and the one
+    that reaches the price is the wrong one.
+
+    Steel is unaffected: the rule returns False for every metal, so no existing job moves.
+
+    THE LOCAL SET IS GONE. It named five plastics and compared them by EXACT equality, so
+    it answered "coatable" for PETG, ABS, PVC, polypropylene and every material string that
+    carried so much as a grade suffix. stock_form_rules.non_metal_reason now answers for
+    the class, and this function's job is only to ask it with the right material.
+    """
+    mat = str(pe.get("normalized_material")
+              or (pe.get("material_estimate") or {}).get("material") or ""
+              ).upper().replace("_", " ")
+    if bool(pe.get("acrylic_no_powder")):
+        return True
+    try:
+        from stock_form_rules import is_impossible_operation as _impossible
+        return bool(_impossible(
+            "powder_coating",
+            str((pe.get("material_estimate") or {}).get("stock_form") or ""), mat))
+    except Exception:
+        return False
+
+
+# The operations that cut a part's holes with it: the profile cuts the read contract names
+# (config READ_PROFILE_CUTS) and the drilling family.
+_HOLE_CUTTING_OPS = frozenset(set(getattr(config, "READ_PROFILE_CUTS", ()) or ())
+                              | {"hole_machining", "drilling", "punch"})
+
+
+def costed_geometry_value(pe: Dict[str, Any], *names: str) -> Any:
+    """A geometry datum off a COSTED part record, from whichever of its two geometry
+    records has one — normalized_geometry first, geometry_rollup second.
+
+    THE COSTED RECORD HAS TWO GEOMETRY RECORDS AND THEY ARE NOT THE SAME RECORD.
+    normalized_geometry holds the DERIVED, confidence-weighted view (`hole_count`,
+    `cut_length_mm`); geometry_rollup holds the MEASURED one (`estimated_hole_count`,
+    `estimated_cut_length_mm`). feature_synthesis multiplies the rollup's cut length by the
+    geometry confidence on its way into normalized_geometry, so on any part below full
+    confidence the two are different numbers describing the same edge.
+
+    WHY ORDER MATTERS MORE THAN IT LOOKS. The Sheet Steel block used to read
+    `pe["geometry_rollup"] or pe["normalized_geometry"]` — one whole dict, chosen by
+    truthiness — and estimator.estimate_part did not copy the rollup onto the costed
+    record at all, so the first branch was None on every part of every job and the second
+    answered every time. Making the rollup travel with the estimate, which is what a
+    mirrored part needs, would therefore have moved every steel part in every job onto the
+    unweighted cut length and changed its internal-cut distance and its laser throughput.
+    That is a pricing decision and not this function's to make, so the field the sheet
+    already reads still wins and the rollup answers only where it is SILENT.
+
+    A ZERO IS SILENCE FOR THE FIELDS IN _ZERO_IS_UNREAD_GEOMETRY_FIELDS AND NO OTHERS.
+    That is a claim about the specific line of code that writes each one, not about
+    geometry, and the list names the writer for every entry. 11350's mirrored right hand is
+    what the hole count cost: its own normalized_geometry had hole_count 0 and no cut
+    length, while the rollup the mirror pass filled from the measured left hand held 2 holes
+    and 743.99mm — so the sheet cut it at 368/hr against its own mirror image's 287.
+
+    For every other field an explicit zero is a VALUE and is returned, because that is what
+    it is everywhere else in this codebase: a measured zero bend count is the whole basis of
+    the fold rule-out. Scoping the rule to this function rather than to these fields would
+    have made the next caller's flat part inherit its mirror's folds.
+    """
+    from source_precedence import rank as _rank
+
+    _SOURCE_KEY = {"normalized_material": "material_source",
+                   "quantity": "quantity_source",
+                   "normalized_thickness_mm": "thickness_source"}
+
+    _candidates = []          # (position, rank, value) — position 0 is normalized_geometry
+    for _pos, _src in enumerate((pe.get("normalized_geometry") or {},
+                                 pe.get("geometry_rollup") or {})):
+        for _n in names:
+            _v = _src.get(_n)
+            if _v is None:
+                continue
+            if (_n in _ZERO_IS_UNREAD_GEOMETRY_FIELDS
+                    and isinstance(_v, (int, float)) and not isinstance(_v, bool)
+                    and _v <= 0):
+                continue
+            _s = _src.get(_SOURCE_KEY.get(_n, f"{_n}_source"))
+            _candidates.append((_pos, _rank(_s), _v))
+            break             # first named spelling this record answers with
+    if not _candidates:
+        return None
+    # RANK FIRST, POSITION ONLY TO BREAK A TIE.
+    #
+    # This asked normalized_geometry first and the rollup only where it was silent — chosen
+    # to avoid moving every steel part onto the unweighted cut length, which was the right
+    # caution and the wrong mechanism. Position is not evidence. On 12422-24-02M the rollup
+    # held 746.91mm stamped `solidworks_api` (rank 90, measured on the model's cut list) and
+    # normalized_geometry held 8215.26mm — the GA's vector paths — with NO recorded source
+    # at all, which this codebase ranks 0. The measurement lost to the guess because the
+    # guess was asked first, and the laser calculator was handed 7832mm of internal cut
+    # against a true 364mm.
+    #
+    # Ranking restores the original caution exactly where it was aimed: two unsourced
+    # values, or two of equal rank, still resolve to normalized_geometry, so nothing whose
+    # provenance nobody recorded moves. Only a datum that can NAME a stronger source
+    # displaces one that cannot.
+    _candidates.sort(key=lambda c: (-c[1], c[0]))
+    return _candidates[0][2]
+
+
+# PLASTICS THE SHOP CUTS, spelled as the drawings spell them. Everything here is matched
+# as a SUBSTRING of the material name, which is why the list is plastics only.
+#
+# WHY NOT REUSE document_builder._NON_METAL_KEYWORDS. It knows every name here and more --
+# and it also contains "LED", for light panels. "COLD ROLLED STEEL" and "ANNEALED" both
+# contain LED, so unioning that set into a substring test would route mild steel into the
+# board block and price it as plastic. The two lists answer different questions: that one
+# asks "does this text mention something non-metal", this one asks "is this part made of
+# plastic sheet". Keeping them apart is deliberate.
+#
+# PETG IS WHY THIS LIST EXISTS. Job 11650's side panels are PETG, and PETG contains none of
+# the old tokens -- not POLY, not ACRYLIC, nothing. So a 1250 x 525 plastic panel was
+# classified as sheet steel and costed at GBP 900/tonne: GBP 22.96 of a GBP 111 material
+# total, on a part that is not metal, with a number that looks entirely plausible. Its
+# opposite hand went unpriced. POLYCARBONATE routed correctly the whole time because it
+# happens to contain POLY, which is what made the failure look like a one-off.
+# The token lists moved to costed_facts, so the workbook, the AI spreadsheet and the
+# engine's nester all read one list. Two copies is how "MR MDF" came to be board in
+# one file and not board in another.
+
+
+def _board_sheet_price_from_kg_rate(material, thickness_mm, sheet_l_mm, sheet_w_mm):
+    """A board's cost per SHEET from its £/kg rate x sheet volume x density.
+
+    THE BOARD EQUIVALENT OF HOW STEEL IS COSTED — £/tonne x weight. MDF carries a 1.35 £/kg rate
+    and a 750 kg/m3 density in config, so a 2440x1220x12 board is a known cost; the Other Sheet
+    block only ever read a ready-made £/sheet and, finding none, shipped 1235x365x12 MDF at £0
+    with the rate sitting in plain sight. Boards are bought by the sheet, so this is the sheet the
+    part nests into, and the workbook divides it by parts-per-sheet exactly as it does for steel.
+
+    Returns None when the material has no rate or density, or a dimension is missing — an honest
+    gap, never a guessed number. A rate that exists in config is reproducible, so this is not an
+    unrepeatable AI figure; it is an SDI material rate, the same class as the steel £/tonne.
+    """
+    if config is None:
+        return None
+    name = str(material or "").strip().upper()
+    if not name:
+        return None
+    rates = getattr(config, "MATERIAL_PRICE_GBP_PER_KG", {}) or {}
+    dens = getattr(config, "MATERIAL_DENSITY_KG_PER_M3", {}) or {}
+    rate = density = None
+    for k in (name, name.replace(" ", "_"), name.replace("_", " ")):
+        rate = rate if rate is not None else rates.get(k)
+        density = density if density is not None else dens.get(k)
+    try:
+        t, sl, sw = float(thickness_mm), float(sheet_l_mm), float(sheet_w_mm)
+    except (TypeError, ValueError):
+        return None
+    if not (rate and density and t > 0 and sl > 0 and sw > 0):
+        return None
+    sheet_vol_m3 = (sl / 1000.0) * (sw / 1000.0) * (t / 1000.0)
+    return round(sheet_vol_m3 * float(density) * float(rate), 2)
+
+
+def _own_sheet_rate(mat: str) -> Optional[float]:
+    """The £/kg this sheet metal is priced at when that is NOT the Sheet Steel block's rate
+    (D-559), else None.
+
+    The Sheet Steel block costs every row from ONE figure, L5 "Sheet Steel Cost Per Tonne".
+    401918-01-01M, a 3 mm STAINLESS rub strip, landed there and was costed at £900/t — the
+    engine's own record had it at config's £3.10/kg, and the sheet silently re-priced it as
+    mild steel (£1.38 where a stainless sheet gives about £4.75; on a stainless panel the gap
+    is pounds). A metal whose configured £/kg sits within SHEET_STEEL_RATE_FAMILY_TOLERANCE
+    of L5's is L5's steel (mild, zintec, galvanised) and belongs in that block; one that does
+    not (stainless, aluminium) is costed in Other Sheet Material at its own cost per sheet,
+    which that block takes as an input. Rates and tolerance are config's; nothing is named
+    here."""
+    if config is None or not _is_sheet_metal(mat) or _is_board(mat):
+        return None
+    name = str(mat or "").strip().upper()
+    rates = getattr(config, "MATERIAL_PRICE_GBP_PER_KG", {}) or {}
+    rate = None
+    for k in (name, name.replace(" ", "_"), name.replace("_", " ")):
+        rate = rate if rate is not None else rates.get(k)
+    if not rate:
+        return None
+    try:
+        l5_per_kg = float((getattr(config, "WORKBOOK_INPUT_DEFAULTS", {}) or {})
+                          .get("sheet_steel_cost_per_tonne_gbp") or 0.0) / 1000.0
+        tol = float(getattr(config, "SHEET_STEEL_RATE_FAMILY_TOLERANCE", 0.5) or 0.5)
+    except (TypeError, ValueError):
+        return None
+    if l5_per_kg <= 0:
+        return None
+    return float(rate) if abs(float(rate) - l5_per_kg) / l5_per_kg > tol else None
+
+
 def _is_board(mat: str) -> bool:
-    m = (mat or "").upper()
-    return any(k in m for k in ("MDF", "ACRYLIC", "HIPS", "FOAM", "PVC", "POLY", "PERSPEX", "BOARD"))
+    """Not sheet metal -- so it is costed by area in the Other Sheet Material block.
+
+    ONE DEFINITION, in costed_facts. This module's token lists and xlsx_output's exact-match
+    set were two different answers to one question, and they disagreed on every material
+    anybody actually writes on a drawing: "MR MDF" and "6MM ABS" were board here and not
+    board there, so the workbook and the AI spreadsheet could put the same part in
+    different blocks on the same run. _is_timber still narrows it where a department has
+    to be named.
+    """
+    return _costed_facts.is_other_sheet_material(mat)
+
+
+_TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",
+                  "SPRUCE", "BEECH", "BIRCH", "MDF", "CHIPBOARD", "OSB",
+                  # MFC — melamine faced chipboard, the commonest shop-fitting board.
+                  "MELAMINE", "MFC")
+
+
+# The routing words that name a CNC pass, whichever vocabulary produced them.
+_CNC_ROUTING_KEYS = frozenset({"cnc_routing", "cnc", "cnc_joinery"})
+
+
+def _is_acrylic_material(mat: Any) -> bool:
+    """Acrylic proper — the stock cut on the CNC rather than on the joinery router.
+
+    Deliberately positive and narrow: it asks whether the material IS acrylic, not whether it
+    is "not metal". _is_board answers the second question and is true of MDF, which is exactly
+    the confusion this exists to avoid."""
+    m = str(mat or "").upper()
+    return "ACRYLIC" in m or "PERSPEX" in m or "PMMA" in m
+
+
+def _is_timber(mat: str) -> bool:
+    """Timber/board joinery, as distinct from acrylic and the other plastics.
+
+    _is_board() lumps them together because neither is sheet metal, which is right for
+    deciding the cost stream but wrong for naming a DEPARTMENT: a wooden crate is not
+    made on the acrylic line. The workbook template has no joinery Assemble/pack, so a
+    timber part still has to take the nearest hand-assembly rate — but the estimator is
+    told that is what happened rather than reading 'Acrylic' against a timber crate and
+    having to work out why."""
+    return _costed_facts.is_timber_board(mat)
+
+
+class CanonicalRouteUnavailable(RuntimeError):
+    """The authoritative route was requested but could not be compiled."""
+
+
+def material_shown_on_row(pe: Mapping[str, Any], priced: Any) -> str:
+    """The material a labour row names: the drawing's, with any substitute it was priced as.
+
+    12312-01-03A is FOAMED PVC priced from ACRYLIC. The 16:04 rerun still read "3mm ACRYLIC"
+    because material_priced_as did not reach the workbook's record — the substitution flag
+    did (review_flags, "material_unpriceable_substituted"), so either one is enough.
+    """
+    priced = str(priced or "")
+    mpa = pe.get("material_priced_as") if isinstance(pe.get("material_priced_as"), Mapping) else {}
+    drawn, sub = mpa.get("arbitrated_material"), mpa.get("priced_material")
+    if not (drawn and sub):
+        for f in (pe.get("review_flags") or []):
+            if isinstance(f, Mapping) and f.get("flag") == "material_unpriceable_substituted":
+                m = re.match(r"\s*(.+?) is not priceable .*?and ([A-Z0-9_ ]+?), read from",
+                             str(f.get("detail") or ""))
+                if m:
+                    drawn, sub = m.group(1).strip(), m.group(2).strip()
+                break
+    if drawn and sub and str(drawn).upper() != str(sub).upper():
+        return f"{drawn} (priced as {sub})"
+    return priced
+
+
+def weld_process_note(wb_op: Any, parts: Any, records_by_pn: Mapping[str, Any]) -> str:
+    """What the weld row adds when the pack states the PROCESS (D-393).
+
+    12696-01-101's row read "Weld (CO2)" under a pack that says "ALL WELDS TO BE TIG UNLESS
+    STATED", and the book's reader took the title for a process decision. The title is the
+    rate card's one arc-weld row; the process is the drawing's. weld_symbols.note_weld_process
+    records it on a part whose weld its own sheet states; this names it on the row with the
+    rate it is charged at. "" for any other row, or when no part on the row states one."""
+    try:
+        from department_codes import title_for as _title_for
+        arc_row = str(_title_for("welding") or "Weld (CO2)")
+    except Exception:                                                # noqa: BLE001
+        arc_row = "Weld (CO2)"
+    if str(wb_op or "") != arc_row:
+        return ""
+    found: Dict[str, bool] = {}
+    for pn in (parts or ()):
+        rec = records_by_pn.get(str(pn or "").strip().upper()) if records_by_pn else None
+        stated = (rec or {}).get("weld_process_stated") if isinstance(rec, Mapping) else None
+        if isinstance(stated, Mapping) and stated.get("process"):
+            proc = str(stated["process"]).upper()
+            found[proc] = found.get(proc, False) or bool(stated.get("default"))
+    if not found:
+        return ""
+    procs = "/".join(sorted(found))
+    _srcs = {str(((records_by_pn.get(str(pn or "").strip().upper()) or {})
+                  .get("weld_process_stated") or {}).get("source") or "")
+             for pn in (parts or ())} if records_by_pn else set()
+    how = ("the enquiry brief" if "enquiry_brief" in _srcs
+           else "the pack's weld specification" if any(found.values())
+           else "the sheet's weld specification")
+    return (f" [{procs} per {how}; charged at the {arc_row} rate, the card's one arc-weld "
+            f"row — confirm]")
+
+
+def labour_row_description(wb_op: Any, material: Any = "", thickness: Any = None,
+                           parts: Any = (), bends: Any = 0, holes: Any = 0,
+                           work_ops: Any = ()) -> str:
+    """The text an estimator reads on a labour row.
+
+    Module-level so it can be driven. The first check on the DRIL wording asserted that a
+    string appeared in this file, which proves the line was typed, not that it reaches a
+    row -- the failure this run has been correcting all day.
+    """
+    _matx = str(material or "").replace("_", " ").strip()
+    _spec = []
+    if thickness:
+        _spec.append(("%g" % float(thickness)) + "mm")
+    if _matx:
+        _spec.append(_matx)
+    _rd = str(wb_op)
+    # "DRILL (ACRYLIC)" ON A STEEL PART IS THE RIGHT ROW WITH A MISLEADING NAME.
+    #
+    # DRIL's column-H title in the rate table is literally "Drill (Acrylic)", and the shop
+    # books metal drilling and tapping against that same row. The TITLE cannot change: it is
+    # the lookup key, and a title the rate table does not carry returns a rate of zero and
+    # costs the work at nothing -- which is how GRIN silently zeroed every deburr on every
+    # job. So the title stays exactly as the workbook has it, and the DESCRIPTION says what
+    # the work actually is.
+    if (str(wb_op) == "Drill (Acrylic)" and _matx
+            and "ACRYLIC" not in _matx.upper() and "PERSPEX" not in _matx.upper()):
+        # EACH DRIL ROW NAMES ITS OWN WORK (D-589). A flow-drilled and tapped M8 thread is
+        # two operations on one row title, and 0351292's base rail carried two identical
+        # "[metal drill/tap ...]" rows that nobody could tell apart or check for overlap.
+        # The row's own engine operations say which it is.
+        _DRIL_WORK = {"hole_machining": "drilling / flow drilling", "drilling": "drilling",
+                      "tapping": "tapping", "countersinking": "countersinking"}
+        _dril = sorted({_DRIL_WORK[str(o).lower()] for o in (work_ops or ())
+                        if str(o).lower() in _DRIL_WORK})
+        _rd += (f" [metal {' + '.join(_dril) if _dril else 'drill/tap'} — DRIL is the "
+                f"rate-table row the shop books this to]")
+    if _spec:
+        _rd += " — " + " ".join(_spec)
+    _pl = list(parts or [])
+    if _pl:
+        _rd += " (" + ", ".join(_pl[:6]) + (", +%d more" % (len(_pl) - 6)
+                                            if len(_pl) > 6 else "") + ")"
+    if bends:
+        _rd += " (%d bend%s)" % (int(bends), "" if int(bends) == 1 else "s")
+    elif holes:
+        _rd += " (%d hole%s)" % (int(holes), "" if int(holes) == 1 else "s")
+    # A GENERIC BUCKET NAMES ITS WORK. "Manual labour (Acrylic)" is the rate-table row;
+    # the WORK is the compiler's own operation (10975-02's is the deburr minted from
+    # SCRAPED EDGES on the drawing). Howard cannot judge whether his PACP figure already
+    # covers this row while the row will not say what it is — that judgement is his, so
+    # the row states the work and claims nothing about whose department owns it.
+    if str(wb_op).startswith("Manual labour") and work_ops:
+        _WORK_WORDS = {"deburr": "edge scraping / deburr",
+                       "deburring": "edge scraping / deburr"}
+        _generic = {"manual", "manual_labour", "manual_labour_acrylic",
+                    "manual_labour_metal", "handling"}
+        _work = ", ".join(sorted({
+            _WORK_WORDS.get(str(o).lower(), str(o).replace("_", " "))
+            for o in work_ops if str(o).lower() not in _generic}))
+        if _work:
+            _rd += f" [{_work}]"
+    # A plated part packs TWICE and the two rows share one department title, so the
+    # plater row says which pack it is — otherwise "Assemble/pack (Metal)" twice reads
+    # as a double-charge. The final pack keeps the plain title every other job has.
+    #
+    # AND THE OTHER TWO SAY WHICH THEY ARE TOO. Naming only the pack OUT left the six-off
+    # book with three "Assemble/pack (Metal)" rows of which one was labelled — so the
+    # 7.5/hr row could not be told from the generic one except by arithmetic, and Howard
+    # cannot audit a row he has to reverse-engineer. James: "the 7.5/hr row is not labelled
+    # as 'final pack after plating', and there is also a generic PACM row. That needs
+    # clearer descriptions before Howard can audit it confidently."
+    if str(wb_op).startswith("Assemble/pack"):
+        _ops_l = {str(o).lower() for o in (work_ops or ())}
+        if "plater_pack" in _ops_l:
+            _rd += (" [1 of 2 — PACK TO PLATER: the part goes out for plating and is "
+                    "packed again on return]")
+        elif "plater_final_pack" in _ops_l:
+            _rd += (" [2 of 2 — FINAL PACK AFTER PLATING: the part comes back from the "
+                    "plater and is packed for despatch]")
+        elif _ops_l:
+            _rd += (" [general assembly and pack — NOT a plating pack stage; this is the "
+                    "job's own bench work]")
+    return _rd
+
+
+def canonical_route_payload(summary: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(summary, dict):
+        return {}
+    payload = (
+        (summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+        or summary.get("canonical_route_shadow")
+        or {}
+    )
+    return payload if isinstance(payload, dict) else {}
+
+
+def canonical_route_cutover_enabled(summary: Dict[str, Any]) -> bool:
+    requested = bool(getattr(
+        config, "CANONICAL_ROUTE_WORKBOOK_CUTOVER", False))
+    if not requested:
+        return False
+    payload = canonical_route_payload(summary)
+    if not payload:
+        raise CanonicalRouteUnavailable(
+            "canonical route cutover is enabled but no compiled route is present")
+    if payload.get("compiler_error"):
+        raise CanonicalRouteUnavailable(
+            f"canonical route compiler failed: {payload.get('compiler_error')}")
+    if not isinstance(payload.get("decisions"), list):
+        raise CanonicalRouteUnavailable(
+            "canonical route cutover is enabled but decisions are missing")
+    return True
+
+
+
+def _no_material_was_costed(part) -> bool:
+    """True when this record carries no material of its own to coat.
+
+    A part with no stock form and no material is one every material block skips as
+    unclassifiable -- typically a record derived from an assembly page rather than a detail
+    drawing, which describes a thing that ships but not a piece of stock that was bought.
+    It cannot contribute coated area, because there is no material there to coat.
+
+    Deliberately narrow: it asks whether BOTH are absent. A sheet part whose blank has not
+    been measured yet is still a real piece of material and still gets coated; that is a
+    missing dimension, not a missing part, and the two must not resolve the same way.
+    """
+    me = (part or {}).get("material_estimate") or {}
+    stock_form = str(me.get("stock_form") or "").strip()
+    material = str((part or {}).get("normalized_material") or me.get("material") or "").strip()
+    return not stock_form and not material
+
+
+def coated_sheet_area_m2(parts, says_coated) -> float:
+    """The SHEET contribution to the coated-area sum, extracted so it is behaviourally
+    testable: given the parts and the coated-membership predicate, every coated flat
+    with a measured blank contributes L x W x 2 x qty exactly once — the bar and BOTH
+    arms of 11350, whichever way the mirror spells itself.
+
+    acrylic_excluded_from_powder (2026-07-15): acrylic / perspex / PMMA / polycarbonate
+    are diamond polished, NEVER powder coated (12439). A part absent from every material
+    block is absent from the booth too (11650-05). A part named TUBE is a hollow section
+    whose blank is garbled view geometry, and a single blank over 3.5 m2 on a retail
+    display is garbled too — both are excluded rather than allowed to invent the powder
+    line."""
+    total = 0.0
+    _seen_squash: Set[str] = set()
+    for _sp in parts or []:
+        # ONE IDENTITY, ONE CONTRIBUTION. If the mirror exists under BOTH spellings at
+        # once ("02 MIR" and "02MIR" as two records), the area must still count once —
+        # membership being squash-tolerant makes double-counting the new risk, so the
+        # sum dedupes by the same squash.
+        _sq_pn = re.sub(r"[^A-Z0-9]", "",
+                        str(_sp.get("part_number") or "").upper())
+        if _sq_pn and _sq_pn in _seen_squash:
+            continue
+        _sme = _sp.get("material_estimate") or {}
+        # AN ASSEMBLY COATED OVER ITS MEMBERS IS COUNTED THAT WAY WHATEVER ITS OWN FORM SAYS
+        # (D-589). 0351292's rail took a shared sheet's tube callout as a stock form of its
+        # own, so the stock-form filter below dropped it before its members' area was read.
+        _members_sum = (isinstance(_sme.get("powder_consumable"), dict) and
+                        _sme["powder_consumable"].get("coated_area_source")
+                        == "sum_of_members_blanks")
+        if not _members_sum and str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", "stated_weight", "unknown", ""):  # stated_weight: coated steel routed by weight; unknown: 11350's mirror record — a coated flat with measured blank and sheet-metal material whose form field was simply never classified
+            continue
+        if part_cannot_be_powder_coated(_sp):
+            continue   # acrylic is not powder coated — contributes zero coated area
+        if not says_coated(_sp) and not (
+                isinstance(_sp.get("coated_with_host"), (list, tuple))
+                and any(says_coated({"part_number": str(_h)})
+                        for _h in _sp.get("coated_with_host"))):
+            # the route decided this part does not go through the booth — unless it is
+            # welded to a host that does (D-499): its area is coated with the host's, and it
+            # adds no P.Coat piece of its own. The K-Wellness brackets' area had disappeared.
+            continue
+        # AN ASSEMBLY COATED AS ONE THING HAS NO BLANK, AND STILL HAS AN AREA. 12567-02-101
+        # HEADER CASE: the coat is claimed on the case, its members' sheets carry none of
+        # their own, so the route names the case and not the panels. This sum read blanks —
+        # the case has none, and its panels are not on the route — so the POWDER line held
+        # 0.2669 m2 for a job whose case alone is over a square metre both faces (D-282).
+        # stamp_members_coated_area already summed the members' blanks, both faces, at their
+        # count per case, onto the case's own powder consumable; that is the case's area.
+        _pcons = _sme.get("powder_consumable") if isinstance(_sme.get("powder_consumable"),
+                                                             dict) else {}
+        if _pcons.get("coated_area_source") == "sum_of_members_blanks":
+            _ma = _safe(_pcons.get("coated_area_m2"))
+            # A MEMBER THE ROUTE CHARGES ON ITS OWN LINE COUNTS THERE, NOT HERE TOO. Where
+            # the case carries its members one by one, leave out any the route names (that
+            # member's own blank is added when the loop reaches it) and count the rest.
+            _per_member = _pcons.get("coated_members_m2")
+            if isinstance(_per_member, dict) and _per_member:
+                _ma = sum(float(_safe(v) or 0.0) for k, v in _per_member.items()
+                          if not says_coated({"part_number": str(k)}))
+            if _ma and _ma > 0:
+                total += float(_ma) * float(_safe(_sp.get("quantity"), 1) or 1)
+                if _sq_pn:
+                    _seen_squash.add(_sq_pn)
+                continue
+        if _no_material_was_costed(_sp):
+            continue   # you cannot coat what you did not buy material for
+        _sdesc = str(_sp.get("part_description") or _sp.get("description")
+                     or _sme.get("description") or "").upper()
+        if "TUBE" in _sdesc:
+            continue
+        _sl = _safe(_sme.get("blank_length_mm"))
+        _sw = _safe(_sme.get("blank_width_mm"))
+        if not (_sl and _sw):
+            # THROUGH THE SHARED RESOLVER, NOT ONE SPELLING. A measured flat can sit under
+            # normalized_geometry.bounding_box_flat_mm or developed_*; reading blank_* alone
+            # left a coated part with a measured flat out of the booth's area (D-283).
+            try:
+                from document_builder import flat_blank_mm as _fbm
+                _sl, _sw = _fbm(_sp)
+            except Exception:                                        # noqa: BLE001
+                _sng = _sp.get("normalized_geometry") or {}
+                _sl = _safe(_sng.get("blank_length_mm"))
+                _sw = _safe(_sng.get("blank_width_mm"))
+        _sq = _safe(_sp.get("quantity"), 1) or 1
+        if _sl and _sw and ((_sl / 1000.0) * (_sw / 1000.0)) > 3.5:
+            continue
+        if _sl and _sw:
+            # LESS THE OPENINGS CUT THROUGH IT (D-500): a sighted slot or opening is metal that
+            # is not there to coat, on both faces. Never below nothing.
+            _open = float(_safe(_sp.get("concept_open_area_mm2")) or 0.0) / 1e6
+            _faces = max(0.0, (_sl / 1000.0) * (_sw / 1000.0) - _open) * 2.0
+            total += _faces * float(_sq)
+            if _sq_pn:
+                _seen_squash.add(_sq_pn)
+    return total
+
+
+def route_coated_membership(route_coated: Optional[Set[str]]):
+    """The coated-membership predicate both powder writers share — squash-tolerant,
+    because the route said '11350-01-02 MIR' while the record spells itself
+    '11350-01-02MIR', and spelling must never decide coating."""
+    squash = ({re.sub(r"[^A-Z0-9]", "", x) for x in route_coated}
+              if route_coated is not None else None)
+
+    def says_coated(_part) -> bool:
+        if route_coated is None:
+            return True
+        _pn = str(_part.get("part_number") or "").strip().upper()
+        return _pn in route_coated or re.sub(r"[^A-Z0-9]", "", _pn) in squash
+    return says_coated
+
+
+def parts_the_route_says_are_coated(summary: Dict[str, Any]) -> Optional[Set[str]]:
+    """Which parts the compiler decided go through the powder booth, or None.
+
+    THE POWDER MASS AND THE POWDER OPERATION MUST COME FROM ONE DECISION.
+
+    They did not. The compiler arbitrates powder_coating as a first-class operation --
+    ranked, evidenced, conflicts recorded -- and the coated-area sum that produces the
+    POWDER bill-of-materials line consulted it not at all. It summed every sheet part it
+    could measure and applied a per-piece floor, so a job the route had decided is not
+    coated still carried powder mass, and 11650's side panels shipped GBP 0.97 of it on a
+    sheet whose own log line said nothing in the job is coated.
+
+    Scope matters here. A finish belongs to the object that goes through the booth, and
+    that object is often an ASSEMBLY: you form raw, weld, then coat. So a decision's
+    PARTICIPANTS are coated as surely as its target -- reading target_id alone would drop
+    the coating off every weldment's components and under-charge exactly the jobs where
+    powder is largest.
+
+    Returns None -- not an empty set -- when the compiler has not ruled on this job at all.
+    Those are different facts: "the route says nothing is coated" is a decision, and "there
+    is no route" is the absence of one. Only the first may delete a powder line.
+    """
+    payload = canonical_route_payload(summary)
+    decisions = payload.get("decisions")
+    if not isinstance(decisions, list) or not decisions:
+        return None
+    saw_powder_decision = False
+    coated: Set[str] = set()
+    for decision in decisions:
+        if not isinstance(decision, dict):
+            continue
+        if str(decision.get("operation") or "").strip().lower() not in _POWDER_OPERATIONS:
+            continue
+        saw_powder_decision = True
+        if str(decision.get("status") or "").strip().lower() != "required":
+            continue
+        for item in [decision.get("target_id")] + list(decision.get("participants") or []):
+            name = str(item or "").strip().upper()
+            if name:
+                coated.add(name)
+    # SILENCE FROM A COMPLETE ROUTE IS A RULING. Under the canonical cutover the compiler
+    # is the authority on every operation, powder included -- it considers powder_coating
+    # for each part and emits a decision when anything supports one. So on a cutover job,
+    # NO powder decision means NOT COATED, and returning None here instead was the bug:
+    # 11650-05 re-ran after the Option 3 wiring landed and still booked GBP 0.97 of powder,
+    # because nothing on the job says POWDER, so the compiler emitted no powder decision, so
+    # this returned None, so the geometry path ran exactly as before. The safety valve
+    # swallowed the fix it was guarding.
+    #
+    # The valve is still needed, but it belongs on the RIGHT question. What it protects
+    # against is a route compiled by something that did not know about powder at all -- and
+    # that is precisely what "the cutover is not active" means. Asked that way it protects
+    # legacy jobs and stops protecting phantom mass.
+    if saw_powder_decision:
+        return coated
+    if canonical_route_cutover_enabled(summary):
+        return set()          # a complete route considered powder and required none
+    return None               # no authority on this job: the geometry path stands
+
+
+_POWDER_OPERATIONS = frozenset({"powder_coating", "powder_coat", "powder",
+                                "p_coat", "pcoat"})
+
+
+def canonical_part_kinds(summary: Dict[str, Any]) -> Dict[str, str]:
+    """Part identity -> canonical hierarchy kind."""
+    out: Dict[str, str] = {}
+    for node in canonical_route_payload(summary).get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        part_number = str(node.get("part_number") or "").strip().upper()
+        kind = str(node.get("kind") or "").strip().lower()
+        if part_number and kind in {"leaf", "assembly", "bought_in"}:
+            out[part_number] = kind
+    return out
+
+
+_MERGE_PRICE_FIELDS = frozenset({
+    "unit_cost_gbp", "unit_material_cost_gbp", "unit_total_cost_gbp",
+    "extended_material_cost_gbp", "extended_total_cost_gbp", "price_source",
+    "price_provenance", "system_cost",
+})
+
+
+def merge_canonical_estimate_records(existing: Dict[str, Any], incoming: Dict[str, Any],
+                                     canonical_kind: str) -> Dict[str, Any]:
+    """Merge two names for one part by EVIDENCE, never by whichever carries more money.
+
+    JOINING TWO NAMES IS ONLY HALF THE JOB; THE OTHER HALF IS ARBITRATING WHAT IS ATTACHED
+    TO THEM. The old score counted "has unit_cost_gbp" as merit, so the moment 11350's right
+    arm was correctly recognised as one part under two names, the alias carrying a £76.04 AI
+    market estimate beat the record carrying a measured flat. The identity fix made the
+    pricing worse, because the tiebreak rewarded exactly the record that should have lost.
+
+    So the make/buy classification decides first: a canonical LEAF or ASSEMBLY is something
+    we fabricate, and a generated whole-part price is not evidence about it at all. Then
+    source rank, which is the codebase's existing answer to "which of these two is better
+    known". Only then does the presence of a price matter, and only for a bought-in, where a
+    price genuinely is the thing being merged.
+
+    The loser is not discarded — it gap-fills every field the winner lacks, so a measurement
+    on one alias and a supplier on the other both survive. What it may NOT do is bring its
+    prices to a fabricated part: that is the door the £76.04 came through.
+    """
+    from source_precedence import rank as _source_rank
+
+    def _strength(record: Dict[str, Any]) -> int:
+        material = record.get("material_estimate") or {}
+        material = material if isinstance(material, dict) else {}
+        _price_src = material.get("price_source")
+        return max((_source_rank(s) for s in (
+            record.get("geometry_source"), record.get("material_source"),
+            record.get("thickness_source"), record.get("source"),
+            material.get("geometry_source"), material.get("material_source"),
+            (_price_src or {}).get("source_class") if isinstance(_price_src, dict) else None,
+        )), default=0)
+
+    def _score(record: Dict[str, Any]):
+        _origin, is_ai = _price_origin(record)
+        if canonical_kind in {"leaf", "assembly"}:
+            return (0 if is_ai else 1, _strength(record), int(bool(record.get("material_estimate"))))
+        return (int(_bom_line_price(record) is not None), 0 if is_ai else 1, _strength(record))
+
+    winner, loser = (existing, incoming)
+    if _score(incoming) > _score(existing):
+        winner, loser = incoming, existing
+    merged = dict(winner)
+    # NOT "unless it looks like an AI price" — unless it is a WHOLE-PART PRICE AT ALL.
+    # Gating on AI-ness was the first version, and it leaked: _price_origin reads the
+    # material estimate's price_source, so an alias carrying the same figure at the top
+    # level was not recognised and gap-filled £76.04 straight onto the measured record.
+    # For something we FABRICATE the material comes from its material estimate or from the
+    # Sheet Steel block; a whole-part figure from the other spelling is never evidence about
+    # it, whoever produced it.
+    _fabricated = canonical_kind in {"leaf", "assembly"}
+    for key, value in loser.items():
+        if value in (None, "", [], {}):
+            continue
+        if _fabricated and key in _MERGE_PRICE_FIELDS:
+            continue
+        if key == "material_estimate" and isinstance(value, dict):
+            if _fabricated and _price_origin(loser)[1]:
+                continue
+            target = dict(merged.get(key) or {})
+            for nested_key, nested_value in value.items():
+                if (nested_value not in (None, "", [], {})
+                        and target.get(nested_key) in (None, "", [], {})):
+                    target[nested_key] = nested_value
+            merged[key] = target
+        elif key in {"review_flags", "reliability_flags"}:
+            # A FLAG CAN BE A DICT ({"severity", "field", "reason"}), and a dict is not
+            # hashable, so dict.fromkeys raised on the first merge of two records that both
+            # carried one. It had never happened until D-322 joined "12645-01GA V2" (the
+            # model) and "12645-01GA" (the sheet): the 29 Sep 10:43 run of 12645 wrote no
+            # workbook at all (D-326). Deduplicated by a stable text key instead.
+            _seen: set = set()
+            _out: List[Any] = []
+            for _f in list(merged.get(key) or []) + list(value or []):
+                _k = (json.dumps(_f, sort_keys=True, default=str)
+                      if isinstance(_f, (dict, list)) else repr(_f))
+                if _k not in _seen:
+                    _seen.add(_k)
+                    _out.append(_f)
+            merged[key] = _out
+        elif merged.get(key) in (None, "", [], {}):
+            merged[key] = value
+    if canonical_kind:
+        merged["_canonical_kind"] = canonical_kind
+    return merged
+
+
+def canonicalise_part_estimates_for_workbook(
+    summary: Dict[str, Any],
+    part_estimates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Apply canonical BOM identity and multiplicity without losing cost evidence."""
+    # THE LAST GATE ENFORCES THE DROPS. The graph quarantines the zipped-row chimera and
+    # folds the wrapped row's BI- fragments at the post-reconcile boundary — and 08:52
+    # showed the fragments back on the sheet anyway, re-minted by a pass that runs after
+    # that boundary and rides a list the fold never saw. Whatever created a record,
+    # nothing reaches the workbook past this function: the same quarantine and the same
+    # fold run once more here, on the exact list the rows are written from. Idempotent —
+    # on a clean population both are no-ops.
+    try:
+        from route_compiler import (fold_bom_row_fragments,
+                                    quarantine_interleave_artefacts,
+                                    set_aside_late_lines,
+                                    set_aside_outside_product)
+        _payload = canonical_route_payload(summary) or {}
+        _issues = _payload.get("issues")
+        quarantine_interleave_artefacts(part_estimates, _issues, summary=summary)
+        # And what is not in the declared product — the other GA's own BOM, and anything
+        # nothing links to it — is not costed; nor is a line minted after the graph.
+        set_aside_outside_product(part_estimates, _issues, summary=summary)
+        set_aside_late_lines(part_estimates, _payload, summary=summary)
+        _da_rows = ((summary.get("document_analysis") or {}))
+        fold_bom_row_fragments(part_estimates,
+                               list(_da_rows.get("bom_rows") or [])
+                               + list(_da_rows.get("bay_bom_rows") or []),
+                               summary=summary)
+    except Exception as _gate_exc:                               # noqa: BLE001
+        # FAIL CLOSED. A gate that shrugs and continues is not a gate: the sheet would be
+        # written from an unenforced population while the log reads like a clean run. The
+        # failure is recorded on the summary and the invariants turn it into a BLOCKING
+        # verdict, so the estimate is marked not-releasable rather than quietly wrong.
+        print(f"   [wb_populate] LAST-GATE ENFORCEMENT FAILED "
+              f"({type(_gate_exc).__name__}: {_gate_exc}) — recorded as a blocking "
+              f"check; the population below is UNENFORCED.", flush=True)
+        summary.setdefault("identity_gate_failures", []).append({
+            "where": "wb_populate.canonicalise_part_estimates_for_workbook",
+            "error": f"{type(_gate_exc).__name__}: {_gate_exc}",
+        })
+    nodes = {
+        str(node.get("part_number") or "").strip().upper(): node
+        for node in canonical_route_payload(summary).get("nodes") or []
+        if isinstance(node, dict) and node.get("part_number")
+    }
+    aliases = {
+        str(alias).strip().upper(): identity
+        for identity, node in nodes.items()
+        for alias in ((node.get("evidence") or {}).get("raw_aliases") or [])
+        if str(alias).strip() and str(alias).strip().upper() != identity
+    }
+    # TWO NODES THAT NAME EACH OTHER ARE ONE PART (D-334). 12645's 14:03 book: BI-NUT and
+    # HALF INCH WHITWORTH NUT each listed the other as its alias, so each record was renamed
+    # to the other's identity and the sheet still carried 120 nuts twice. The graph now
+    # settles such a loop itself; this settles it again on the exact list the rows are
+    # written from, for a graph built before that, by the same rule.
+    try:
+        from route_compiler import _settle_alias_loops
+        _settle_alias_loops(aliases, nodes)
+    except Exception as _loop_exc:                                   # noqa: BLE001
+        print(f"   [wb_populate] alias loops not settled ({_loop_exc})", flush=True)
+    # A SYNTHESISED CODE YIELDS TO A CANONICAL ONE FOR THE SAME ITEM.
+    #
+    # 12120 shipped the same PEM stud twice: STD PART qty 2 from the GA BOM, and BI-PEMSTUD
+    # qty 2 minted by the prose recogniser from the same words. Four studs where the drawing
+    # calls for two. Free while both were unpriced; wrong the moment either got a price.
+    #
+    # A "BI-" code is not a part number the draughtsman wrote -- it is one this engine
+    # invented from a phrase ("BI-" + the phrase, uppercased). So where a synthesised code
+    # describes the same item as a code the canonical graph already holds, the graph wins.
+    # Keyed on that distinction, not on PEM studs: any recogniser-minted duplicate of a
+    # drawing item resolves the same way.
+    def _desc_key(_t: Any) -> str:
+        return re.sub(r"[^A-Z0-9]+", " ", str(_t or "").upper()).strip()
+
+    def _usable_identity(_pn: Any) -> bool:
+        """A merge TARGET has to be a part number somebody can look up.
+
+        "BI-NUT -> -" on job 11350: the recogniser-minted wing nut was absorbed into a
+        canonical line numbered "-", so the identity that survived was the one naming
+        nothing. A synthesised code is imperfect; a placeholder is not a code at all."""
+        try:
+            from part_identity import is_placeholder_identity
+
+            return not is_placeholder_identity(_pn)
+        except Exception:
+            return bool(str(_pn or "").strip())
+
+    # ONE CANDIDATE, OR NONE. Keeping the first node with a given description made the
+    # merge target depend on dict order: two canonical bought-ins sharing a description
+    # would absorb the synthesised line into whichever happened to be seen first, and the
+    # sheet would show the quantity against the wrong part with nothing to indicate it.
+    # An ambiguous match is not a match.
+    # ONLY A CANONICAL BOUGHT-IN MAY ABSORB A SYNTHESISED BOUGHT-IN.
+    #
+    # The index covered every node, so a recogniser-minted code could be merged into a
+    # fabricated LEAF or an assembly whose description happened to match -- putting a
+    # purchased item's identity and price onto a part we make, which is the make/buy error
+    # this engine has a whole gate for elsewhere. A BI- code is a bought-in by construction;
+    # its only legitimate twin is a bought-in.
+    _desc_hits: Dict[str, List[str]] = {}
+    for _ident, _node in nodes.items():
+        if str(_node.get("kind") or "").strip().lower() != "bought_in":
+            continue
+        _dk = _desc_key(_node.get("description"))
+        if _dk:
+            _desc_hits.setdefault(_dk, []).append(_ident)
+    _canonical_by_desc = {_dk: _ids[0] for _dk, _ids in _desc_hits.items()
+                          if len(_ids) == 1 and _usable_identity(_ids[0])}
+    _ambiguous = {_dk for _dk, _ids in _desc_hits.items() if len(_ids) > 1}
+    _synth_merged: List[str] = []
+    for _est in part_estimates or []:
+        if not isinstance(_est, dict):
+            continue
+        _sid = str(_est.get("part_number") or "").strip().upper()
+        if not _sid.startswith("BI-") or _sid in nodes or _sid in aliases:
+            continue
+        _dk = _desc_key(_est.get("description"))
+        if _dk in _ambiguous:
+            print(f"   [wb_populate] {_sid} matches MORE THAN ONE canonical item by "
+                  f"description; left as its own line rather than merged into an arbitrary "
+                  f"one — estimator to reconcile", flush=True)
+            continue
+        _target = _canonical_by_desc.get(_dk)
+        if _target and _target != _sid:
+            aliases[_sid] = _target
+            _synth_merged.append(f"{_sid} -> {_target}")
+
+    normalised: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for estimate in part_estimates or []:
+        if not isinstance(estimate, dict):
+            continue
+        source_id = str(estimate.get("part_number") or "").strip().upper()
+        identity = aliases.get(source_id, source_id)
+        if not identity:
+            continue
+        item = dict(estimate)
+        node = nodes.get(identity) or {}
+        _canonical_kind = str(node.get("kind") or "").strip().lower()
+        if _canonical_kind:
+            item["_canonical_kind"] = _canonical_kind
+        if identity != source_id:
+            item["_canonical_source_part_number"] = source_id
+            item["part_number"] = identity
+        # ONE QUANTITY FIELD. The sheet costs the graph node's per-unit figure, and that
+        # figure is now reconciled against the quantity apply_field owns before it leaves the
+        # compiler — so this is no longer a second, independent copy that can quietly disagree
+        # with the arbitrated record. What the part's own line said is carried alongside it
+        # rather than lost, because a part that is one-off on its own drawing and six-off in
+        # the assembly is two facts an estimator needs, not a contradiction to hide.
+        if node.get("qty_per_unit") is not None:
+            item["quantity"] = node.get("qty_per_unit")
+        if node.get("qty_own") is not None:
+            item["quantity_own"] = node.get("qty_own")
+            item["quantity_own_source"] = node.get("qty_own_source") or ""
+        if node.get("qty_note"):
+            item["quantity_note"] = node.get("qty_note")
+        if not item.get("description") and node.get("description"):
+            item["description"] = node.get("description")
+        if identity not in normalised:
+            normalised[identity] = item
+            order.append(identity)
+        else:
+            normalised[identity] = merge_canonical_estimate_records(
+                normalised[identity], item, _canonical_kind)
+
+    if _synth_merged:
+        print(f"   [wb_populate] canonical identity absorbed {len(_synth_merged)} "
+              f"engine-minted duplicate(s): {', '.join(_synth_merged)}", flush=True)
+
+    # A BOUGHT-IN THAT ARRIVED WITH A RECORD AND NO PRICE IS THE SAME LINE AS ONE THAT
+    # ARRIVED WITH NO RECORD AT ALL.
+    #
+    # The mint below already asks the DB-free commodity table — and could never answer for
+    # these two, because its first statement skips any node that is not kind "bought_in" OR
+    # whose identity is already in `normalised`. (Paraphrased rather than quoted: a comment
+    # reproducing that line verbatim is found by the source-inspection test that guards the
+    # mint's squash-match, which then reads the wrong window.)
+    #
+    # It prices a bought-in it is about to INVENT. 12349-02's "STD PART / 3.5x19mm WOOD
+    # SCREW" and "FIXING / M4x10mm FLANGE BUTTON HEAD SCREW" already HAVE records — priceless
+    # ones, filed into `normalised` by the loop just above — so they took that `continue`
+    # silently and shipped at £0.00 run after run, while the same table answers £0.03 and
+    # £0.08 the moment it is asked. Four fixes were written in estimator.py and every one of
+    # them sat upstream of whichever reader made those records. This loop is downstream of
+    # all of them, over the exact dictionary the BOM rows are written from, so it sees the
+    # line whoever made it and under either spelling.
+    #
+    # LAST RESORT, NEVER AN OVERWRITE. A line already carrying money — from UDEF, a
+    # catalogue, history or the market rung — is left exactly as it stands, and so is one the
+    # engine deliberately withheld.
+    for _identity, _item in normalised.items():
+        _kind0 = str(_item.get("_canonical_kind")
+                     or (nodes.get(_identity) or {}).get("kind") or "").strip().lower()
+        _roles0 = {str(r).strip().lower() for r in (_item.get("page_roles") or [])}
+        if _kind0 in ("assembly", "leaf"):
+            continue                    # a part we MAKE is not a commodity somebody buys
+        if _kind0 != "bought_in" and "bought_in" not in _roles0:
+            continue
+        if _item.get("_price_explicitly_withheld"):
+            continue                    # withheld on purpose; the row says so and means it
+        if _bom_line_price(_item) is not None:
+            continue                    # the one price chain the row itself reads
+        _me0 = _item.get("material_estimate") or {}
+        if any(_safe(_v) for _v in (_item.get("unit_cost_gbp"),
+                                    _item.get("unit_material_cost_gbp"),
+                                    _item.get("extended_material_cost_gbp"),
+                                    _me0.get("unit_material_cost_gbp"),
+                                    _me0.get("cost_per_part_gbp"),
+                                    _me0.get("extended_material_cost_gbp"))):
+            continue                    # a figure the engine resolved and declined
+        # A TABLE OF COMPONENT PROVISIONALS MUST NEVER ANSWER FOR A COMMERCIAL ALLOWANCE.
+        # 18a19c2: the commodity PALLET entry matched the word "pallet" inside the packaging
+        # placeholder and invented £12.00 on the one line config holds empty by decision.
+        _code0 = str(_item.get("part_number") or _identity or "").strip().upper()
+        _desc0 = str(_item.get("description") or "").upper()
+        if (_code0 in ("PACKAGING", "DELIVERY", "CARRIAGE", "FREIGHT")
+                or "PER-UNIT SHARE" in _desc0 or "ESTIMATOR TO PRICE" in _desc0):
+            continue
+        try:
+            from pricing_service import standard_commodity_price as _std_com0
+            _com0 = _std_com0({"part_number": _code0,
+                               "description": _item.get("description") or ""})
+        except Exception:                                        # noqa: BLE001
+            _com0 = None
+        _u0 = _safe((_com0 or {}).get("unit_price_gbp"))
+        if _u0 is None or _u0 <= 0:
+            continue
+        _u0 = round(float(_u0), 2)
+        _q0 = _safe(_item.get("quantity")) or 1
+        _e0 = round(_u0 * float(_q0), 2)
+        _item["unit_cost_gbp"] = _u0
+        _item["unit_material_cost_gbp"] = _u0
+        _item["extended_total_cost_gbp"] = _e0
+        _item["cost_source"] = "standard_commodity_provisional"
+        _item["costing_basis"] = "standard_commodity_provisional"
+        _item["material_estimate"] = {
+            **(_me0 if isinstance(_me0, dict) else {}),
+            "unit_material_cost_gbp": _u0, "cost_per_part_gbp": _u0,
+            "extended_material_cost_gbp": _e0,
+            "cost_method": "standard_commodity_provisional"}
+        _item.setdefault("review_flags", []).append(
+            (_com0 or {}).get("review_reason")
+            or "Provisional standard-commodity price — confirm against a supplier quote.")
+        print(f"   [wb_populate] {_code0} ({str(_item.get('description') or '')[:40]}) "
+              f"priced from the standard commodity table at £{_u0:.2f} — "
+              f"{(_com0 or {}).get('price_source_note') or 'source not recorded'}", flush=True)
+
+    # An explicit bought-in BOM line must remain visible even when no pricing record was
+    # created. It is safer as an unpriced estimator row than absent from the BOM.
+    #
+    # THIS IS WHERE A CLASS-WORD COMMODITY ACTUALLY REACHES THE SHEET.
+    #
+    # 11762-17's "STD PART / PERFO PLASTIC LOCKING CLIP" is a canonical BOM bought-in that never
+    # got a pricing record — estimate_part is never called on it, so it is NOT in part_estimates,
+    # and every pricing fix in estimator.py sat on a line this one never crosses. It is minted
+    # HERE, and it shipped £0 four runs running because this mint only ever wrote a withheld
+    # placeholder. But a generically-named standard commodity has a fixed config figure keyed on
+    # its DESCRIPTION (the class word 'STD PART' in the code column is no obstacle). Consult the
+    # DB-free commodity table at the mint: on a hit, write the buy price onto the row — material
+    # only, no bench-fitting uplift, flagged PROVISIONAL — instead of a blank the sheet reads as
+    # free. A bought-in with no commodity match still mints as the estimator-to-price row below.
+    # A REMOVED IDENTITY STAYS REMOVED. This mint exists for a canonical bought-in that
+    # never got a pricing record — and the last-gate fold above creates exactly that
+    # shape on purpose: it removes a duplicate's record while the shadow graph still
+    # carries its node. Without this ledger check the function removed both tape
+    # fragments and then re-minted them, priced, three lines below — "folded" in the log
+    # and back on the sheet in the same call.
+    _removed_ids = {
+        str(e.get("part_number") or "").strip().upper()
+        for key in ("folded_bom_row_fragments", "quarantined_interleave_artefacts")
+        for e in (summary.get(key) or []) if isinstance(e, dict)
+    }
+    # A SPELLING VARIANT IS NOT A MISSING PURCHASE. On 11350-01 the right arm existed in
+    # the population under one spelling while the PDF BOM's node carried another
+    # ("11350-01-02 MIR" with the hand as a separate token), so `identity in normalised`
+    # missed and this mint wrote an unpriced BOM row for a part the Sheet Steel block was
+    # already charging £0.45 — every reader then counted a charged part as a missing
+    # price. Identity is compared squashed (alphanumerics only) before minting.
+    # AND TWO LINES ALREADY IN THE POPULATION THAT ARE ONE ROW READ TWO WAYS (D-452).
+    try:
+        from part_identity import fold_one_cell_duplicates as _fold_pop
+        _vals = list(normalised.values())
+        for _drop, _keep in _fold_pop(_vals):
+            _dk = next((k for k in list(normalised) if str(normalised[k].get("part_number") or k).upper() == _drop.upper()), None)
+            _kk = next((k for k in list(normalised) if str(normalised[k].get("part_number") or k).upper() == _keep.upper()), None)
+            if _dk and _kk and _dk != _kk:
+                normalised.pop(_dk, None)
+                if _dk in order:
+                    order.remove(_dk)
+                aliases[_dk] = _kk
+                print(f"   [wb_populate] '{_drop}' folded onto '{_keep}' — one row read as one "
+                      f"cell; one line, not two.", flush=True)
+    except Exception as _fold_exc:                               # noqa: BLE001
+        print(f"   [wb_populate] one-cell fold not run ({_fold_exc})", flush=True)
+    _norm_squash = {re.sub(r"[^A-Z0-9]", "", str(k).upper()): k for k in normalised}
+    for identity, node in nodes.items():
+        if node.get("kind") != "bought_in" or identity in normalised:
+            continue
+        if aliases.get(identity, identity) != identity:
+            # ANOTHER NAME FOR A PART ALREADY ON THE SHEET (D-334) — BI-NUT, once its loop
+            # with HALF INCH WHITWORTH NUT is settled, is not a purchase to invent.
+            continue
+        _id_squash = re.sub(r"[^A-Z0-9]", "", str(identity).upper())
+        if _id_squash and _id_squash in _norm_squash:
+            print(f"   [wb_populate] '{identity}' not minted — the population already "
+                  f"records it as '{_norm_squash[_id_squash]}'; two spellings of one "
+                  f"part are one line, not a purchase to invent.", flush=True)
+            continue
+        if identity.strip().upper() in _removed_ids:
+            print(f"   [wb_populate] '{identity}' not re-minted — its record was folded "
+                  f"or quarantined by the identity gate; the graph node describes a "
+                  f"removed duplicate, not a missing purchase.", flush=True)
+            continue
+        # A NODE THAT IS A LINE ALREADY ON THE SHEET READ AS ONE CELL IS NOT A PURCHASE
+        # (D-452). 8188-08's insert was charged twice on five books: the vision model listed
+        # "FIXING M6X12MM THREADED INSERT, HEADED HEX DRIVE" (no description) among SA03's
+        # children, the graph made a node of it, and this mint priced it a second time at
+        # £0.22 beside the line "FIXING M6X12MM / THREADED INSERT, HEADED HEX DRIVE" at £0.10.
+        # Every earlier fix ran on the part records, before this line exists; the rule is
+        # asked here too, where it is born, and the node is recorded as an alias.
+        try:
+            from part_identity import same_row_read_as_one_cell as _one_cell
+            from part_identity import same_bom_occurrence as _same_occ
+            # ...and only where it is the SAME occurrence (D-454): a node listed under a parent
+            # the held line was never listed under is the same item somewhere else.
+            _host = next((k for k, v in normalised.items()
+                          if _one_cell(identity, node.get("description"),
+                                       v.get("part_number") or k, v.get("description"))
+                          and _same_occ(node, v)), None)
+        except Exception:                                        # noqa: BLE001
+            _host = None
+        if _host:
+            aliases[identity] = _host
+            _hv = normalised.get(_host) or {}
+            _note = (f"{identity} is this row read as one cell — the code and the description "
+                     f"of {_host} joined; one line, not two")
+            if _note not in (_hv.get("review_flags") or []):
+                _hv.setdefault("review_flags", []).append(_note)
+            print(f"   [wb_populate] '{identity}' not minted — it is '{_host}' read as one "
+                  f"cell; one line, not two.", flush=True)
+            continue
+        _bi_desc = node.get("description") or ""
+        _bi_qty = node.get("qty_per_unit") or 1
+        _bi_com = None
+        try:
+            from pricing_service import standard_commodity_price as _std_commodity
+            _bi_com = _std_commodity({"description": _bi_desc, "part_number": identity})
+        except Exception:                                        # noqa: BLE001
+            _bi_com = None
+        _bi_unit = _safe(_bi_com.get("unit_price_gbp")) if _bi_com else None
+        if _bi_unit is not None and _bi_unit > 0:
+            _bi_unit = round(float(_bi_unit), 4)              # sub-penny items (D-503)
+            _bi_ext = round(_bi_unit * int(_bi_qty or 1), 2)
+            normalised[identity] = {
+                "part_number": identity,
+                "description": _bi_desc,
+                "quantity": _bi_qty,
+                "page_roles": ["bought_in"],
+                "unit_cost_gbp": _bi_unit,
+                "unit_material_cost_gbp": _bi_unit,
+                "unit_total_cost_gbp": _bi_unit,
+                "extended_total_cost_gbp": _bi_ext,
+                "material_estimate": {
+                    "unit_material_cost_gbp": _bi_unit,
+                    "cost_per_part_gbp": _bi_unit,
+                    "extended_material_cost_gbp": _bi_ext,
+                    "cost_method": "standard_commodity_provisional",
+                },
+                "costing_basis": "standard_commodity_provisional",
+                "source": "standard_commodity_provisional",
+                "review_flag": True,
+                "review_flags": [
+                    _bi_com.get("review_reason")
+                    or "Provisional standard-commodity price — confirm against a supplier quote."
+                ],
+            }
+            order.append(identity)
+            continue
+        # NO FIXED COMMODITY FIGURE, BUT AN ITEM CANNOT SHIP AT £0 — it bounces straight back.
+        # Ask the same price chain every other line uses (catalogue / UDEF / history / market),
+        # which now names the supplier it points at. On a hit, price the line INDICATIVE with that
+        # source; only if even that finds nothing does it fall to the explicit "estimator to
+        # price" row below. DB-free offline (the chain returns nothing without a PricingService),
+        # so a fixture still lands on the honest withheld row.
+        _bi_llm = None
+        _bi_sc = None
+        # WHY NOT, ON THE RECORD. "Estimator to price" on 11350-01's wing nuts and PEM
+        # studs could mean SDILive has no row for them, the market/AI leg found nothing,
+        # or the chain never ran at all (no PricingService, an import error) — and the
+        # row said none of it, so the only person who could answer "do we genuinely not
+        # find these in SDILive?" was whoever re-runs it with a debugger. The chain's own
+        # account is captured here and lands on the withheld row and in the log.
+        _bi_chain_note = ""
+        try:
+            from estimator import _resolve_part_system_cost as _rpsc
+            _bi_sc = _rpsc({"part_number": identity, "description": _bi_desc,
+                            "page_roles": ["bought_in"], "quantity": _bi_qty})
+            _bi_llm = _safe((_bi_sc or {}).get("applied_unit_cost"))
+            if _bi_llm is None:
+                _sel = (((_bi_sc or {}).get("result") or {}).get("selected") or {})
+                _bi_chain_note = ("the price chain ran (UDEF / catalogue / history / "
+                                  "market-AI) and returned nothing for this description"
+                                  + (f"; nearest source: {_sel.get('source')}"
+                                     if _sel.get("source") else ""))
+        except Exception as _bi_exc:                             # noqa: BLE001
+            _bi_llm = None
+            _bi_chain_note = (f"the price chain could not run here — "
+                              f"{type(_bi_exc).__name__}: {_bi_exc}")
+        if _bi_llm is not None and _bi_llm > 0:
+            _sel = ((_bi_sc.get("result") or {}).get("selected") or {})
+            _sup = (((_sel.get("metadata") or {}).get("supplier_name"))
+                    or _sel.get("source") or "market/AI estimate")
+            _bi_llm = round(float(_bi_llm), 2)
+            _bi_ext = round(_bi_llm * int(_bi_qty or 1), 2)
+            normalised[identity] = {
+                "part_number": identity,
+                "description": _bi_desc,
+                "quantity": _bi_qty,
+                "page_roles": ["bought_in"],
+                "unit_cost_gbp": _bi_llm,
+                "unit_material_cost_gbp": _bi_llm,
+                "unit_total_cost_gbp": _bi_llm,
+                "extended_total_cost_gbp": _bi_ext,
+                "material_estimate": {
+                    "unit_material_cost_gbp": _bi_llm,
+                    "cost_per_part_gbp": _bi_llm,
+                    "extended_material_cost_gbp": _bi_ext,
+                    "cost_method": "market_ai_indicative",
+                },
+                "costing_basis": "market_ai_indicative",
+                "source": str(_sel.get("source") or "market_ai_indicative"),
+                "supplier": _sup,
+                "review_flag": True,
+                "review_flags": [
+                    (f"a past SDI quote's line price (SDI Live history) via {_sup} — a per-unit "
+                     f"share at that quote's own quantity; confirm it fits this order"
+                     if "historical_quote" in str(_sup).lower() or "historical_quote" in
+                     str(_sel.get("source") or "").lower() else
+                     f"INDICATIVE market/AI price from {_sup} — no catalogue rate for this "
+                     f"class-word line; verify before quoting.")
+                ],
+            }
+            order.append(identity)
+            continue
+        print(f"   [wb_populate] '{identity}' unpriced — "
+              f"{_bi_chain_note or 'no price chain account recorded'}", flush=True)
+        normalised[identity] = {
+            "part_number": identity,
+            "description": _bi_desc,
+            "quantity": _bi_qty,
+            "page_roles": ["bought_in"],
+            "material_estimate": {},
+            "_price_explicitly_withheld": True,
+            "review_flag": True,
+            "review_flags": [
+                "Explicit canonical BOM item has no pricing record; estimator to price."
+                + (f" ({_bi_chain_note}.)" if _bi_chain_note else "")
+            ],
+        }
+        order.append(identity)
+
+    # A fabricated leaf in the explicit hierarchy cannot disappear merely because an
+    # upstream adapter failed to produce a cost record. Bought-ins are made visible above;
+    # fabricated leaves need geometry/material investigation and therefore block release.
+    payload = canonical_route_payload(summary)
+    existing_issues = {
+        (
+            str(issue.get("code") or ""),
+            str(issue.get("part_number") or "").strip().upper(),
+        )
+        for issue in (payload.get("issues") or [])
+        if isinstance(issue, dict)
+    }
+    for identity, node in nodes.items():
+        if (
+            node.get("kind") == "leaf"
+            and node.get("parents")
+            and identity not in normalised
+            and ("bom_leaf_without_estimate", identity) not in existing_issues
+        ):
+            payload.setdefault("issues", []).append({
+                "code": "bom_leaf_without_estimate",
+                "part_number": identity,
+                "description": node.get("description") or "",
+                "parents": list(node.get("parents") or []),
+                "message": (
+                    "An explicit fabricated BOM leaf has no estimate record and cannot "
+                    "be placed in a material block."
+                ),
+            })
+    # THE SECTION SCHEDULE REACHED THE SHEET, OR THE RECORD SAYS WHERE IT DID NOT (D-576):
+    # the hand-off audit writes its result for the invariant; it never stops the book.
+    from section_coverage_contract import record_coverage
+    return record_coverage(summary, [normalised[identity] for identity in order])
+
+
+# A colour is a code or a named colour. Reading the whole sentence is what let a pointer
+# ("SEE ASSEMBLY DRAWING NOTTINGHAM") read as a second colour and fork the booth setup.
+_RAL_CODE = re.compile(r"\bRAL\s*\d{4}\b")
+_COLOUR_WORDS = frozenset({
+    "WHITE", "BLACK", "SILVER", "GREY", "GRAY", "RED", "BLUE", "GREEN", "YELLOW",
+    "ORANGE", "BROWN", "CREAM", "IVORY", "ANTHRACITE", "GRAPHITE", "CHROME", "GOLD",
+})
+
+
+def _canonical_finish_signature(
+    identities: List[str],
+    estimates: Dict[str, Dict[str, Any]],
+    raw: Dict[str, Dict[str, Any]],
+    operation: str = "",
+) -> str:
+    """The BOOTH SETUP, not the words the drawings happen to use.
+
+    A SETUP CHANGES WHEN THE COLOUR CHANGES. It does not change because one part's title
+    block says "POWDER COATED NOTTINGHAM" and another's says "SEE ASSEMBLY DRAWING
+    NOTTINGHAM" — that is a pointer the engine has already resolved to the same finish — and
+    it does not change because a third part states no finish at all while the route says it
+    is coated.
+
+    This joined the RAW TEXT, so 11350's one white powder job came out as three booth setups
+    and three lots of setup time: "POWDER COATED NOTTINGHAM", "FINISH-UNSPECIFIED", and
+    "POWDER COATED NOTTINGHAM | SEE ASSEMBLY DRAWING NOTTINGHAM". One colour, one booth, one
+    hang — charged three times.
+
+    So the key is what the setup actually depends on: the finish FAMILY, from the module
+    that already owns that question, and the COLOUR. Different colours still get different
+    setups, which is the thing this function exists to protect — a colour change IS a booth
+    change, and nothing else here is.
+
+    An unread finish contributes NOTHING rather than a token of its own. It is not evidence
+    of a different colour; it is absence, and absence must not fork a setup. If no candidate
+    states anything, they are all one unspecified setup — still one, not one each.
+    """
+    from finish_rules import finish_families, _OPERATION_FAMILY
+
+    families: set = set()
+    colours: set = set()
+    for identity in identities:
+        for record in (estimates.get(identity) or {}, raw.get(identity) or {}):
+            if not isinstance(record, dict):
+                continue
+            for key in ("normalized_finish", "finish", "surface_finish",
+                        "surface_finishes", "finish_general", "colour", "color",
+                        "normalized_colour", "ral"):
+                value = record.get(key)
+                if isinstance(value, dict):
+                    value = value.get("description") or value.get("name") or value.get("value")
+                for candidate in (value if isinstance(value, (list, tuple, set)) else [value]):
+                    text = re.sub(r"\s+", " ", str(candidate or "").strip()).upper()
+                    if not text:
+                        continue
+                    families |= finish_families(text)
+                    # A COLOUR IS A RAL CODE OR A NAMED COLOUR, never the whole sentence.
+                    # Reading the sentence is what let a pointer look like a second colour.
+                    colours |= {m.group(0) for m in _RAL_CODE.finditer(text)}
+                    colours |= {w for w in _COLOUR_WORDS if re.search(r"\b" + w + r"\b", text)}
+    # THE OPERATION KNOWS ITS OWN FAMILY. A part the route sends to the powder booth is
+    # powder-coated whether or not its title block says so — 11350's right arm states no
+    # finish at all, and reading that as a distinct setup gave one white job a third booth
+    # hang. The decision is the evidence here; the title block is corroboration.
+    if not families:
+        _op_family = _OPERATION_FAMILY.get(str(operation or "").strip().lower())
+        if _op_family:
+            families = {_op_family}
+    return "|".join(("+".join(sorted(families)) or "FAMILY-UNREAD",
+                     "+".join(sorted(colours)) or "COLOUR-UNREAD"))
+
+
+def _canonical_record_index(
+    summary: Dict[str, Any],
+    part_estimates: List[Dict[str, Any]],
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    estimates = {
+        str(item.get("part_number") or "").strip().upper(): item
+        for item in (part_estimates or [])
+        if isinstance(item, dict) and item.get("part_number")
+    }
+    raw: Dict[str, Dict[str, Any]] = {}
+    for pool in (
+        summary.get("parts"),
+        (summary.get("manufacturing_writeup") or {}).get("parts"),
+    ):
+        if not isinstance(pool, list):
+            continue
+        for item in pool:
+            if not isinstance(item, dict):
+                continue
+            part_number = str(item.get("part_number") or "").strip().upper()
+            if part_number:
+                raw.setdefault(part_number, item)
+    return estimates, raw
+
+
+def allocate_laser_nest_setup(ws, groups: Dict[Any, Dict[str, Any]],
+                              lb: Dict[str, int], flags: List[str]) -> None:
+    """ONE NEST, ONE SET-UP.
+
+    The laser rows are one per component (see canonical_labour_groups), and each row takes
+    the FULL department set-up from the template's own lookup — so a five-part nest would
+    book five 10-minute set-ups where the floor loads one program and cuts one sheet.
+    Howard's constraint verbatim: "if multiple components used but don't exceed a single
+    sheet, laser rate would be reduced to not exceed the given set up time".
+
+    So the ONE set-up is allocated across the rows of a nest — parts of the same laser,
+    material and gauge — by wrapping the template's OWN set-up lookup as (lookup)/N on each
+    row. The workbook stays authoritative: the minutes still come from THEIR table, and if
+    the estimators change it every share moves with it. The sum across the nest is (lookup)
+    exactly — one allowance — by construction, not by rounding.
+
+    Written ONLY when this row's own hours formula (col J) demonstrably reads this row's
+    set-up cell (col L), checked against the live template at run time. Where it does not —
+    a template revision, a moved column — nothing is touched and the sheet says so out
+    loud: five set-ups charged honestly beats one charged by luck.
+    """
+    _nest_rows: Dict[str, List[Dict[str, Any]]] = {}
+    for _gv in groups.values():
+        if _gv.get("laser_nest_id") and _gv.get("workbook_row"):
+            _nest_rows.setdefault(str(_gv["laser_nest_id"]), []).append(_gv)
+    for _nid, _members in sorted(_nest_rows.items()):
+        _members.sort(key=lambda _m: _m["workbook_row"])
+        _n = len(_members)
+        for _m in _members:
+            _m["laser_nest_size"] = _n
+        if _n < 2:
+            continue                       # one row, the template's own set-up, untouched
+        # THE NEST MUST BE PROVEN, NOT PRESUMED. Same material and gauge only says the
+        # parts COULD share a program; canonical_labour_groups proves whether the whole
+        # order actually fits one stock sheet from the engine's own nesting results, and
+        # stamps the verdict on every member. Unproven, each row keeps its own full
+        # set-up — overstated and said so, never reduced on a presumption.
+        if not all(_m.get("laser_nest_proven") for _m in _members):
+            _why_np = next((str(_m.get("laser_nest_evidence") or "") for _m in _members
+                            if _m.get("laser_nest_evidence")), "no nesting proof")
+            _flag(f"laser nest {_nid}: rows split per component but the ONE-set-up "
+                  f"allocation was NOT applied — the nest is not proven to fit one "
+                  f"sheet ({_why_np}). Each of the {_n} rows carries a full department "
+                  f"set-up; if these genuinely share a sheet program, reduce it on the "
+                  f"sheet.", flags)
+            continue
+        # CHECK EVERY ROW BEFORE WRITING ANY. A nest half-allocated would under-charge the
+        # divided rows while the others still carry a full set-up — worse than either
+        # honest state, and invisible on the sheet.
+        _rows_ok, _rows_bad = [], []
+        for _m in _members:
+            _r = int(_m["workbook_row"])
+            _j = ws.cell(row=_r, column=lb["col_hours"]).value
+            _l = ws.cell(row=_r, column=lb["col_setup"]).value
+            if (isinstance(_j, str) and ("L%d" % _r) in _j.replace("$", "")
+                    and isinstance(_l, str) and _l.startswith("=")):
+                _rows_ok.append(_r)
+            else:
+                _rows_bad.append(_r)
+        if not _rows_bad:
+            for _m in _members:
+                _r = int(_m["workbook_row"])
+                _l_cell = ws.cell(row=_r, column=lb["col_setup"])
+                _l_cell.value = "=(%s)/%d" % (str(_l_cell.value)[1:], _n)
+                _m["setup_share"] = ("1/%d of the department set-up "
+                                     "(template's own lookup, divided)" % _n)
+            _flag(f"laser nest {_nid}: {_n} component rows "
+                  f"(sheet rows {_rows_ok}) share ONE department set-up — each row carries "
+                  f"the template's own set-up lookup divided by {_n}, so the nest's total "
+                  f"is exactly one allowance and moves if the estimators change their "
+                  f"table. Components of one material and gauge nest on one sheet "
+                  f"(Howard Thurley, 7332-01).", flags)
+        else:
+            _flag(f"laser nest {_nid}: the rows split per component but the set-up could "
+                  f"NOT be allocated — the template's hours/set-up cells on row(s) "
+                  f"{_rows_bad} are not the shape this build knows (J reading L). EVERY "
+                  f"row is carrying a FULL department set-up: {_n} set-ups charged where "
+                  f"the nest loads one. OVERSTATED, not understated — an estimator must "
+                  f"reduce it on the sheet.", flags)
+
+
+def row_parts_for(scope: Any, target_id: Any, participants: Any) -> Tuple[List[str], List[str]]:
+    """(the part numbers a labour row names, the members it covers) for one decision (D-398).
+
+    An assembly-scoped event names its target — the assembly the joint, the coat or the pack
+    is on — and lists the members it covers separately; a part-scoped event names its
+    participants as before. Participants that are the target itself are not members."""
+    _t = str(target_id or "").strip()
+    _p = [str(p).strip() for p in (participants or []) if str(p or "").strip()]
+    if str(scope or "").strip().lower() == "assembly" and _t:
+        return [_t], [p for p in _p if p != _t]
+    return (_p or ([_t] if _t else [])), []
+
+
+def section_words_on_line(desc: Any, material_estimate: Any) -> str:
+    """AN OVAL SAYS IT IS ONE (D-594). A tube bought as a flat-sided oval read on the bill as
+    its part name and two numbers, which a buyer orders as box section. The section in
+    purchasing words ("30 x 15 x 1.5 flat-sided oval (FSO) tube") goes on the line wherever
+    the description does not already say oval."""
+    me = material_estimate if isinstance(material_estimate, dict) else {}
+    words = str(me.get("section_description") or "")
+    text = str(desc or "")
+    if "OVAL" in words.upper() and "OVAL" not in text.upper():
+        return f"{text}  {words}".strip()
+    return text
+
+
+def canonical_labour_groups(
+    summary: Dict[str, Any],
+    part_estimates: List[Dict[str, Any]],
+    order_qty: int,
+    skipped_part_numbers: Any = (),
+    all_fabricated_are_wire: bool = False,
+) -> Dict[Any, Dict[str, Any]]:
+    """Render required OperationDecisions into workbook pricing groups.
+
+    Route authority stays in the compiler. This function may combine compatible part-level
+    decisions into one tooling setup, but it never creates an operation from a raw word or
+    a missing legacy cost. Assembly decisions remain one group per target event.
+    """
+    payload = canonical_route_payload(summary)
+    estimates, raw = _canonical_record_index(summary, part_estimates)
+    node_qty = {
+        str(node.get("part_number") or "").strip().upper():
+            (_safe(node.get("qty_per_unit"), 1) or 1)
+        for node in (payload.get("nodes") or [])
+        if isinstance(node, dict) and node.get("part_number")
+    }
+    skipped = {
+        str(item).strip().upper() for item in (skipped_part_numbers or [])
+        if str(item).strip()
+    }
+    # The lines the declared product does not reach — the graph's set-aside issues and the
+    # ledger of records taken out (D-505). The out-of-scope set, not a node allowlist, so
+    # synthetic targets (@ROUTE-n) and generated lines are never caught by it.
+    _out_of_scope: Set[str] = set()
+    try:
+        from route_compiler import outside_product_identities as _outside, \
+            clean_part_number as _cpn
+        _out_of_scope = {k.upper() for k in _outside(payload.get("issues"))}
+        _out_of_scope |= {
+            _cpn(e.get("part_number")).upper()
+            for e in (summary.get("set_aside_outside_product") or [])
+            if isinstance(e, dict) and e.get("part_number")}
+        _out_of_scope.discard("")
+    except Exception:                                                # noqa: BLE001
+        _out_of_scope = set()
+    tube_pns = tube_part_numbers(summary)
+    groups: Dict[Any, Dict[str, Any]] = {}
+
+    def _prove_laser_nests(groups_in: Dict[Any, Dict[str, Any]]) -> None:
+        """ONE SHEET, PROVEN — NOT PRESUMED FROM MATERIAL AND GAUGE.
+
+        Same material and gauge says the parts COULD share a sheet program; Howard's
+        constraint is conditional on their actually fitting one sheet: "if multiple
+        components used but don't exceed a single sheet, laser rate would be reduced to
+        not exceed the given set up time". So before any set-up is shared, the nest is
+        proven from the engine's own nesting results (the template's K38 formula, run per
+        part into stock_estimate): every member on the SAME stock sheet, and the sum of
+        each member's share of a sheet — (qty/unit × order qty) ÷ its parts-per-sheet —
+        at most 1.0. A member with no nest result, a mixed stock sheet, or a total past
+        one sheet leaves the nest UNPROVEN, each row keeping its own full set-up with the
+        reason recorded on the group.
+        """
+        _nests: Dict[str, List[Dict[str, Any]]] = {}
+        for _g in groups_in.values():
+            if _g.get("laser_nest_id"):
+                _nests.setdefault(str(_g["laser_nest_id"]), []).append(_g)
+        for _nid, _members in _nests.items():
+            if len(_members) < 2:
+                for _g in _members:
+                    _g["laser_nest_proven"] = True
+                    _g["laser_nest_evidence"] = "single row — nothing shared, nothing to prove"
+                continue
+            _fraction, _sheets, _bad = 0.0, set(), []
+            for _g in _members:
+                _pn = str((_g.get("parts") or [""])[0]).strip().upper()
+                _se = (((estimates.get(_pn) or {}).get("material_estimate") or {})
+                       .get("stock_estimate") or {})
+                _pps = _safe(_se.get("parts_per_sheet"))
+                _sheet = _se.get("candidate_sheet_size_mm")
+                if not _pps or _pps <= 0 or not _sheet:
+                    _bad.append(_pn or "(unnamed)")
+                    continue
+                _sheets.add(tuple(_sheet) if isinstance(_sheet, (list, tuple)) else _sheet)
+                _fraction += ((_safe(_g.get("qty"), 1) or 1) * float(order_qty or 1)) \
+                    / float(_pps)
+            if _bad:
+                _proven, _why = False, (f"no nest result for {', '.join(_bad)} — nothing "
+                                        f"proves these share a sheet")
+            elif len(_sheets) > 1:
+                _proven, _why = False, (f"members nest on DIFFERENT stock sheets "
+                                        f"({sorted(_sheets)}) — not one program")
+            elif _fraction <= 1.0:
+                _proven, _why = True, (f"the whole order takes {_fraction:.2f} of one "
+                                       f"{next(iter(_sheets))} sheet, by the template's "
+                                       f"own nesting")
+            else:
+                _proven, _why = False, (f"the order needs {_fraction:.2f} sheets — past "
+                                        f"one sheet, Howard's one-set-up condition is not "
+                                        f"met and each row keeps its own")
+            # ── AN ESTIMATOR-CONFIRMED NESTING GROUP IS ALSO PROOF ────────────────────
+            #
+            # James, 18 Sep: "For 7332-01-003 and -004, share one 10-minute laser set-up.
+            # Howard's explicit statement is the proof for this job... For every other job,
+            # shared set-up requires either a proven combined nest or an estimator-confirmed
+            # nesting group. SAME GAUGE ALONE IS NEVER ENOUGH."
+            #
+            # The arithmetic above is one kind of proof and it needs `parts_per_sheet`,
+            # which the nester does not always produce — on 7332-01 it did not, so 003 and
+            # 004 each kept a full 10-minute set-up and the job booked 20 minutes where the
+            # shop runs one program. A person who knows the job is the other kind of proof,
+            # and it is the stronger one. It arrives in the job's own answers file, so it
+            # governs THIS drawing and no other, and it is recorded as HIS ruling rather
+            # than as something the engine worked out.
+            _confirmed = _confirmed_nesting_group(summary, [
+                str(p).strip().upper()
+                for _g in _members for p in (_g.get("parts") or [])
+            ])
+            if _confirmed and not _proven:
+                _proven, _why = True, (
+                    f"estimator-confirmed nesting group: {_confirmed}. Not derived — a "
+                    f"person who knows the job stated these components share one program, "
+                    f"which is the condition Howard set for one set-up")
+            for _g in _members:
+                _g["laser_nest_proven"] = _proven
+                _g["laser_nest_evidence"] = _why
+
+    for decision in payload.get("decisions") or []:
+        if not isinstance(decision, dict) or decision.get("status") != "required":
+            continue
+        decision_id = str(decision.get("decision_id") or "").strip()
+        operation = str(decision.get("operation") or "").strip().lower()
+        target_id = str(decision.get("target_id") or "").strip().upper()
+        participants = [
+            str(item).strip().upper()
+            for item in (decision.get("participants") or [])
+            if str(item).strip()
+        ]
+        participants = list(dict.fromkeys(participants))
+        if not decision_id or not operation:
+            continue
+        if target_id in skipped or any(item in skipped for item in participants):
+            continue
+        # THE SAME SCOPE AS THE MATERIAL (D-505), at the place a row is made. A line the
+        # declared product does not reach left the material blocks; it leaves the labour
+        # block too. A shared row keeps its in-scope parts; one with none left is not made.
+        if _out_of_scope:
+            if target_id in _out_of_scope:
+                continue
+            participants = [p for p in participants if p not in _out_of_scope]
+
+        candidate_ids = list(dict.fromkeys(
+            [target_id] + participants))
+
+        # ── A RULING IS THE LAST GATE BEFORE A LABOUR ROW, ON THIS ROAD TOO ───────────
+        #
+        # The legacy grader has asked this question for a long time, in the words of its
+        # own comment: "an operation a MEASUREMENT ruled out is not a missing row — it is
+        # an answered question... this is the last gate before a labour row, and it is the
+        # one that spends money". The canonical grader never asked it.
+        #
+        # 11908-21's 16:39 book is what that costs. The board was promoted, the laminate
+        # was ruled out with the reason recorded on all three trays — the report prints it
+        # in full, "laminating removed from the route: this board is bought PRE-FACED" —
+        # and the Estimate sheet still carried Glue at £18.43, because the decision graph
+        # was compiled before the ruling existed and nothing re-read it at render time.
+        #
+        # That is D-102 exactly, one road over: the tube bend came back because the ruling
+        # was written under a name the route readers did not use; this one is written under
+        # the right name at a time the canonical reader had already stopped listening. A
+        # ruling has to be honoured wherever a row is MADE, not only where it is compiled.
+        _ruled_on = [
+            _p for _p in candidate_ids
+            if operation in {
+                str(_k).strip().lower()
+                for _k in ((estimates.get(_p) or {}).get("operations_ruled_out")
+                           or (raw.get(_p) or {}).get("operations_ruled_out") or {})}
+        ]
+        # Every participant must be ruled out before the row goes: a ruling about one part
+        # does not cancel a group that is doing the work for others.
+        if _ruled_on and len(_ruled_on) == len([
+                _p for _p in candidate_ids if _p in estimates or _p in raw]):
+            _why_ruled = ""
+            for _p in _ruled_on:
+                _src = ((estimates.get(_p) or {}).get("operations_ruled_out")
+                        or (raw.get(_p) or {}).get("operations_ruled_out") or {})
+                for _k, _v in _src.items():
+                    if str(_k).strip().lower() == operation:
+                        _why_ruled = str(_v or "")
+                        break
+                if _why_ruled:
+                    break
+            print(f"   [route] {operation} NOT charged on {', '.join(_ruled_on)} — ruled "
+                  f"out: {_why_ruled[:200]}", flush=True)
+            continue
+
+        representative_id = next(
+            (item for item in candidate_ids if item in estimates), "")
+        pe = estimates.get(representative_id) or {}
+        raw_part = raw.get(representative_id) or {}
+        # THE FAMILY THE MONEY WAS FOR, NOT ONLY THE WORD ON THE DRAWING. A promoted board
+        # is bought, nested and priced as MFMDF while `normalized_material` stays "MDF" —
+        # correctly, because that IS what the drawing says. But every row then reads "9mm
+        # MDF", so three separate readers of the 16:39 book concluded the engine was still
+        # costing raw MDF when it was not, and the argument cost more than the defect would
+        # have. A sheet that will not say which board it costed cannot be checked.
+        material = str(
+            (pe.get("material_estimate") or {}).get("costing_material_family")
+            or (raw_part.get("material_estimate") or {}).get("costing_material_family")
+            or pe.get("normalized_material")
+            or (pe.get("material_estimate") or {}).get("material")
+            or raw_part.get("normalized_material")
+            or ""
+        )
+        thickness = _safe(
+            pe.get("normalized_thickness_mm")
+            or (pe.get("material_estimate") or {}).get("thickness_mm"),
+            0,
+        ) or 0
+        # ONE GAUGE ON THE WHOLE SHEET. The Sheet Steel row for 008 reads 1.0 mm — the
+        # confirmed production substitution — while its laser row read "0.9mm MILD STEEL"
+        # off whichever thickness reached this record, so the book contradicted itself
+        # about the same part and an estimator could not tell which gauge was costed. The
+        # substitution is a RULING and it is asked here for the same reason the material
+        # writer asks it: what production buys is what the sheet says.
+        _sub_rec = pe.get("production_substitution") or (raw_part or {}).get(
+            "production_substitution")
+        if isinstance(_sub_rec, dict):
+            _costed_mm = _safe(_sub_rec.get("costed_thickness_mm"))
+            if _costed_mm and _costed_mm > 0:
+                thickness = _costed_mm
+        # A SECTION'S GAUGE IS ITS WALL (D-591). 0351292's cross rail is 50 x 20 x 2 tube; a
+        # "3 mm" read off the support assembly's sheet put "Saw | 3mm MILD STEEL" on its row.
+        # Where the part is costed as a section, the row names the section's own wall.
+        _ss_row = pe.get("section_stock") or (raw_part or {}).get("section_stock")
+        if isinstance(_ss_row, dict) and _safe(_ss_row.get("t")):
+            thickness = _safe(_ss_row.get("t"))
+        stock_form = str(
+            (pe.get("material_estimate") or {}).get("stock_form") or ""
+        ).lower()
+        if not stock_form and representative_id in tube_pns:
+            stock_form = "tube"
+        # THE GROUP'S FAMILY, NOT THE FIRST PARTICIPANT'S. See _group_material_family —
+        # an assembly-scope row spanning several parts takes the bench its parts belong
+        # to, and a representative with no material no longer defaults the job to metal.
+        material, is_acrylic = _group_material_family(
+            candidate_ids, estimates, raw, material)
+        # THE MATERIAL, HERE TOO. _map_operation takes it so a timber part reaches the joinery
+        # departments the rate card carries instead of the acrylic ones; this call site did
+        # not pass it, and this is the call site the CANONICAL ROUTE uses — which is to say,
+        # the one every current job actually goes through. 11908-21 came back reading
+        # "Assemble/pack (Acrylic) - 3mm MDF" with the joinery fix already in, because the fix
+        # was applied to the other of the two places that ask the same question.
+        wb_op = _map_operation(operation, is_acrylic, stock_form, material)
+        if wb_op is None:
+            wb_op = operation
+        if (
+            wb_op == "Weld (CO2)"
+            and stock_form in {"wire", "bar"}
+            and all_fabricated_are_wire
+        ):
+            wb_op = "Spotweld"
+        # And you still cannot weld acrylic on this path either. Same rule, same reason: WELD
+        # is CO2 on steel, and a bonded acrylic joint has no bead to dress.
+        if is_acrylic and not _is_timber(material) and wb_op in ("Weld (CO2)", "Spotweld"):
+            wb_op = "Glue"
+        # A SECTION IS CUT ONCE, ON THIS ROAD TOO (D-541). The remap above turns a laser or
+        # guillotine word on a tube into the Tube cut, which was right while nothing else cut
+        # it. Since D-531 the estimator charges the saw per piece on every section bought as a
+        # stock length, so 0356454's box-section uprights and lower frame reached the sheet
+        # on a Tube row AND a Saw row — one length cut twice. Where every part on the row is
+        # already sawn, the Tube row is the same cut and is not made.
+        if wb_op == "Tube" and operation in _CUT_REMAPPED_TO_TUBE:
+            _known = [p for p in candidate_ids if p in estimates or p in raw]
+            _sawn = [p for p in _known if _sawn_to_length(p, estimates, raw)]
+            if _sawn and len(_sawn) == len(_known):
+                print(f"   [route] {operation} NOT charged on {', '.join(_sawn)} — already "
+                      f"sawn to length; a section is cut once", flush=True)
+                continue
+
+        scope = str(decision.get("scope") or "part").lower()
+        sequence = _safe(decision.get("sequence"))
+        qty = _safe(decision.get("qty_per_unit"), 1) or 1
+        if is_stated_time_operation(operation):
+            # A STATED TIME REFUSES TO SHARE A ROW ON THIS PATH TOO.
+            #
+            # Every key below this line is a DEPARTMENT plus its tooling: wb_op is the
+            # displayed title, so the pack OUT and the pack BACK — both "Assemble/pack
+            # (Metal)" at the same material and sequence — land on one row, and brushing
+            # pools with any other manual-metal work at the same gauge. The stated figure
+            # is then not overridden by a median so much as never asked for, because the
+            # stated-time lookup runs per ROW, after this.
+            #
+            # The sequence-less fallback at the bottom of the chain makes it worse rather
+            # than better: a decision with no sequence deliberately JOINS an existing
+            # department group. For a stated rule that is the merge, made on purpose.
+            #
+            # Keyed on the operation, so one stated rule is one row for the job. The row
+            # still carries the department's title and bills at the department's rate.
+            key = ("canonical-stated", wb_op, str(operation).strip().lower())
+        elif operation == "hardware_insertion":
+            key = ("canonical-event", decision_id)
+        elif operation == "powder_coating":
+            # One colour/booth setup can carry several separately identified coated
+            # objects. Different finishes remain separate setups.
+            finish_signature = _canonical_finish_signature(
+                candidate_ids, estimates, raw, operation)
+            key = ("canonical-finish-setup", wb_op, finish_signature)
+        elif scope == "assembly":
+            key = ("canonical-event", decision_id)
+        elif wb_op == "Robomac":
+            key = ("canonical-event", decision_id)
+        elif wb_op in ("Laser (Metal)", "Laser (Acrylic)"):
+            # ── ONE LABOUR ROW PER COMPONENT ON THE LASER ────────────────────────────
+            #
+            # "Labour rates should be separate line each component as reflect the
+            #  different time per component" — Howard Thurley, 7332-01, and his own sheet
+            # carries FIVE separate LASM rows. Keyed by (op, material, gauge), 7332-01-003
+            # (a 441x10 strap) and -004 (a 15.88 square cap) shared one row at a blended
+            # 441/hr; his figures for the two are 235 and 900 — nearly four to one, and a
+            # single number cannot be checked against either.
+            #
+            # The row splits; the SET-UP does not. Components of one material and gauge
+            # genuinely nest on the same sheet — his constraint exactly: "if multiple
+            # components used but don't exceed a single sheet, laser rate would be reduced
+            # to not exceed the given set up time". So each row carries the nest it
+            # belongs to, and the emit loop allocates the department's ONE set-up across
+            # that nest (see ONE NEST, ONE SET-UP below). Splitting without that half
+            # would book five set-ups where the shop has one — the error he warned about,
+            # worse than the blended row it replaces.
+            key = ("canonical-part-setup", wb_op, material.upper(),
+                   "%g" % thickness, target_id or decision_id)
+        else:
+            # Compatible leaf events share one tooling setup. Decision identities remain
+            # attached individually, so no event disappears in the grouping.
+            key = (
+                "canonical-setup", wb_op, material.upper(),
+                "%g" % thickness, "%g" % sequence if sequence is not None else "",
+            )
+            # ONE BENCH, ONE SET-UP. The sequence-less acrylic manual rule landed beside
+            # the sequenced deburr on the same part as a SECOND Manual labour (Acrylic)
+            # row — two 15-minute set-ups for one visit to one bench. Decisions arrive
+            # sequence-first, so the sequenced group already exists: a decision with no
+            # sequence of its own joins its department's group instead of minting a twin.
+            if sequence is None:
+                for _existing in groups:
+                    if _existing[:4] == key[:4]:
+                        key = _existing
+                        break
+
+        group = groups.setdefault(key, {
+            "wb_op": wb_op,
+            "material": material,
+            "thickness": thickness,
+            "group_key": key,
+            "qty": 0,
+            "bh": 0.0,
+            "parts": [],
+            "targets": [],
+            "bends": 0,
+            "holes": 0,
+            "engine_ops": [],
+            "decision_ids": [],
+            "canonical_route": True,
+            # A stated figure given PER FINISHED UNIT is one occasion for the job, however
+            # many components take it — so the row is assembly-scoped in fact, whatever
+            # scope the individual decisions carry. Recorded on the group because the emit
+            # loop is where the quantity is chosen, and it must not have to re-derive this.
+            "assembly_scoped": (scope == "assembly"
+                                or stated_time_is_once_per_finished_unit(operation)),
+            "stated_once_per_finished_unit":
+                stated_time_is_once_per_finished_unit(operation),
+            "route_sequence": sequence,
+        })
+        if isinstance(key, tuple) and key and key[0] == "canonical-part-setup":
+            # The nest this row shares its set-up with: same laser, same material, same
+            # gauge — the tuple that decides whether parts can share a sheet program.
+            group["laser_nest_id"] = "%s|%s|%g" % (wb_op, material.upper(), thickness)
+        if decision_id not in group["decision_ids"]:
+            group["decision_ids"].append(decision_id)
+        if operation not in group["engine_ops"]:
+            group["engine_ops"].append(operation)
+        if target_id and target_id not in group["targets"]:
+            group["targets"].append(target_id)
+        # THE ROW NAMES THE THING THE EVENT IS ON (D-398). An assembly-scoped joint is one
+        # charge on the assembly; naming its members in the Part No. cell ("001, 002, 003,
+        # 101" on 9439-01-04's weld row) reads as four charges, and an estimator would put
+        # the joint back on the leaves. The cell carries the target; the members go to the
+        # description as what it joins. A part-scoped row is unchanged.
+        _named, _joins = row_parts_for(scope, target_id, participants)
+        for part_number in _named:
+            if part_number and part_number not in group["parts"]:
+                group["parts"].append(part_number)
+        for part_number in _joins:
+            if part_number and part_number not in group.setdefault("joins", []):
+                group["joins"].append(part_number)
+        group["qty"] += qty
+        if sequence is not None:
+            group["route_sequence"] = (
+                sequence if group.get("route_sequence") is None
+                else min(float(group["route_sequence"]), sequence)
+            )
+
+        if operation == "hardware_insertion":
+            insert_count = sum(node_qty.get(item, 1) for item in participants)
+            group["qty"] = qty
+            group["bh"] += (
+                float(order_qty) * insert_count
+                * float(_MANM_INSERT_SECONDS_EACH) / 3600.0
+            )
+            # THE RATE, STATED RATHER THAN LEFT TO CANCEL. This branch builds its batch
+            # figure from the REAL order quantity, so the quantity divides out again
+            # downstream and the derived rate is already invariant — 60/hr per insertion at
+            # 20 off, 180 off and 1000 off alike. But the general warning cannot see that it
+            # cancels, so it fired on the one operation that was right, and a warning that
+            # is wrong on a correct case is how the ones that matter stop being read.
+            group["run_hours_per_unit"] = (
+                (group.get("run_hours_per_unit") or 0.0)
+                + insert_count * float(_MANM_INSERT_SECONDS_EACH) / 3600.0
+            )
+            group["work_units"] = insert_count
+            continue
+
+        # ── AN ASSEMBLY'S OWN TIME IS NOT A SUM OF ITS PARTS ──────────────────────────────
+        #
+        # The rule below is right about the danger and too broad about the remedy. Summing
+        # participant hours for an assembly-level operation IS an over-count — five members
+        # do not get welded five times — so assembly work falls to the department throughput.
+        # But that throws away the case where the estimator computed a time FOR THE ASSEMBLY
+        # ITSELF, which is not a sum of anything.
+        #
+        # 7332-01-101 is that case, and it is the whole of Howard Thurley's line 86/87:
+        #
+        #     "Weld & Dress AI Estimate for 2 Minutes & 1 Minute respectively, Timings from
+        #      Welding Dept. 0.5 Hours & 20 Minutes respectively."
+        #
+        # The engine computes 50 minutes of welding and 33.5 of dressing on that weldment —
+        # the sheet's own outstanding-inputs list prints the working, "5 joint(s) at 10 min".
+        # Both are assembly-scoped, so neither reached this grouping at all, and the rows
+        # fell to Weld (CO2) 29/hr and Dress Welds 60/hr: the department medians, 2 minutes
+        # and 1. About £28 a unit on a £63 stand, on every book 7332-01 has ever produced.
+        #
+        # So the target's OWN record is read where it has a time for this operation. One
+        # part, one number, no summing — the thing the warning above is about cannot happen
+        # here. Where the assembly carries no time of its own, the department throughput
+        # stands exactly as before.
+        _asm_id = target_id if (scope == "assembly" and target_id in estimates) else None
+        if _asm_id:
+            _asm_bh = {str(k).strip().lower(): v for k, v in
+                       ((estimates[_asm_id].get("labour_estimate") or {}).get(
+                           "batch_hours") or {}).items()}
+            _asm_rh = {str(k).strip().lower(): v for k, v in
+                       ((estimates[_asm_id].get("labour_estimate") or {}).get(
+                           "run_hours_per_unit") or {}).items()}
+            # ASKED BY DEPARTMENT, NOT BY SPELLING.
+            #
+            # The route names this operation "assembly"; the estimator times it "handling".
+            # department_codes has said they are one thing since it was written —
+            # _alias("PACM", "handling", "assembly", ...) — and an exact-key lookup asked
+            # neither of them that question, so Assemble/pack (Metal) reached the emit loop
+            # with no hours at all and took the department median. Twelve minutes of pack
+            # (four out to the plater, eight on final assembly) against two.
+            #
+            # The same two-names-for-one-thing that has cost a fix at every layer of this
+            # job. Resolved once, here, by asking the thing that owns the answer.
+            _h = _safe(_asm_bh.get(operation))
+            _r = _safe(_asm_rh.get(operation))
+            if not _h and not _r:
+                try:
+                    from department_codes import code_for as _dept_of
+                    _want = _dept_of(operation)
+                    if _want:
+                        for _alt, _v in _asm_bh.items():
+                            if _dept_of(_alt) == _want and _safe(_v):
+                                _h = _safe(_v)
+                                break
+                        for _alt, _v in _asm_rh.items():
+                            if _dept_of(_alt) == _want and _safe(_v):
+                                _r = _safe(_v)
+                                break
+                except Exception:                                    # noqa: BLE001
+                    pass
+            if (_h and _h > 0) or (_r and _r > 0):
+                if _h and _h > 0:
+                    group["bh"] += float(_h)
+                if _r and _r > 0:
+                    group["run_hours_per_unit"] = (
+                        group.get("run_hours_per_unit") or 0.0) + float(_r) * qty
+                # `rh` is the run time a piece THIS ROW INCLUDED for the member — found here
+                # under the department's other name — so a stated time replaces exactly it
+                # (D-495), and the row's working shows the member's own rate (D-498).
+                group.setdefault("hours_by_part", {})[str(_asm_id)] = {
+                    "bh": float(_h or 0.0), "qty_per_unit": float(qty or 1),
+                    "rh": float(_r or 0.0)}
+                group["assembly_own_time"] = True
+                continue
+
+        # Geometry-derived batch hours are valid for leaf events. Assembly work uses the
+        # department throughput because summing participant hours is the old over-count.
+        if scope == "part" and representative_id:
+            batch_hours = (
+                (estimates[representative_id].get("labour_estimate") or {})
+                .get("batch_hours") or {}
+            )
+            normalised_hours = {
+                str(name).strip().lower(): value
+                for name, value in batch_hours.items()
+            }
+            hours = _safe(normalised_hours.get(operation))
+            if hours and hours > 0:
+                group["bh"] += hours
+            # The quantity-free rate, where the estimator recorded one.
+            _rhpu = (estimates[representative_id].get("labour_estimate") or {}).get(
+                "run_hours_per_unit") or {}
+            _rh = _safe({str(k).strip().lower(): v for k, v in _rhpu.items()}.get(operation))
+            if _rh and _rh > 0:
+                # PER PIECE, TIMES THE PIECES. The engine's run time is one piece's; the row's
+                # throughput is its piece count over these hours, so a part two-off per unit
+                # added one piece's time and the sheet charged one piece: 12633-03-01P's
+                # second front panel was never lasered (D-250).
+                group["run_hours_per_unit"] = (group.get("run_hours_per_unit") or 0.0) + _rh * qty
+            # The same record on the canonical path, so a grouped row can show its working
+            # whichever route built it. See the note in populate_workbook: only the SUM was
+            # kept, so a row combining a long strap and a small cap could not be audited.
+            if (hours and hours > 0) or (_rh and _rh > 0):
+                group.setdefault("hours_by_part", {})[str(representative_id)] = {
+                    "bh": float(hours or 0.0), "qty_per_unit": float(qty or 1),
+                    "rh": float(_rh or 0.0)}
+
+            geometry = estimates[representative_id].get("normalized_geometry") or {}
+            if operation == "folding":
+                group["bends"] += int(_safe(
+                    geometry.get("estimated_bend_line_count"), 0) or 0) * int(qty)
+            elif operation in {"hole_machining", "drilling", "punch"}:
+                group["holes"] += int(_safe(
+                    geometry.get("estimated_hole_count"), 0) or 0) * int(qty)
+            # THE HOLES THE ROW'S TIME WAS COSTED FOR, ON EVERY CUTTING ROW (D-598a): the
+            # count the process estimate used, times the part's quantity — so a hole can be
+            # held to the row that cuts it, laser or drill.
+            if operation in _HOLE_CUTTING_OPS:
+                _hc = (estimates[representative_id].get("process_estimate") or {}).get("hole_count")
+                if isinstance(_hc, (int, float)) and not isinstance(_hc, bool) and _hc >= 0:
+                    _hp = group.setdefault("holes_cut_by_part", {})
+                    _hp[representative_id] = _hp.get(representative_id, 0) + _hc * qty
+                    group["holes_cut_basis"] = "per_finished_product"
+                group["holes_cut"] = int(group.get("holes_cut") or 0) + int(_safe(
+                    (estimates[representative_id].get("process_estimate") or {})
+                    .get("hole_count"), 0) or 0) * int(qty)
+
+    _merge_unread_colour_into_the_known_one(groups)
+    _prove_laser_nests(groups)
+
+    for group in groups.values():
+        group["decision_ids"] = sorted(set(group.get("decision_ids") or []))
+        group["decision_id"] = (
+            group["decision_ids"][0]
+            if len(group["decision_ids"]) == 1 else None
+        )
+    return groups
+
+
+def _merge_unread_colour_into_the_known_one(groups: Dict[Any, Dict[str, Any]]) -> None:
+    """An UNREAD colour is not a second colour, and must not buy a second booth setup.
+
+    11350 is one white job. The bar, the left arm and the sub-assembly print their finish;
+    the right arm's record prints none — so its setup signature came out COLOUR-UNREAD while
+    theirs carried the colour, and the job paid for two hangs of one colour.
+
+    A part whose colour nobody read is not evidence of a different colour. It is absence,
+    and it joins the colour this operation is already set up for — when there is EXACTLY ONE
+    to join. Two known colours and an unknown is genuinely ambiguous, and the ambiguous case
+    keeps its own setup rather than being assigned to whichever was seen first.
+    """
+    by_op: Dict[Any, List[Any]] = {}
+    for key in groups:
+        if isinstance(key, tuple) and key and key[0] == "canonical-finish-setup":
+            by_op.setdefault((key[1], str(key[2]).split("|")[0]), []).append(key)
+    for (_wb_op, _family), keys in by_op.items():
+        if len(keys) < 2:
+            continue
+        _known = [k for k in keys if "COLOUR-UNREAD" not in str(k[2])]
+        _unread = [k for k in keys if "COLOUR-UNREAD" in str(k[2])]
+        if len(_known) != 1 or not _unread:
+            continue
+        _into = groups[_known[0]]
+        for _k in _unread:
+            _from = groups.pop(_k)
+            _into["qty"] = (_into.get("qty") or 0) + (_from.get("qty") or 0)
+            _into["bh"] = (_into.get("bh") or 0.0) + (_from.get("bh") or 0.0)
+            for _f in ("parts", "targets", "engine_ops", "decision_ids"):
+                _into[_f] = list(dict.fromkeys(
+                    list(_into.get(_f) or []) + list(_from.get(_f) or [])))
 
 
 def _is_tube(pe: Dict[str, Any]) -> bool:
@@ -280,6 +3876,137 @@ def _is_tube(pe: Dict[str, Any]) -> bool:
 
 
 
+def fill_missing_block_totals(ws, cm, flags=None) -> Dict[str, List[int]]:
+    """A block row with no line-total formula is filled from the block's first row.
+
+    The widened template of 27 Sep 2026 carried the BOM's Total Value formula
+    =(J*K)*(100%+L) on rows 11-31 and 62-80 and NOT on 32-61. A bought-in written to one of
+    those thirty rows shows its price and quantity and adds nothing to Total Material Cost —
+    the one error on a sheet that nobody catches, because the row looks priced (D-304).
+    Every block's column M is a per-row formula; where a row inside a block has none and the
+    block's first row has one, the first row's formula is translated to it (openpyxl's own
+    Translator, so references move exactly as Excel's fill-down would) and the fill is
+    flagged so the template can be corrected. A row holding a value, not a formula, is left
+    alone. Returns {block: [rows filled]}.
+    """
+    filled: Dict[str, List[int]] = {}
+    try:
+        from openpyxl.formula.translate import Translator
+    except Exception:                                                # noqa: BLE001
+        return filled
+    for key in ("bom", "tube", "steel", "other_sheet", "labour"):
+        blk = cm.get(key)
+        if not isinstance(blk, dict):
+            continue
+        fr, lr = int(blk["first_row"]), int(blk["last_row"])
+        src = ws.cell(fr, 13).value
+        if not (isinstance(src, str) and src.startswith("=")):
+            continue
+        for r in range(fr + 1, lr + 1):
+            cell = ws.cell(r, 13)
+            if cell.value in (None, ""):
+                try:
+                    cell.value = Translator(src, origin=f"M{fr}").translate_formula(f"M{r}")
+                    filled.setdefault(key, []).append(r)
+                except Exception:                                    # noqa: BLE001
+                    continue
+    for key, rows in filled.items():
+        _flag(f"TEMPLATE: {key} rows {rows[0]}..{rows[-1]} ({len(rows)} rows) had no line-total "
+              f"formula in column M, so a line written there would add nothing to the total. "
+              f"Filled from row {cm[key]['first_row']} for this book — fill the formula down "
+              f"in the blank template.", flags if isinstance(flags, list) else [])
+    return filled
+
+
+def block_title(key: Any) -> str:
+    """What the Estimate sheet calls a material block — the template's own label, never the
+    engine's internal key ('tube' is the template's Wire block)."""
+    blk = CELL_MAP.get(str(key or "").strip()) if isinstance(CELL_MAP, dict) else None
+    if isinstance(blk, dict) and str(blk.get("title") or "").strip():
+        return str(blk["title"]).strip()
+    return str(key or "")
+
+
+def derive_cellmap_from_template(ws, cm, flags=None) -> Dict[str, Any]:
+    """Read every block's rows from the template itself, and update the map in place.
+
+    THE TEMPLATE IS THE SOURCE OF TRUTH FOR ITS OWN LAYOUT, SO READ IT. The block rows were
+    constants, widened by hand in step with the template once (BOM 15 -> 40 rows, July), and
+    the guard below refused to run the moment the two disagreed. On 27 Sep 2026 the BOM block
+    was widened again in Excel so a big kit's bought-ins fit on the sheet, and every run
+    would have stopped with "Update CELL_MAP" until someone edited code (D-303).
+
+    Excel re-points the Total Material Cost formula whenever rows are inserted, so it always
+    names the four material blocks in order — BOM, Wire, Sheet Steel, Other Sheet Material —
+    as SUM(M<first>:M<last>) spans. Each span is accepted only where the section label the
+    engine expects sits in its place (the BOM's own header row above it; "Wire", "Sheet
+    Steel", "Other Sheet Material" two rows above the others), so a formula somebody edited
+    by hand cannot move a write. The labour block runs from the row under "Operation" in the
+    Labour section to the row above "Total Labour Cost". The powder rate and total cells sit
+    in AF on Other Sheet Material's label and header rows. Anything not found keeps its
+    constant, and the guard below still refuses a map the template contradicts. Returns
+    {block: (old, new)} for what moved.
+    """
+    import re as _re
+    moved: Dict[str, Any] = {}
+    try:
+        rows_c = {}
+        for r in range(1, min(ws.max_row, 600) + 1):
+            v = ws.cell(r, 3).value
+            if isinstance(v, str) and v.strip():
+                rows_c[r] = v.strip().lower()
+        total_row = next((r for r, v in rows_c.items() if v.startswith("total material cost")), None)
+        if total_row is None:
+            return moved
+        f = next((c.value for c in ws[total_row]
+                  if isinstance(c.value, str) and "SUM(" in c.value), None)
+        spans = sorted((int(a), int(b)) for a, b in
+                       _re.findall(r"SUM\(M(\d+):M(\d+)\)", str(f or "")))
+        if len(spans) != 4:
+            return moved
+        expect = (("bom", 1, "bill of materials"), ("tube", 2, "wire"),
+                  ("steel", 2, "sheet steel"), ("other_sheet", 2, "other sheet material"))
+        found: Dict[str, Tuple[int, int]] = {}
+        titles: Dict[str, str] = {}
+        for (key, above, label), (fr, lr) in zip(expect, spans):
+            if not rows_c.get(fr - above, "").startswith(label):
+                return moved                   # the formula and the labels disagree: keep the map
+            found[key] = (fr, lr)
+            # THE BLOCK'S NAME IS THE TEMPLATE'S OWN LABEL, read from the cell just checked —
+            # what every surface calls the block (block_title), so a note never names it by
+            # the engine's internal key.
+            _t = ws.cell(fr - above, 3).value
+            if isinstance(_t, str) and _t.strip():
+                titles[key] = _t.strip()
+        for key, _t in titles.items():
+            if isinstance(cm.get(key), dict):
+                cm[key]["title"] = _t
+        lab = next((r for r, v in sorted(rows_c.items())
+                    if r > found["other_sheet"][1] and v == "labour"), None)
+        op_row = next((r for r, v in sorted(rows_c.items())
+                       if lab and r > lab and v == "operation"), None)
+        lab_total = next((r for r, v in sorted(rows_c.items())
+                          if op_row and r > op_row and v.startswith("total labour cost")), None)
+        if op_row and lab_total and lab_total - 1 > op_row:
+            found["labour"] = (op_row + 1, lab_total - 1)
+        for key, (fr, lr) in found.items():
+            blk = cm.get(key)
+            if isinstance(blk, dict) and (blk.get("first_row"), blk.get("last_row")) != (fr, lr):
+                moved[key] = ((blk.get("first_row"), blk.get("last_row")), (fr, lr))
+                blk["first_row"], blk["last_row"] = fr, lr
+        _pw_label = found["other_sheet"][0] - 2
+        cm["powder"] = {"rate_cell": f"AF{_pw_label}", "total_cell": f"AF{_pw_label + 1}"}
+        if moved:
+            _flag("template layout read from the template itself: "
+                  + "; ".join(f"{k} rows {o[0]}..{o[1]} -> {n[0]}..{n[1]}"
+                              for k, (o, n) in moved.items())
+                  + " (Total Material Cost formula and section labels agree)",
+                  flags if isinstance(flags, list) else [])
+    except Exception:                                                # noqa: BLE001
+        return moved
+    return moved
+
+
 def _verify_template_matches_cellmap(ws, cm, flags=None):
     """The template is the single source of truth for its own layout.
 
@@ -290,10 +4017,26 @@ def _verify_template_matches_cellmap(ws, cm, flags=None):
     truncating a block.
 
     Non-fatal if the formula cannot be found or parsed: we fall back to the constants.
+
+    FOUND BY LABEL, BECAUSE THE CELL MOVES WHEN THE LAYOUT DOES. This read M92 by address —
+    the one cell guaranteed to shift the moment anybody widens a block, which is the only
+    occasion this check exists for. Inserting two rows into Other Sheet Material moves the
+    total to M94, the read finds no formula, the guard returns quietly, and the run writes a
+    stale map into a re-shaped sheet: rows on top of the totals, exactly what this was built
+    to prevent. 12349-02 needs that widening — its ninth acrylic flat has nowhere to go — so
+    the guard has to survive it. The label is what does not move.
     """
     import re as _re
     try:
-        f = ws["M92"].value
+        f = None
+        for _row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 400)):
+            _lbl = next((c for c in _row if isinstance(c.value, str)
+                         and c.value.strip().lower().startswith("total material cost")), None)
+            if _lbl is None:
+                continue
+            f = next((c.value for c in _row
+                      if isinstance(c.value, str) and "SUM(" in c.value), None)
+            break
         if not isinstance(f, str) or "SUM(" not in f:
             return
         spans = _re.findall(r"SUM\(M(\d+):M(\d+)\)", f)
@@ -318,9 +4061,1521 @@ def _verify_template_matches_cellmap(ws, cm, flags=None):
         return  # never let the safety check itself break a run
 
 
+def labour_sheet_coverage(wb, cm) -> Optional[Dict[str, Any]]:
+    """Which Estimate labour rows the department-hours sheet actually reads, against the
+    labour block the template itself reports (cm["labour"], set by derive_cellmap_from_template).
+
+    THE DEPARTMENT TABLE READ A BLOCK THAT NO LONGER EXISTED. The hidden Labour sheet pairs
+    column A (the row's department) with column B (its hours) by single-cell reference, one row
+    per labour row, and its per-department formulas scan A1:B<capacity>. When the labour block
+    was widened from 40 to 72 rows, Excel shifted A41:B100 to the rows BELOW the new block
+    (Estimate!G198:J257, the totals area) instead of extending them, so rows 166-197 were
+    never read. 12645 19:17: "Total Labour Hours By Dept." summed 9.85 h against 12.60 h of
+    labour rows; P.Coat, Assemble/pack, Weld and Dress Welds (2.75 h) were missing (D-325).
+
+    Returns None when there is no such sheet (another template), else {sheet, dept_col,
+    hours_col, rows (the Estimate rows column A reads, in order), expected, capacity,
+    missing, stray, ok}. Read from the formulas, never from fixed row numbers."""
+    import re as _re
+    est = str(cm.get("estimate_sheet") or "Estimate")
+    lab = cm.get("labour") or {}
+    fr, lr = lab.get("first_row"), lab.get("last_row")
+    if not (isinstance(fr, int) and isinstance(lr, int) and lr >= fr):
+        return None
+    # THE BLOCK MUST BE THE ONE THE SHEET'S OWN LABELS BOUND. When the layout could not be
+    # read (a book whose material total is already AGGREGATE, a template reshaped past what
+    # derive_cellmap_from_template recognises) the map keeps its constants, and "repairing"
+    # against a stale map would point the department table at the wrong rows — it did, on
+    # the first try of this check. So: "Operation" directly above, "Total Labour Cost"
+    # directly below, or nothing is judged.
+    _es = wb[est] if est in wb.sheetnames else None
+    _col = int(lab.get("col_operation") or 3)
+    _above = str((_es.cell(fr - 1, _col).value if _es is not None else "") or "").strip().lower()
+    _below = str((_es.cell(lr + 1, _col).value if _es is not None else "") or "").strip().lower()
+    if _above != "operation" or not _below.startswith("total labour cost"):
+        return {"sheet": None, "ok": None, "unconfirmed": True,
+                "expected": list(range(fr, lr + 1))}
+    _ref = _re.compile(r"^=\s*'?" + _re.escape(est) + r"'?!\$?([A-Z]{1,3})\$?(\d+)\s*$")
+    for sh in wb.worksheets:
+        if sh.title == est:
+            continue
+        a1, b1 = _ref.match(str(sh.cell(1, 1).value or "")), _ref.match(str(sh.cell(1, 2).value or ""))
+        if not (a1 and b1):
+            continue
+        # capacity: the span the per-department formulas scan ($A$1:$B$<n>)
+        cap = None
+        for c in range(3, min(sh.max_column, 60) + 1):
+            v = sh.cell(2, c).value
+            m = _re.search(r"\$A\$1:\$B\$(\d+)", str(getattr(v, "text", v) or ""))
+            if m:
+                cap = int(m.group(1))
+                break
+        if cap is None:
+            continue
+        rows: List[Optional[int]] = []
+        for r in range(1, cap + 1):
+            m = _ref.match(str(sh.cell(r, 1).value or ""))
+            rows.append(int(m.group(2)) if m else None)
+        expected = list(range(fr, lr + 1))
+        got = [x for x in rows if x is not None]
+        return {"sheet": sh.title, "dept_col": a1.group(1), "hours_col": b1.group(1),
+                "rows": rows, "expected": expected, "capacity": cap,
+                "missing": sorted(set(expected) - set(got)),
+                "stray": sorted(set(got) - set(expected)),
+                "ok": got == expected}
+    return None
+
+
+def repair_labour_sheet_references(wb, cm, flags=None) -> Optional[Dict[str, Any]]:
+    """Point the department-hours sheet at exactly the labour block, in THIS book, and say so.
+
+    The template on the share is the thing to fix; until it is, every produced book is
+    repaired so its department hours add up to its labour rows. A block larger than the
+    sheet's scan capacity cannot be repaired here without rewriting its array formulas, and
+    is flagged as a template fault instead (D-325)."""
+    cov = labour_sheet_coverage(wb, cm)
+    _fl = flags if isinstance(flags, list) else []
+    if cov is not None and cov.get("unconfirmed"):
+        _e = cov["expected"]
+        _flag(f"labour block rows {_e[0]}..{_e[-1]} are not bounded by 'Operation' and "
+              f"'Total Labour Cost' on the sheet, so the department-hours sheet was NOT "
+              f"checked or repaired: department totals may not add up to the labour rows.", _fl)
+        return cov
+    if cov is None or cov["ok"]:
+        return cov
+    est = str(cm.get("estimate_sheet") or "Estimate")
+    exp = cov["expected"]
+    if len(exp) > cov["capacity"]:
+        _flag(f"TEMPLATE FAULT: the {cov['sheet']} sheet scans {cov['capacity']} rows but the "
+              f"labour block has {len(exp)} (rows {exp[0]}..{exp[-1]}); department hours will "
+              f"omit rows past its capacity. Widen that sheet's formulas in the template.", _fl)
+        return cov
+    sh = wb[cov["sheet"]]
+    for i in range(cov["capacity"]):
+        r = i + 1
+        if i < len(exp):
+            sh.cell(r, 1).value = f"={est}!{cov['dept_col']}{exp[i]}"
+            sh.cell(r, 2).value = f"={est}!{cov['hours_col']}{exp[i]}"
+        else:
+            sh.cell(r, 1).value = None
+            sh.cell(r, 2).value = None
+    _miss = cov["missing"]
+    _flag(f"TEMPLATE FAULT REPAIRED IN THIS BOOK: the {cov['sheet']} sheet read "
+          + (f"no labour rows {_miss[0]}..{_miss[-1]} ({len(_miss)} rows)" if _miss else "")
+          + (f"{' and ' if _miss else ''}{len(cov['stray'])} row(s) outside the labour block"
+             if cov["stray"] else "")
+          + f", so 'Total Labour Hours By Dept.' did not add up to the labour rows. Pointed "
+            f"at {est}!{cov['dept_col']}{exp[0]}:{cov['hours_col']}{exp[-1]} for this book; "
+            f"fix the template's {cov['sheet']} sheet so this is not needed.", _fl)
+    return cov
+
+
+def _make_material_total_error_tolerant(ws, flags=None):
+    """Rewrite the Total Material Cost formula (M92) so an errored material row does not
+    blank the whole total.
+
+    The template's M92 is a plain SUM across the material blocks:
+        =(SUM(M11:M50)+SUM(M53:M60)+SUM(M63:M81)+SUM(M84:M91)+AF83)
+    A single #VALUE!/#DIV/0! in any summed cell (a steel part with no blank dims) makes the
+    whole SUM error, which cascades into Unit Cost and Sell Price. We replace each SUM(range)
+    with AGGREGATE(9,6,range) — 9 = SUM, 6 = ignore errors — so the total is the sum of the
+    CREDIBLE rows and the errored rows contribute nothing until the estimator dimensions them.
+
+    NON-REGRESSIVE: AGGREGATE(9,6,range) is arithmetically identical to SUM(range) whenever the
+    range has no errors, so fully-dimensioned jobs (12120/1282) are unchanged. Bare cell terms
+    (e.g. +AF83, the powder total) are left as-is — they are not the cascade source. Best-effort:
+    if M92 is not the expected shape, leave it untouched and flag.
+    """
+    import re as _re
+    try:
+        # BY LABEL, LIKE ITS SIBLING, AND FOR THE SAME REASON. _verify_template_matches_cellmap
+        # read this total at M92 by address and went blind the moment a block was widened —
+        # which is the one occasion it exists for. This function had the identical address and
+        # the identical blind spot, and a worse consequence: it flags "not the expected SUM
+        # formula", returns, and the material total silently keeps plain SUM. One part with no
+        # blank dimensions then #VALUE!s Total Material, Unit Cost and Sell Price together.
+        # Widening Other Sheet Material — which 12349-02 needs — moves this cell.
+        cell = None
+        for _row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 400)):
+            if not any(isinstance(c.value, str)
+                       and c.value.strip().lower().startswith("total material cost")
+                       for c in _row):
+                continue
+            cell = next((c for c in _row
+                         if isinstance(c.value, str) and "SUM(" in c.value), None)
+            break
+        f = cell.value if cell is not None else None
+        if not isinstance(f, str) or "SUM(" not in f:
+            if flags is not None:
+                _flag("material-total error-tolerance: no Total Material Cost row with a SUM "
+                      "formula was found — left as-is (a missing dim will still #VALUE! the "
+                      "total).", flags)
+            return False
+        # SUM(  ->  AGGREGATE(9,6,   for every SUM( in the formula. Ranges/bare refs unchanged.
+        # AGGREGATE is an Excel 2010+ "future function": openpyxl MUST store it with the
+        # _xlfn. prefix or Excel shows #NAME? (it reads bare AGGREGATE as an unknown name).
+        # Excel displays/evaluates _xlfn.AGGREGATE(...) as AGGREGATE(...).
+        new_f = _re.sub(r"\bSUM\(", "_xlfn.AGGREGATE(9,6,", f)
+        if new_f == f:
+            return False
+        cell.value = new_f
+        if flags is not None:
+            _flag("material total made error-tolerant (SUM->AGGREGATE ignore-errors): a part "
+                  "with no blank dims no longer blanks Total Material/Unit/Sell — it totals the "
+                  "credible lines and self-completes when the flagged dims are filled.", flags)
+        return True
+    except Exception:
+        return False  # never let this optional hardening break a run
+
+
+def _clean_error_cells(ws, flags=None):
+    """Wrap the formula-driven output cells in the Sheet-Steel / Other-Sheet rows (Qty Per Sheet,
+    Cost Per Part, and the row-aligned Laser/CNC/Powder rate-calculator cells) in IFERROR(...,"")
+    so a part with no blank dims shows BLANK cells instead of #DIV/0!/#VALUE! scattered across the
+    sheet. NON-REGRESSIVE: IFERROR(valid_formula,"") == valid_formula when there is no error, so a
+    fully dimensioned row is untouched — and the row SELF-HEALS: the instant the estimator fills
+    the dims, the formula evaluates and the value appears (and the error-tolerant material total
+    picks it up). The 'DIMS REQUIRED' description marker still names which rows to complete.
+    """
+    wrapped = 0
+    try:
+        blocks = [CELL_MAP.get("steel"), CELL_MAP.get("other_sheet")]
+        for blk in blocks:
+            if not blk:
+                continue
+            fr, lr = blk["first_row"], blk["last_row"]
+            # WHERE THE FORMULAS START IS A PROPERTY OF THE BLOCK, NOT A CONSTANT. The two
+            # blocks do not share a column layout — Other Sheet carries no gauge column, so
+            # everything after the sheet size sits one column left. Asking each block where
+            # its own formula region begins is the only way one sweep can clean both.
+            # Inputs inside the range are unaffected: only cells holding a formula string
+            # are touched, and every cell this module writes is a number.
+            first_c = int(blk.get("first_formula_col") or 11)
+            for r in range(fr, lr + 1):
+                # first_formula_col..AH(34): Qty Per Sheet, Cost Per Part, and the row's
+                # rate-calculator cells.
+                for c in range(first_c, 35):
+                    cell = ws.cell(row=r, column=c)
+                    v = cell.value
+                    if isinstance(v, str) and v.startswith("=") and "IFERROR(" not in v.upper():
+                        cell.value = f'=IFERROR({v[1:]},"")'
+                        wrapped += 1
+    except Exception:
+        return 0  # never let cosmetic cleanup break a run
+    if flags is not None and wrapped:
+        _flag(f"cleaned {wrapped} error-prone formula cell(s) with IFERROR — not-yet-dimensioned "
+              f"rows show blank, not #DIV/0!/#VALUE! (self-heal when dims are filled).", flags)
+    return wrapped
+
+
+# ── estimator-input surfacing ────────────────────────────────────────────────────────
+# An estimator reads the Estimate tab, not the console. Everything below writes ONTO that
+# tab: the cells they must fill are coloured as inputs, and the two figures that look like
+# a finished price carry a count of what is still missing.
+
+C_INPUT_FILL = "FFF2CC"     # amber — "type here"
+C_INPUT_EDGE = "BF8F00"
+C_ALERT_FILL = "FFC7CE"     # red — "this is not a price yet"
+C_ALERT_TEXT = "9C0006"
+
+
+def _writable_cell(ws, row: int, col: int):
+    """The cell to write at (row, col), or None when it is a MERGED CONTINUATION.
+
+    openpyxl exposes every cell of a merged range, but only the TOP-LEFT one accepts a
+    value — the rest raise "'MergedCell' object attribute 'value' is read-only". On 11350
+    that killed the whole estimator-input block after the heading: the run reported the
+    outstanding inputs only in its flags, and the sheet an estimator opens carried a
+    PROVISIONAL banner pointing at a checklist that was not there.
+
+    A merged range is a layout decision in the estimators' own template, so it moves as the
+    template changes and cannot be hardcoded around. Asked here, once, at the only place
+    this module writes free-form rows."""
+    try:
+        _c = ws.cell(row=row, column=col)
+        if _c.__class__.__name__ == "MergedCell":
+            # Write to the anchor of whichever range covers this cell.
+            for _rng in getattr(ws, "merged_cells", []).ranges:
+                if (_rng.min_row <= row <= _rng.max_row
+                        and _rng.min_col <= col <= _rng.max_col):
+                    return ws.cell(row=_rng.min_row, column=_rng.min_col)
+            return None
+        return _c
+    except Exception:
+        return None
+
+
+def _mark_input_cell(ws, row: int, col: int) -> None:
+    """Colour a cell as something a person must fill in.
+
+    Deliberately a FILL and a border, not a comment: comments are hidden until hovered, and
+    the whole failure was that the missing input was discoverable rather than visible."""
+    if openpyxl is None:
+        return
+    try:
+        _c = ws.cell(row=row, column=col)
+        _c.fill = PatternFill("solid", fgColor=C_INPUT_FILL)
+        _s = Side(style="medium", color=C_INPUT_EDGE)
+        _c.border = Border(left=_s, right=_s, top=_s, bottom=_s)
+    except Exception:
+        pass
+
+
+def _find_label_cell(ws, *needles: str):
+    """(row, col) of the first cell whose text contains every needle, or None.
+
+    Found by LABEL, never by a hardcoded address: the estimators' template shifts its
+    totals down as the BOM block grows, and a fixed row silently goes stale — the same
+    reason _find_wb_sell_price_ref scans."""
+    _want = [n.lower() for n in needles if n]
+    try:
+        for _row in ws.iter_rows():
+            for _cell in _row:
+                _v = _cell.value
+                if isinstance(_v, str) and all(_n in _v.lower() for _n in _want):
+                    return _cell.row, _cell.column
+    except Exception:
+        pass
+    return None
+
+
+def write_revision_header(ws, summary: Dict[str, Any], job_folder_name: str) -> bool:
+    """Put the drawing revision in the template's own Rev box. True when it was written.
+
+    THE REVISION IS READ AND THEN DROPPED ON THE FLOOR. Job 11350's run printed
+    "[revision] 11350-01 revision -> B" and the sheet's Rev box was blank, so an estimator
+    cannot tell which issue of the drawing was priced — and a sheet that outlives a revision
+    is a sheet nobody can trust.
+
+    Found by LABEL, never by address: the header block is the estimators' own layout and it
+    moves. AN EXACT LABEL, not a substring — "rev" sits inside plenty of words a header can
+    carry, and writing beside the wrong one is the same class of mistake that put a BOM row
+    number into a labour Set Up cell and voided the sheet.
+
+    Only into an EMPTY cell, so nothing anyone put on the template is ever displaced.
+
+    The revision comes from the ONE resolver that already answers "what drawing is this" —
+    title block, then canonical top assembly, then the folder name. A tenth place working a
+    job's identity out for itself is how the nine already here came to disagree.
+    """
+    try:
+        from client_quote_html import _drawing_identity
+        _rev = str((_drawing_identity(summary, job_folder_name) or ("", "", ""))[1] or "").strip()
+    except Exception:
+        _rev = ""
+    # The resolver returns the QUOTE's display string, "Rev B", because a quote header has
+    # no label of its own. This template prints the label itself, so the box takes the
+    # revision alone — otherwise the sheet reads "Rev  Rev B".
+    _rev = re.sub(r"^REV(?:ISION)?[\s.:]*", "", _rev, flags=re.IGNORECASE).strip()
+    if not _rev:
+        return False
+    try:
+        for _row in ws.iter_rows():
+            for _c in _row:
+                if not isinstance(_c.value, str):
+                    continue
+                if _c.value.strip().rstrip(":").lower() not in {"rev", "revision"}:
+                    continue
+                _cell = _writable_cell(ws, _c.row, _c.column + 1)
+                if _cell is not None and _cell.value in (None, ""):
+                    _cell.value = _rev
+                    return True
+                return False
+    except Exception:
+        pass
+    return False
+
+
+# Directories that are part of the filing system rather than the name of a customer. The
+# enquiry tree is deep — K:\Estimating\Completed\Live Enquiries\completed AI briefs\<client>\
+# <job> — and the folder above the job is the client on every pack seen so far (Harrods,
+# fanatics). These are the ones it must never mistake for one.
+_NOT_A_CLIENT_FOLDER = frozenset("""
+estimating completed live enquiries briefs jobs drawings aisheets output input archive
+sdiintelligenceaisheet aiestimating shared shareddata data temp tmp new current work
+""".split()) | {"completed ai briefs", "live enquiries", "ai estimating"}
+
+
+def client_from_job_folder(summary: Dict[str, Any]) -> str:
+    """The customer, read from the folder the job sits in. "" when it cannot be told.
+
+    "For traceability / easier identification can Client / Job Description / Date be
+    populated for header" — the estimator, and the customer cell was falling back to the JOB
+    NUMBER, so the sheet said "7332-01" under a heading that means Harrods. The client is not
+    on the drawing in any form we read, and it is right there in the path the pack came from.
+
+    Deliberately conservative, because the cost of a wrong customer name on a sheet is worse
+    than a blank: the folder must sit directly above the job folder, must not be one of the
+    filing directories the enquiry tree is made of, and must look like a name rather than a
+    code. Anything else yields "" and the existing fallback stands."""
+    _raw = str((summary or {}).get("job_folder") or "").strip()
+    if not _raw:
+        return ""
+    _parts = [p for p in re.split(r"[\\/]+", _raw) if p.strip()]
+    if len(_parts) < 2:
+        return ""
+    _cand = _parts[-2].strip()
+    if not _cand or _cand.lower() in _NOT_A_CLIENT_FOLDER:
+        return ""
+    if _cand.endswith(":") or len(_cand) < 3 or len(_cand) > 40:
+        return ""          # a drive letter, an initialism, or a sentence
+    if re.fullmatch(r"[\d\-_. ]+", _cand):
+        return ""          # a job number is not a customer
+    if any(_w in _cand.lower() for _w in ("brief", "enquir", "estimat", "drawing")):
+        return ""
+    return _cand
+
+
+def full_drawing_number(summary: Dict[str, Any], job_folder_name: str) -> str:
+    """The job's WHOLE number for the header's drawing-number box.
+
+    \\d+ against the folder name printed "12349" on a job whose number is 12349-02 — a
+    truncation the estimator has to notice and repair before the sheet can be traced back
+    to its drawings, which is the point of the box ("easier to trace back when requoting
+    same job in future" — the estimator, 12 Sep). Resolved by the ONE resolver that answers
+    "what drawing is this" — title block, then canonical top assembly, then the folder name
+    kept whole to its number groups — same as the Rev box and the quote header, so the
+    three documents cannot name the same job three ways."""
+    try:
+        from client_quote_html import _drawing_identity
+        _num = str((_drawing_identity(summary, job_folder_name) or ("", "", ""))[0] or "").strip()
+        if _num:
+            return _num
+    except Exception:
+        pass
+    _m = re.match(r"\s*(\d+[A-Za-z]?(?:[-_]\d+[A-Za-z]?)*)", str(job_folder_name or ""))
+    return _m.group(1).strip(" -_") if _m else str(job_folder_name or "")
+
+
+def write_header_value_beside_label(ws, labels, fallback_cell: str, value: Any) -> str:
+    """Write a header value in the cell beside its label; return the cell written.
+
+    THE LABEL STAYS A LABEL. The customer and drawing number were written to C3 and C5 by
+    address, and C3 and C5 are where the template prints "Customer" and "Drawing No." — so
+    11650-06-GA's sheet read "Boots" and "11650-06-GA" in the label column with nothing
+    beside them (Dave, estimating, 28 Sep 2026). Found by exact label in the top rows, as
+    Description and Date are; the value goes in the next cell (the top-left of its merge).
+    Where no label is found, the configured cell is used, and never a cell holding a label.
+    """
+    wanted = {str(l).strip().rstrip(":").lower() for l in labels}
+    try:
+        for _row in ws.iter_rows(min_row=1, max_row=10):
+            for _c in _row:
+                if isinstance(_c.value, str) and \
+                        _c.value.strip().rstrip(":").lower() in wanted:
+                    _cell = _writable_cell(ws, _c.row, _c.column + 1)
+                    if _cell is not None:
+                        _cell.value = value
+                        return _cell.coordinate
+    except Exception:                                                # noqa: BLE001
+        pass
+    _cur = ws[fallback_cell].value
+    if isinstance(_cur, str) and _cur.strip().rstrip(":").lower() in wanted:
+        return ""                    # the fallback is the label itself: write nothing over it
+    ws[fallback_cell] = value
+    return fallback_cell
+
+
+_LABOUR_PARTS_LABELS = ("part no", "part nos", "part number", "part numbers", "part code",
+                        "part codes", "parts", "drawing no", "drawing nos", "dwg no")
+
+
+def labour_parts_column(ws, lb: Dict[str, Any], flags=None) -> Optional[int]:
+    """The labour block's own column for part numbers, or None to keep them in the text.
+
+    Dave (estimating, 28 Sep 2026, on 11650-06-GA), pencilled across the labour block:
+    "2 columns" — the operation's description in one, the drawings it covers in the other,
+    now that the sub-drawings have come off the bill of materials and the labour rows are
+    where an estimator reads them.
+
+    The template decides. A header in the labour row labelled for part numbers ("Part No.",
+    "Parts", "Drawing No") is used where it stands. Otherwise, with
+    config.LABOUR_PARTS_COLUMN_LABEL set, the Part Description header's own merge gives up its
+    LAST column: the description keeps the rest, the freed column is labelled, and nothing
+    outside that merge moves. A header that is not merged across two or more columns has
+    nothing to give, and the parts stay in the description as before.
+    """
+    hr = int(lb["first_row"]) - 1
+    c_desc = int(lb["col_desc"])
+    c_stop = int(lb.get("col_qty") or c_desc + 4)
+    try:
+        for c in range(c_desc + 1, c_stop):
+            v = ws.cell(hr, c).value
+            if isinstance(v, str) and \
+                    " ".join(v.replace(".", " ").split()).lower() in _LABOUR_PARTS_LABELS:
+                return c
+        try:
+            import config as _cfg_lp
+            label = str(getattr(_cfg_lp, "LABOUR_PARTS_COLUMN_LABEL", "") or "")
+        except Exception:                                            # noqa: BLE001
+            label = ""
+        if not label:
+            return None
+        rng = next((m for m in list(ws.merged_cells.ranges)
+                    if m.min_row <= hr <= m.max_row and m.min_col == c_desc
+                    and m.max_col > c_desc), None)
+        if rng is None or rng.max_col >= c_stop:
+            return None
+        parts_col = rng.max_col
+        anchor = ws.cell(hr, c_desc)
+        ws.unmerge_cells(str(rng))
+        if parts_col - 1 > c_desc:
+            ws.merge_cells(start_row=rng.min_row, start_column=c_desc,
+                           end_row=rng.max_row, end_column=parts_col - 1)
+        cell = ws.cell(hr, parts_col)
+        cell.value = label
+        if anchor.has_style:
+            from copy import copy as _copy_style
+            cell._style = _copy_style(anchor._style)
+        return parts_col
+    except Exception as exc:                                         # noqa: BLE001
+        _flag(f"labour part-number column not set up ({exc}); part numbers stay in the "
+              f"description", flags if isinstance(flags, list) else [])
+        return None
+
+
+def free_labour_parts_cell(ws, row: int, col_desc: int, parts_col: int):
+    """Give one labour row its part-number cell: a D:F-style merge on the row is narrowed to
+    stop short of the parts column. Returns the cell, or None if it cannot be written."""
+    for m in list(ws.merged_cells.ranges):
+        if m.min_row <= row <= m.max_row and m.min_col <= parts_col <= m.max_col:
+            if m.min_col != col_desc:
+                return None                      # somebody else's merge: leave it alone
+            ws.unmerge_cells(str(m))
+            if parts_col - 1 > col_desc:
+                ws.merge_cells(start_row=m.min_row, start_column=col_desc,
+                               end_row=m.max_row, end_column=parts_col - 1)
+    return _writable_cell(ws, row, parts_col)
+
+
+def split_labour_description(rd: str, wb_op: Any, parts: Any) -> Tuple[str, str]:
+    """(description, part numbers) for a labour row whose parts have their own column.
+
+    The operation's name is already in the Operation column, so the description starts at
+    what the work is on; the parts list comes out of the text and whole into its cell."""
+    _pl = [str(p) for p in (parts or []) if p]
+    text = str(rd or "")
+    if _pl:
+        shown = ", ".join(_pl[:6]) + (", +%d more" % (len(_pl) - 6) if len(_pl) > 6 else "")
+        text = text.replace(" (" + shown + ")", "", 1)
+    op = str(wb_op or "")
+    if op and text.startswith(op):
+        text = text[len(op):].lstrip()
+        if text.startswith("—"):
+            text = text[1:].lstrip()
+    return text, ", ".join(_pl)
+
+
+def write_job_identity_header(ws, summary: Dict[str, Any], job_folder_name: str) -> List[str]:
+    """Fill Description and Date beside the template's own labels. Returns what was written.
+
+    "Could you add description/date/drawing number at top please (easier to trace back when
+    requoting same job in future)" — the estimator, 12 Sep. The labels were already on the
+    template (C4 'Description', C7 'Date') and every pack went out with nothing beside them:
+    a sheet that cannot be matched back to its job without opening the drawings again.
+
+    Same rules as the Rev box, because it is the same shape of write:
+      * Found by EXACT LABEL, never by address — the header block is the estimators' own
+        layout and it moves. Top rows only: 'Date' appears in plenty of blocks further down
+        the sheet, and writing beside the wrong one is how a BOM row number once landed in
+        a labour Set Up cell.
+      * Only into an EMPTY cell, so nothing anyone put on the template is displaced.
+      * The description comes from the ONE resolver that answers "what is this unit" —
+        title block, then canonical top assembly, then the cleaned folder name. Where it
+        can say nothing better than the drawing number, nothing is written: a number
+        repeated under a Description label is noise wearing a label.
+    The date is the day this estimate was produced — the fact a requote needs.
+    """
+    try:
+        from client_quote_html import _drawing_identity
+        _num, _, _desc = _drawing_identity(summary, job_folder_name) or ("", "", "")
+    except Exception:
+        _num, _desc = "", ""
+    _desc = str(_desc or "").strip()
+    if _desc and _desc == str(_num or "").strip():
+        _desc = ""
+    from datetime import date as _date_cls
+    wanted = {"description": _desc,
+              "date": _date_cls.today().strftime("%d/%m/%Y")}
+    written: List[str] = []
+    try:
+        for _row in ws.iter_rows(min_row=1, max_row=10):
+            for _c in _row:
+                if not isinstance(_c.value, str):
+                    continue
+                _label = _c.value.strip().rstrip(":").lower()
+                _val = wanted.get(_label)
+                if not _val:
+                    continue
+                _cell = _writable_cell(ws, _c.row, _c.column + 1)
+                if _cell is not None and _cell.value in (None, ""):
+                    _cell.value = _val
+                    written.append(_label)
+                wanted[_label] = ""          # one label, one write — first (topmost) wins
+    except Exception:
+        pass
+    return written
+
+
+def _write_undrawn_bom_lines(ws, summary: Dict[str, Any], flags: List[str]) -> None:
+    """Name, ON THE SHEET, the BOM lines whose drawings were never supplied.
+
+    An incomplete pack is priced rather than refused, so the total on this sheet is real for what
+    was supplied and is NOT a price for the whole product. That distinction lived in the job
+    report and the run log — two documents away from the person reading the number. Dyson
+    10575-02 priced at GBP 146 with four welded assemblies uncosted because nobody had sent their
+    drawings; the sheet said PROVISIONAL and did not say why.
+
+    Written below the estimator-input checklist, in the same place and the same voice, because
+    it is the same kind of fact: something outstanding that changes what the total means.
+    """
+    try:
+        from costed_facts import undrawn_bom_lines
+        missing = undrawn_bom_lines(summary)
+        if not missing:
+            return
+        _start = ws.max_row + 2
+        _c1 = _writable_cell(ws, _start, 3)
+        if _c1 is None:
+            _flag("undrawn-drawings block could not be placed on the Estimate tab — the rows "
+                  "below the totals are merged in this template. The job report still names "
+                  "them.", flags)
+            return
+        _c1.value = (f"DRAWINGS MISSING FROM THIS PACK ({len(missing)}) — priced from what was "
+                     f"supplied; these are NOT in the total above")
+        _c1.font = Font(name="Arial", bold=True, size=12, color="FFFFFF")
+        _c1.fill = PatternFill("solid", fgColor="7F2A2A")
+        _r = _start + 1
+        for _i, _m in enumerate(missing, 1):
+            _lbl = _writable_cell(ws, _r, 3)
+            if _lbl is not None:
+                _desc = _m.get("description") or ""
+                _lbl.value = (f"{_i}.  {_m.get('part_number')}"
+                              f"{'  —  ' + _desc if _desc else ''}"
+                              f"    (no detail drawing supplied — nothing costed it)")
+                _lbl.font = Font(name="Arial", size=10, color=C_ALERT_TEXT)
+                _lbl.fill = PatternFill("solid", fgColor=C_INPUT_FILL)
+            _r += 1
+        _flag(f"DRAWINGS MISSING: {len(missing)} BOM line(s) name a drawing this pack does not "
+              f"contain — listed on the Estimate tab from row {_start}. The total is real for "
+              f"what was supplied and is not a price for the whole product.", flags)
+    except Exception as _exc:                                    # noqa: BLE001
+        _flag(f"undrawn-drawings block not written ({_exc}) — the sheet still calculates and "
+              f"the job report still names the missing drawings.", flags)
+
+
+def _question_fingerprint(part: Any, what: Any) -> tuple:
+    """What question this input actually asks, so the same one is never listed twice.
+
+    The 19:02 book's Outstanding list carried ten items and only seven questions:
+    DELIVERY twice (the unpriced-line entry and a review-flag ask, worded differently),
+    the A01 blank-extent question twice (two checks measured the same 792 x 760.3
+    against the same 759.81 x 210), and G01's material twice (two rivals to one kept
+    value — one question: what is it made of). A list a person works down earns its
+    length; a padded one teaches them to skim.
+
+    Three keys, tried in order: "price this line" asks collapse per part whatever their
+    wording; a flag that opens with its field name ("normalized_material: …") collapses
+    per part+field; otherwise the numbers in the text are the question's own signature.
+    """
+    pn = str(part or "").strip().upper()
+    t = re.sub(r"\s+", " ", str(what or "")).strip().lower()
+    if "price" in t and any(w in t for w in ("enter the per-unit", "estimator to price",
+                                             "not yet priced", "not priced",
+                                             "enter a unit rate")):
+        return (pn, "price-this-line")
+    m = re.match(r"([a-z_]{4,40}):", t)
+    if m:
+        return (pn, m.group(1))
+    nums = frozenset(re.findall(r"\d+(?:\.\d+)?", t)[:10])
+    if nums:
+        return (pn, nums)
+    return (pn, t[:120])
+
+
+def _apply_customer_terms(ws, customer_name: Any, flags: List[str]) -> None:
+    """The customer's own commercial terms, onto the sheet's own cells.
+
+    M170 divides by (100% − rebate) and then by the absorption divisor; the template
+    ships rebate 0 and /0.93 and nothing ever set them, so an M&S job went out missing
+    the office's 1.8% uplift and on the wrong divisor (their table books M&S at /0.92).
+    Terms come from config.CUSTOMER_COMMERCIAL_TERMS with their source; an estimator's
+    own typed rebate is never overwritten, and an unlisted customer is left exactly as
+    the template ships."""
+    try:
+        _terms = getattr(config, "customer_commercial_terms", lambda _x: None)(
+            customer_name)
+        if not _terms:
+            return
+        _reb_hit = _find_label_cell(ws, "rebate calculator")
+        if _reb_hit:
+            _rr, _rc = _reb_hit
+            for _step in (2, 1, 3, 4):
+                _cell = ws.cell(row=_rr, column=_rc + _step)
+                if _cell.value in (None, "", 0):
+                    _cell.value = float(_terms["rebate_fraction"])
+                    _flag(f"CUSTOMER TERMS: rebate {_terms['rebate_fraction']:.1%} for "
+                          f"{_terms['customer']} written to {_cell.coordinate} "
+                          f"(config.CUSTOMER_COMMERCIAL_TERMS, from the office's own "
+                          f"table). A typed rebate would not have been touched.", flags)
+                    break
+                if isinstance(_cell.value, (int, float)) and _cell.value:
+                    _flag(f"CUSTOMER TERMS: rebate cell {_cell.coordinate} already "
+                          f"holds {_cell.value} — the estimator's figure stands.", flags)
+                    break
+        _div = float(_terms.get("absorption_divisor") or 0)
+        _tuc_hit = _find_label_cell(ws, "total unit cost")
+        if _div and _tuc_hit:
+            _tr, _tc = _tuc_hit
+            for _step in (2, 1, 3, 4):
+                _fcell = ws.cell(row=_tr, column=_tc + _step)
+                _fv = _fcell.value
+                if isinstance(_fv, str) and _fv.startswith("="):
+                    _m_div = re.search(r"/(0\.9\d+)\s*$", _fv)
+                    if _m_div and abs(float(_m_div.group(1)) - _div) > 1e-9:
+                        _fcell.value = _fv[:_m_div.start()] + f"/{_div:g}"
+                        _flag(f"CUSTOMER TERMS: absorption divisor {_m_div.group(1)} -> "
+                              f"{_div:g} for {_terms['customer']} in "
+                              f"{_fcell.coordinate} — the office's own table books "
+                              f"this customer at /{_div:g}.", flags)
+                    break
+    except Exception as _ct_exc:                                 # noqa: BLE001
+        _flag(f"customer commercial terms not applied ({_ct_exc}) — the template's own "
+              f"defaults stand.", flags)
+
+
+def _write_beside_price_labels(ws, text: Optional[str]) -> int:
+    """Write `text` in the first free cell past the value beside each figure that reads as a
+    price — Unit Cost, Sell Price, Total Unit Cost — and return the lowest label row found.
+
+    With `text` None nothing is written and only the row is returned, so the checklist still
+    anchors below the totals. ONE WALK, because the run-stop banner (D-409) and the estimator-
+    inputs banner must land in the same cells by the same rule; a second copy of this walk
+    would be a second opinion about where the price is.
+
+    ONE BANNER PER ROW. "unit cost" also matches "Total Unit Cost Price", so the same row was
+    found twice and the second pass walked past the first banner and wrote another beside it.
+
+    PAST THE VALUE, NOT AT A FIXED OFFSET. The value sits somewhere to the right of its label
+    and the gap differs per row, so a fixed +3 landed exactly on the Total Unit Cost figure.
+    The write was refused — the formula is safe either way — but a refused banner is no
+    banner, and the sheet went out looking finished again. Walk right past every populated
+    cell, then take the first free one.
+    """
+    _last_row = 0
+    _done_rows = set()
+    for _needles in (("unit cost",), ("sell price",), ("total unit cost",)):
+        _hit = _find_label_cell(ws, *_needles)
+        if not _hit:
+            continue
+        _r, _c = _hit
+        _last_row = max(_last_row, _r)
+        if _r in _done_rows or text is None:
+            continue
+        _done_rows.add(_r)
+        _col = _c + 1
+        _seen_value = False
+        for _step in range(1, 12):
+            if ws.cell(row=_r, column=_c + _step).value not in (None, ""):
+                _seen_value = True
+                _col = _c + _step + 1
+            elif _seen_value:
+                _col = _c + _step
+                break
+        _target = _writable_cell(ws, _r, _col)
+        if _target is not None and _target.value in (None, ""):
+            _target.value = text
+            _target.font = Font(name="Arial", bold=True, size=11, color=C_ALERT_TEXT)
+            _target.fill = PatternFill("solid", fgColor=C_ALERT_FILL)
+    return _last_row
+
+
+def _write_run_stop_banner(ws, summary: Dict[str, Any], flags: List[str]) -> bool:
+    """A RUN THAT COSTED NOTHING SAYS SO BESIDE THE PRICE CELLS (D-409).
+
+    The 12675-01 book of 8 Oct 09:15 carried "PROVISIONAL — 2 to settle: 2 market figures to
+    replace (£23.00)" beside a Unit Cost of £25.46 — packaging and delivery for a product the
+    run never costed — and nothing on the sheet said the run had stopped. The stop the scan
+    recorded is written where a reader looks for the price, in the same words the report and
+    the quote use. Returns True when it was written, so the estimator-inputs banner stands
+    aside: "PROVISIONAL" promises a figure somebody can finish.
+    """
+    try:
+        from run_stop import nothing_to_cost, banner                   # noqa: PLC0415
+        stop = nothing_to_cost(summary)
+    except Exception:                                                  # noqa: BLE001
+        return False
+    if not stop:
+        return False
+    try:
+        _write_beside_price_labels(ws, banner(stop))
+        _flag(banner(stop), flags)
+        return True
+    except Exception as _exc:                                          # noqa: BLE001
+        _flag(f"the run-stop banner could not be written ({_exc}) — the report and the quote "
+              f"carry the stop", flags)
+        return False
+
+
+def _write_concept_takeoff_banner(ws, summary: Dict[str, Any], flags: List[str]) -> bool:
+    """A SHEET PRICED FROM THE MODEL SAYS SO BESIDE ITS PRICE CELLS (D-411), in the words the
+    report's callout and the quote's gate use. Returns True when written."""
+    try:
+        from model_takeoff import banner as _takeoff_banner           # noqa: PLC0415
+        text = _takeoff_banner(summary.get("concept_takeoff"))
+    except Exception:                                                  # noqa: BLE001
+        return False
+    if not text:
+        return False
+    try:
+        _write_beside_price_labels(ws, text)
+        _flag(text, flags)
+        return True
+    except Exception as _exc:                                          # noqa: BLE001
+        _flag(f"the concept take-off banner could not be written ({_exc}) — the report and "
+              f"the quote carry the label", flags)
+        return False
+
+
+def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str],
+                            banner: bool = True) -> None:
+    """Put the outstanding inputs where the estimator is already looking.
+
+    Three places, because one is not enough. Beside Unit Cost and beside Sell Price, so the
+    two figures that read as a finished price carry the count. And a checklist below the
+    totals, so there is somewhere to work from.
+
+    The sheet is NOT prevented from calculating. An estimator needs the working even when
+    it is incomplete, and a blanked total would break the read-back and every deliverable
+    downstream of it. What changes is that nothing here can be mistaken for finished."""
+    if openpyxl is None or not inputs:
+        return
+    # ONE QUESTION, ONE ROW — judged here, the single door every input passes through,
+    # so the banner's count and the checklist's length agree by construction.
+    _seen_q = set()
+    _unique: List[Dict[str, Any]] = []
+    for _it in inputs:
+        _fp = _question_fingerprint((_it or {}).get("part"), (_it or {}).get("what"))
+        if _fp in _seen_q:
+            continue
+        _seen_q.add(_fp)
+        _unique.append(_it)
+    inputs = _unique
+    try:
+        from estimator_inputs import banner_text
+        _banner = banner_text(inputs)
+
+        # ── beside the two figures that look like a price ──────────────────────
+        # One walk for every banner (D-409); with `banner` False the stop's banner already
+        # stands there and only the anchor row is wanted.
+        _last_row = _write_beside_price_labels(ws, _banner if banner else None)
+
+        # ── the checklist ──────────────────────────────────────────────────────
+        # ANCHORED BELOW THE TOTALS, AND NOWHERE ELSE.
+        #
+        # This used CELL_MAP["labour"]["last_row"] + 6 as a floor. That row number is the
+        # range wb_populate WRITES labour into, not the physical extent of the estimators'
+        # labour table, which runs on well past it. So the checklist landed INSIDE the
+        # table and put "BOM row 12" into a Set Up (Mins) cell — and text in a numeric cell
+        # propagates: Total Hours to #VALUE!, then Total Labour Cost, then Unit Cost, then
+        # Sell Price. The whole sheet failed to calculate because of a note about a BOM row.
+        #
+        # The totals labels are the only anchor that is genuinely BELOW everything the
+        # template computes. Without one, the block is not placed at all: the banner beside
+        # Unit Cost still carries the count, and no guess is worth a #VALUE! sheet.
+        if not _last_row:
+            _flag(f"ESTIMATOR INPUTS: {len(inputs)} outstanding, but the totals block could "
+                  f"not be located, so the checklist was not placed. They are listed in "
+                  f"these flags and the count appears beside Unit Cost.", flags)
+            return
+        _start = _last_row + 3
+
+        # AND ONLY INTO EMPTY ROWS. A template revision could put something below the
+        # totals; overwriting it is how this broke in the first place.
+        _need = len(inputs) + 1
+        while any(ws.cell(row=_start + _i, column=_c).value not in (None, "")
+                  for _i in range(_need) for _c in (2, 3, 9, 10, 11, 12, 13)):
+            _start += _need + 1
+            if _start > _last_row + 400:
+                _flag(f"ESTIMATOR INPUTS: {len(inputs)} outstanding, but no clear block of "
+                      f"rows was found below the totals to list them in. The count still "
+                      f"appears beside Unit Cost.", flags)
+                return
+        _c1 = _writable_cell(ws, _start, 3)
+        if _c1 is None:
+            _flag("estimator-input checklist could not be placed — the rows below the "
+                  "totals are merged in this template. The banner beside Unit Cost and "
+                  "Sell Price still names the count.", flags)
+            return
+        _c1.value = f"OUTSTANDING ESTIMATOR INPUTS ({len(inputs)}) — this sheet is NOT a price until these are filled"
+        _c1.font = Font(name="Arial", bold=True, size=12, color="FFFFFF")
+        _c1.fill = PatternFill("solid", fgColor="1F3864")
+        _r = _start + 1
+        for _i, _item in enumerate(inputs, 1):
+            _lbl = _writable_cell(ws, _r, 3)
+            if _lbl is None:
+                _r += 1
+                continue
+            _lbl.value = (f"{_i}.  {_item.get('part') or _item.get('where') or ''}"
+                          f"{'  —  ' if _item.get('part') or _item.get('where') else ''}"
+                          f"{_item.get('what') or ''}")
+            _lbl.font = Font(name="Arial", size=10, color=C_ALERT_TEXT)
+            _lbl.fill = PatternFill("solid", fgColor=C_INPUT_FILL)
+            _where = _writable_cell(ws, _r, 11)
+            if _where is not None:
+                _where.value = _item.get("where") or ""
+                _where.font = Font(name="Arial", size=9, italic=True)
+            _r += 1
+        _flag(f"ESTIMATOR INPUTS: {len(inputs)} outstanding — listed on the Estimate tab "
+              f"from row {_start}, with each input cell shaded. Unit Cost and Sell Price "
+              f"are marked PROVISIONAL until they are filled.", flags)
+    except Exception as _exc:
+        _flag(f"estimator-input block not written ({_exc}) — the sheet still calculates, "
+              f"but the outstanding inputs are only in these flags.", flags)
+
+
+# Operations whose throughput default was NOT derived from the estimating corpus. Kept
+# beside the defaults it describes so the two cannot drift: adding a measured rate without
+# removing its name here would overstate what we know about it.
+_THROUGHPUT_UNMEASURED = frozenset({
+    "Tubebend", "Tube", "Guillotine", "Drill (Acrylic)", "Grinding / Deburr",
+    "CNC Joinery", "Glue", "Wet Spray", "Dress Welds", "Diamond Polish",
+})
+
+
+def _clear_or_set(ws, row: int, column: int, value: Any) -> None:
+    """Write `value` into a cell, CLEARING it when the value is None.
+
+    ws.cell(row, column, value=None) is a read, not a write: openpyxl assigns only when the
+    value is not None. A template cell holding a formula therefore survives an "unpriced"
+    write untouched — which is how a delivered book carried the blank template's own
+    #REF! on a line the engine believed it had left blank.
+    """
+    ws.cell(row=row, column=column).value = value
+
+
+def _confirmed_nesting_group(summary: Any, part_numbers: Any) -> str:
+    """The estimator's own name for a nesting group these parts all belong to, or "".
+
+    Read from the job's answers file (`estimator_decisions.nesting_groups`), so it governs
+    one drawing and never travels. EVERY member of the laser group must be named in the
+    same confirmed group: a ruling about 003 and 004 says nothing about a third component
+    that happens to share their gauge, and "same gauge alone is never enough".
+    """
+    try:
+        _dec = ((summary or {}).get("estimator_decisions") or {}) \
+            if isinstance(summary, dict) else {}
+        _groups = _dec.get("nesting_groups") or {}
+        if not isinstance(_groups, dict):
+            return ""
+        _want = {str(p).strip().upper() for p in (part_numbers or []) if str(p).strip()}
+        if not _want:
+            return ""
+        for _name, _members in _groups.items():
+            _have = {str(m).strip().upper() for m in (_members or [])}
+            if _want and _want.issubset(_have):
+                return str(_name)
+    except Exception:                                                # noqa: BLE001
+        return ""
+    return ""
+
+
+def is_stated_time_operation(op: Any) -> bool:
+    """Is this an operation whose minutes a person or a department gave us?
+
+    ONE PREDICATE, TWO GROUPERS. The workbook has two labour paths — the legacy loop and
+    `canonical_labour_groups` under route cutover — and they build different key SHAPES for
+    the same question. The first version of this rule went into the legacy loop only, which
+    is not the path 7332-01 takes: its summary carries a canonical route shadow and the
+    cutover defaults on, so the fix was real, tested, and on the wrong road.
+
+    The key shapes can differ. What must not differ is which operations refuse to share a
+    row, so that decision is asked here and nowhere else.
+    """
+    return str(op or "").strip().lower() in {
+        str(o).strip().lower()
+        for o in (getattr(config, "STATED_TIME_OPERATIONS", ()) or ())
+    }
+
+
+def stated_time_is_once_per_finished_unit(op: Any) -> bool:
+    """Is this stated figure minutes per FINISHED UNIT, or minutes per component?
+
+    The question only bites when more than one component takes the operation, which is
+    exactly 7332-01: 008 and 101 are both plated, so the estimator mints the pack stages on
+    both and the canonical grouper ADDS their quantities. The row then books two occasions
+    of a figure that was given as one.
+
+    The two graders already disagreed about this without anybody noticing. The legacy loop
+    forces qty 1 for the pack departments; the canonical grouper takes the accumulated
+    group quantity. Same job, same rule, two answers — and the canonical one is the road
+    7332-01 travels.
+
+    Declared per operation in config rather than inferred from the department, so a rule
+    whose minutes really are per component can say so and be believed.
+    """
+    _basis = (getattr(config, "STATED_TIME_OPERATIONS", {}) or {})
+    if not isinstance(_basis, dict):
+        return False
+    return str(_basis.get(str(op or "").strip().lower()) or "").strip().lower() == \
+        str(getattr(config, "PER_FINISHED_UNIT", "per_finished_unit")).strip().lower()
+
+
+def labour_group_key(op: Any, wb_op: str, part_number: str,
+                     material: Any, thickness: Any,
+                     per_part_ops: Any = (), one_row_per_job: Any = ()) -> tuple:
+    """Which workbook row this operation shares, and with what.
+
+    A NAMED FUNCTION SO THE TEST CAN DRIVE THE DECISION ITSELF. The first version of this
+    rule lived inline in the emit loop, which meant the only way to test it was to rebuild
+    the same branch in the test file and assert against that — a mirror, which passes
+    whether or not the engine agrees with it. That is the fault the whole register keeps
+    finding in another guise: two copies of one fact.
+
+    Four ways a row is shared, in priority order:
+
+      A STATED TIME       keys on the OPERATION. Every other key below is a DEPARTMENT, and
+                          wb_op is the department's displayed title — so the pack OUT and
+                          the pack BACK, both "Assemble/pack (Metal)", merged into one row
+                          BEFORE the stated-time lookup ever ran, and brushing pooled with
+                          deburr and bench work at the same gauge. The stated figure was
+                          not overridden by a median; it was never asked for. The row still
+                          shows the department's title and bills at its rate.
+      PER PART            one set-up per part (a wire form is re-tooled for each).
+      ONE ROW PER JOB     one set-up for the whole job.
+      OTHERWISE           one set-up per tooling change: department, material, gauge.
+    """
+    _op = str(op or "").strip().lower()
+    if is_stated_time_operation(_op):
+        return (wb_op, "", _op)
+    if wb_op in (per_part_ops or ()):
+        return (wb_op, part_number, "")
+    if wb_op in (one_row_per_job or ()):
+        return (wb_op, "", "")
+    return (wb_op, str(material), "%g" % (_safe(thickness) or 0))
+
+
+
+def break_or_fallback_formula(sheet_name: str, break_row: int, fallback: Any) -> str:
+    """A commercial line's price: the break the order quantity falls in, else the run's figure.
+
+    THE BREAK THAT APPLIES, NOT THE 1-OFF ONE (D-354). The formula asked whether the FIRST
+    break cell (D, 1 off) was blank, and only then looked up the order's break. On M&S's bin
+    at 350 off an estimator who filled the 350 column alone kept the £14.86 and £9.14
+    placeholders, because the 1-off cell was still empty. Now the cell tested is the one the
+    lookup would read: filled, it prices the line; empty, the run's own figure stands.
+    """
+    _rng = f"'{sheet_name}'!D{break_row}:N{break_row}"
+    _brk = f"'{sheet_name}'!$D$4:$N$4"
+    _at = f"INDEX({_rng},MATCH($D$6,{_brk},1))"
+    return (f"=IF(IFERROR({_at},\"\")=\"\",{fallback},"
+            f"LOOKUP($D$6,{_brk},{_rng}))")
+
+def _ours_by_shape(formula: Any) -> bool:
+    """Did THIS engine write that price formula, or was it already in the template?
+
+    Told apart by shape rather than by remembering, because remembering is what failed: a
+    row the loop never reached keeps the template's formula and no record says so. The
+    break-priced formula this module writes always wraps its LOOKUP in an IF that asks
+    whether the break row was filled:
+
+        =IF('Material Price Break'!D14="",0,LOOKUP($D$6,...))      ours
+        =LOOKUP($D$6,'Material Price Break'!$D$4:$N$4,...#REF!)    the template's
+
+    A bare LOOKUP in a price cell is therefore the blank template still speaking on a row
+    the engine has claimed — which is the whole fault, whether or not it says #REF! today.
+    """
+    if not isinstance(formula, str) or not formula.startswith("="):
+        return False
+    _f = formula.replace(" ", "").upper()
+    return _f.startswith("=IF(") and "LOOKUP($D$6" in _f
+
+
 def _flag(msg: str, flags: List[str]):
     flags.append(msg)
     print(f"   [wb_populate] ⚠ {msg}")
+
+
+# The WB nests a part by dividing the sheet size by the part size. A blank part length is
+# therefore not a blank cost — it is a division that fails, and Excel renders that failure
+# as #VALUE!/#DIV/0! in Qty Per Sheet with no statement of why. An estimator reading a row
+# with a part name, a quantity, an error and no dimensions has to guess whether the engine
+# could not measure the part or the template is broken.
+#
+# ONE IMPLEMENTATION, TWO BLOCKS. Sheet Steel grew this marker when 12392 shipped rows
+# with no gauge; Other Sheet did not, and 11650's PETG side panels then shipped exactly the
+# same failure wearing a different face - two panels, no length, no width, #VALUE! where a
+# quantity should be. A rule that lives in one branch of a pair is how the pair comes to
+# disagree about what an unmeasured part looks like.
+_DIMS_REQUIRED = "DIMS REQUIRED"
+
+
+def mark_row_needs_dimensions(ws, row: int, col_desc: int, missing) -> bool:
+    """Say on the sheet, in the row itself, that this part was never measured.
+
+    The row KEEPS ITS FORMULA. Filling the named cells in Excel recomputes the line and the
+    (error-tolerant) material total picks it up - so the marker is an instruction to the
+    estimator, not a dead row. Returns True if it wrote, False if the row already said so.
+    """
+    names = [str(n) for n in (missing or []) if n]
+    if not names:
+        return False
+    cell = ws.cell(row=row, column=col_desc)
+    current = str(cell.value or "")
+    if _DIMS_REQUIRED in current:
+        return False
+    cell.value = f"{current}  ⚠ {_DIMS_REQUIRED} ({', '.join(names)}) — not costed"
+    return True
+
+
+def route_group_id(wb_op: Any, material: Any, thickness: Any, part_numbers: Any = (),
+                   group_key: Any = None) -> str:
+    """A stable identity for a route group, independent of where it lands on the sheet.
+
+    The sheet row is the join key WITHIN a run, and it is the right one — it is what Excel
+    calculated against. But it is not stable BETWEEN runs: insert a row in the template, or
+    let a group drop out because a part became bought-in, and every row below shifts. A
+    baseline compared on row number then reports a change on every line and the real change
+    is invisible.
+
+    The identity is what the group IS — the operation, the material, the gauge, and the parts
+    it covers. Same group, same id, whatever row it lands on and whatever job it belongs to.
+    """
+    import hashlib
+    parts = sorted({str(p).strip().upper() for p in (part_numbers or []) if str(p).strip()})
+    if group_key is not None:
+        # THE GROUPING KEY IS THE IDENTITY. Deriving the id from the group's stored material
+        # and thickness is wrong for the one-row-per-job departments, whose key is
+        # (operation, "", ""): those fields hold whatever the FIRST part to reach the group
+        # happened to carry, so reordering mixed-gauge P.Coat or Weld parts changed an id
+        # that is supposed to be stable. The key is what actually decided the grouping.
+        basis = "|".join(str(k or "").strip().lower() for k in
+                         (group_key if isinstance(group_key, (list, tuple)) else [group_key]))
+    else:
+        _thk = _num_or_none(thickness)
+        basis = "|".join((
+            str(wb_op or "").strip().lower(),
+            str(material or "").strip().lower(),
+            f"{_thk:.3f}" if _thk is not None else "",
+        ))
+    return "rg_" + hashlib.sha1((basis + "||" + ",".join(parts)).encode("utf-8")).hexdigest()[:12]
+
+
+def _num_or_none(v: Any) -> Optional[float]:
+    try:
+        f = float(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+    return f if f == f else None
+
+
+def build_workbook_labour(
+    groups: Any,
+    skipped_part_numbers: Any = (),
+    canonical_mode: bool = False,
+) -> Dict[str, Any]:
+    """The CANONICAL ROUTE RECORD: the labour rows the workbook accepted, each keyed to the
+    sheet row it was written to.
+
+    Must be called AFTER the write loop, because `workbook_row` is stamped onto each group
+    there. An earlier version built this record BEFORE the loop and then back-filled row
+    numbers by matching on department name in insertion order — which is wrong the moment
+    one department holds more than one group. On 12120 that swapped the 1.2mm and 1.5mm
+    Fold rows, and the Laser rows with them, attaching each group's calculated cost to the
+    other's parts. Reading the row straight off the group cannot do that.
+
+    These rows are post-filter: after every spurious-op, finish and material gate, after
+    department mapping, and including injected operations. Engine-side
+    labour_estimate.costs_gbp is PRE-filter and must not be used to describe the job.
+
+    Identity only. Hours, rates and values come from Excel via `final_estimate`, which joins
+    to these rows on `workbook_row`.
+    """
+    _rows = [g for g in (groups.values() if isinstance(groups, dict) else (groups or []))
+             if isinstance(g, dict) and g.get("workbook_row")]
+    _canonical = bool(canonical_mode) or (
+        bool(_rows) and all(g.get("canonical_route") for g in _rows)
+    )
+    return {
+        "schema": "workbook_labour_rows.v3" if _canonical else "workbook_labour_rows.v2",
+        "mode": "canonical" if _canonical else "legacy",
+        "identity": ("route_group_id is stable across runs and template revisions; "
+                     "workbook_row is the join key within THIS run's sheet."),
+        "note": ("Labour rows as ACCEPTED by wb_populate, keyed to the sheet row each was "
+                 "written to. Identity only — hours, rates and values come from Excel via "
+                 "final_estimate, which joins to these on workbook_row."),
+        "rows": [
+            {
+                "workbook_row": g.get("workbook_row"),
+                "route_group_id": route_group_id(g.get("wb_op"), g.get("material"),
+                                                 g.get("thickness"), g.get("parts"),
+                                                 group_key=g.get("group_key")),
+                "wb_operation": g.get("wb_op"),
+                # Real engine operations, recorded when the group was formed. NOT the group
+                # key: that holds the mapped department name.
+                "engine_operations": list(g.get("engine_ops") or []),
+                "engine_operation": (list(g.get("engine_ops") or []) or [None])[0],
+                "decision_id": g.get("decision_id"),
+                "decision_ids": list(g.get("decision_ids") or []),
+                "material": g.get("material"),
+                "thickness_mm": g.get("thickness"),
+                "qty_per_unit": g.get("qty"),
+                # THE HOLES THE ROW'S PARTS CARRY INTO ITS TIME (D-598a): every cutting row's
+                # count of the holes it was costed for, so the read contract can hold a hole
+                # to the row on its owning part that cuts it.
+                "holes_cut": g.get("holes_cut"),
+                "holes_cut_by_part": dict(g.get("holes_cut_by_part") or {}),
+                "holes_cut_basis": g.get("holes_cut_basis"),
+                # HOW THE RATE WAS ARRIVED AT — template_calculated / size_banded /
+                # historical / historical_unbanded / engine_derived / unmeasured_default.
+                # Without this the audit tabs present an unmeasured constant and the
+                # estimators' own calculator as the same kind of claim.
+                "rate_basis": g.get("rate_basis"),
+                # A COSTED TIME KEPT OUTSIDE THE DEFAULT'S RANGE, and the question it raised.
+                "throughput_review": g.get("throughput_review"),
+                "part_numbers": list(g.get("parts") or []),
+                # THE NEST IS ROW DATA, NOT A FORMULA TRICK. A split laser row says which
+                # nest it shares its ONE department set-up with, how many rows share it,
+                # and what share this row carries — so the allocation can be audited from
+                # the record, not reverse-engineered from a cell.
+                **({"laser_nest_id": g.get("laser_nest_id"),
+                    "laser_nest_size": g.get("laser_nest_size"),
+                    "laser_nest_proven": g.get("laser_nest_proven"),
+                    "laser_nest_evidence": g.get("laser_nest_evidence"),
+                    "setup_share": g.get("setup_share")}
+                   if g.get("laser_nest_id") else {}),
+            }
+            for g in sorted(_rows, key=lambda g: g["workbook_row"])
+        ],
+        "skipped_part_numbers": sorted(skipped_part_numbers or []),
+    }
+
+
+# A TIME A PERSON GAVE US, AND WHY THAT OUTRANKS A MEDIAN.
+#
+# The costing stage stamps a part when its time is a stated shop figure rather than a
+# derivation. Corpus medians describe jobs in general; a stated time describes this one.
+# A CLAIM IS ABOUT AN OPERATION, NOT ABOUT A PART.
+#
+# The first cut of this recorded "7332-01-008 has a stated time" and then let that vouch for
+# ANY operation on 008 — so the part's geometry-derived LASER time was read as stated, and
+# the row stopped using the template's own Laser Rate Calculator, which is the strongest
+# basis on the sheet. A fix that improves three rows and quietly degrades a fourth is not a
+# fix.
+#
+# 008 is plated, so the plater pack time IS stated for it. Its laser time is not, and
+# nothing about being plated says otherwise. Each marker therefore names the operations it
+# actually vouches for, and a claim reaches those and no others.
+_STATED_SHOP_TIME_MARKERS = (
+    ("weld_time_is_an_allowance", ("welding", "dress_welds"),
+     "the welding department's stated weldment allowance (config.WELD_TIME_MODEL)"),
+    ("weld_time_is_per_joint", ("welding", "dress_welds"),
+     "the welding department's stated per-joint weld time (config.WELD_TIME_MODEL)"),
+    # `handling` and `assembly` stay listed although a plated part no longer books either:
+    # the claim has to keep vouching for a book produced before the final pack got its own
+    # operation, or re-opening one would read its stated pack time as a department median.
+    ("plater_pack_applied",
+     ("handling", "assembly", "plater_pack", "plater_final_pack"),
+     "the stated pack times for a part that goes out to a plater "
+     "(config.PLATING_LOGISTICS)"),
+    ("brush_before_plate_applied", ("brush_before_plate", "manual_labour_metal"),
+     "the shop's stated brushing time before plating (config.BRUSH_BEFORE_PLATE)"),
+    # THE BENCH-FITTING RULE'S OWN TIME (D-364): Tony Ford's joinery bench rate inside its
+    # scope, the house allowance per part fitted outside it. The floor guard read it as a
+    # garbage derivation and put the department median in its place — 79 an hour, 45 seconds
+    # to fit a plywood bin together.
+    ("bench_work_applied", ("bench_work",),
+     "the bench-fitting rule for a board assembly (the joinery bench rate, or the house "
+     "allowance per part fitted)"),
+    # THE SIGHTED UNIT'S FITTING TIME (D-486): the per-part handling minutes for every piece
+    # it fits — not a derivation for the floor guard to replace with a department median.
+    ("unit_fitting_applied", ("handling", "assembly"),
+     "the per-part handling allowance for each piece the unit fits (LABOUR_RULES handling)"),
+)
+
+
+def _claim_covers(stated_ops: Any, operation: Any) -> bool:
+    """Does this claim vouch for THIS operation — under either of the shop's names for it?"""
+    _op = str(operation or "").strip().lower()
+    if not _op:
+        return False
+    if _op in {str(o).strip().lower() for o in (stated_ops or ())}:
+        return True
+    try:
+        from department_codes import code_for
+        _want = code_for(_op)
+        return bool(_want) and any(code_for(o) == _want for o in (stated_ops or ()))
+    except Exception:                                                # noqa: BLE001
+        return False
+
+
+def _member_stated_hours(hours: Dict[str, Any], covered: Any, engine_ops: Any) -> float:
+    """One member's stated hours a piece for the row's operation, or 0.
+
+    A stated time belongs to its own operation and to no other: the department alias is
+    asked only for an operation that is not itself a stated-time one, and never takes a
+    stated operation's figure as its source (the six-off book's generic assembly row picked
+    up the final pack's stated 8 minutes that way)."""
+    for _eop in (engine_ops or []):
+        if not _claim_covers(covered, _eop):
+            continue
+        _v = _safe(hours.get(str(_eop).strip().lower()))
+        if not _v and not is_stated_time_operation(_eop):
+            # The same operation under the department's other name — "assembly" on the
+            # route, "handling" in the costing, one PACM row on the sheet. Never for a stated
+            # operation, in either direction: excluding the TARGET stops a generic row
+            # borrowing one; excluding stated ops as SOURCES stops it from the other end.
+            try:
+                from department_codes import code_for as _dept_of2
+                _want2 = _dept_of2(_eop)
+                if _want2:
+                    for _ak, _av in hours.items():
+                        if is_stated_time_operation(_ak):
+                            continue
+                        if _dept_of2(_ak) == _want2 and _safe(_av):
+                            _v = _safe(_av)
+                            break
+            except Exception:                                        # noqa: BLE001
+                pass
+        if _v and _v > 0:
+            return float(_v)
+    return 0.0
+
+
+def member_rates(hours_by_part: Mapping[str, Any], order_qty: Any) -> List[Tuple[str, float, float]]:
+    """(part, pieces an hour, batch hours) for each member of a shared labour row — the row's
+    working, shown beside the one combined rate it charges.
+
+    A MEMBER'S RATE IS ITS OWN PIECE TIME (D-498). The batch hours a part estimate carries are
+    its piece time × the ORDER's units, not × its pieces a unit — so multiplying the order by
+    the pieces a unit inflated every multi-off member: a bracket thirty to a unit read 5807/hr
+    beside its true ~194/hr, and the spread warning fired on that. The row's charge never used
+    these figures; only what the row SAID about its members was wrong."""
+    out: List[Tuple[str, float, float]] = []
+    try:
+        oq = float(order_qty or 0)
+    except (TypeError, ValueError):
+        oq = 0.0
+    for _ppn, _rec in (hours_by_part or {}).items():
+        _rec = _rec if isinstance(_rec, Mapping) else {}
+        _pbh = _safe(_rec.get("bh"))
+        _prh = _safe(_rec.get("rh"))
+        if _prh and _prh > 0:
+            out.append((str(_ppn), 1.0 / _prh, float(_pbh or 0.0)))
+        elif _pbh and _pbh > 0 and oq > 0:
+            out.append((str(_ppn), oq / _pbh, float(_pbh)))
+    return out
+
+
+def stated_row_hours(group: Dict[str, Any], stated_time_by_pn: Dict[str, str],
+                     stated_hours_by_pn: Dict[str, Dict[str, Any]],
+                     stated_ops_by_pn: Dict[str, Any]) -> Tuple[float, List[str]]:
+    """The row's run hours a finished unit where a member's time was STATED, and who stated it.
+
+    EVERY MEMBER, EACH TIMES ITS PIECES (D-428). Tim Wilkes on 12173-02: weld and dress "very
+    low". The Weld (CO2) row grouped 12173-05-01M x4, -05-101 x4 and -06-201 x7 — fifteen
+    pieces — and this read the FIRST member's stated 6 minutes and charged the row as if it
+    were the whole: 15 pieces at 150/hr, six minutes for fifteen welds. The grouping had
+    already summed them (1.355 h); the stated branch threw that away.
+
+    So the row's hours are the group's own sum (each member's hours a piece x its pieces),
+    with each claimed member's computed share replaced by its stated one. A member with no
+    claim keeps its computed share; nothing is invented for a member with no hours at all."""
+    g = group or {}
+    by_part = {str(k).strip().upper(): v for k, v in (g.get("hours_by_part") or {}).items()}
+    # A time stated ONCE PER FINISHED UNIT is booked once however many members carry it.
+    _once = bool(g.get("stated_once_per_finished_unit"))
+    total = 0.0 if _once else (_safe(g.get("run_hours_per_unit")) or 0.0)
+    claimed: List[str] = []
+    for _gp in (g.get("parts") or []):
+        _gk = str(_gp).strip().upper()
+        if _gk not in stated_time_by_pn:
+            continue                     # hours exist for most parts; a CLAIM does not
+        _hrs = stated_hours_by_pn.get(_gk) or {}
+        _v = _member_stated_hours(_hrs, stated_ops_by_pn.get(_gk) or (), g.get("engine_ops"))
+        if not _v:
+            continue
+        if _once:
+            total = max(total, _v)
+            claimed.append(_gk)
+            continue
+        _rec = by_part.get(_gk) or {}
+        _q = _safe(_rec.get("qty_per_unit"), 1) or 1
+        _computed = 0.0
+        if "rh" in _rec:
+            # WHAT THE ROW ACTUALLY INCLUDED FOR THIS MEMBER (D-495). The stated time is found
+            # under the department's other name ("assembly" on the route, "handling" in the
+            # costing); asking for the computed share by the route's spelling found nothing,
+            # so the K-Wellness unit's 82.95 minutes were added on top of themselves and the
+            # Assemble/pack row charged 165.9. The grouping records the share it summed.
+            _computed = _safe(_rec.get("rh")) or 0.0
+        elif _rec:
+            for _eop in (g.get("engine_ops") or []):
+                _computed = _safe(_hrs.get(str(_eop).strip().lower())) or 0.0
+                if _computed:
+                    break
+        total += (_v - _computed) * _q
+        claimed.append(_gk)
+    return (round(total, 6) if claimed and total > 0 else 0.0), claimed
+
+
+def _group_carries_a_stated_shop_time(group: Any, stated: Dict[str, str],
+                                      stated_ops: Any = None) -> bool:
+    """True when any part on this labour row was timed from a figure a department gave us.
+
+    assembly_own_time is the same claim from the grouping side: the row's hours came from
+    the ASSEMBLY's own record rather than from summing its members, so they are one number
+    for one thing and the corpus median has nothing better to offer.
+
+    Not when the row's time follows a measured area (time_from_area): the assembly's own
+    figure is then the engine's arithmetic on that same area, floored — not a person's
+    statement. 12527-22-101's coat read as "stated" at 20/hr and charged £19 a unit."""
+    if (group or {}).get("time_from_area"):
+        return False
+    if (group or {}).get("assembly_own_time"):
+        return True
+    _ops = [o for o in ((group or {}).get("engine_ops") or [])]
+    for _p in ((group or {}).get("parts") or []):
+        _k = str(_p).strip().upper()
+        if _k not in stated:
+            continue
+        if stated_ops is None:
+            return True
+        # AND THE CLAIM HAS TO COVER THIS ROW'S OPERATION. A plated part's pack time is
+        # stated; its fold is not, and a part-wide reading would exempt the fold from the
+        # floor guard that exists to catch a garbage derivation.
+        _cov = (stated_ops or {}).get(_k) or ()
+        if not _ops or any(_claim_covers(_cov, _o) for _o in _ops):
+            return True
+    return False
+
+
+def _stated_shop_time_source(group: Any, stated: Dict[str, str]) -> str:
+    for _p in ((group or {}).get("parts") or []):
+        _hit = stated.get(str(_p).strip().upper())
+        if _hit:
+            return _hit
+    if (group or {}).get("assembly_own_time"):
+        return "the assembly's own computed time, not a sum of its members"
+    return "a stated shop figure"
+
+
+
+def open_on_sheet(wb, sheet_name: str) -> None:
+    """Make `sheet_name` the tab the book opens on, scrolled to its top-left cell.
+
+    A frozen pane keeps its split, and its scrolling pane starts just past the split. Every
+    other tab is deselected, so Excel does not open with a group of sheets selected.
+    """
+    from openpyxl.utils import get_column_letter
+    est = wb[sheet_name]
+    idx = wb.worksheets.index(est)
+    for ws in wb.worksheets:
+        ws.sheet_view.tabSelected = ws is est
+    wb.active = idx
+    for view in wb.views or []:
+        view.activeTab = idx
+        view.firstSheet = 0
+    sv = est.sheet_view
+    sv.topLeftCell = "A1"
+    if sv.pane is not None and sv.pane.state in ("frozen", "frozenSplit"):
+        first = f"{get_column_letter(int(sv.pane.xSplit or 0) + 1)}{int(sv.pane.ySplit or 0) + 1}"
+        sv.pane.topLeftCell = first
+    else:
+        sv.pane = None
+        first = "A1"
+    for sel in sv.selection or []:
+        sel.activeCell = first
+        sel.sqref = first
+
+OVERFLOW_NEST_SHEET = "Sheet Material Overflow"
+
+_CELL_REF = re.compile(r"(\$?)([A-Z]{1,3})(\$?)(\d+)(?![\d(])")
+
+
+def _reads_only_its_own_row(formula: str, row: int) -> bool:
+    """True when every cell a formula reads sits on its own row and its own sheet, so the
+    formula can be moved to another row or sheet and still compute the same thing there."""
+    body = re.sub(r'"[^"]*"', '""', str(formula))
+    if "!" in body or ":" in body:
+        return False
+    for dollar_col, _col, dollar_row, r in _CELL_REF.findall(body.upper()):
+        if dollar_row or int(r) != row:
+            return False
+    return True
+
+
+def nest_overflow_rows(wb, ws, block: Mapping[str, Any], parts: Sequence[Dict[str, Any]],
+                       write_inputs) -> Dict[str, Tuple[str, int]]:
+    """Write each overflow part onto a copy of the block's first row, on its own sheet.
+
+    The copy carries every cell of the template's first block row that is not an input: the
+    parts-per-sheet and cost-per-part formulas, translated to the new row, and the constants
+    (scrap, cutting speed). `write_inputs(sheet, row, part)` is the same writer the block
+    uses, so the inputs are the block's inputs. Returns {part number: (sheet title, row)};
+    empty when the template row cannot be copied faithfully.
+    """
+    from openpyxl.formula.translate import Translator
+    first = int(block["first_row"])
+    inputs = {int(block[k]) for k in block if str(k).startswith("col_")}
+    header = first - 1
+    cells = [c for c in ws[first] if c.column >= int(block["col_desc"])]
+    formulas = [c for c in cells if isinstance(c.value, str) and c.value.startswith("=")
+                and c.column not in inputs]
+    if not formulas or not all(_reads_only_its_own_row(c.value, first) for c in formulas):
+        return {}
+    if OVERFLOW_NEST_SHEET in wb.sheetnames:
+        del wb[OVERFLOW_NEST_SHEET]
+    nest = wb.create_sheet(OVERFLOW_NEST_SHEET)
+    nest.cell(row=1, column=int(block["col_desc"]),
+              value=(f"{ws.title} Other Sheet Material block full — these parts are nested "
+                     f"by the block's own formulas and priced from here on the Bill of "
+                     f"Materials. Total Material Cost does not add this sheet."))
+    last_col = max(c.column for c in cells if c.value is not None)
+    for c in ws[header]:
+        if c.value is not None and int(block["col_desc"]) <= c.column <= last_col:
+            nest.cell(row=2, column=c.column, value=c.value)
+    out: Dict[str, Tuple[str, int]] = {}
+    for i, pe in enumerate(parts):
+        r = 3 + i
+        for c in cells:
+            if c.column in inputs or c.value is None:
+                continue
+            v = c.value
+            if isinstance(v, str) and v.startswith("="):
+                v = Translator(v, origin=c.coordinate).translate_formula(
+                    f"{c.column_letter}{r}")
+            nest.cell(row=r, column=c.column, value=v)
+        write_inputs(nest, r, pe)
+        pn = str(pe.get("part_number") or "").strip()
+        if pn:
+            out[pn] = (nest.title, r)
+    return out
+
+
+def point_bom_lines_at_nest_rows(ws, bom: Mapping[str, Any],
+                                 nest_rows: Mapping[str, Tuple[str, int]]) -> List[str]:
+    """Price each spilled Bill of Materials line from its nest row: the line total becomes
+    the nest row's Cost Per Part cell (a line total, scrap included), so the line's own
+    scrap is zero and its price is that total over its quantity."""
+    moved: List[str] = []
+    keys = {str(k).strip().upper(): v for k, v in nest_rows.items()}
+    for r in range(int(bom["first_row"]), int(bom["last_row"]) + 1):
+        code = str(ws.cell(row=r, column=int(bom["col_code"])).value or "").strip().upper()
+        desc = str(ws.cell(row=r, column=int(bom["col_desc"])).value or "")
+        if code not in keys or "block full" not in desc:
+            continue
+        title, nr = keys[code]
+        qty = ws.cell(row=r, column=int(bom["col_qty"])).coordinate
+        ws.cell(row=r, column=int(bom["col_price"]),
+                value=f"=IFERROR('{title}'!M{nr}/{qty},\"\")")
+        ws.cell(row=r, column=int(bom["col_scrap"]), value=0)
+        ws.cell(row=r, column=int(bom["col_supplier"]), value="Other Sheet Material nest")
+        ws.cell(row=r, column=int(bom["col_desc"]),
+                value=(desc.split(" — ")[0] + f" — Other Sheet Material block full: nested "
+                       f"by the block's own formulas on '{title}' row {nr}"))
+        moved.append(str(ws.cell(row=r, column=int(bom["col_code"])).value).strip())
+    return moved
 
 
 def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional[str]:
@@ -332,12 +5587,20 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         return None
 
     cm = CELL_MAP
-    tpl = cm["template_path"]
+    tpl = template_path()
     if not os.path.exists(tpl):
         print(f"   [wb_populate] TEMPLATE NOT FOUND: {tpl}")
+        print(f"   [wb_populate] the estimate will fall back to the xlsx_output builder, "
+              f"whose labour rows are NOT route-grouped and therefore OVERSTATE assembly "
+              f"operations. If the share is unreachable, point SDI_WB_TEMPLATE at a local "
+              f"copy of the template and re-run.")
         return None
 
     flags: List[str] = []
+    # Everything a person still has to type before this sheet is a price. Collected as it
+    # is discovered rather than re-derived at the end, so a gate that finds a gap and a
+    # block that reports it cannot drift apart.
+    _inputs: List[Dict[str, Any]] = []
 
     # part estimates live under estimate_summary.part_estimates (or top-level parts)
     pes = (
@@ -346,20 +5609,51 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         or summary.get("parts")
         or []
     )
+    _canonical_cutover = canonical_route_cutover_enabled(summary)
+    if _canonical_cutover:
+        pes = canonicalise_part_estimates_for_workbook(summary, list(pes))
+        # THE LIST THE SHEET IS BUILT FROM HAS TO SURVIVE THE SHEET.
+        #
+        # This was a local variable, discarded the moment the workbook was saved, and it is
+        # not the list any other deliverable reads. Canonicalising merges recogniser-minted
+        # duplicates into the drawing's own code, rolls sub-assembly multiplicity into each
+        # quantity, and ADDS explicit bought-in BOM lines that never got a pricing record.
+        # So the Estimate sheet showed one set of rows and the Decision Report, AI
+        # Provenance, quote HTML and job report each showed a different one — a bought-in
+        # the sheet charges appearing on no other page, a duplicate on every page but the
+        # sheet, and quantities that differ wherever a part sits below the first level.
+        #
+        # Published under its own key rather than overwriting part_estimates: the engine's
+        # pre-canonical record is what project_priced_route reconciles decisions against and
+        # what the read-back and learning paths expect. Consumers read it through
+        # costed_facts.job_parts, which falls back to part_estimates when no workbook ran.
+        ((summary.setdefault("estimate_summary", {}))
+         ["canonical_part_estimates"]) = pes
+    _canonical_kinds = canonical_part_kinds(summary) if _canonical_cutover else {}
+    if _canonical_cutover:
+        canonical_route_payload(summary)["mode"] = "cutover"
+        _flag(
+            "CANONICAL BOM/ROUTE CUTOVER is active: hierarchy controls material placement "
+            "and required OperationDecisions are the only source of labour rows.",
+            flags,
+        )
 
     wb = openpyxl.load_workbook(tpl, data_only=False, keep_vba=False)
     if cm["estimate_sheet"] not in wb.sheetnames:
         print(f"   [wb_populate] no '{cm['estimate_sheet']}' sheet in template.")
         return None
     ws = wb[cm["estimate_sheet"]]
+    derive_cellmap_from_template(ws, cm, flags)
     _verify_template_matches_cellmap(ws, cm, flags)
+    repair_labour_sheet_references(wb, cm, flags)
+    fill_missing_block_totals(ws, cm, flags)
 
     # Powder £/kg — write the code-controlled rate into the sheet (cell AF82),
     # overwriting the template's static default. AF83 (=AD82*AF82) then computes
     # powder material cost at the correct rate. Source: config.POWDER_COST_PER_KG.
     if _POWDER_COST_PER_KG is not None:
         try:
-            ws["AF82"] = float(_POWDER_COST_PER_KG)
+            ws[cm.get("powder", {}).get("rate_cell", "AF82")] = float(_POWDER_COST_PER_KG)
         except Exception:
             pass
 
@@ -369,9 +5663,62 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                           or summary.get("order_quantity")
                           or (summary.get("estimate_summary") or {}).get("assumed_job_quantity")
                           or 180) or 180)
-    ws[hdr["customer"]]   = summary.get("customer") or summary.get("client") or job_folder_name
-    ws[hdr["drawing_no"]] = re.match(r"\s*(\d+)", job_folder_name).group(1) if re.match(r"\s*(\d+)", job_folder_name) else job_folder_name
+    # THE QUANTITY ASKED FOR IS THE QUANTITY WRITTEN, OR THE SHEET SAYS SO. Two runs of
+    # 11908-21 went out at 1-off against a --order-qty 50 command; nothing anywhere said
+    # the request had been lost, and the reviewer found it by opening D6. The request
+    # travels as SDI_ORDER_QTY; when it exists and the cell about to be written disagrees,
+    # that is a run-level fault and it is said as one.
+    _req_qty = os.getenv("SDI_ORDER_QTY", "").strip()
+    if _req_qty.isdigit() and int(_req_qty) != order_qty:
+        _flag(f"ORDER QTY MISMATCH: the run asked for {_req_qty} (--order-qty / "
+              f"SDI_ORDER_QTY) and Estimate D6 is being written at {order_qty} — the "
+              f"request did not reach the costed record. The sheet is NOT the quantity "
+              f"asked for.", flags)
+
+    _customer_name = (summary.get("customer") or summary.get("client")
+                      or client_from_job_folder(summary) or job_folder_name)
+    write_header_value_beside_label(ws, ("customer",), hdr["customer"], _customer_name)
+    write_header_value_beside_label(ws, ("drawing no.", "drawing no", "drawing number"),
+                                    hdr["drawing_no"],
+                                    full_drawing_number(summary, job_folder_name))
     ws[hdr["order_qty"]]  = order_qty
+    write_job_identity_header(ws, summary, job_folder_name)
+
+    _apply_customer_terms(ws, _customer_name, flags)
+
+    # THE REVISION IS READ AND THEN DROPPED ON THE FLOOR. 11350's run printed
+    # "[revision] 11350-01 revision -> B" and the sheet's Rev box was blank — so an estimator
+    # cannot tell which issue of the drawing was priced, and a sheet that outlives a revision
+    # is a sheet nobody can trust. The engine already knows; only the header did not.
+    #
+    # Found by LABEL, never by address: the template's header block is the estimators' own
+    # layout. Written only into an EMPTY cell, so nothing on the template is ever displaced.
+    write_revision_header(ws, summary, job_folder_name)
+
+    # THE DESCRIPTION BOX SAYS WHAT THE PRODUCT IS. Howard's own sheet reads "A4 Table
+    # Top Graphic Holder - L Stand (0355255)"; ours went out blank — an attachment header
+    # with an empty Description reads as unfinished before a single figure is checked.
+    # Same title source as the quotation, same instruction guard (a drawing note is not
+    # a product name), written only into an empty cell so a typed description stands.
+    try:
+        from client_quote_html import (_drawing_identity, _reads_as_an_instruction,
+                                       _reads_as_a_code)
+        _t_num, _t_rev, _t_title = _drawing_identity(summary, job_folder_name)
+        # A quotation header would rather print the number than nothing, so the resolver
+        # falls back to it — but this box sits beside a Drawing box that already holds it,
+        # and 10975-02's read "10975-02-GA" under a label an estimator asked for so he
+        # could tell at a glance what a sheet was FOR. The same refusal the older header
+        # writer makes, on the shape rather than on string equality.
+        if _t_title and not _reads_as_an_instruction(_t_title) \
+                and not _reads_as_a_code(_t_title):
+            _d_hit = _find_label_cell(ws, "description")
+            if _d_hit:
+                _dr, _dc = _d_hit
+                _cell = _writable_cell(ws, _dr, _dc + 1)
+                if _cell is not None and _cell.value in (None, ""):
+                    _cell.value = str(_t_title)[:90]   # a typed description never moves
+    except Exception:                                            # noqa: BLE001
+        pass
 
     # ── Classify parts into blocks — from the FULL part audit ──────────────
     # Rules, in order, based on the engine's own fields (confirmed by _classify_audit):
@@ -390,11 +5737,12 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     wire_parts = []
     for pe in pes:
         pn = str(pe.get("part_number") or "").upper()
+        canonical_kind = _canonical_kinds.get(pn)
         me = pe.get("material_estimate") or {}
         stock_form = str(me.get("stock_form") or "").lower()
         rflags = [str(f).lower() for f in (me.get("reliability_flags") or [])]
         roles = [str(r).lower() for r in (pe.get("page_roles") or [])]
-        mat = str(pe.get("normalized_material") or "").upper()
+        mat = str(pe.get("normalized_material") or me.get("material") or "").upper()
         blank_l = _safe(me.get("blank_length_mm"))
         unit_price = _safe(pe.get("unit_cost_gbp") or pe.get("unit_material_cost_gbp"))
         ext_total = _safe(pe.get("extended_total_cost_gbp"))
@@ -403,6 +5751,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                                 or re.search(r"ASSEMBL|WELDMENT", str(pe.get("description") or "").upper())
                                 or "weldment" in cost_method
                                 or "children" in cost_method)
+        # A LINE PRICED AS ITS OWN SECTION STOCK IS ITS OWN MATERIAL (D-577), whatever its
+        # name says. "BASE FRAME - WELDMENT" is a frame sawn from three pieces of tube that
+        # the estimator priced by length; the word WELDMENT sent it down the rollup branch
+        # and its steel was "carried by children" that are its own pieces. The 03M pieces
+        # reach the bill by this same road under their own codes; the frame goes the same way.
+        if _line_is_its_own_section_stock(me):
+            name_is_assembly = False
 
         # 1. commercial placeholders (PACKAGING / DELIVERY): write as blank-price
         #    (£0) BOM rows for the estimator to fill in, rather than dropping.
@@ -415,16 +5770,73 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             continue
 
         # 2. weldment/assembly parent — material carried by children, labour only
-        if "weldment_parent_material_suppressed" in rflags:
+        if canonical_kind == "assembly":
+            excluded.append(pe)
+            print(f"   [wb_populate] excluded canonical assembly parent: {pn} "
+                  "(material belongs to leaf children)")
+        elif "weldment_parent_material_suppressed" in rflags:
             weldment_parts.append(pe)
-        elif name_is_assembly and stock_form not in STEEL_STOCK_FORMS and "bought_in" not in roles:
+        elif (name_is_assembly and stock_form not in STEEL_STOCK_FORMS
+              and "bought_in" not in roles and _has_children_to_carry_it(pn, pes, summary)):
             # assembly rollup (e.g. 1453-GA-C kick plate ASSEMBLY, 1455-C-101 weldment):
             # exclude from material to avoid double-counting its children.
             excluded.append(pe)
             print(f"   [wb_populate] excluded assembly rollup: {pn} "
                   f"(£{ext_total} carried by children)")
-        # 3. steel (sheet or stated-weight, with real geometry)
-        elif stock_form in STEEL_STOCK_FORMS:
+        elif stock_form == "tube":
+            # A TUBE LINE THE ROLLUP BRANCHES DID NOT CLAIM IS WRITTEN (D-578). The branch
+            # below reads the word ASSEMBLY on a line nothing carries, flags it and writes
+            # nothing — a weldment named so but cut from its own tube left the sheet by it.
+            # The canonical-assembly, suppression and rollup branches above keep their
+            # authority; a tube line past them is a material row.
+            bom_parts.append(pe)
+        elif name_is_assembly and stock_form not in STEEL_STOCK_FORMS and "bought_in" not in roles:
+            # THE WORD "ASSEMBLY" IS NOT EVIDENCE THAT SOMETHING ELSE CARRIES THE COST.
+            #
+            # This branch excluded a part's material on the strength of ASSEMBL appearing in
+            # its description, and printed "carried by children" without ever checking that
+            # any child exists. On a sheet-metal job that is usually right — 11350-01-101 is
+            # a bar and some studs, both priced. On a JOINERY job it is how the biggest
+            # number on the sheet disappears: "12422-24-101 JOINERY ASSEMBLY" is a
+            # 750 x 1447.5 x 31 panel whose siblings are metal brackets, not its children,
+            # so nothing downstream carries it and the line reads GBP 0.00 like every other
+            # deliberate cross-reference.
+            #
+            # No children, no rollup. It is costed as what it is, and the estimator is told
+            # the word was read and disregarded.
+            _flag(f"{pn}: described as an ASSEMBLY but nothing in this job is its child, so "
+                  f"its material is NOT rolled up — there is nothing to roll it up INTO. "
+                  f"Costed as a part in its own right. If it really is a rollup, its "
+                  f"children are missing from the BOM.", flags)
+        # 2b. Stated-weight part with NO nesting geometry (e.g. a timber panel costed by its
+        #     printed weight × £/kg). The area-based steel/board blocks can't display it — they
+        #     read L×W and would show £0. Write it as a DIRECT-priced BOM line (the same proven
+        #     path the tubes use) so its real per-part material cost reaches the sheet. Steel
+        #     stated-weight parts that DO carry a blank still route to the Sheet Steel block below.
+        elif stock_form == "stated_weight" and blank_l is None and _safe(me.get("cost_per_part_gbp")):
+            bom_parts.append(pe)
+        # 2c. A SHEET METAL PRICED AT ITS OWN RATE IS NOT L5's STEEL (D-559): stainless and
+        #     aluminium carry their own £/kg in config, and the Sheet Steel block would re-cost
+        #     them from the mild-steel £/tonne. With a blank they go to Other Sheet Material at
+        #     their own cost per sheet, which that block takes as an input.
+        elif ((stock_form in STEEL_STOCK_FORMS or _is_sheet_metal(mat)) and not _is_board(mat)
+              and blank_l is not None and _own_sheet_rate(mat)):
+            import costed_facts as _cf_own
+            _bd2c = _cf_own.blank_dimensions(pe)
+            if _safe(_bd2c.get("length_mm")) and _safe(_bd2c.get("width_mm")):
+                pe["_other_sheet_at_own_rate_gbp_per_kg"] = _own_sheet_rate(mat)
+                board_parts.append(pe)
+                _flag(f"{pn}: {str(mat).upper()} is priced at its own rate "
+                      f"(£{_own_sheet_rate(mat):.2f}/kg, config MATERIAL_PRICE_GBP_PER_KG), not "
+                      f"the Sheet Steel block's £/tonne — costed in Other Sheet Material at its "
+                      f"own cost per sheet (D-559).", flags)
+            else:
+                steel_parts.append(pe)
+        # 3. steel (sheet or stated-weight, with real geometry) — but NOT a board/timber part.
+        #    A timber panel costed by stated weight has stock_form 'stated_weight' (in
+        #    STEEL_STOCK_FORMS); without the board guard it would be dumped in Sheet Steel and
+        #    metal-lasered. Board/timber materials fall through to the board block below.
+        elif stock_form in STEEL_STOCK_FORMS and not _is_board(mat):
             steel_parts.append(pe)
         # 3b. wire / round bar -> Wire block (WB prices it from gauge + length)
         elif stock_form == "wire":
@@ -435,9 +5847,24 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # 5. priced bought-in
         elif "bought_in" in roles:
             bom_parts.append(pe)
-        # 6. board / other sheet
+        # 6. board / other sheet — but ONLY when it can be costed AS a sheet.
         elif _is_board(mat):
-            board_parts.append(pe)
+            import costed_facts as _cf_board
+            _bd6 = _cf_board.blank_dimensions(pe)
+            if _safe(_bd6.get("length_mm")) and _safe(_bd6.get("width_mm")):
+                board_parts.append(pe)
+            else:
+                # A board/plastic line with NO sheet dimensions cannot be nested or costed as a
+                # sheet — the Other Sheet block reads L×W and shows £0. A bought-in moulding read
+                # as a plastic (an ABS castor body) belongs on the BOM as a per-each line, where
+                # the catalogue / market / last-resort price applies. A genuine board PANEL that
+                # is merely missing its size lands here too and is flagged to add dimensions;
+                # either way it no longer reads as free. Keyed on the missing geometry, not a name.
+                _flag(f"{pn}: board/plastic material with no sheet dimensions — routed to the BOM "
+                      f"as a per-each line (catalogue/market price) instead of a £0 Other-Sheet "
+                      f"row. If this is a board panel, add its L×W and it will cost as a sheet.",
+                      flags)
+                bom_parts.append(pe)
         # 7. sheet metal with geometry but no stock_form set
         elif _is_sheet_metal(mat) and blank_l is not None:
             steel_parts.append(pe)
@@ -445,9 +5872,31 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         elif unit_price is None and ext_total is not None and blank_l is None:
             bom_parts.append(pe)
         else:
-            _flag(f"part {pe.get('part_number')} unclassifiable "
-                  f"(stock_form={stock_form!r}, role={roles}, unit={unit_price}, "
-                  f"ext={ext_total}, blankL={blank_l}) — skipped.", flags)
+            # A PART THE CLASSIFIER CANNOT PLACE IS STILL A PART SOMEBODY MUST PRICE.
+            #
+            # This branch used to flag "unclassifiable — skipped", and skipped meant
+            # SILENT on the sheet: no material row, no unpriced row, nothing for an
+            # estimator to strike. 0359342 dropped 27 fabricated leaves here in one job
+            # — all sixteen Corian panels among them — because a foreign pack's parts
+            # arrived with no material fact, which defeats every branch above (mat null
+            # fails the board/sheet tests; the last-resort market price they DO carry
+            # fails branch 8's unit_price-is-None test). Their indications sat priced
+            # and labelled in the canonical population while the sheet's material total
+            # read as if the Corian were free.
+            #
+            # Route the line to the BOM block instead. The row writer already owns every
+            # honesty question that follows: a priced line prices through
+            # _bom_line_price and wears the INDICATIVE tag when its money is a market
+            # guess (_price_origin reads the rescuer's cost_method mark); an unpriced
+            # one gets the same "MATERIAL UNPRICED: enter a unit rate" row the BI-
+            # placeholders get. Either way the part is ON the sheet, which is the one
+            # thing "skipped" can never be.
+            bom_parts.append(pe)
+            _flag(f"part {pe.get('part_number')} fits no material block "
+                  f"(stock_form={stock_form!r}, role={roles}, material={mat!r}, "
+                  f"blankL={blank_l}) — written to the BOM as a per-each line so it "
+                  f"cannot silently read as free. Add its material/geometry to cost it "
+                  f"as sheet or board.", flags)
 
     # ── BOM block: desc, code, PRICE (engine), qty, scrap ──────────────────
     # Holds true bought-ins (fixings, vinyl, electricals) AND tube sections
@@ -470,11 +5919,36 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # calculation cannot see, so nothing is double-counted.
     _wire_powder_area_m2 = 0.0
     _wire_powder_diag = []
-    _all_pes_pw = ((summary.get("estimate_summary") or {}).get("part_estimates")
+    # THE SAME POPULATION THE BLOCKS READ. This read the RAW part_estimates while the
+    # Sheet Steel block reads the canonicalised list — so the mirror record (raw
+    # spelling, no blank fields of its own) contributed nothing to the coated area
+    # while its canonical twin sat fully measured in the steel block. One list for
+    # both writers, falling back to the raw pools only when no canonical list exists.
+    _all_pes_pw = (pes or (summary.get("estimate_summary") or {}).get("part_estimates")
                    or summary.get("parts") or [])
+
+    # ── ONE DECISION OWNS POWDER ────────────────────────────────────────────────────
+    # The route compiler arbitrates powder_coating: ranked, evidenced, conflicts recorded.
+    # Everything below used to ignore it and measure area instead, so the mass and the
+    # operation were two readers of one job answering separately -- and the mass had no
+    # way of knowing the route had ruled powder out.
+    #
+    # None means the compiler has not ruled on this job, and the geometry path stands
+    # unchanged. A SET, including an empty one, is a decision and is obeyed.
+    _route_coated = parts_the_route_says_are_coated(summary)
+
+    # SPELLING NEVER DECIDES COATING — the shared squash-tolerant predicate; see
+    # route_coated_membership for the 11350 mirror story.
+    _route_says_coated = route_coated_membership(_route_coated)
+
+    if _route_coated is not None:
+        _flag(f"powder follows the compiled route: {len(_route_coated)} part(s) decided "
+              f"coated. Mass and operation now come from one decision.", flags)
     for _wp in _all_pes_pw:
         _wme = _wp.get("material_estimate") or {}
         if str(_wme.get("stock_form") or "").lower() not in ("wire", "bar"):
+            continue
+        if not _route_says_coated(_wp):
             continue
         _wg = _safe(_wme.get("wire_gauge_mm") or _wp.get("wire_gauge_mm"))
         _wl = _safe(_wme.get("wire_length_mm") or _wp.get("wire_length_mm"))
@@ -491,30 +5965,33 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     #     167.04 x 113 x 2 / 1e6 = 0.03775 m2
     # which matches the template's own AB63 to five decimal places. The area maths agrees
     # with theirs; only the coverage RATE is in dispute.
-    _sheet_powder_area_m2 = 0.0
-    # acrylic_excluded_from_powder (2026-07-15): acrylic / perspex / PMMA / polycarbonate are
-    # diamond polished, NEVER powder coated. An acrylic part is a sheet form, so without this
-    # guard its area was summed into the coated total and a phantom POWDER BOM row was written
-    # (12439). Exclude acrylic/plastic from the coated-area sum. Steel parts are unaffected.
-    _ACR_NO_POWDER = {"ACRYLIC", "HIGH IMPACT ACRYLIC", "PERSPEX", "PMMA", "POLYCARBONATE"}
-    def _is_acrylic_pw(_p):
-        _m = str(_p.get("normalized_material")
-                 or (_p.get("material_estimate") or {}).get("material") or "").upper().replace("_", " ")
-        return _m in _ACR_NO_POWDER or bool(_p.get("acrylic_no_powder"))
-    for _sp in _all_pes_pw:
-        _sme = _sp.get("material_estimate") or {}
-        if str(_sme.get("stock_form") or "").lower() not in ("sheet", "plate", "stated_weight", ""):  # include stated_weight: it is coated steel routed by weight, must not drop from the powder sum (aligns with STEEL_STOCK_FORMS routing filter). Powder basis stays GROSS L x W; this only keeps steel parts in the sum when a valid blank area flips them onto the weight path.
-            continue
-        if _is_acrylic_pw(_sp):
-            continue   # acrylic is not powder coated — contributes zero coated area
-        _sng = _sp.get("normalized_geometry") or {}
-        _sl = _safe(_sme.get("blank_length_mm") or _sng.get("blank_length_mm"))
-        _sw = _safe(_sme.get("blank_width_mm") or _sng.get("blank_width_mm"))
-        _sq = _safe(_sp.get("quantity"), 1) or 1
-        if _sl and _sw:
-            _sheet_powder_area_m2 += (_sl / 1000.0) * (_sw / 1000.0) * 2.0 * float(_sq)
+    # The shared physical rule, aliased for the per-piece floor below (the sheet sum
+    # consults it inside coated_sheet_area_m2).
+    _is_acrylic_pw = part_cannot_be_powder_coated
+    _sheet_powder_area_m2 = coated_sheet_area_m2(_all_pes_pw, _route_says_coated)
 
-    _powder_area_m2 = _sheet_powder_area_m2 + _wire_powder_area_m2
+    # ── SECTION AREA TOO ────────────────────────────────────────────────────────
+    # Sheet and wire were the only two contributors. A powder-coated tube, box section or
+    # angle matched neither and contributed nothing at all — see section_coated_area_m2.
+    _section_powder_area_m2 = 0.0
+    _section_powder_diag = []
+    for _cp in _all_pes_pw:
+        if not _route_says_coated(_cp):
+            continue   # a section the route excluded is not on the booth line either
+        _cpc = (_cp.get("material_estimate") or {}).get("powder_consumable")
+        if isinstance(_cpc, dict) and _cpc.get("coated_area_source") == "sum_of_members_blanks":
+            continue   # coated over its members, counted in the sheet sum (D-589)
+        _ca = section_coated_area_m2(_cp)
+        if _ca > 0:
+            _section_powder_area_m2 += _ca
+            _section_powder_diag.append(f"{_cp.get('part_number')}({_ca:.5f} m2)")
+
+    _powder_area_m2 = _sheet_powder_area_m2 + _wire_powder_area_m2 + _section_powder_area_m2
+    if _section_powder_area_m2 > 0:
+        _flag(f"POWDER: section stock adds {_section_powder_area_m2:.5f} m2 of coated surface "
+              f"({', '.join(_section_powder_diag)}) — outer perimeter x cut length. Until now "
+              f"section contributed ZERO to the coated total, since the sum saw only flat "
+              f"blanks and wire.", flags)
     _powder_by_area_kg = _powder_area_m2 * float(_POWDER_KG_PER_M2)
 
     # ── A MINIMUM PER PIECE, NOT JUST A COVERAGE RATE ───────────────────────────
@@ -532,6 +6009,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _fsf = str((_fp.get("material_estimate") or {}).get("stock_form") or "").lower()
         if _is_acrylic_pw(_fp):
             continue   # acrylic is not coated — must not count toward the per-piece powder floor
+        if _no_material_was_costed(_fp):
+            continue   # not costed for material, so not an object on the booth line
+        if not _route_says_coated(_fp):
+            # THE FLOOR IS PER COATED OBJECT, and an object the route excluded is not one.
+            # Without this the floor re-invents the mass the area sum just declined to
+            # book, which is exactly how a job with nothing coated still carried powder.
+            continue
         if _fsf in ("sheet", "plate", "wire", "bar", "board"):
             _fab_pieces += int(_safe(_fp.get("quantity"), 1) or 1)
     # powder_floor_zero_when_no_coated (2026-07-15): a job with ZERO coatable pieces gets
@@ -546,28 +6030,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
     _powder_kg_total = round(max(_powder_by_area_kg, _powder_by_floor_kg), 5)
 
-    # Largest fabricated part by area (m2) - the size proxy for throughput banding. Pack and
-    # coat speed track the biggest part in the job, not the average. Reuses the same geometry
-    # the powder area calc reads; known when the labour block runs, unlike the unit-cost cell.
-    _max_part_area_m2 = 0.0
-    for _ap in _all_pes_pw:
-        _ame = _ap.get("material_estimate") or {}
-        _asf = str(_ame.get("stock_form") or "").lower()
-        _ang = _ap.get("normalized_geometry") or {}
-        _aq = _safe(_ap.get("quantity"), 1) or 1
-        _area = 0.0
-        if _asf in ("sheet", "plate", "board", ""):
-            _al = _safe(_ame.get("blank_length_mm") or _ang.get("blank_length_mm"))
-            _aw = _safe(_ame.get("blank_width_mm") or _ang.get("blank_width_mm"))
-            if _al and _aw:
-                _area = (_al / 1000.0) * (_aw / 1000.0)
-        elif _asf in ("wire", "bar"):
-            _ag = _safe(_ame.get("gauge_mm") or _ame.get("diameter_mm"))
-            _aln = _safe(_ame.get("length_mm") or _ame.get("cut_length_mm"))
-            if _ag and _aln:
-                _area = 3.14159265 * (_ag / 1000.0) * (_aln / 1000.0)
-        if _area > _max_part_area_m2:
-            _max_part_area_m2 = _area
+    # Largest FABRICATED part by area (m2) - the size proxy for throughput banding, and the
+    # part it came from so the flag can name it. Only a part we make votes, through a stock
+    # form we recognise; see _largest_fabricated_part_area for why "" and bought-in do not.
+    _max_part_area_m2, _max_part_area_pn = _largest_fabricated_part_area(_all_pes_pw)
     _powder_basis = ("MINIMUM PER PIECE" if _powder_by_floor_kg >= _powder_by_area_kg
                      else "COATED AREA")
     _wire_powder_kg = _powder_kg_total          # the BOM branch below reads this name
@@ -604,10 +6070,22 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 or bool(_p.get("_consumable_qty_unknown")))
 
     if _powder_kg_total > 0 and not any(_is_powder_row(_p) for _p in bom_parts):
+        # "WHERE DID THE PRICE COME FROM FOR POWDER (PER KILO)?" — the estimator's first
+        # question of fifteen, about a line that stated its AREA and not its RATE. The rate
+        # has a name against it (POWDER_COSTING_POLICY: £4/kg standard powder, confirmed by
+        # estimating, Tim, POWDER5 on job 1282) and the line never said so, which is how a
+        # settled figure reads as an invented one. It says so now.
+        _pk_rate = float(_POWDER_COST_PER_KG or 9.73)
+        try:
+            _pk_src = str((getattr(config, "POWDER_COSTING_POLICY", {}) or {}).get(
+                "powder_material_gbp_per_kg_source") or "").strip()
+        except Exception:                                        # noqa: BLE001
+            _pk_src = ""
         bom_parts = list(bom_parts) + [{
             "part_number": "POWDER",
-            "description": "Powder — computed from coated surface area "
-                           f"({_powder_area_m2:.4f} m2)",
+            "description": (f"Powder — computed from coated surface area "
+                            f"({_powder_area_m2:.4f} m2) at £{_pk_rate:.2f}/kg"
+                            + (f" ({_pk_src})" if _pk_src else "")),
             "quantity": 1,
             "_price_explicitly_withheld": True,   # routes through the consumable branch,
             "_consumable_qty_unknown": True,      # which sets qty = kg and price = GBP/kg
@@ -618,25 +6096,199 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # material blocks. Powder is now a BOM row inside SUM(M11:M50), so leaving AF83 alive
     # would charge it TWICE.
     try:
-        ws["AF83"] = 0
+        ws[cm.get("powder", {}).get("total_cell", "AF83")] = 0
     except Exception:
         pass
 
     b = cm["bom"]
+
+
+    # ── EVERY FABRICATED PART APPEARS IN THE BILL OF MATERIALS ─────────────────────
+    #
+    # The template costs a nested sheet part in the Sheet Steel block and a board panel in
+    # Other Sheet, so neither has ever appeared in the "Bill of Materials (Per Unit)" list.
+    # That is arithmetically correct and practically wrong: on M&S 2085 an estimator opens
+    # the sheet, reads the bill of materials, and the main part of the job — the bracket
+    # plate everything else welds into — is not in it. You have to know the template's
+    # internals to work out that it is costed twenty rows further down.
+    #
+    # So they are listed, and listed FIRST, with the block carrying their cost named on the
+    # line. The price is deliberately ZERO: Total Material Cost (M92) sums BOM + Wire +
+    # Sheet Steel + Other Sheet, so a priced duplicate here would double that part's
+    # material and the sheet would be wrong in a way nobody would spot.
+    # ── A BLOCK THAT IS FULL MUST SPILL, NOT SWALLOW ───────────────────────────────
+    #
+    # Each costing block is a fixed run of template rows — Other Sheet Material is eight.
+    # 0359342 has nine board panels, so the ninth (JAE834, a real 9mm MDF shelf bottom at
+    # GBP 6.72, eight per unit) was written nowhere. The engine had its price; the block had
+    # no row for it; the writer flagged "extras DROPPED" and moved on. What reached the
+    # estimator was worse than the loss: the BOM still carried JAE834's cross-reference line
+    # saying "costed in Other Sheet Material below" — pointing at a row that does not exist —
+    # and the report explained the GBP 0.00 as "no catalogue, price file or quote holds this
+    # item", which is not what happened and sends someone hunting for a supplier price that
+    # was never the problem.
+    #
+    # So the overflow goes where the BOM's own overflow already goes: the part becomes a
+    # normal bill-of-materials line carrying its OWN per-part cost (the block would have
+    # charged the same money), and if the BOM is full too, the existing spill machinery
+    # below itemises it on the 'BOM Overflow' sheet. Nothing is dropped and nothing points
+    # at a row that isn't there.
+    _spilled_from_blocks: List[Dict[str, Any]] = []
+    _board_spill: List[Dict[str, Any]] = []
+    for _blk_list, _blk_key in ((steel_parts, "steel"), (board_parts, "other_sheet"),
+                                (wire_parts, "tube")):
+        _blk_name = str((cm.get(_blk_key) or {}).get("title") or block_title(_blk_key))
+        _cap_map = cm.get(_blk_key) or {}
+        _cap = int(_cap_map.get("last_row", 0)) - int(_cap_map.get("first_row", 0)) + 1
+        if _cap > 0 and len(_blk_list) > _cap:
+            for _sp in list(_blk_list[_cap:]):
+                # THE SAME PART MUST COST THE SAME MONEY IN ROW NINE AS IN ROW EIGHT — AND
+                # FROM OUT HERE, IT CANNOT BE MADE TO.
+                #
+                # The first spill wrote the engine's NET-PART figure, a different basis from the
+                # block's and reliably smaller. The second reproduced the block's FORMULA,
+                # ROUNDUP(sheet price / parts per sheet, 2) x (1 + scrap) — and the run proved
+                # that wrong too, in the way that matters most: it used the ENGINE's inputs, and
+                # the engine's parts-per-sheet is not the workbook's. 0359342's JAE834 came out
+                # at GBP 0.84 against its identical twin JAE833, in the block, at GBP 1.12. A
+                # confident label on a number that still moved with the row.
+                #
+                # Parts-per-sheet is computed by the TEMPLATE's own cell, from inputs the block
+                # row supplies, and nothing out here can reproduce it without reimplementing a
+                # nest we would then have to keep in step. So this stops pretending: the spilled
+                # line carries the engine's net-part figure, which EXCLUDES the sheet drop the
+                # block would have charged, and it is labelled as what it is — an under-charge
+                # of unknown size that a person has to settle. Visible and wrong beats invisible
+                # and wrong, and an estimator can act on it.
+                #
+                # The real fix is a wider block in the template, which is a change to the
+                # workbook and not to this writer.
+                if _blk_key == "other_sheet":
+                    _board_spill.append(_sp)
+                _spilled_from_blocks.append(
+                    spill_from_full_block(ws, _blk_name, _blk_key, _cap_map, _sp, flags))
+            _flag(f"{_blk_name}: {len(_blk_list)} part(s) for {_cap} template row(s) — "
+                  f"{len(_blk_list) - _cap} moved to the Bill of Materials at their own "
+                  f"per-part cost so no line is dropped: "
+                  + ", ".join(str(p.get('part_number')) for p in _blk_list[_cap:]), flags)
+            del _blk_list[_cap:]
+    if _spilled_from_blocks:
+        bom_parts = list(bom_parts) + _spilled_from_blocks
+
+    _xref_rows: List[Dict[str, Any]] = []
+    try:
+        import config as _cfg_x
+        _list_xrefs = bool(getattr(_cfg_x, "BOM_LISTS_PARTS_COSTED_IN_BLOCKS", False))
+    except Exception:                                                # noqa: BLE001
+        _list_xrefs = False
+    for _blk_key, _blk in ((("steel", steel_parts), ("other_sheet", board_parts),
+                            ("tube", wire_parts)) if _list_xrefs else ()):
+        _blk_name = str((cm.get(_blk_key) or {}).get("title") or block_title(_blk_key))
+        for _xp in _blk:
+            if not isinstance(_xp, dict) or not _xp.get("part_number"):
+                continue
+            _xref_rows.append({
+                "part_number": _xp.get("part_number"),
+                "description": f"{_xp.get('description') or ''} — costed in {_blk_name} below",
+                "quantity": int(_safe(_xp.get("quantity"), 1) or 1),
+                "unit_cost_gbp": 0.0,
+                "_bom_cross_reference": True,
+                "_canonical_kind": _xp.get("_canonical_kind") or "leaf",
+            })
+    if _xref_rows:
+        bom_parts = _xref_rows + list(bom_parts)
+        _flag(f"BOM: {len(_xref_rows)} fabricated part(s) listed in the Bill of Materials for "
+              f"completeness at GBP 0.00 — their material is costed in the Sheet Steel / Other "
+              f"Sheet / Wire block, and pricing them here too would double it.", flags)
+
+    # ── BOM overflow: spill-in-code, no template surgery, no lines dropped ──────────
+    # The template's BOM block holds a fixed number of rows. A big job (e.g. Cocktails,
+    # 48 bought-in/tube lines) exceeds it. Rather than fail the whole sheet (dropping to
+    # the legacy builder) or silently drop lines, write the first (_n_rows - 1) items
+    # individually and turn the FINAL BOM row into a consolidated 'overflow' line that
+    # carries the summed value of the remainder — so the material total stays correct —
+    # while every spilled line is itemised in full on a dedicated 'BOM Overflow' sheet.
+    _n_rows = b["last_row"] - b["first_row"] + 1
+    _bom_overflow_parts: List[Dict[str, Any]] = []
+    if len(bom_parts) > _n_rows:
+        bom_parts = pin_lines_that_price_themselves(bom_parts, _n_rows)
+        _bom_overflow_parts = bom_parts[_n_rows - 1:]
+        _ov_total = 0.0
+        for _op in _bom_overflow_parts:
+            _pp = _bom_line_price(_op)
+            if _pp is not None:
+                _ov_total += _pp * int(_safe(_op.get("quantity"), 1) or 1)
+        _consolidated = {
+            "part_number": "BOM-OVERFLOW",
+            "description": (f"+{len(_bom_overflow_parts)} more bought-in items "
+                            f"(itemised on 'BOM Overflow' sheet)"),
+            "quantity": 1,
+            "unit_cost_gbp": round(_ov_total, 2),
+            "_bom_overflow_consolidated": True,
+        }
+        bom_parts = bom_parts[:_n_rows - 1] + [_consolidated]
+        _flag(f"BOM overflow: {len(_bom_overflow_parts) + _n_rows - 1} BOM/tube lines > "
+              f"{_n_rows} template rows. {len(_bom_overflow_parts)} spilled to the "
+              f"'BOM Overflow' sheet and consolidated (£{_ov_total:.2f}) on the last BOM "
+              f"row — no lines dropped.", flags)
+
+    # ── THE SAME ARTICLE, NAMED TWICE ──────────────────────────────────────────────
+    # 11650's cabinet BOM lists the Essentra levelling foot as both "ESSENTRA FOOT-466122"
+    # (GBP 0.00) and "FIXING1081" (GBP 0.22), qty 2 on each — one part, counted twice. It is
+    # survivable only while the second line stays at zero; the moment the manufacturer
+    # reference makes it priceable, the job buys four feet and pays for two it never orders.
+    #
+    # SO THE MONEY GOES ON ONE LINE AND THE OTHER SAYS WHERE IT WENT. Not deleted: the
+    # drawing really does name the part twice, and a line that vanishes between the BOM an
+    # estimator reads and the sheet they check is how trust in the sheet goes. Grouped on
+    # shared MANUFACTURER REFERENCE, which is an identity — never on description, family or
+    # supplier, because the M4 and M6 knurled knobs on this same sheet are the same words,
+    # the same supplier and different parts.
+    try:
+        import supplier_reference as _sref
+        for _grp in _sref.same_article_groups(bom_parts):
+            _priced = [i for i in _grp if _bom_line_price(bom_parts[i]) not in (None, 0)]
+            _keep = _priced[0] if _priced else _grp[0]
+            _kept_pn = str(bom_parts[_keep].get("part_number") or "?")
+            for _i in _grp:
+                if _i == _keep:
+                    continue
+                _dup = bom_parts[_i] = dict(bom_parts[_i])
+                _dup["unit_cost_gbp"] = 0.0
+                _dup["_duplicate_of"] = _kept_pn
+                # THE LINE EXPLAINS ITSELF IN ITS OWN DESCRIPTION, which is how the
+                # cross-reference rows above already do it. The first attempt put the
+                # sentence in input_note_for_line, and that function is only reached for rows
+                # whose status is UNPRICED — a duplicate is NOT_APPLICABLE, precisely so it
+                # stays off the estimator's checklist, so the explanation was written into a
+                # branch this row can never enter. A blank cell reads as a free part; a blank
+                # cell whose reason lives in an unreachable function reads exactly the same.
+                _dup["description"] = (
+                    f"{str(_dup.get('description') or '')[:110]} — SAME ARTICLE AS "
+                    f"{_kept_pn}: costed there, not here")
+                _shared = sorted(_sref.identity_keys(_dup) & _sref.identity_keys(bom_parts[_keep]))
+                _flag(f"BOM {_dup.get('part_number')} and {_kept_pn} are the SAME ARTICLE "
+                      + (f"(both name manufacturer reference {', '.join(_shared)})" if _shared
+                         else "(one line's description leads with the other's part number)")
+                      + ". The quantity is "
+                      f"costed once, on {_kept_pn}; this line is shown at GBP 0.00 because "
+                      f"the drawing names the part twice. CHECK THE QUANTITY — if the two "
+                      f"lines are genuinely different fittings, one of them is mis-numbered.",
+                      flags)
+    except Exception as _dedup_exc:                                   # pragma: no cover
+        _flag(f"BOM duplicate-article check did not run ({_dedup_exc}); a part named twice "
+              f"would be costed twice.", flags)
+
     row = b["first_row"]
+    # WHAT IS ACTUALLY ABOUT TO BE WRITTEN, AND FROM WHERE. The sheet has shown codes that
+    # are in none of the three saved pools -- SCREW where part_estimates holds BI-SCREW --
+    # and reading the workbook has twice sent a fix at the wrong population. One line naming
+    # the rows at the moment they are written ends that argument permanently.
+    print(f"   [bom-rows] writing {len(bom_parts)} line(s): "
+          f"{', '.join(str(_p.get('part_number') or '?') for _p in bom_parts)}", flush=True)
+
     for pe in bom_parts:
         if row > b["last_row"]:
-            _n_rows = b["last_row"] - b["first_row"] + 1
-            _lost = [str(p.get("part_number") or p.get("description") or "?")
-                     for p in bom_parts[_n_rows:]]
-            _msg = (f"BOM overflow: {len(bom_parts)} BOM/tube parts but only {_n_rows} rows. "
-                    f"Would DROP: {', '.join(_lost)}. Widen the BOM block in the template.")
-            if STRICT_BOM_OVERFLOW:
-                # A dropped bought-in is pure lost money with no visual cue on the sheet.
-                # 1282 lost £27 of LED Downlights this way, behind a flag nobody read.
-                # Refuse to produce a quietly-short estimate.
-                raise RuntimeError("[wb_populate] " + _msg)
-            _flag(_msg + " — extra parts DROPPED.", flags)
             break
         me = pe.get("material_estimate") or {}
         se = me.get("stock_estimate") or {}
@@ -659,13 +6311,50 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                     desc = f"{desc} (cat ref: {_size})"
         else:
             desc = _cat_desc or _own_pn
+        desc = section_words_on_line(desc, me)
+        # THE SIZE THE PART'S OWN SHEET OR MODEL GIVES, ON THE LINE (D-403). A bought line
+        # read "9598-02-02G GRAPHIC" while its sheet prints 210 x 148.5 and its model carries
+        # the same extents; the estimator pricing the print had to open the pack to learn
+        # what size it was. Written where the record holds two plausible dimensions and the
+        # description does not already say them; never invented.
+        _dims = _own_size_mm(pe)
+        if _dims and not re.search(r"\d+(?:\.\d+)?\s*[x×]\s*\d+", str(desc or "")):
+            desc = f"{desc}  {_dims[0]:g} × {_dims[1]:g}"
+        _cut = cut_list_text(se)
+        if _cut:
+            desc = f"{desc}  —  {_cut}"
         # code: THIS part's own number; fall back to catalogue code only if the part has none
         code = _own_pn or se.get("catalogue_part_code")
         # supplier: engine may put it at top level OR in material_estimate
         supplier = pe.get("supplier") or me.get("supplier") or ""
+        # WHERE THIS PRICE CAME FROM, ON THE SHEET ITSELF. The supplier column was blank on
+        # every BOM line, so a catalogue price and an AI market estimate looked identical to
+        # the estimator reading the workbook — and on this job the guessed lines were 96% of
+        # material, with one knob quoted at GBP 1.25, GBP 11.52 and GBP 1.77 on three runs of
+        # the same inputs. A figure nobody can reproduce must not sit in a price column
+        # looking like a quote.
+        _origin, _indicative = _price_origin(pe)
+        supplier = _supplier_cell(supplier, _origin)
+        if _indicative:
+            # Also on the description, because the supplier column is narrow and this is the
+            # one thing a reader must not miss. The cell is truncated to 120 characters on
+            # write, and the tag is appended LAST — so on a long description the warning is
+            # the first thing that would be cut. Trim the description instead: a shortened
+            # part name is a small loss, a silently dropped warning is the whole point gone.
+            _room = 120 - len(_INDICATIVE_TAG) - 2
+            desc = f"{str(desc)[:_room].rstrip()}  {_INDICATIVE_TAG}"
+            _flag(f"BOM {code or desc}: priced by an AI market estimate, not a catalogue. "
+                  f"The figure changes every run and is INDICATIVE ONLY — confirm before "
+                  f"quoting.", flags)
         # price: bought-in unit_cost_gbp, or tube's unit_material_cost_gbp (catalogue £/EA),
         # or — for BI-/fuller-costed items — derive unit from extended_total_cost_gbp / qty
-        qty = int(_safe(pe.get("quantity"), 1))
+        # THE CELL KEEPS THE FRACTION THE RECORD KEEPS (D-520). D-518 stopped the
+        # estimator flooring a metre line's quantity, and the 12:57 book still printed
+        # Estimate!K13 = 3 against a provenance of 3.192: this writer floored it again on
+        # the way to the sheet. A second writer of the same fact gets the same gate —
+        # config.CONTINUOUS_UNITS_OF_MEASURE — not a second opinion. (The powder branch
+        # below already writes fractional kilos to this very cell.)
+        qty = _bom_row_quantity(pe)
         # ── "Not priced" is a DECISION, not a missing value ──────────────────────────
         # The chain below is built to KEEP LOOKING until it finds a number: four candidate
         # fields, then a division as a last resort. That is right for a part whose price is
@@ -679,10 +6368,25 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         #
         # Honour the marker and short-circuit. Whatever stale numbers survive elsewhere on
         # the record, unpriced means unpriced.
+        # An AI market estimate is not a price — bom_line_pricing says why, and says it
+        # somewhere a fixture can reach. The row loop keeps only the call.
+        # Carry the reproducibility verdict onto the record the decision reads. Without
+        # this the rule exists and nothing asks it — the defect this branch has already
+        # been fixed for twice.
+        pe = dict(pe)
+        pe["_price_is_reproducible"] = _price_is_reproducible(pe)
+        _line = bom_line_pricing(pe, _indicative, _bom_line_price(pe))
+        pe = _line["part"]
+
         if pe.get("_price_explicitly_withheld"):
-            _cat_rate = _safe(pe.get("_catalogue_rate_gbp"))
+            # A powder line's rate is config.POWDER_COST_PER_KG whether the drawing named the
+            # powder (POWDER197, read off the BOM with no rate) or the engine added a generic
+            # row (which stamps the rate). Resolving it here means a NAMED powder is priced
+            # from the engine's own coated mass exactly like the generic one, instead of being
+            # withheld at £0 with the kilos sitting unused. Keyed on the powder class, not a code.
+            _cat_rate = _powder_consumable_rate(pe, _POWDER_COST_PER_KG)
             _is_consumable_line = bool(pe.get("_consumable_qty_unknown")) or \
-                                  "POWDER" in str(pe.get("part_number") or "").upper()
+                                  _is_powder_consumable(pe)
             if _is_consumable_line and _cat_rate and _wire_powder_kg > 0:
                 # We withheld because we could not know the QUANTITY. We now can: the wire's
                 # coated area is real geometry (pi x d x L) that the workbook's sheet-only
@@ -690,9 +6394,25 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 # rate is.
                 price = _cat_rate
                 qty = _powder_kg_total
-                _flag(f"POWDER computed from WIRE geometry: {_wire_powder_area_m2:.5f} m2 of "
-                      f"coated surface (pi x dia x length) x {_POWDER_KG_PER_M2} kg/m2 = "
-                      f"{_wire_powder_kg} kg @ £{_cat_rate:.2f}/kg. "
+                # SAY WHERE THE KILOS ACTUALLY CAME FROM. This read "POWDER computed from
+                # WIRE geometry: {_wire_powder_area_m2} m2 ... = {_wire_powder_kg} kg" for
+                # every job that reached it, and on 11650 -- which has NO WIRE AT ALL, an
+                # empty Wire block and 0 wire/bar parts -- it printed "0.00000 m2 of coated
+                # surface (pi x dia x length) x 0.2 kg/m2 = 0.08314 kg". Nought times a fifth
+                # is not 0.08314. The KILOS are right: they are _powder_kg_total, the seven
+                # coated SHEET parts at 0.4157 m2. The sentence named a geometry the job does
+                # not have, so the one line explaining the powder cost could not be checked
+                # against anything -- and a number nobody can check is a number nobody can
+                # defend when Tim asks where it came from.
+                #
+                # Wire is one CONTRIBUTOR to the total, not the source of it. Report the
+                # total, then name the wire share only when there is one.
+                _wire_share = (f" ({_wire_powder_area_m2:.5f} m2 of that is wire, pi x dia x "
+                               f"length, which the sheet-only calculator cannot see)"
+                               if _wire_powder_area_m2 > 0 else "")
+                _flag(f"POWDER: {_powder_area_m2:.4f} m2 of coated surface x "
+                      f"{_POWDER_KG_PER_M2} kg/m2 = {_powder_kg_total:.5f} kg @ "
+                      f"£{_cat_rate:.2f}/kg{_wire_share}. "
                       f"COVERAGE RATE IS THE TEMPLATE'S {_POWDER_KG_PER_M2} kg/m2 = 100% "
                       f"TRANSFER EFFICIENCY, which nothing achieves. Tim's sheet for THIS job "
                       f"implies 1.70 kg/m2 (an open wire frame lets most of the cloud "
@@ -700,28 +6420,258 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"parts. THIS LINE UNDER-READS until the rate is measured "
                       f"(config.POWDER_KG_PER_M2). Estimator to check.", flags)
             else:
-                price = None
-                _flag(f"BOM {pe.get('part_number') or (str(desc)[:30])}: price WITHHELD by the "
-                      f"engine (quantity not on the drawing and cannot be guessed). Row is on "
-                      f"the sheet with its code and supplier — ESTIMATOR TO PRICE. Not an "
-                      f"error.", flags)
+                # WE PRICE EVERYTHING WE CAN, HOWEVER WE CAN. A DASH READS AS FREE.
+                #
+                # This wrote None and left the money column blank on a line where a figure
+                # was sitting in hand. That was my policy, not the business's, and it was
+                # wrong twice over: a blank cell reads as FREE — the one error on this sheet
+                # nobody catches — and it overrode a commercial judgement that belongs to the
+                # estimator, namely whether an indicative number beats no number. It does.
+                # Tim can strike GBP 3.12; he cannot strike a blank he never notices.
+                #
+                # NOTHING ABOUT THE PROVENANCE CHANGES, AND THAT IS THE WHOLE POINT. The row
+                # still reads [AI ESTIMATE - INDICATIVE, NOT A QUOTE], the supplier cell still
+                # names the model, and price_not_reproducible is still BLOCKING so this job
+                # cannot leave as a firm quote or an ERP export. Reproducibility is a property
+                # to DECLARE and a gate on FIRMNESS — never a reason to withhold a number.
+                #
+                # The other way into this branch is a quantity nobody could read. There is no
+                # figure there to write, so that one stays blank and stays owned.
+                price = _line["withheld_gbp"] if _line.get("withheld_gbp") else None
+                # AND SAY SO WHERE A CHECKER CAN READ IT, not only in a console flag.
+                # stamp_affects_total already asks the right question — a price can be
+                # resolved and then not added — but it falls back to `applied`, which is
+                # True for a price that was FOUND. So the stamp still read as money in the
+                # total, and price_not_reproducible blocked job 12392 for a figure this very
+                # branch had deliberately refused to put on the sheet. The writer knew and
+                # never wrote it down.
+                try:
+                    import price_provenance as _pp
+                    # ONLY WHERE NOTHING WAS WRITTEN. This marks a line as carrying no money,
+                    # which is now true of exactly one of the two cases that reach here — the
+                    # unreadable quantity. Marking a line we HAVE just priced would tell every
+                    # downstream check the cell is empty while the sheet shows a figure, which
+                    # is the "one fact, two writers" defect in the ledger itself.
+                    if not _line.get("withheld_gbp"):
+                        _pp.mark_withheld(pe)
+                    # AND ON THE LINE, NOT ONLY ON THIS COPY OF IT. A part's price stamp is
+                    # written in more than one place — the costed record here and the raw
+                    # part record the geometry passes hold — and marking the object in hand
+                    # left the twin still reading as money. 12392 went from two offending
+                    # lines to one, which is the same defect at half the volume. Withholding
+                    # is a property of the LINE; recorded once, honoured wherever its stamps
+                    # live.
+                    _code = str(pe.get("part_number") or "").strip().upper()
+                    if _code and not _line.get("withheld_gbp"):
+                        _wl = summary.setdefault("withheld_price_lines", [])
+                        if _code not in _wl:
+                            _wl.append(_code)
+                except Exception:                       # noqa: BLE001
+                    pass
+                # Two different reasons reach this branch and an estimator needs to know
+                # which: a quantity nobody could read, or a figure nobody could reproduce.
+                if _line["withheld_gbp"]:
+                    _flag(f"BOM {pe.get('part_number') or (str(desc)[:30])}: priced at "
+                          f"£{_line['withheld_gbp']:,.2f} from an AI market estimate — a "
+                          f"number, not a quote. It is on the sheet so the line is not read "
+                          f"as free; the job stays NOT A FIRM PRICE until a catalogue or "
+                          f"supplier rate replaces it. ESTIMATOR TO CONFIRM.", flags)
+                else:
+                    _flag(f"BOM {pe.get('part_number') or (str(desc)[:30])}: price WITHHELD by the "
+                          f"engine (quantity not on the drawing and cannot be guessed). Row is on "
+                          f"the sheet with its code and supplier — ESTIMATOR TO PRICE. Not an "
+                          f"error.", flags)
         else:
-            price = _safe(pe.get("unit_cost_gbp")
-                          or pe.get("unit_material_cost_gbp")
-                          or me.get("unit_material_cost_gbp"))
-            if price is None:
-                ext = _safe(pe.get("extended_total_cost_gbp"))
-                if ext is not None and qty > 0:
-                    price = round(ext / qty, 4)
-        ws.cell(row=row, column=b["col_desc"],     value=str(desc)[:120])
+            # ONE price chain, not two. This was a hand-copy of _bom_line_price with the
+            # same whole-total fallback, so fixing the helper alone would have left the
+            # SHEET unchanged and only corrected the overflow sum nobody sees. That is the
+            # test-the-caller-not-the-helper trap, in the code rather than in a fixture.
+            price = _bom_line_price(pe)
+        # A FIGURE ON AN UNRESOLVED READING SAYS SO ON ITS LINE (D-432); the price stands.
+        _unres = unresolved_reading_note(pe)
+        if _unres:
+            desc = f"{str(desc)[:60]}  —  {_unres}"
+            _flag(f"BOM {pe.get('part_number')}: {_unres}.", flags)
+        # THE STAMP SAYS WHAT THE SHEET DID. Whatever path led here, this is the figure the
+        # line carries; a record that still says its bought-in price reached the total when
+        # the cell is empty is one fact with two writers, and the consistency check reported
+        # exactly that on the 21:57 book: eleven £0 lines "reached the total as AI prices".
+        reconcile_price_stamp_with_sheet(pe, price, summary)
+        ws.cell(row=row, column=b["col_desc"],     value=str(desc)[:200 if _unres else 120])
         ws.cell(row=row, column=b["col_code"],     value=code)
         ws.cell(row=row, column=b["col_supplier"], value=supplier)
-        ws.cell(row=row, column=b["col_price"],    value=price if price is not None else None)
+        # A PER-ORDER LINE AMORTISES THROUGH THE SHEET'S OWN LOOKUP, NOT A FROZEN LITERAL.
+        # The 17:56 book wrote packaging as a literal £31.57 per unit: change D6 and every
+        # unit still carried the whole order's boxes, at 1000 off exactly as at 1 — the one
+        # failure the break mechanism exists to prevent, on the one line that moves. A line
+        # that knows its order cost at each break gets the template's own formula, and the
+        # break writer fills its row, so D6 drives it like every other break-priced line.
+        #
+        # EVERY PER-ORDER LINE, NOT ONLY THE ONE THE PACKING METHOD PRICED. The test was
+        # `order_gbp_at_breaks`, which only the stated packing method writes; packaging and
+        # delivery priced from a house figure or researched for the whole order carry
+        # `order_gbp` alone, so 11650-06 wrote £27.50 and £42.50 as literals while the break
+        # table beside them held £3.06 and £4.72 at 18 off — the 18-off unit carried the
+        # 2-off freight, about £62 too much. The break table fills a row for any line with
+        # an order figure, so any line with an order figure reads it.
+        _cl_rec = pe.get("commercial_line") if isinstance(pe.get("commercial_line"), dict) \
+            else {}
+        _at_breaks = _cl_rec.get("order_gbp_at_breaks") or (
+            {"order": _cl_rec["order_gbp"]} if _safe(_cl_rec.get("order_gbp")) else None)
+        _mpb_cfg = dict(getattr(config, "MATERIAL_PRICE_BREAK", {}) or {})
+        if _at_breaks and _mpb_cfg.get("enabled"):
+            _t = row + int(_mpb_cfg.get("row_offset", -6))
+            _sheet_name = str(_mpb_cfg.get("sheet") or "Material Price Break")
+            # WITH THE RUN'S OWN FIGURE AS THE FALLBACK. A run that never fills the break
+            # table (no quantities asked) would leave the LOOKUP reading an empty row —
+            # £0 packaging, worse than the literal this replaces. The IF asks the row's
+            # first cell: empty means this run kept the literal behaviour, filled means
+            # D6 drives the line like every other break-priced row.
+            _lit = price if price is not None else 0
+            ws.cell(row=row, column=b["col_price"],
+                    value=break_or_fallback_formula(_sheet_name, _t, _lit))
+        else:
+            # CLEARED, NOT LEFT. openpyxl's ws.cell(..., value=None) assigns NOTHING — it only
+            # writes when the value is not None — so an unpriced line kept whatever formula
+            # the template had in its price cell. The 17:36 7332-01 book carried the
+            # template's own broken reference on its plating line:
+            #     J20  =LOOKUP($D$6,'Material Price Break'!$D$4:$N$4,'Material Price Break'!#REF!)
+            # and a misrouted one on the freight line, both propagating into M and the
+            # block total. An unpriced line is a BLANK price, written as one.
+            _clear_or_set(ws, row, b["col_price"], price)
         ws.cell(row=row, column=b["col_qty"],      value=qty)
-        ws.cell(row=row, column=b["col_scrap"],    value=0.04)  # 4% default; WB applies
-        if price is None:
+        # 4% SCRAP IS AN ALLOWANCE FOR MATERIAL YOU CUT AND SPOIL. A pallet is not cut, and
+        # a lorry is not spoiled.
+        #
+        # This wrote 0.04 onto every BOM row without asking what the row was, so 12349-02
+        # charged 4% on £25.00 of boxes and £12.14 of haulage — the sheet shows £26.00 and
+        # £12.63 — and 12552 carried £6.80 of scrap on freight. Mechanically what the
+        # template does, and indefensible the moment anyone reads the two columns side by
+        # side, which the covering note now prints next to each other.
+        #
+        # Only the commercial placeholders are exempted: packaging and delivery are priced
+        # for the whole ORDER and divided per unit, so there is no material in them at all.
+        # Every real bought-in keeps its allowance — a fixing is dropped and a panel is
+        # scratched like anything else.
+        _is_commercial = bool(pe.get("_commercial_placeholder")) or str(
+            pe.get("source") or "") == "commercial_placeholder" or str(
+            code or "").strip().upper() in ("PACKAGING", "DELIVERY")
+        # AN ALLOWANCE ALREADY IN THE PRICE IS NOT CHARGED AGAIN.
+        #
+        # Two kinds of line arrive here with their waste already inside the unit rate, and the
+        # sheet's own 4% multiplied it a second time:
+        #   - SECTION/TUBE stock, priced mass x rate x SECTION_STOCK_POLICY waste_factor. 7332's
+        #     leg pair shipped £12.19 against a true £11.72 — the same 4% twice.
+        #   - A FIXED per-each purchased commodity (the felt pad's £0.20 config rate). You buy
+        #     four pads and stick on four pads; there is no cut loss to allow for, and £0.80
+        #     became £0.83.
+        # Sheet and board keep their allowance — a panel is still scratched.
+        _waste_already_in = waste_already_in_price(pe)
+        ws.cell(row=row, column=b["col_scrap"],
+                value=None if (_is_commercial or _waste_already_in) else 0.04)
+        # A line the material block covers, or an assembly, is not a gap somebody fills.
+        from estimator_inputs import UNPRICED as _GAP
+        # A REAL ZERO IS NOT A PRICE. The category half (_line["status"]) already excludes
+        # cross-references, duplicates and assemblies — that stays. The PRICE half tested
+        # `price is None`, and a commercial placeholder is written as a numeric 0.0, so
+        # PACKAGING and DELIVERY never reached the checklist: the banner read "1 ESTIMATOR
+        # INPUT REQUIRED" (the margin alone) while two lines carried no money at all, and the
+        # sheet claimed to be one input away from being a price. _safe returns None for a blank
+        # and 0.0 for a zero — both falsy, both a gap somebody has to fill.
+        if not _safe(price) and _line["status"] == _GAP:
             _flag(f"BOM item {pe.get('part_number')} has no price — line will be £0.", flags)
+            # A BLANK THAT LOOKS LIKE A ZERO IS WORSE THAN AN ERROR.
+            #
+            # "£-" in the Price column reads as a real zero, and on 2085 two unpriced tubes
+            # sat under a Unit Cost of £6.33 that looked finished. The line now says what is
+            # missing and what would fill it, and the cell an estimator types into is
+            # coloured as an input rather than left looking like a result.
+            from estimator_inputs import input_note_for_line as _input_note
+            _note = _line["note"] or _input_note(pe)
+            # A SPILLED STEEL LINE NO STOCKED SHEET HOLDS SAYS WHY IT HAS NO PRICE. The generic
+            # note ("enter the per-unit figure") replaced the block-full words, so 12645's
+            # 3,020 mm covers read as an ordinary gap rather than a make decision (D-321).
+            if pe.get("_block_overflow_basis") == "no_stocked_sheet" \
+                    and isinstance(pe.get("route_gap"), dict):
+                _note = dict(_note, note=f"NOT PRICED — {pe['route_gap']['issue']}; "
+                                         f"{pe['route_gap']['action']}")
+            _inputs.append({
+                "kind": _note["kind"], "part": pe.get("part_number") or "",
+                "where": f"BOM row {row}", "what": _note["note"], "row": row,
+                "col": b["col_price"],
+            })
+            ws.cell(row=row, column=b["col_desc"],
+                    value=f"{str(desc)[:70]}  —  {_note['note']}"[:200])
+            _mark_input_cell(ws, row, b["col_price"])
         row += 1
+
+    # ── EVERY BOM PRICE CELL IS THE ENGINE'S, OR IT IS DELIBERATELY BLANK ──────────────
+    #
+    # "It must never produce #REF!" — and blanking it in the final hygiene scrub was the
+    # wrong answer to the right complaint. That pass exists to catch what nobody could
+    # enumerate; using it here HID a broken reference instead of deciding what the line
+    # should say, and on the one line it hid, an explicitly unresolved plating cost would
+    # have become a blank contributing zero with nothing to explain itself.
+    #
+    # The decision belongs where the intent is known, which is here. A row the engine put a
+    # line on gets one of exactly three things in its price cell:
+    #
+    #     a number             the line is priced
+    #     a formula WE wrote   the line prices off the break table
+    #     nothing              the line is awaiting a price, and says so in its description
+    #
+    # A template formula surviving in that cell is none of the three. It is the blank
+    # template still speaking on a row the engine has claimed — which is how J20 shipped
+    # carrying 'Material Price Break'!#REF! with M20 inheriting it into the block total.
+    # So the cell is cleared and the line is MADE to say what it is, rather than left to be
+    # tidied later. The row is named on the log either way: a broken template reference is
+    # not our bug and wants fixing at source.
+    _stranded: List[str] = []
+    for _r in range(b["first_row"], min(row, b["last_row"] + 1)):
+        _code_c = ws.cell(row=_r, column=b["col_code"]).value
+        _desc_c = ws.cell(row=_r, column=b["col_desc"]).value
+        if not (_code_c or _desc_c):
+            continue                      # no line here; the template's own row, untouched
+        _price_c = ws.cell(row=_r, column=b["col_price"])
+        _pv = _price_c.value
+        if _pv is None or not isinstance(_pv, str):
+            continue                      # blank, or a number — both are decisions
+        if not _pv.startswith("="):
+            continue
+        if _ours_by_shape(_pv):
+            continue                      # a formula this run wrote
+        _stranded.append(f"{_r}{' (#REF!)' if '#REF!' in _pv else ''}")
+        _clear_or_set(ws, _r, b["col_price"], None)
+        _mark_input_cell(ws, _r, b["col_price"])
+        _awaiting = "AWAITING A CURRENT PRICE"
+        if _awaiting not in str(_desc_c or ""):
+            ws.cell(row=_r, column=b["col_desc"],
+                    value=f"{str(_desc_c or '')[:150]}  —  {_awaiting}"[:200])
+    if _stranded:
+        _flag(f"BOM price cells left holding a TEMPLATE formula on rows the engine had "
+              f"claimed: {', '.join(_stranded)}. Each is now blank and its line reads "
+              f"AWAITING A CURRENT PRICE, which is what an unresolved cost should show — "
+              f"never a broken reference, and never a silent zero. A row marked #REF! is "
+              f"the blank template's own broken formula and wants repairing at source.",
+              flags)
+
+    # Itemise every spilled BOM line on a dedicated sheet so nothing is hidden behind the
+    # consolidated overflow row. Failure-isolated: a sheet-write error never breaks the run.
+    if _bom_overflow_parts:
+        try:
+            _ov_ws = wb.create_sheet("BOM Overflow")
+            _ov_ws.append(["Part code", "Description", "Supplier", "Unit Price (GBP)", "Qty"])
+            for _op in _bom_overflow_parts:
+                _ome = _op.get("material_estimate") or {}
+                _ov_ws.append([
+                    _op.get("part_number") or "",
+                    str(_op.get("description") or "")[:120],
+                    _op.get("supplier") or _ome.get("supplier") or "",
+                    _bom_line_price(_op),
+                    int(_safe(_op.get("quantity"), 1) or 1),
+                ])
+        except Exception:
+            pass
 
     # ── Wire block: desc, qty, gauge, length ───────────────────────────────
     # Round bar / stud / wire. The WB prices it itself:
@@ -763,6 +6713,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
     # ── Steel block: desc, qty, length, width, gauge ───────────────────────
     s = cm["steel"]
+    _block_sheet = template_block_sheet(ws, s)
     row = s["first_row"]
     for _si, pe in enumerate(steel_parts):
         if row > s["last_row"]:
@@ -792,21 +6743,77 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _len_g = _safe(me.get("blank_length_mm") or ng.get("blank_length_mm"))
         _wid_g = _safe(me.get("blank_width_mm")  or ng.get("blank_width_mm"))
         _gau_g = _safe(pe.get("normalized_thickness_mm") or me.get("thickness_mm"))
-        _dxf_g = (pe.get("geometry_source") == "dxf_flat_pattern")
+        _dxf_g = pe.get("geometry_source") in ("dxf_flat_pattern", "solidworks_flat_pattern")
         if (not _gau_g) and (not _len_g) and (not _wid_g) and (not _dxf_g):
             _skip_pns.add(_pn_g)
             _flag("excluded non-fabricatable part '" + _pn_g + "' from Sheet Steel "
                   "(no gauge, no geometry, no DXF) - detail/callout artefact, "
                   "estimator to verify", flags)
             continue
-        length = _safe(me.get("blank_length_mm") or ng.get("blank_length_mm"))
-        width  = _safe(me.get("blank_width_mm")  or ng.get("blank_width_mm"))
+        # ONE READER. See costed_facts.blank_dimensions: this looked in two holders and
+        # invariants looked in three different ones, so the sheet and the checks could be
+        # costed from and blocked over two different sizes of the same part.
+        import costed_facts as _cf_blank
+        _bd = _cf_blank.blank_dimensions(pe)
+        length = _safe(_bd["length_mm"])
+        width  = _safe(_bd["width_mm"])
         gauge  = _safe(pe.get("normalized_thickness_mm") or me.get("thickness_mm"))
+        # WHAT PRODUCTION BUYS IS WHAT THE SHEET COSTS FROM.
+        #
+        # The gauge above is whichever normalised value reached the costed record, with the
+        # material estimate's own thickness behind it. A confirmed production substitution
+        # ("0.9mm Steel Production use 1mm in Lieu" — Howard Thurley, D-068) is neither of
+        # those: it is a RULING, recorded as one, and on the delivered book it lost to the
+        # drawn 0.9 with nothing on the row to say a substitution had been decided at all.
+        #
+        # Asked from the recorded fact rather than re-derived, so it cannot be defeated by
+        # which record happens to carry a normalised thickness. Only a CONFIRMED rule gets
+        # here — apply_production_substitutions returns early on an unconfirmed one and
+        # costs as drawn — so a cell that changes here is always one a person has ruled on.
+        _sub_rec = pe.get("production_substitution")
+        if isinstance(_sub_rec, dict):
+            _costed = _safe(_sub_rec.get("costed_thickness_mm"))
+            _drawn = _safe(_sub_rec.get("drawn_thickness_mm"))
+            if _costed and _costed > 0 and _costed != gauge:
+                _flag(f"{_pn_g}: gauge on the sheet is {_costed:g} mm, not the drawn "
+                      f"{_drawn:g} mm — confirmed production substitution "
+                      f"{_sub_rec.get('rule_id', '')} ({_sub_rec.get('stated_by', 'production')}, "
+                      f"{_sub_rec.get('stated_on', 'undated')}). The costed record carried "
+                      f"{gauge:g} mm. What production buys is what the row costs from.",
+                      flags)
+                gauge = _costed
         ws.cell(row=row, column=s["col_desc"],   value=f"{pe.get('part_number','')}  {pe.get('description','')}")
         ws.cell(row=row, column=s["col_qty"],    value=int(_safe(pe.get("quantity"), 1)))
         ws.cell(row=row, column=s["col_length"], value=length)
         ws.cell(row=row, column=s["col_width"],  value=width)
         ws.cell(row=row, column=s["col_gauge"],  value=gauge)
+        # THE SHEET THE PART IS CUT FROM, WHERE THE TEMPLATE'S CANNOT NEST IT (D-314).
+        if length and width and s.get("col_sheet_l") and s.get("col_sheet_w"):
+            # THE ROW'S OWN SHEET, OR THE BLOCK'S WHERE THE ROW HAS NONE — and then WRITTEN.
+            # A blank cell used to be read as 2500 x 1250 for the fit test and left blank on
+            # the sheet, so the row's own nest formula found no sheet: 20 of 12645's parts
+            # (29 Sep, 21:27 book) had no parts-per-sheet, no cost and a default laser rate,
+            # and the banner said "21 prices missing" (D-342).
+            _l0 = _safe(ws.cell(row=row, column=s["col_sheet_l"]).value)
+            _w0 = _safe(ws.cell(row=row, column=s["col_sheet_w"]).value)
+            _tpl = (_l0 or _block_sheet[0], _w0 or _block_sheet[1])
+            _mat_ss = pe.get("normalized_material") or me.get("material") or "MILD STEEL"
+            _sheet, _why = steel_sheet_for_row(length, width, _mat_ss, _tpl)
+            if _sheet is None and not _why and not (_l0 and _w0):
+                ws.cell(row=row, column=s["col_sheet_l"], value=_tpl[0])
+                ws.cell(row=row, column=s["col_sheet_w"], value=_tpl[1])
+                _flag(f"steel {_pn_g}: template row {row} had no stock sheet size; wrote the "
+                      f"block's own {_tpl[0]:g} x {_tpl[1]:g} — copy the sheet size into the "
+                      f"template's added rows", flags)
+            if _sheet is not None:
+                ws.cell(row=row, column=s["col_sheet_l"], value=_sheet[0])
+                ws.cell(row=row, column=s["col_sheet_w"], value=_sheet[1])
+                if is_oversize_sheet(_why):
+                    raise_oversize_route(pe, length, width, _why, flags)
+                else:
+                    _flag(f"steel {_pn_g}: {length:g} x {width:g} blank cut from a {_why}", flags)
+            elif _why:
+                raise_unnestable_steel(pe, length, width, _why, flags)
         # Which row did this part land on? The template's own Laser Rate Calculator
         # computes a throughput on THIS row (col W = 3600/V). The labour block should
         # READ that, not substitute our own model — ours is ~4x slow on small parts.
@@ -814,14 +6821,12 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # Laser-calc inputs S (No of holes) and T (Internal Cutting Distance).
         # Drawing-derived; feeds the sheet's laser calculator display. Honest gaps:
         # blank (not 0) when not read, so a genuine no-hole part is not a false claim.
-        # Canonical geometry lives in pe["geometry_rollup"] (NOT "geometry").
-        _geom = pe.get("geometry_rollup") or pe.get("normalized_geometry") or {}
-        _holes = _geom.get("estimated_hole_count")
-        if _holes is None:
-            _holes = _geom.get("hole_count")
+        # Both geometry records, asked in order — see costed_geometry_value.
+        _holes = costed_geometry_value(pe, "hole_count", "estimated_hole_count")
         if isinstance(_holes, (int, float)) and int(_holes) > 0:
             ws.cell(row=row, column=s["col_holes"], value=int(_holes))
-        _cutlen = _safe(_geom.get("estimated_cut_length_mm") or _geom.get("cut_length_mm"))
+        _cutlen = _safe(costed_geometry_value(
+            pe, "cut_length_mm", "estimated_cut_length_mm"))
         if length and width and _cutlen:
             _internal = round(max(0.0, float(_cutlen) - 2.0 * (float(length) + float(width))), 1)
             ws.cell(row=row, column=s["col_internal_cut"], value=_internal)
@@ -834,30 +6839,53 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         if not (length and width and gauge):
             _flag(f"steel {pe.get('part_number')} missing dim(s) "
                   f"(L={length} W={width} G={gauge}) — WB cost will be 0/wrong.", flags)
+            # Loud, on-sheet marker so the estimator sees exactly which rows to complete.
+            mark_row_needs_dimensions(
+                ws, row, s["col_desc"],
+                [_n for _n, _v in (("L", length), ("W", width), ("gauge", gauge)) if not _v])
         row += 1
 
     # ── Other Sheet block: desc, qty, length, width, thickness ─────────────
     o = cm["other_sheet"]
-    row = o["first_row"]
-    for pe in board_parts:
-        if row > o["last_row"]:
-            _flag(f"Other-sheet overflow: {len(board_parts)} board parts, block full — extras DROPPED.", flags)
-            break
+
+    def _write_board_row(ws, row: int, pe: Dict[str, Any]) -> None:
         me = pe.get("material_estimate") or {}
         ng = pe.get("normalized_geometry") or {}
-        length = _safe(me.get("blank_length_mm") or ng.get("blank_length_mm"))
-        width  = _safe(me.get("blank_width_mm")  or ng.get("blank_width_mm"))
+        # ONE READER. See costed_facts.blank_dimensions: this looked in two holders and
+        # invariants looked in three different ones, so the sheet and the checks could be
+        # costed from and blocked over two different sizes of the same part.
+        import costed_facts as _cf_blank
+        _bd = _cf_blank.blank_dimensions(pe)
+        length = _safe(_bd["length_mm"])
+        width  = _safe(_bd["width_mm"])
         thick  = _safe(pe.get("normalized_thickness_mm") or me.get("thickness_mm"))
         ws.cell(row=row, column=o["col_desc"],   value=f"{pe.get('part_number','')}  {pe.get('description','')}")
         ws.cell(row=row, column=o["col_qty"],    value=int(_safe(pe.get("quantity"), 1)))
         ws.cell(row=row, column=o["col_length"], value=length)
         ws.cell(row=row, column=o["col_width"],  value=width)
         ws.cell(row=row, column=o["col_thick"],  value=thick)
+        if not (length and width):
+            # The side-panel failure. A board/plastic part with no blank size nests into
+            # nothing: Qty Per Sheet errors, Cost Per Part is 0, and the row otherwise looks
+            # like any other. Named here for the same reason Sheet Steel names it.
+            _miss = [_n for _n, _v in (("L", length), ("W", width)) if not _v]
+            _flag(f"other-sheet {pe.get('part_number')} missing dim(s) "
+                  f"(L={length} W={width}) — WB cost will be 0/wrong.", flags)
+            mark_row_needs_dimensions(ws, row, o["col_desc"], _miss)
         # sheet size: WB nesting divides by sheet L/W — MUST be non-blank or it
         # produces #VALUE! that propagates into M59 and poisons the whole total.
         # Board stock default 2440×1220 (standard sheet); use engine's if present.
         se = me.get("stock_estimate") or {}
-        sh = se.get("candidate_sheet_size_mm") or [2440, 1220]
+        sh = se.get("candidate_sheet_size_mm")
+        if not sh and pe.get("_other_sheet_at_own_rate_gbp_per_kg"):
+            # A sheet METAL here (D-559) nests into its own standard sheet, not a board's.
+            _std = (getattr(config, "STANDARD_SHEET_SIZES_MM", {}) or {}) if config else {}
+            _m_up = str(pe.get("normalized_material") or me.get("material") or "").upper()
+            for _k in (_m_up, _m_up.replace("_", " "), _m_up.replace(" ", "_")):
+                if _std.get(_k):
+                    sh = list(_std[_k][0])
+                    break
+        sh = sh or [2440, 1220]
         ws.cell(row=row, column=o["col_sheet_l"], value=_safe(sh[0]) if len(sh) > 0 else 2440)
         ws.cell(row=row, column=o["col_sheet_w"], value=_safe(sh[1]) if len(sh) > 1 else 1220)
         # Cost per sheet (col L): the WB formula M=(L/J)*(1+K)*D needs this input, else Cost Per
@@ -871,11 +6899,51 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _scrap_frac = _safe(me.get("scrap_pct")) or 0.04
             if _cpp and _pps:
                 _sheet_price = round(float(_cpp) * float(_pps) / (1.0 + float(_scrap_frac)), 2)
+        if not _sheet_price:
+            # LAST, AND ONLY A GAP-FILLER: derive the £/sheet from the material's own £/kg rate the
+            # same way steel is costed, so a board with a rate in config is never £0. MDF (1.35
+            # £/kg, 750 kg/m3) 1235x365x12 stops shipping free.
+            _sheet_price = _board_sheet_price_from_kg_rate(
+                pe.get("normalized_material") or me.get("material"), thick,
+                (sh[0] if len(sh) > 0 else 2440), (sh[1] if len(sh) > 1 else 1220))
+            if _sheet_price:
+                _flag(f"Other-sheet {pe.get('part_number')} priced from the "
+                      f"{str(pe.get('normalized_material') or '').upper()} £/kg rate x sheet volume "
+                      f"x density (£{_sheet_price:.2f}/sheet) — an SDI material rate, not a supplier "
+                      f"quote; confirm the board grade.", flags)
         if _sheet_price:
             ws.cell(row=row, column=o["col_cost_per_sheet"], value=_sheet_price)
         else:
             _flag(f"Other-sheet {pe.get('part_number')} has no sheet price — Cost Per Part will be 0.", flags)
+
+    row = o["first_row"]
+    for pe in board_parts:
+        if row > o["last_row"]:
+            _flag(f"Other-sheet overflow: {len(board_parts)} board parts, block full — extras DROPPED.", flags)
+            break
+        _write_board_row(ws, row, pe)
         row += 1
+
+    # ── A FULL BLOCK'S OVERFLOW, NESTED BY THE BLOCK'S OWN CELLS ──────────────────────
+    # D-248. A spilled board part used to carry the engine's net-part cost, which leaves out
+    # the sheet drop the block charges: 12633-00's Choc Holder front panel and dividers went
+    # out at £0.48 and £0.22 against the block's nest. Reproducing the nest out here failed
+    # once already (the engine's parts-per-sheet is not the workbook's), so this does not:
+    # each spilled part gets a row on a sheet beside the Estimate carrying the block's OWN
+    # formulas, copied from its first row, and the Bill of Materials line reads its price
+    # from there. Only when every formula in that row reads its own row is this done; any
+    # other shape leaves the line on the declared net-part basis.
+    try:
+        _board_nest_rows = (nest_overflow_rows(wb, ws, o, _board_spill, _write_board_row)
+                            if _board_spill else {})
+    except Exception as _ne:                                         # noqa: BLE001
+        _board_nest_rows = {}
+        _flag(f"could not nest the Other Sheet Material overflow ({_ne}); left on the "
+              f"net-part basis.", flags)
+    if _board_spill and not _board_nest_rows:
+        _flag("Other Sheet Material overflow left on the net-part basis: the block's first "
+              "row has a formula that reads outside its own row, so it cannot be copied.",
+              flags)
 
     # ── Labour block: one row per (part, operation) ────────────────────────
     # Operations live in labour_estimate.costs_gbp (its KEYS are the operation names).
@@ -902,7 +6970,20 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         "P.Coat":                   458,    # 316 lines | was 424 — close; my "2-3x too slow"
                                             #             claim was wrong, this one was fine
         "Laser (Metal)":            269,    # 305 lines | was 180
-        "Laser (Acrylic)":          252,    # 13 lines  | was 120
+        # 95/hr, NOT 252. "Line 96 – Laser Rate Acrylic Comparison AI 252 p/hour Manual
+        # Estimate 95 p/hour" — Howard Thurley, SDI estimating, 9 Sep 2026.
+        #
+        # 252 was measured, and measured off THIRTEEN lines — the thinnest sample in this
+        # whole table, against 305 for metal laser and 329 for fold. Thirteen historical
+        # lines is not better evidence than the estimator who runs the department, and the
+        # corpus cannot say which of those thirteen were small parts nested many-up.
+        #
+        # It went into 7332-01's own answers file first, where it governed one drawing and
+        # every other acrylic job kept the figure he had already told us was wrong. A rate
+        # correction is not a decision about one stand: it is how the department runs, so it
+        # belongs here where it reaches every job.
+        "Laser (Acrylic)":           95,    # Howard Thurley (SDI estimating), 9 Sep 2026
+                                            #   | was 252 from 13 corpus lines | was 120
         "Manual labour (Acrylic)":  122,    # 13 lines  | was 40
         "Linebend":                 118,    # 18 lines  | was 40
         "Punch":                    116,    # 126 lines | was 100
@@ -910,6 +6991,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         "Saw":                      105,    # 10 lines  | was 60
         "Roll":                     100,    # 12 lines  | was 120
         "Assemble/pack (Acrylic)":   99,    # 15 lines  | was 35
+        # JOINERY IS MEASURED NOW — Tony Ford's 11908-21 sheet, the register overwrites
+        # these literals below. Left here as the pre-measurement guesses they were, because
+        # the size of the correction is the point: bench work ran 40x too fast.
+        "Packing Joinery":           99,    # was UNMEASURED — follows Assemble/pack (Acrylic)
+        "Bench Work Joinery":        79,    # was UNMEASURED — follows Manual labour (Metal)
         "Fold":                      93,    # 329 lines | was 50
         "Manual labour (Metal)":     79,    # 23 lines  | was 40
         "Assemble/pack (Metal)":     58,    # 166 lines | was 40
@@ -923,7 +7009,120 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         "Tube":                      40,    # UNMEASURED
         "Guillotine":                80,    # UNMEASURED
         "Drill (Acrylic)":           30,    # UNMEASURED
+        # Deburr/linish is a quick hand pass. Without a default the engine's time model gave a
+        # garbage ~1/hr, so a single grouped deburr line billed 22 hrs / £365 at the CNCJ rate —
+        # the biggest single error on a metal job. A sane default lets the floor cap it.
+        "Grinding / Deburr":        120,    # UNMEASURED — quick hand deburr, config-tunable
+        # Joinery / timber-route ops. Without defaults the engine's time model derived a
+        # garbage ~0.17/hr on no-DXF timber parts, so grouped CNC/Glue/Spray lines billed
+        # 5-6 hrs/part (£1,050 CNC + £610 spray + £472 glue on Cocktails). Sane defaults let
+        # the floor cap them back to ~a minute or two per part. UNMEASURED, config-tunable.
+        "CNC Joinery":   30,    # UNMEASURED — CNC router pass
+        # ACRYLIC ROUTING HAS ITS OWN DEPARTMENT NOW, AND IT NEEDED ITS OWN FLOOR.
+        #
+        # Moving acrylic off the joinery router (CNCJ) onto CNC sent the operation to a
+        # department this table had never heard of, so the derived throughput had no floor and
+        # no ceiling — and on the first pack through, the cell came out EMPTY. `Total Hours` is
+        # `60/throughput`, so an empty cell is a division by nothing and the error propagates
+        # into the labour total: the covering email read "not readable from the sheet" and
+        # "Labour is 0 sheet rows" on a sheet whose quantities were finally right.
+        #
+        # Exactly what the note above this group warns about, and I walked into it by adding a
+        # department without adding its row here. Follows CNC Joinery rather than inventing a
+        # faster figure: the two are different machines but nothing measured says by how much,
+        # and a made-up number would be worse than an honest borrowed one.
+        "CNC":           30,    # UNMEASURED — follows CNC Joinery until a measured figure exists
+        "Glue":          40,    # UNMEASURED — manual glue-up
+        "Wet Spray":         60,    # UNMEASURED — wet spray booth
+        # EDGE BANDING WAS THE SAME TRAP, FOUND BY THE GUARD RATHER THAN BY A PACK. The
+        # joinery map can emit it — a board panel whose drawing says EDGED — and it had no
+        # floor, so the first job with edge banding on it would have blanked its own labour
+        # total exactly as the acrylic router did. Follows the router pass at 30/hr: a machine
+        # pass along an edge, with nothing measured to say otherwise.
+        "Edge Banding":  30,    # UNMEASURED — follows CNC Joinery, a machine pass on board
+        # MACHINES JOINERY (MC J) — saw and spindle. A row with no floor here derives a
+        # garbage throughput and blanks the labour total, which this table has been caught
+        # by twice (the acrylic router, then edge banding). Follows the router pass until
+        # the register's measured figure overlays it below.
+        "Machines Joinery": 30,  # UNMEASURED — overlaid from SHOP_STATED for faced board
+        # Dress Welds (DRES): linish/grind the CO2 weld bead — a quick hand pass, like deburr.
+        # Had no default, so the engine's garbage ~0.88/hr stood: a grouped 16-part line billed
+        # 18.6 hrs / £533 — the single largest labour line on Cocktails and the whole gap to the
+        # engine's £976. A sane default lets the floor cap it.
+        "Dress Welds":               60,    # UNMEASURED — hand weld dressing, config-tunable
+        # Diamond Polish (DPOL): acrylic edge polish. Unmapped + no default gave ~0.67/hr / £52
+        # on a single diffuser. (Metal DPOL is already gated out upstream.)
+        "Diamond Polish":            90,    # UNMEASURED — acrylic edge polish, config-tunable
     }
+    # THE REGISTER GOVERNS THE STATED ENTRIES. The literal above keeps this table auditable
+    # as a table (the rate inventory parses it statically, and the floor-coverage tests read
+    # it the same way), but a figure the shop STATED is config.SHOP_STATED's to own — one
+    # central place, names and dates on — so the register's value overwrites the literal
+    # here. Change it there; changing it here changes nothing, which is the point.
+    _THROUGHPUT_DEFAULTS["Laser (Acrylic)"] = float(
+        (getattr(config, "SHOP_STATED", None) or {}).get("laser_acrylic_parts_per_hour")
+        or _THROUGHPUT_DEFAULTS["Laser (Acrylic)"])
+    _THROUGHPUT_DEFAULTS["Assemble/pack (Acrylic)"] = float(
+        (getattr(config, "SHOP_STATED", None) or {}).get(
+            "acrylic_assemble_pack_parts_per_hour")
+        or _THROUGHPUT_DEFAULTS["Assemble/pack (Acrylic)"])
+    # THE JOINERY DEPARTMENTS, off Tony Ford's own 11908-21 sheet — A SCOPED PILOT, NOT A
+    # UNIVERSAL FLOOR.
+    #
+    # Every joinery throughput here was a guess borrowed from a neighbouring department
+    # because no joinery job had ever been measured; "no edge banding, no machining
+    # saw/spindle, no bench work time" is what that reads like from the estimator's side,
+    # and bench work at 79/hr against his 1.96/hr is 25.5 of his 42 hours run forty times
+    # too fast. His sheet is real evidence and it belongs in the engine.
+    #
+    # WHAT IT IS NOT IS A JOINERY CONSTANT. The first version of this applied his figures to
+    # every joinery job at every quantity, which review caught immediately — and it is the
+    # SAME defect he reported, arriving from the other side. His figures are HOURS PER ORDER
+    # at fifty off. Hours per order contain both a per-unit run time and whatever setup the
+    # department did once, and one job gives one equation in two unknowns: it cannot be
+    # solved, only asked. Treating the lot as run time overstates the per-unit rate by
+    # however much of it was setup — on his own numbers, half an hour of setup a department
+    # moves the pack rate by 22%.
+    #
+    # So it is scoped to the family it was measured on — faced/laminated board, his colour-
+    # core tray — where the work the figures describe is the work being done. Outside that
+    # family the old guesses stand, still marked UNMEASURED, because an honest "we do not
+    # know" beats another department's number wearing joinery's name. The scope widens when
+    # a second job or the department confirms, not before.
+    # ── ASKED OF THE BOARD PARTS, WHICH IS WHERE THE BOARD IS ────────────────────────
+    #
+    # This asked `bom_parts` only, and a board panel is never in `bom_parts`: the router
+    # eighty lines up sends anything `_is_board` with a measurable blank to `board_parts`,
+    # which is the whole point of having an Other Sheet block. So the one list that could
+    # not contain a faced board was the only list consulted, and the test came back False on
+    # every faced-board job there has ever been.
+    #
+    # 11908-21's 16:39 book is the proof: the promotion fired, the trays carry
+    # `costing_material_family: MFMDF`, the laminate was ruled out of the route — and Bench
+    # Work still ran at 30/hr against Tony's measured 2/hr and Packing at 75/hr against his
+    # 20/hr, because the question was put to a list the trays were not in. A scoped pilot
+    # that cannot see its own scope applies to nothing.
+    # The rows whose default is a figure a DEPARTMENT STATED rather than a corpus median.
+    # See the derived-throughput gate below: a stated rate is not a default to be improved
+    # on, it is the answer.
+    _STATED_THROUGHPUT_ROWS: set = set()
+    _faced_board_job = any(
+        isinstance(_p, dict) and (
+            _p.get("_laminate_in_board")
+            or str((_p.get("material_estimate") or {}).get("costing_material_family")
+                   or "").upper() in {"MFMDF", "MFC"}
+            or str(_p.get("normalized_material") or "").upper() in {"MFMDF", "MFC"})
+        for _p in (list(bom_parts or []) + list(board_parts or [])))
+    if _faced_board_job:
+        for _row, _key in (("CNC Joinery",        "joinery_cnc_parts_per_hour"),
+                           ("Edge Banding",       "joinery_edge_banding_parts_per_hour"),
+                           ("Bench Work Joinery", "joinery_bench_parts_per_hour"),
+                           ("Machines Joinery",   "joinery_machining_parts_per_hour"),
+                           ("Packing Joinery",    "joinery_pack_parts_per_hour")):
+            _stated = (getattr(config, "SHOP_STATED", None) or {}).get(_key)
+            if _stated:
+                _THROUGHPUT_DEFAULTS[_row] = float(_stated)
+                _STATED_THROUGHPUT_ROWS.add(_row)
     _THROUGHPUT_CEILING_MULTIPLIER = 5   # derived > default × 5 → use default
     # The ceiling above only catches derived throughputs that are too FAST. A derived
     # throughput that is too SLOW sails through — and slow means MORE HOURS, which
@@ -932,16 +7131,170 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # Symmetric, and deliberately as conservative as the ceiling: only implausible
     # outliers are substituted, and every substitution is FLAGGED with both numbers.
     _THROUGHPUT_FLOOR_DIVISOR = 5        # derived < default ÷ 5 → use default
+    # WHICH OF THESE TIMES A DEPARTMENT ACTUALLY GAVE US.
+    #
+    # The costing stage stamps a part when its time came from a person rather than from a
+    # model: the welding department's weldment allowance, its per-joint rate, and the
+    # 4 + 8 minute plater pack. Collected here so the floor guard below can tell a stated
+    # figure from a garbage derivation — which it could not, and which is why the shop's own
+    # numbers were replaced by corpus medians on the one job where an estimator had written
+    # them down for us.
+    _stated_time_by_pn: Dict[str, str] = {}
+    _stated_hours_by_pn: Dict[str, Dict[str, float]] = {}
+    _stated_ops_by_pn: Dict[str, set] = {}
+    _stamped_records = list(bom_parts or [])
+    for _srcname in ("parts",):
+        _stamped_records += [r for r in (summary.get(_srcname) or []) if isinstance(r, dict)]
+    _stamped_records += [r for r in ((summary.get("estimate_summary") or {}).get(
+        "part_estimates") or []) if isinstance(r, dict)]
+    # The records the labour rows read a part's own statements from (D-393: the weld process
+    # its sheet states). Any record of the part serves; one carrying the statement wins.
+    _pe_by_pn_for_rows: Dict[str, Any] = {}
+    for _rec in _stamped_records:
+        _rpn = str(_rec.get("part_number") or "").strip().upper()
+        if _rpn and (_rpn not in _pe_by_pn_for_rows or _rec.get("weld_process_stated")):
+            _pe_by_pn_for_rows[_rpn] = _rec
+    for _sp in _stamped_records:
+        if not isinstance(_sp, dict):
+            continue
+        _spn = str(_sp.get("part_number") or "").strip().upper()
+        if not _spn:
+            continue
+        for _marker, _ops, _why in _STATED_SHOP_TIME_MARKERS:
+            if _sp.get(_marker):
+                _stated_time_by_pn.setdefault(_spn, _why)
+                _stated_ops_by_pn.setdefault(_spn, set()).update(_ops)
+                # AND THE HOURS THEMSELVES, not only the fact that some exist.
+                #
+                # Five separate branches in the emit loop below can each discard a computed
+                # time, and four of them have now been caught doing it one at a time:
+                # assembly scope skipped the grouping, the floor guard replaced outliers,
+                # one-row-per-job took the median, and the department alias meant the hours
+                # were filed under a name nobody asked for. Each fix was an exception added
+                # to one branch, and the next run found the next branch.
+                #
+                # That is the wrong shape. A figure a department stated is not a candidate
+                # to be weighed against five defaults — it is the answer, and the decision
+                # belongs in ONE place before the chain rather than as an exception inside
+                # each link of it. So the hours travel with the claim, and the loop asks
+                # once, at the top, whether this row has one.
+                #
+                # AND IT KEEPS LOOKING, BECAUSE ONE PART CAN CARRY SEVERAL CLAIMS.
+                #
+                # This used to `break` here. 7332-01-101 is a welded, brushed, plated
+                # weldment: it carries the weld markers AND brush_before_plate_applied AND
+                # plater_pack_applied. The break registered only the FIRST marker's
+                # operations — the weld pair — so the brushing row's claim covered
+                # `welding` and `dress_welds` and did not cover brushing. The stated 40
+                # minutes was computed correctly, recorded correctly, and then not asked
+                # for: the row fell to the corpus median of 79/hr and booked £1.69 where
+                # the figure Howard gave makes about £125 at six off.
+                #
+                # There was never a reason to stop at the first claim. A part has as many
+                # stated times as the shop has given it.
+        # THE MARKER AND THE HOURS MAY NOT BE ON THE SAME DICT. The costing stage stamps
+        # the part it is working on; the labour record is attached to the part ESTIMATE, and
+        # whether those are one object or two has already cost this session one fix that
+        # found nothing and passed. So the hours are collected from every record that has
+        # them, and the claim is checked separately at the point of use.
+        # A TIME COUNTED FROM THE PART'S OWN RECORD (a cut list's pieces at a config
+        # allowance) is the same kind of claim as a stated time for the floor guard's
+        # purposes (D-460): evidence about THIS part, which a corpus median cannot improve.
+        _cot = _sp.get("_counted_op_times")
+        if isinstance(_cot, dict):
+            for _cop, _cwhy in _cot.items():
+                _stated_time_by_pn.setdefault(_spn, str(_cwhy))
+                _stated_ops_by_pn.setdefault(_spn, set()).add(str(_cop).strip().lower())
+        _le = _sp.get("labour_estimate")
+        if isinstance(_le, dict):
+            _rh = _le.get("run_hours_per_unit")
+            if isinstance(_rh, dict) and _rh:
+                _stated_hours_by_pn.setdefault(_spn, {}).update(
+                    {str(k).strip().lower(): v for k, v in _rh.items()})
     lb = cm["labour"]
     row = lb["first_row"]
+    _parts_col = labour_parts_column(ws, lb, flags)
     labour_overflow = False
     # Labour applies to FABRICATED parts (steel, board, weldment) plus tubes (which get
     # powder/handling as real finishing). Bought-in BOM items (fixings, BI-*, NOTE-*,
     # electricals) are purchased finished goods — they must NOT generate fabrication
     # labour rows (e.g. BI-ADHESIVECABLE was wrongly getting an 'Assemble/pack' line).
     labour_parts = list(steel_parts) + list(board_parts) + list(weldment_parts) + list(wire_parts)
+
+    def _pe_material(p):
+        return str(p.get("normalized_material") or (p.get("material_estimate") or {}).get("material") or "")
+
     labour_parts += [p for p in bom_parts
-                     if str((p.get("material_estimate") or {}).get("stock_form") or "").lower() == "tube"]
+                     if str((p.get("material_estimate") or {}).get("stock_form") or "").lower() == "tube"
+                     # Timber/board panels are direct-priced in the BOM block for MATERIAL, but they
+                     # still need their sawing/routing/gluing/lacquer LABOUR — pull them into the
+                     # labour path (their stated-weight stock_form + board material is the signature;
+                     # this excludes the PVC sticker and metal fasteners, which are not stated_weight).
+                     or (str((p.get("material_estimate") or {}).get("stock_form") or "").lower() == "stated_weight"
+                         and _is_board(_pe_material(p)))]
+
+    # ── IF WE KNOW THE ROUTE, WE COST THE ROUTE ──────────────────────────────────
+    #
+    # Every rule above decides by CLASSIFICATION: is this steel, board, wire, a tube, a
+    # board panel. A part the engine could not classify gets no labour row no matter what it
+    # is doing — so an operation we read off the drawing, or concluded from it, is simply
+    # dropped on the floor at the last step before the sheet.
+    #
+    # M&S 2085 spent four runs proving it. Its tubes are round; the section detector only
+    # knew rectangular; no section meant no `tube` stock form; and no stock form meant that
+    # even a saw and a weld sitting on the part in black and white would never have reached
+    # the labour block. Fixing the detector fixes THIS job. This fixes the shape of it: the
+    # route we extracted is the route we cost, and a classification gap can no longer silently
+    # delete work.
+    #
+    # Gated on FABRICATION operations specifically, never on handling/assembly, because
+    # bought_in_policy already strips fabrication ops from anything purchased — so a part
+    # still carrying one is something we make. That is what kept BI-ADHESIVECABLE from
+    # getting an Assemble/pack line, and it stays kept.
+    try:
+        from bought_in_policy import FABRICATION_OPS as _FAB_OPS
+    except Exception:
+        _FAB_OPS = frozenset()
+    # The route lives on the RAW part records, not on the costed ones this loop walks.
+    _route_by_pn = route_operations_by_part(summary)
+    _tube_pns = tube_part_numbers(summary)
+    # Scope travels on the extract's routes, not on the part records, so read it from there
+    # too — a part-level record only knows the ops it carries, not how often they happen.
+    _scope_by_op: Dict[str, str] = {}
+    for _r in ((summary.get("llm_full_extract") or {}).get("routes") or []):
+        if isinstance(_r, dict):
+            _o = str(_r.get("operation") or "").strip().lower()
+            _s2 = str(_r.get("scope") or "").strip().lower()
+            if _o and _s2 in ("part", "assembly"):
+                _scope_by_op[_o] = _s2
+    _already = {id(p) for p in labour_parts}
+    _routed_in = []
+    for p in bom_parts:
+        if id(p) in _already or not isinstance(p, dict):
+            continue
+        # A CROSS-REFERENCE ROW IS A DISPLAY LINE, NOT A PART.
+        #
+        # The BOM list carries a GBP 0.00 row for each fabricated part so the bill of
+        # materials reads as the parts list it claims to be. That row is a stub with the
+        # same part number as the real record — so this gate matched its route and put it in
+        # the labour block as a SECOND copy of a part already there. 2085 booked Weld,
+        # Dress Welds and P.Coat at qty 4 across three parts, and grew a second bare
+        # "Laser (Metal) (2085-01)" row beside the real one. The cross-reference exists to
+        # stop a double count in the material column; it must not create one in labour.
+        if p.get("_bom_cross_reference") or p.get("_bom_overflow_consolidated"):
+            continue
+        _ops = set(_route_by_pn.get(str(p.get("part_number") or "").strip().upper(), []))
+        for _k in ("textual_operations", "operations", "inferred_operations"):
+            _v = p.get(_k)
+            if isinstance(_v, list):
+                _ops |= {str(o).strip().lower() for o in _v if str(o).strip()}
+        if _ops & _FAB_OPS:
+            labour_parts.append(p)
+            _routed_in.append(f"{p.get('part_number')} ({', '.join(sorted(_ops & _FAB_OPS))})")
+    if _routed_in:
+        _flag(f"labour: {len(_routed_in)} part(s) pulled into the labour block because they "
+              f"carry a fabrication route, not because the engine classified their stock: "
+              f"{'; '.join(_routed_in[:6])}. A route we read is a route we cost.", flags)
     # Powder gate: costs_gbp carries powder_coating blind to finish (part_estimates
     # has finish=None). The reliable drawing-derived signal is textual_operations on
     # the fuller manufacturing_writeup.parts record. Build {part_number -> is_powder}.
@@ -980,6 +7333,29 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 _t += " " + str(_pg[_k])
         return _t.upper()
 
+    # ── THIS GATE ONLY SPEAKS WHERE IT DECIDES ──────────────────────────────────────
+    # Everything from here to the finish map below is the LEGACY finish gate. Every one of
+    # its consumers sits inside `for pe in ([] if _canonical_cutover else labour_parts)`,
+    # so under the canonical route it decides nothing at all -- and it went on printing its
+    # conclusions anyway. On 11650's side panels it announced "nothing in this job carries
+    # a POWDER finish" while a powder line sat on the sheet, and that log line, which had no
+    # reader and no authority, is what made a classification bug look like a policy dispute.
+    #
+    # NOT DELETED, BECAUSE IT IS NOT DEAD EVERYWHERE. A job with no compiled route still
+    # runs this path and still needs it. What is removed is its VOICE where it has no vote:
+    # under cutover the route compiler owns powder, the arbitrated decision is what the
+    # mass and the operation both read, and a second opinion printed beside it is noise
+    # that has already misled two readers of this codebase once.
+    def _gate_flag(_msg, _fl):
+        if _canonical_cutover:
+            return
+        _flag(_msg, _fl)
+
+    if _canonical_cutover:
+        _flag("finish/powder decided by the compiled route (arbitrated, with provenance); "
+              "the legacy finish gate is not consulted on this job.", flags)
+
+
     _assembly_is_powder = False
     _assembly_finish_seen = False
     for _pg in (summary.get("pages") or []):
@@ -1011,8 +7387,22 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         #
         # A bought-in consumable is not a fabricated part and cannot be the thing that goes
         # through the booth. Any job carrying a powder CODE in its BOM had this bug.
-        _pg_roles_boughtin = [str(_r).lower() for _r in (_mp.get("page_roles") or [])]
-        if (not _pn) or ("bought_in" in _pg_roles_boughtin):
+        #
+        # AND IT ASKS THE MODULE THAT OWNS THAT QUESTION. This was a substring test on
+        # page_roles, which is one of seven signals bought_in_policy weighs — and the
+        # weakest of them where a record carries two roles at once. On 12392 all four steel
+        # leaves carry BOTH "detail" and "bought_in", so every one of them was skipped here
+        # and the scan came back holding a single entry: the assembly's EDGED. The engine
+        # then reported "no part's finish reads RAW" about a job whose own observations say
+        # 12392-02-01M reads RAW, claimed powder on that raw part, and left the route
+        # decision unverifiable.
+        #
+        # A private copy of a rule that exists elsewhere is how two readers of one job come
+        # to disagree about what it says. The predicate already treats a mixed detail +
+        # bought-in reading as a conflict rather than authority, and every strong catalogue
+        # signal still returns True from it, so the tin of paint above is still excluded —
+        # by identity now, rather than by a role that a fabricated part can also carry.
+        if not _pn or _bought_in_policy.is_bought_in(_mp):
             continue
         _fin = str(_mp.get("normalized_finish") or "").strip()
         if not _fin:
@@ -1028,10 +7418,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         elif any(_h in _fin_u for _h in _POWDER_POINTER_HINTS):
             _powder_ok[_pn] = _assembly_is_powder
             if _assembly_is_powder:
-                _flag(f"{_pn}: finish is a POINTER ('{_fin[:38]}') — resolved to POWDER "
+                _gate_flag(f"{_pn}: finish is a POINTER ('{_fin[:38]}') — resolved to POWDER "
                       f"from the assembly drawing.", flags)
             else:
-                _flag(f"{_pn}: finish points to the assembly drawing, but NO assembly page "
+                _gate_flag(f"{_pn}: finish points to the assembly drawing, but NO assembly page "
                       f"states a finish. DRAWING DEFECT — not coated, and not invented. "
                       f"Raise with Design.", flags)
         elif _fin_u:
@@ -1060,7 +7450,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _assembly_level_powder = False
     if not any(_powder_ok.values()):
         if not _assembly_is_powder:
-            _flag("nothing in this job carries a POWDER finish, and no assembly page states "
+            _gate_flag("nothing in this job carries a POWDER finish, and no assembly page states "
                   "one either. If the product IS coated, the drawing does not say so — raise "
                   "with Design. NOT coating anything, and not guessing.", flags)
         else:
@@ -1075,13 +7465,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 _assembly_level_powder = True
                 for _pn2 in _raw_components:
                     _powder_ok[_pn2] = True
-                _flag(f"ASSEMBLY-LEVEL FINISH: every detail says RAW, the assembly drawing "
+                _gate_flag(f"ASSEMBLY-LEVEL FINISH: every detail says RAW, the assembly drawing "
                       f"says POWDER. The components are formed raw, welded, and the ASSEMBLY "
                       f"is coated ({', '.join(_raw_components)}). P.Coat applied ONCE, to one "
                       f"object — not once per component.", flags)
             else:
                 # Loud, specific, and it prints what it actually saw. No third blind attempt.
-                _flag(f"assembly drawing says POWDER and nothing else in the job qualifies, "
+                _gate_flag(f"assembly drawing says POWDER and nothing else in the job qualifies, "
                       f"but no part's finish reads RAW. Finishes seen: "
                       f"{ {k: (v[:24] or '<empty>') for k, v in _fin_by_pn.items()} }. "
                       f"NOT coating anything. Check the drawing finish fields.", flags)
@@ -1118,14 +7508,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         if _all_point_at_assembly and _job_welds:
             _weldment_is_one_object = True
             _assembly_level_powder = True          # the P.Coat qty already reads this flag
-            _flag(f"WELDMENT IS ONE OBJECT: no part carries its own finish — every one points "
+            _gate_flag(f"WELDMENT IS ONE OBJECT: no part carries its own finish — every one points "
                   f"at the assembly ({', '.join(_fab_pns)}) — and the job welds. They are "
                   f"joined into a single object, and a single object hangs on the booth line "
                   f"ONCE. P.Coat qty 1, not one per component.", flags)
         elif _all_point_at_assembly and not _job_welds:
             # Do NOT guess. Pointing at the assembly does not by itself mean welded — the
             # parts could be coated separately and then bolted. Say why we did not fire.
-            _flag(f"every part points at the assembly for its finish "
+            _gate_flag(f"every part points at the assembly for its finish "
                   f"({', '.join(_fab_pns)}) but NOTHING WELDS on this job. They may be one "
                   f"object, or coated separately and bolted. NOT collapsing P.Coat to qty 1 "
                   f"— charging one coat per part. Estimator to check.", flags)
@@ -1133,11 +7523,15 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # Diamond-polish gate: diamond_polish is spurious on powder-coated parts
     # (mutually exclusive finishes; boilerplate misfire). Build {pn -> finish is
     # powder} from the fuller record's normalized_finish.
+    # Read through finish_rules so this legacy gate and the compiler's canonical one cannot
+    # disagree about what "the drawing says powder" means. Also picks up surface_finishes,
+    # which this loop ignored — a part stating its powder finish only there read as
+    # unfinished, and kept a diamond polish under a coat it will never survive.
+    from finish_rules import finish_is_powder as _fin_is_powder, stated_finish as _stated_fin
     _finish_is_powder = {}
     for _mp in _mw_parts:
         _pn = str(_mp.get("part_number") or "")
-        _fin = str(_mp.get("normalized_finish") or "").upper()
-        _finish_is_powder[_pn] = "POWDER" in _fin
+        _finish_is_powder[_pn] = _fin_is_powder(_stated_fin(_mp))
 
     # ── LABOUR — GROUPED BY SETUP, NOT BY PART ──────────────────────────────
     # The WB books SETUP on every row (Fold 30min = £20.24, P.Coat 15min = £88.86,
@@ -1163,10 +7557,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # is welded to the hook plate and the assembly goes through powder as a single object —
     # grouping by gauge charged two coating setups to coat one thing (£5.90 vs Tim's £2.00).
     # Fold/Laser/Punch stay grouped by gauge, where the gauge genuinely IS the tooling.
+    # "Packing Joinery" is the third member of the pack family, not a fourth kind of thing.
+    # Left out of these two sets it would book a pack row per PART on a timber job, where
+    # metal and acrylic book one for the job — the whole reason the sets exist.
     _ONE_ROW_PER_JOB = {"Assemble/pack (Metal)", "Assemble/pack (Acrylic)",
+                        "Packing Joinery",
                         "Weld (CO2)", "Spotweld", "Dress Welds",
                         "P.Coat"}
-    _PACK_OPS = {"Assemble/pack (Metal)", "Assemble/pack (Acrylic)"}
+    _PACK_OPS = {"Assemble/pack (Metal)", "Assemble/pack (Acrylic)", "Packing Joinery"}
 
     # ── YOU CANNOT SPOT-WELD A BAR TO A PLATE ────────────────────────────────────
     # Spot welding squeezes two thin OVERLAPPING SHEETS between electrodes. 7670 is three
@@ -1210,20 +7608,82 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # Grouping these into one row UNDER-charges — the failure mode we cannot see.
     _PER_PART_OPS = {"Robomac"}
 
-    _groups = {}
-    for pe in labour_parts:
+    # Read from config so the list of stated rules lives in ONE place — the same place the
+    # rules themselves do. A rule added there without a row here would merge silently,
+    # which is the fault this exists to stop.
+    _STATED_TIME_OPS = {str(o).strip().lower()
+                        for o in (getattr(config, "STATED_TIME_OPERATIONS", ()) or ())}
+
+    _groups = (
+        canonical_labour_groups(
+            summary,
+            list(pes),
+            order_qty,
+            skipped_part_numbers=_skip_pns,
+            all_fabricated_are_wire=_all_fabricated_are_wire,
+        )
+        if _canonical_cutover else {}
+    )
+    if _canonical_cutover:
+        _flag(
+            f"canonical route rendered {len(_groups)} labour pricing group(s); "
+            "the raw-route rescue and legacy per-part cost union were not consulted.",
+            flags,
+        )
+    for pe in ([] if _canonical_cutover else labour_parts):
         if str(pe.get("part_number") or "") in _skip_pns:
             continue   # phantom excluded from Sheet Steel — drop its ops too
         le = pe.get("labour_estimate") or {}
         costs = le.get("costs_gbp") or {}
         batch_hours = le.get("batch_hours") or {}
+        _pn = str(pe.get("part_number") or "")
         ops = list(costs.keys())
+
+        # ── A ROUTED OPERATION WITH NO COST MODEL IS STILL WORK ──────────────────────
+        #
+        # This list came only from labour_estimate.costs_gbp — the operations the estimator
+        # managed to put a NUMBER against. An operation that is on the part's route but has
+        # no time model behind it was not merely uncosted, it was invisible: no row, no
+        # flag, nothing on the sheet to say the job includes it.
+        #
+        # M&S 2085 is that exactly. Both tubes carry tube_cut and tube_bending, the plate
+        # carries folding, all three map to real departments (Tube, Tubebend, Fold) — and
+        # the invariant reported them as "named but not priced" while the sheet showed five
+        # labour rows on one part. The route was right the whole way down and stopped here.
+        #
+        # So the union is taken. An operation the estimator costed keeps its number; one it
+        # did not gets a row anyway, timed from the department's own throughput default (the
+        # same default the sheet already uses when it cannot size-band a part) and flagged
+        # by name. Every filter below still runs — spurious-by-stock-form, the powder gate,
+        # the diamond-polish gate — so this widens what reaches them, not what survives them.
+        _routed_extra = routed_operations_without_cost(
+            pe, costs, _route_by_pn.get(_pn.strip().upper()))
+        if _routed_extra:
+            ops = ops + _routed_extra
+            _flag(f"labour {_pn or '?'}: {len(_routed_extra)} routed operation(s) carry no "
+                  f"cost model ({', '.join(_routed_extra)}) — costed from the department's "
+                  f"throughput default so the work appears on the sheet. Confirm the times.",
+                  flags)
+
         if not ops:
             continue
-        _pn = str(pe.get("part_number") or "")
         _qty_pu = int(_safe(pe.get("quantity"), 1))
         _is_acr = _is_board(str(pe.get("normalized_material") or ""))
         _sf = (pe.get("material_estimate") or {}).get("stock_form")
+        # STOCK FORM IS ONLY STAMPED WHEN THE MATERIAL COSTED SUCCESSFULLY.
+        #
+        # estimator sets stock_form="tube" inside the two branches that PRODUCE A PRICE — the
+        # catalogue match and the mass calculation. A tube whose material could not be priced
+        # at all (2085's, which have a section but no printed cut length) therefore arrives
+        # with the field blank, and every rule keyed on it silently does nothing. The laser
+        # suppression written for exactly these parts was inert on exactly these parts.
+        #
+        # Identity is not a by-product of pricing. And the evidence for it — section_stock —
+        # is on the RAW record, not this costed one, so it comes through the same bridge the
+        # route does. Reading it off `pe` looked right and resolved to None on the real data:
+        # the fourth time in this job that a fix has been aimed at the wrong record.
+        if not _sf and _pn.strip().upper() in _tube_pns:
+            _sf = "tube"
         _mat = pe.get("normalized_material") or ""
         _me2 = pe.get("material_estimate") or {}
         _ng2 = pe.get("normalized_geometry") or {}
@@ -1246,11 +7706,54 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                           f"(diamond-polish is spurious/boilerplate on a powder finish).", flags)
                     continue
 
-            wb_op = _map_operation(op, _is_acr, _sf or "")
+            wb_op = _map_operation(op, _is_acr, _sf or "", _mat)
+            # A CUT ON TIMBER HAPPENS ON THE ROUTER. Sent there by the joinery map above; said
+            # out loud here, because it is a substitution the route did not ask for and only an
+            # estimator can confirm the router is where this part is actually cut.
+            if (_is_timber(_mat) and wb_op == "CNC Joinery"
+                    and "laser" in str(op).lower()):
+                _flag(f"'{op}' on {_pn} ({_mat}) booked as CNC Joinery — board is routed, not "
+                      f"profiled on the acrylic laser. Confirm the router is right for it.",
+                      flags)
+            # A timber part still landing on an ACRYLIC department. The pack, bench and cut
+            # families now go to the joinery rows the rate card carries; anything left here is
+            # a department with no joinery equivalent, and it says so rather than leaving
+            # "(Acrylic)" sitting against a wooden crate unexplained.
+            elif wb_op and "(Acrylic)" in str(wb_op) and _is_timber(_mat):
+                _flag(f"'{wb_op}' booked on {_pn} ({_mat}) — the rate table has no joinery "
+                      f"equivalent of this department, so the ACRYLIC rate is used as the "
+                      f"nearest available. Confirm the rate is right for timber.", flags)
             if wb_op is None:
                 _flag(f"labour op '{op}' ({_pn}) not in OP_NAME_MAP — WB rate lookup will "
                       f"return 0 for it. Add mapping.", flags)
                 wb_op = str(op)
+
+            # YOU CANNOT WELD ACRYLIC.
+            #
+            # 12349-02's 01A came back with Weld (CO2) and Dress Welds on it. The drawing says
+            # UV BONDED, and Tim's sheet has no weld on that part at all — it is seven acrylic
+            # pieces glued into a box. WELD here is CO2 on steel: an arc, a filler wire and a
+            # bead somebody then grinds flat. Put an acrylic panel under it and there is no
+            # part left.
+            #
+            # This is not a rate to tune, it is a physical impossibility, so it is corrected
+            # rather than flagged and left costing. Weld becomes Glue, which is the operation
+            # that actually joins these parts and is on the rate card; dressing is DROPPED
+            # outright, because a bonded joint has no bead to dress and the row would charge
+            # a hand pass for work nobody does.
+            #
+            # Steel is untouched. So is a genuinely plastic-welded part, if one ever arrives —
+            # it would arrive as its own operation, not as the steel CO2 department.
+            if _is_acr and not _is_timber(_mat) and wb_op in ("Weld (CO2)", "Spotweld",
+                                                              "Dress Welds"):
+                if wb_op == "Dress Welds":
+                    _flag(f"dropped '{op}' on {_pn} ({_mat}) — a bonded acrylic joint has no "
+                          f"weld bead to dress.", flags)
+                    continue
+                _flag(f"'{op}' on {_pn} ({_mat}) booked as Glue — acrylic is bonded, not "
+                      f"welded, and the CO2 department would destroy the part. Confirm the "
+                      f"joint is a bond.", flags)
+                wb_op = "Glue"
 
             # Wire frames go on the SPOT WELDER — but ONLY when the whole job is wire.
             # 7670 (3 wire forms welded to each other): Spotweld, £1.61 on Tim's sheet.
@@ -1261,21 +7764,90 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                     and _all_fabricated_are_wire):
                 wb_op = "Spotweld"
 
-            if wb_op in _PER_PART_OPS:
-                key = (wb_op, _pn, "")         # one setup PER PART (per wire form)
-            elif wb_op in _ONE_ROW_PER_JOB:
-                key = (wb_op, "", "")          # one setup for the whole job
-            else:
-                key = (wb_op, str(_mat), "%g" % (_thk or 0))   # one setup per tooling change
+            # A STATED TIME KEEPS ITS OWN ROW, BECAUSE EVERY KEY BELOW IS A DEPARTMENT.
+            #
+            # wb_op is the DISPLAYED TITLE, so two different operations that bill to the
+            # same bench group together: the pack OUT and the pack BACK are both
+            # "Assemble/pack (Metal)", and brushing is "Manual labour (Metal)" alongside
+            # deburr and bench work at the same gauge. They merged HERE, before the
+            # stated-time lookup further down ever ran — so giving each rule its own
+            # operation fixed the naming and left the rows collapsing exactly as before.
+            # The stated figure was not overridden by a median; it was never asked for.
+            #
+            # The operation goes in the key and nothing else changes: the row still shows
+            # the department's title and bills at the department's rate, which is what the
+            # template and the rate card expect. Strictly NARROWER than the grouping it
+            # replaces — a stated operation can only ever be split out of a group it would
+            # have shared, never merged into one it would not.
+            key = labour_group_key(op, wb_op, _pn, _mat, _thk,
+                                   per_part_ops=_PER_PART_OPS,
+                                   one_row_per_job=_ONE_ROW_PER_JOB)
 
+            # THE DRAWING'S MATERIAL ON THE ROW, THE SUBSTITUTE NAMED. 12312-01-03A is FOAMED
+            # PVC and was priced from ACRYLIC (no Foamex rate); its CNC row read "3mm ACRYLIC"
+            # while AI Provenance said FOAMED PVC. The grouping key is unchanged.
+            _shown = material_shown_on_row(pe, _mat)
             g = _groups.setdefault(key, {
-                "wb_op": wb_op, "material": _mat, "thickness": _thk,
+                "wb_op": wb_op, "material": _mat, "thickness": _thk, "material_shown": _shown,
+                # The tuple that DECIDED this grouping. material/thickness above are only
+                # those of the first part to land here, which for a one-row-per-job
+                # department is an accident of ordering.
+                "group_key": key,
+                # The same declared basis the canonical grouper records, so the quantity
+                # question gets ONE answer whichever road the job travels. This path used
+                # to answer it by department (_PACK_OPS below), which is right for the two
+                # pack stages by luck and silent for brushing.
+                "stated_once_per_finished_unit":
+                    stated_time_is_once_per_finished_unit(op),
                 "qty": 0, "bh": 0.0, "parts": [], "bends": 0, "holes": 0,
+                # The ENGINE operation(s) behind this row. The group key carries the mapped
+                # DEPARTMENT name, so it cannot answer "what operation is this" — reading it
+                # as one turned wet_spray into 'Spray / Wet Paint' and left every consumer
+                # matching on a string the engine never emits.
+                "engine_ops": [],
             })
+            if op and op not in g.setdefault("engine_ops", []):
+                g["engine_ops"].append(str(op))
+            # The sequence the extract read off THIS drawing, if it gave one. Lowest wins:
+            # a group can gather several parts, and the row belongs where the first of them
+            # is done. None stays None, and the shop's own order applies at sort time.
+            # SCOPE — how often this operation happens per product, which is not the same
+            # as how many parts the route line names. Recorded on the group so the emit loop
+            # can flag it (or honour it, once the rates are confirmed).
+            _op_l = str(op or "").strip().lower()
+            _sc = operation_scope_for(pe, _op_l, _scope_by_op)
+            if _sc == "assembly":
+                g["assembly_scoped"] = True
+                _qpu_part = (pe.get("operation_qty_per_unit") or {}).get(_op_l)
+                if _qpu_part:
+                    _prev = _safe(g.get("qty_per_unit_by_scope"), 0) or 0
+                    g["qty_per_unit_by_scope"] = max(_prev, _safe(_qpu_part, 1) or 1)
+            _rs = (pe.get("operation_sequence") or {}).get(str(op or "").strip().lower())
+            if _rs is not None:
+                try:
+                    _rs = float(_rs)
+                    g["route_sequence"] = (_rs if g.get("route_sequence") is None
+                                           else min(float(g["route_sequence"]), _rs))
+                except (TypeError, ValueError):
+                    pass
             g["qty"] += _qty_pu
             _bh = _safe(batch_hours.get(op))
             if _bh and _bh > 0:
                 g["bh"] += float(_bh)
+            # WHOSE HOURS THEY WERE, keptt alongside the total.
+            #
+            # "Line 98 – Laser Rate Mild Steel 2.5mm – 2 Separate Components x 2 per each
+            # component one Labour Rate shown – Is AI linking both parts with average rate
+            # input?"  The row is 7332-01-003 (a 441 x 10 strap) and 7332-01-004 (a 15.88
+            # square cap) at one blended 441/hr, and his own figures for the two are 235 and
+            # 900 — nearly four to one. A single number cannot be checked against either.
+            #
+            # Only the SUM was retained, so the row could not show its working even in
+            # principle. The parts' own hours cost nothing to keep and are the difference
+            # between a figure an estimator can audit and one he can only accept.
+            if _pn and _bh and _bh > 0:
+                g.setdefault("hours_by_part", {})[_pn] = {
+                    "bh": float(_bh), "qty_per_unit": float(_qty_pu or 1)}
             if _pn and _pn not in g["parts"]:
                 g["parts"].append(_pn)
 
@@ -1290,7 +7862,12 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # keyed ("Robomac","MILD_STEEL","4")). Check before injecting.
         if str(_sf or "").lower() in _ROBOMAC_STOCK_FORMS:
             _has_robo = any(
-                _map_operation(_o, _is_acr, _sf or "") == "Robomac" for _o in ops
+                # The material here too, not because a bar is ever timber — it cannot be,
+                # this branch is gated on a round-bar stock form — but because this asks the
+                # same question the row-writer below answers, and two callers of one function
+                # disagreeing about the arguments is how "Assemble/pack (Acrylic) - 3mm MDF"
+                # survived a fix that was already in.
+                _map_operation(_o, _is_acr, _sf or "", _mat) == "Robomac" for _o in ops
             )
             if not _has_robo:
                 _rg = _groups.setdefault(("Robomac", _pn, ""), {
@@ -1305,12 +7882,133 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 g["bends"] += int(_safe((_ng2 or {}).get("estimated_bend_line_count"), 0)) * _qty_pu
             elif _ol in ("hole_machining", "drilling", "punch"):
                 g["holes"] += int(_safe((_ng2 or {}).get("estimated_hole_count"), 0)) * _qty_pu
+            if _ol in _HOLE_CUTTING_OPS:
+                _hc = (pe.get("process_estimate") or {}).get("hole_count")
+                if isinstance(_hc, (int, float)) and not isinstance(_hc, bool) and _hc >= 0:
+                    _hp = g.setdefault("holes_cut_by_part", {})
+                    _hp[_pn] = _hp.get(_pn, 0) + _hc * _qty_pu
+                    g["holes_cut_basis"] = "per_finished_product"
+                g["holes_cut"] = int(g.get("holes_cut") or 0) + int(_safe(
+                    (pe.get("process_estimate") or {}).get("hole_count"), 0) or 0) * _qty_pu
 
-    for _key in sorted(_groups.keys()):
+    # ── MANM: insert labour for pressed fasteners (self-clinch nuts, PEM studs) ──
+    # Tim books the press/insert time as Manual labour (Metal) (MANM). His 12120 sheet
+    # gives the rule directly and consistently: Clinch x4 @60/hr and Pem x2 @120/hr both
+    # = 15 s/insert (config.MANM_INSERT_SECONDS_EACH). Knurled knobs and thumbscrews are
+    # hand-assembled (Assemble/pack), NOT pressed, so only clinch/PEM parts count. Counts
+    # come from bom_parts, which by now carry the reconciled quantities (self-clinch 1->4,
+    # PEM added), so this books labour on the true insert count. Injected here — like the
+    # Robomac row above — because the insert count is a BOM fact, not a per-part route op.
+    if (not _canonical_cutover
+            and _BOOK_MANM_INSERT_LABOUR and _MANM_INSERT_SECONDS_EACH > 0):
+        _ins_tokens = [str(t).upper() for t in (_MANM_INSERT_PART_TOKENS or [])]
+        _insert_count = 0
+        _insert_parts: List[str] = []
+        for _bp in bom_parts:
+            _blob = (str(_bp.get("description") or "") + " "
+                     + str(_bp.get("part_number") or "")).upper()
+            if _ins_tokens and any(_tok in _blob for _tok in _ins_tokens):
+                _q = int(_safe(_bp.get("quantity"), 0))
+                if _q > 0:
+                    _insert_count += _q
+                    _pn_ins = str(_bp.get("part_number") or _bp.get("description") or "insert")
+                    if _pn_ins not in _insert_parts:
+                        _insert_parts.append(_pn_ins)
+        if _insert_count > 0:
+            # bh chosen so the derived throughput below resolves to exactly
+            # 3600/(inserts * seconds_each): one MANM row, qty 1.
+            _manm_bh = order_qty * _insert_count * float(_MANM_INSERT_SECONDS_EACH) / 3600.0
+            _mg = _groups.setdefault(("Manual labour (Metal)", "insert", ""), {
+                "wb_op": "Manual labour (Metal)", "material": "", "thickness": 0,
+                "qty": 1, "bh": 0.0, "parts": [], "bends": 0, "holes": 0,
+            })
+            _mg["qty"] = 1
+            _mg["bh"] += _manm_bh
+            _mg["parts"] = _insert_parts
+            _manm_tp = 3600.0 / (_insert_count * float(_MANM_INSERT_SECONDS_EACH))
+            _flag(f"MANM insert labour: {_insert_count} pressed insert(s) "
+                  f"(self-clinch/PEM, counted from the reconciled BOM: "
+                  f"{', '.join(_insert_parts)}) x {_MANM_INSERT_SECONDS_EACH:.0f}s each "
+                  f"-> Manual labour (Metal) at {_manm_tp:.0f}/hr. Rule from Tim's 12120 "
+                  f"sheet (clinch x4 @60/hr, pem x2 @120/hr both = 15s/insert). Knurled "
+                  f"knob & thumbscrew are hand-assembled (Assemble/pack), not counted.", flags)
+
+    # ── LABOUR ROWS COME OUT IN MANUFACTURING ORDER, NOT ALPHABETICAL ORDER ─────────
+    #
+    # This was sorted(_groups.keys()), and the keys start with the department name — so
+    # 2085's sheet read Assemble/pack, Laser, P.Coat. Pack before cut. That is not a route,
+    # it is a word list, and an estimator reading down it cannot sanity-check a sequence
+    # that is not in sequence.
+    #
+    # The extract already returns `sequence` per route (10, 20, 30...) and it was thrown
+    # away. Where it is present it wins, because it is the model reading THIS drawing's
+    # order of work. Where it is absent — a job with no routes extracted, or an operation
+    # the engine inferred itself — the shop's own order applies: you cut before you form,
+    # form before you weld, weld before you coat, and you pack last. That is a fact about
+    # the shop, not about a job, so it is inheritable by every job that follows.
+    _SHOP_ORDER = {
+        "Laser (Metal)": 10, "Laser (Acrylic)": 10, "Punch": 10, "Guillotine": 10,
+        "Saw": 15, "Tube": 15, "CNC Joinery": 15,
+        # Saw and spindle follow the router: the panel is cut and profiled before its edges
+        # are banded, which is why this sits between CNC Joinery (15) and Edge Banding (28).
+        "Machines Joinery": 18,
+        "Fold": 20, "Linebend": 20, "Tubebend": 20, "Roll": 20, "Robomac": 20,
+        "Manual labour (Metal)": 25,
+        "Edge Banding": 28, "Glue": 28,
+        "Weld (CO2)": 30, "Spotweld": 30,
+        "Dress Welds": 35, "Grinding / Deburr": 38,
+        "P.Coat": 60, "Wet Spray": 60, "Diamond Polish": 62,
+        "Assemble/pack (Metal)": 90, "Assemble/pack (Acrylic)": 90,
+        "Packing Joinery": 90,           # packs last, with the rest of the pack family
+        "Bench Work Joinery": 25,        # a hand bench pass, where manual labour sits
+    }
+    _DEFAULT_ORDER = 50          # something we do not recognise sits mid-route, not last
+
+    def _group_order(_k):
+        _g = _groups[_k]
+        _read = _g.get("route_sequence")
+        if _read is not None:
+            return (0, float(_read), str(_g.get("wb_op") or ""))
+        return (0, float(_SHOP_ORDER.get(str(_g.get("wb_op") or ""), _DEFAULT_ORDER)),
+                str(_g.get("wb_op") or ""))
+
+    _charge_once = bool(getattr(config, "ASSEMBLY_SCOPED_OPS_CHARGE_ONCE", False))
+    for _key in sorted(_groups.keys(), key=_group_order):
         g = _groups[_key]
+        # An assembly-level operation is done once per product however many parts it joins.
+        # Today it is charged once per part. Whether that is wrong turns on what the
+        # throughput rate MEANS -- assemblies per hour or parts per hour -- which is the
+        # estimators' ruling about their own table, so the default only SAYS SO.
+        if (not g.get("canonical_route")
+                and g.get("assembly_scoped")
+                and int(_safe(g.get("qty"), 1) or 1) > 1):
+            _was = int(_safe(g.get("qty"), 1) or 1)
+            if _charge_once:
+                g["qty"] = assembly_scoped_qty(g)
+                _flag(f"labour '{g.get('wb_op')}': ASSEMBLY-scoped operation charged ONCE "
+                      f"per product (was qty {_was}, one per part). "
+                      f"config.ASSEMBLY_SCOPED_OPS_CHARGE_ONCE is on.", flags)
+            else:
+                _flag(f"labour '{g.get('wb_op')}': the route marks this an ASSEMBLY-level "
+                      f"operation -- done once per product -- but it is charged at qty "
+                      f"{_was}, one per part it names. If the {g.get('wb_op')} rate is "
+                      f"ASSEMBLIES per hour this line is about {_was}x too high; if it is "
+                      f"PARTS per hour it is correct. Nothing changed: set "
+                      f"config.ASSEMBLY_SCOPED_OPS_CHARGE_ONCE once the rates are confirmed.",
+                      flags)
         if row > lb["last_row"]:
+            # A FULL BLOCK DROPS WORK, AND DROPPED WORK MUST BE SEEN. This was a `break` and
+            # one line in the flags: on 12173 (29 Sep) thirty false Robomac rows filled the
+            # block and Wet Spray and Assemble/pack fell off the end, while the unit cost
+            # read as complete. Every group that does not fit is now recorded with its parts
+            # and hours, and costed_facts counts it as blocking on every surface (D-340).
             labour_overflow = True
-            break
+            summary.setdefault("labour_not_on_sheet", []).append({
+                "operation": str(g.get("wb_op") or ""),
+                "parts": [str(p) for p in (g.get("parts") or [])],
+                "batch_hours": round(float(_safe(g.get("bh"), 0) or 0), 4),
+            })
+            continue
         wb_op = g["wb_op"]
 
         # Assemble/pack is PER PRODUCT: you pack the finished product once, not once per
@@ -1321,34 +8019,148 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # (When the parts themselves carry POWDER, they are coated individually before
         #  assembly and the per-part count is right — so this only applies to the
         #  assembly-level case.)
-        _qty = 1 if (wb_op in _PACK_OPS
-                     or (wb_op == "P.Coat" and _assembly_level_powder)) else int(g["qty"] or 1)
+        # ONE OCCASION FOR THE JOB, HOWEVER MANY COMPONENTS TAKE IT.
+        #
+        # The two graders disagreed here and nobody noticed: the legacy branch below forces
+        # qty 1 for the pack departments, while the canonical branch takes the accumulated
+        # group quantity — and 7332-01 travels the canonical road with TWO plated parts,
+        # 008 and 101. The estimator mints the pack stages on both, the group adds them,
+        # and the row books two occasions of a figure Howard gave as one: 30/hr where the
+        # stated 4 minutes makes 15.
+        #
+        # Asked from the declared basis rather than from the department, so it answers the
+        # same on both paths and a rule whose minutes really are per component still gets
+        # its per-component quantity.
+        _stated_once = bool(g.get("stated_once_per_finished_unit"))
+        if _stated_once:
+            _qty = 1
+            _parts_in = [p for p in (g.get("parts") or []) if p]
+            if len(_parts_in) > 1:
+                _flag(f"'{wb_op}' booked ONCE for the finished unit, not once per "
+                      f"component: {len(_parts_in)} parts take it ({', '.join(_parts_in)}) "
+                      f"and the shop's figure is stated per unit. If this operation really "
+                      f"happens once per component, say so and the basis changes in one "
+                      f"place (config.STATED_TIME_OPERATIONS).", flags)
+        elif g.get("canonical_route"):
+            _qty = int(_safe(g.get("qty"), 1) or 1)
+        else:
+            _qty = 1 if (wb_op in _PACK_OPS
+                         or (wb_op == "P.Coat" and _assembly_level_powder)) else int(g["qty"] or 1)
 
         _matx = str(g["material"] or "").replace("_", " ").strip()
-        _spec = []
-        if g["thickness"]:
-            _spec.append(("%g" % g["thickness"]) + "mm")
-        if _matx:
-            _spec.append(_matx)
-        _detail = ""
-        if g["bends"]:
-            _detail = " (%d bend%s)" % (g["bends"], "" if g["bends"] == 1 else "s")
-        elif g["holes"]:
-            _detail = " (%d hole%s)" % (g["holes"], "" if g["holes"] == 1 else "s")
-        _pl = g["parts"]
-        _ptxt = ", ".join(_pl[:6]) + (", +%d more" % (len(_pl) - 6) if len(_pl) > 6 else "")
-        _rd = str(wb_op)
-        if _spec:
-            _rd += " — " + " ".join(_spec)
-        if _ptxt:
-            _rd += " (" + _ptxt + ")"
-        _rd += _detail
+        # AN ASSEMBLY HAS NO GAUGE, AND PRINTING ONE IS WORSE THAN PRINTING NOTHING.
+        #
+        # 11908-21's pack row read "Assemble/pack (Acrylic) — 3mm MDF" over three parts the
+        # sheet costs at 9mm, and section 7 of the covering note said so on the same page:
+        # "9 (the page also reads 1.0, 3 — not used)". An assembly-scoped row takes its
+        # material and thickness from the PARENT, and a parent's thickness is whatever stray
+        # number the GA page happened to print — the gauge belongs to its children, and they
+        # do not all share one.
+        #
+        # Boxing a finished assembly is not a gauge operation, so the row names the parts and
+        # stops. Every part-scoped row is untouched: there the gauge is the part's own and it
+        # is the most useful thing on the line.
+        _rd = labour_row_description(wb_op, g.get("material_shown") or g["material"],
+                                     None if g.get("assembly_scoped") else g["thickness"],
+                                     g["parts"], g["bends"], g["holes"],
+                                     work_ops=g.get("engine_ops") or ())
+        # THE PROCESS THE PACK STATES, BESIDE THE RATE ROW IT IS CHARGED ON (D-393).
+        _wp_note = weld_process_note(wb_op, g.get("parts") or (), _pe_by_pn_for_rows)
+        if _wp_note:
+            _rd += _wp_note
+            g["weld_process_note"] = _wp_note.strip(" []")
+        # WHAT THE EVENT COVERS, beside the one thing it is charged on (D-398).
+        if g.get("joins"):
+            _jl = [str(j) for j in g["joins"]]
+            _rd += (" [covers " + ", ".join(_jl[:6])
+                    + (f", +{len(_jl) - 6} more" if len(_jl) > 6 else "") + "]")
 
         ws.cell(row=row, column=lb["col_operation"], value=wb_op)
+        _pcell = (free_labour_parts_cell(ws, row, int(lb["col_desc"]), _parts_col)
+                  if _parts_col else None)
+        if _pcell is not None:
+            _rd, _pn_text = split_labour_description(_rd, wb_op, g["parts"])
+            _pcell.value = _pn_text[:200] or None
+            from openpyxl.styles import Alignment as _Al
+            _a = _pcell.alignment
+            _pcell.alignment = _Al(horizontal=_a.horizontal, vertical="top", wrap_text=True)
         ws.cell(row=row, column=lb["col_desc"],      value=_rd[:200])
         ws.cell(row=row, column=lb["col_qty"],       value=_qty)
 
+        # ── ONE DECISION, BEFORE THE CHAIN ────────────────────────────────────────────
+        #
+        # "A later writer can throw away a correct shop figure and print a plausible
+        # default." — James Gray, 15 Sep 2026, and he is describing the shape rather than
+        # any one bug.
+        #
+        # Five branches below can each discard a computed time, and FOUR have now been
+        # caught doing it, one run apiece: assembly scope skipped the grouping, the floor
+        # guard replaced an outlier, one-row-per-job took the median, and the department
+        # alias filed the hours under a name nobody asked for. Each fix was an exception
+        # added inside one link, and the next run found the next link. Weld took four runs
+        # that way; pack is on its fifth.
+        #
+        # A time a department stated is not a candidate to be weighed against five defaults.
+        # It is the answer. So it is decided ONCE, here, above the chain — and a row that
+        # has one never enters the chain at all. There is no sixth branch to find, because
+        # there is no longer a path from a stated time to a default.
+        #
+        # Everything else is untouched: a group with no stated time walks the chain exactly
+        # as before, and the medians keep doing the job they are good at.
+        _stated_hours, _stated_members = stated_row_hours(
+            g, _stated_time_by_pn, _stated_hours_by_pn, _stated_ops_by_pn)
+        _stated_from = ", ".join(_stated_members)
+        if _stated_hours and _stated_hours > 0:
+            _tp_stated = float(_qty) / _stated_hours
+            ws.cell(row=row, column=lb["col_throughput"], value=round(_tp_stated, 4))
+            g["rate_basis"] = "stated_shop_time"
+            g["workbook_row"] = row
+            _flag(f"throughput for '{wb_op}' is {_tp_stated:.2f}/hr — "
+                  f"{_stated_shop_time_source(g, _stated_time_by_pn)}, read from "
+                  f"{_stated_from}'s own record{'s' if len(_stated_members) > 1 else ''}: "
+                  f"{_qty} piece(s) in {_stated_hours * 60:.1f} min a finished unit, every "
+                  f"member times its own pieces. A stated time does not compete with a "
+                  f"department median; it replaces it.",
+                  flags)
+            row += 1
+            continue
+
         default_tp = _THROUGHPUT_DEFAULTS.get(wb_op or "")
+        # AND THE ESTIMATOR'S OWN THROUGHPUT OUTRANKS THE CORPUS.
+        #
+        # "Line 96 – Laser Rate Acrylic Comparison AI 252 p/hour Manual Estimate 95 p/hour."
+        # 252 is a row in the table above, measured off THIRTEEN historical lines. Howard
+        # Thurley runs the department. Thirteen lines is not better evidence than the person
+        # who does the work, and until now there was no way for him to say so except for us
+        # to edit a dict inside a function — which is precisely the complaint that the rates
+        # are scattered through the code.
+        #
+        # His figure, for this job, named as his. It does not inherit: the answers file is
+        # named for the drawing. A rate that should govern every job belongs in the table or
+        # on the template, which is a separate decision and a deliberate one.
+        _dec_tp = ((summary.get("estimator_decisions") or {}).get("throughput_per_hour") or {}) \
+            if isinstance(summary, dict) else {}
+        _tp_override = _safe(_dec_tp.get(wb_op or ""))
+        if _tp_override and _tp_override > 0:
+            ws.cell(row=row, column=lb["col_throughput"], value=round(float(_tp_override), 4))
+            g["rate_basis"] = "estimator_stated"
+            _flag(f"throughput for '{wb_op}' is "
+                  f"{float(_tp_override):g}/hr — "
+                  f"{(summary.get('estimator_decisions') or {}).get('decided_by', 'the estimator')}"
+                  f"'s own figure for this job, in place of the "
+                  f"{default_tp if default_tp else 'derived'}/hr the corpus gives. Governs "
+                  f"this drawing only.", flags)
+            g["workbook_row"] = row
+            row += 1
+            continue
+        # HOW THIS RATE WAS ARRIVED AT, as data rather than a code comment.
+        #
+        # Tube 40/hr is an UNMEASURED constant; P.Coat 458/hr is a historical observation;
+        # the laser rate is the estimators' OWN calculator read off the template. Three
+        # very different claims, and the audit tabs presented all three identically because
+        # the only place the difference was recorded was a "# UNMEASURED" comment.
+        _rate_basis = ("unmeasured_default" if (wb_op or "") in _THROUGHPUT_UNMEASURED
+                       else "historical" if default_tp else "engine_derived")
 
         # ── SIZE-BANDED DEFAULT, keyed on the job's largest part AREA ────────────────
         # For Assemble/pack and P.Coat one number cannot be right - a small part is packed
@@ -1363,15 +8175,53 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _banded = _bands.get(_band)
             if _banded:
                 _flag(f"throughput for '{wb_op}' size-banded on part area: largest part "
-                      f"{_max_part_area_m2:.4f} m2 -> band {_band} -> {_banded}/hr "
+                      f"{_max_part_area_pn or '?'} {_max_part_area_m2:.4f} m2 -> band {_band} "
+                      f"-> {_banded}/hr "
                       f"(was default {default_tp}/hr). MEASURED from your own history by product "
                       f"size - a small part runs faster than a big one, and one median cannot "
                       f"say that. Retune in config.THROUGHPUT_SIZE_BANDS.", flags)
                 default_tp = _banded
+                _rate_basis = "size_banded"
         elif _bands and _max_part_area_m2 <= 0:
             _flag(f"throughput for '{wb_op}': wanted to size-band it but no fabricated part "
                   f"area was computed - using the un-banded default {default_tp}/hr. Not "
                   f"guessing a band.", flags)
+            # A historical median applied WITHOUT the band it was measured in. Weaker than
+            # a banded rate and stronger than a constant nobody measured — a distinction
+            # the sheet made in a console line and nowhere an estimator reads.
+            if _rate_basis != "unmeasured_default":
+                _rate_basis = "historical_unbanded"
+
+        # ── P.COAT BY HANGING GEOMETRY (Howard, 1176-02) ─────────────────────────────
+        # A part longer than one bar occupies several on the line; the size band cannot
+        # see that, so where one does the row's rate is the line's bars an hour over the
+        # bars its pieces take. config.POWDER_HANGING holds the method and who stated it.
+        if (wb_op or "") == "P.Coat":
+            _by_pn_ph = {str(p.get("part_number") or "").upper(): p
+                         for p in (_all_pes_pw or []) if isinstance(p, dict)}
+            _row_parts_ph = [_by_pn_ph[str(x).upper()] for x in (g.get("parts") or [])
+                             if str(x).upper() in _by_pn_ph]
+            _hang = powder_hanging_throughput(_row_parts_ph)
+            if _hang is not None:
+                default_tp = round(_hang[0], 1)
+                _rate_basis = "powder_hanging_geometry"
+                g["rate_working"] = _hang[1]
+                _flag(f"throughput for 'P.Coat' from hanging geometry: {_hang[1]}", flags)
+            # AND THE COAT'S TIME FOLLOWS ITS AREA. The size band and the bars say how many
+            # pieces the line can hang; neither says how long a large piece takes to spray.
+            # The M&S steel unit coated 9.36 m2 at the band's 319/hr — about £1 — and its
+            # riser (12527-22) coated 0.17 m2 at a floor of 20/hr — £19. The row takes the
+            # slower of line capacity and area, and the area rate is a measurement, so an
+            # assembly's own engine-computed coat time does not outrank it as "stated".
+            _by_area = powder_area_throughput(_row_parts_ph)
+            if _by_area is not None:
+                g["time_from_area"] = True
+                if not default_tp or _by_area[0] < float(default_tp):
+                    default_tp = round(_by_area[0], 1)
+                    _rate_basis = "powder_coated_area"
+                    g["rate_working"] = _by_area[1]
+                _flag(f"throughput for 'P.Coat' checked against coated area: {_by_area[1]} "
+                      f"— row charged at {float(default_tp):g}/hr.", flags)
 
         # Assembly, packing and welding time is NOT in the DXF. There is no geometry from
         # which to derive "how long does it take to pack this" — the engine's derived value
@@ -1398,53 +8248,534 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _rws = [_r for _r in _rws if _r]
             if _rws:
                 _qs = "+".join("E%d" % _r for _r in _rws)
-                _ts = "+".join("E%d*V%d" % (_r, _r) for _r in _rws)
+                # A FLOOR UNDER THE SECONDS, BECAUSE NOBODY LOADS A PART IN ONE SECOND.
+                #
+                # The calculator times the CUT. On a part big enough for cutting to
+                # dominate that is the right answer and Howard's own figures agree with it:
+                # 7332-01-003, a 441 x 10 strap, computed 236/hr against his 235. But
+                # 7332-01-004 is a 15.88 mm square cap — a cut path of a few centimetres —
+                # and the same formula returned 3,340/hr where he books 900. At 3,340 an
+                # hour a part is loaded, pierced, cut and unloaded in 1.08 seconds, which
+                # no machine and no operator does.
+                #
+                # So the denominator is floored at the time a part takes REGARDLESS of its
+                # cut path (config.LASER_MIN_SECONDS_PER_PART). Applied inside the
+                # template's own formula with MAX(), so the calculator is still visibly
+                # doing the work and still tracks any change the estimators make to their
+                # cutting speeds — the floor only governs where the cut is so short that
+                # handling is the whole job.
+                _floor = _safe(getattr(config, "LASER_MIN_SECONDS_PER_PART", 0), 0) or 0
+                if _floor > 0:
+                    _ts = "+".join("E%d*MAX(V%d,%g)" % (_r, _r, _floor) for _r in _rws)
+                else:
+                    _ts = "+".join("E%d*V%d" % (_r, _r) for _r in _rws)
                 _fb = float(default_tp or 269)
                 _laser_formula = "=IFERROR(3600*(%s)/(%s),%s)" % (_qs, _ts, _fb)
 
         if _laser_formula:
             ws.cell(row=row, column=lb["col_throughput"], value=_laser_formula)
+            # The estimators' own calculator, on their own cutting speeds. The strongest
+            # basis on the sheet, and previously indistinguishable from a guess.
+            _rate_basis = "template_calculated"
             _flag(f"laser throughput now READS THE TEMPLATE'S OWN Laser Rate Calculator "
                   f"(rows {_rws}) instead of the engine's time model. The calculator uses "
                   f"the estimators' cutting speeds, the blank size, the hole count and the "
                   f"internal cut distance — all of which we already write into it. On 1310 "
                   f"it computes 311/hr where our model said 80 (Tim books 300).", flags)
-        elif (wb_op in _ONE_ROW_PER_JOB or wb_op in _PER_PART_OPS) and default_tp:
+        elif (wb_op == "Laser (Metal)" and default_tp
+              and (_safe(g.get("run_hours_per_unit")) or _safe(g.get("bh")))):
+            # NO CALCULATOR ROW, SO THE ENGINE'S OWN CUT-PATH TIME (D-569). The template's
+            # Laser Rate Calculator lives on the Sheet Steel block's rows; a sheet metal costed
+            # elsewhere — the stainless strip in Other Sheet Material (D-559) — has no row for
+            # it to read, and the first cut fell to the department median (269/hr), losing the
+            # geometry the engine had already timed. The engine's run time per piece is the
+            # same cut-path arithmetic the calculator does, so it stands in here, and says so.
+            _rhpu_l = _safe(g.get("run_hours_per_unit"))
+            _bh_l = _safe(g.get("bh"))
+            _tp_l = (float(_qty) / _rhpu_l if (_rhpu_l and _rhpu_l > 0)
+                     else (order_qty * _qty) / float(_bh_l))
+            ws.cell(row=row, column=lb["col_throughput"], value=round(_tp_l, 4))
+            _rate_basis = "engine_time_model"
+            _flag(f"laser throughput for {', '.join(g.get('parts') or [])} is {_tp_l:.1f}/hr "
+                  f"from the engine's own cut-path time — the part is costed outside the Sheet "
+                  f"Steel block, so the template's Laser Rate Calculator has no row for it "
+                  f"(D-569); not the {default_tp}/hr department median.", flags)
+        elif ((wb_op in _ONE_ROW_PER_JOB or wb_op in _PER_PART_OPS) and default_tp
+              and not _group_carries_a_stated_shop_time(g, _stated_time_by_pn, _stated_ops_by_pn)):
             ws.cell(row=row, column=lb["col_throughput"], value=float(default_tp))
+        elif (wb_op in _ONE_ROW_PER_JOB or wb_op in _PER_PART_OPS) and default_tp \
+                and not _safe(g.get("run_hours_per_unit")) and not _safe(g.get("bh")):
+            # Stated, but nothing actually arrived to state. The default stands rather than
+            # a division by nothing.
+            ws.cell(row=row, column=lb["col_throughput"], value=float(default_tp))
+        elif wb_op in _ONE_ROW_PER_JOB or wb_op in _PER_PART_OPS:
+            # ── THE THIRD RULE, AND THE ONE THAT WAS ACTUALLY IN FORCE ─────────────────
+            #
+            # The branch above is right about derived values and wrong about stated ones,
+            # and its own comment says which: "Assembly, packing and welding time is NOT in
+            # the DXF ... the engine's derived value for those ops is fiction dressed as
+            # measurement (1310's weld derived at 14.85/hr against a corpus average of 29)."
+            #
+            # True, and it does not describe 7332-01. Nothing was derived from geometry
+            # there: the welding department said half an hour, the figure sat in
+            # config.WELD_TIME_MODEL with their name on it, and the estimator applied it.
+            # That is the opposite of fiction dressed as measurement — it is measurement,
+            # and this branch handed it to a corpus median anyway.
+            #
+            # Three rules stood between Howard Thurley's 9 September note and the sheet, and
+            # each one was individually defensible: assembly-scope skips the grouping, the
+            # floor guard replaces outliers, and one-row-per-job ops take the default. Every
+            # one of them exists to stop the engine inventing a time. None of them could
+            # tell an invention from a figure a department wrote down.
+            #
+            # So the exception is the same one, a third time: a STATED time wins. Where the
+            # group carries none, the default stands exactly as before.
+            _rhpu_s = _safe(g.get("run_hours_per_unit"))
+            _bh_s = _safe(g.get("bh"))
+            if _rhpu_s and _rhpu_s > 0:
+                _stated_tp = float(_qty) / _rhpu_s
+            else:
+                _stated_tp = (order_qty * _qty) / float(_bh_s)
+            ws.cell(row=row, column=lb["col_throughput"], value=round(_stated_tp, 4))
+            _rate_basis = "stated_shop_time"
+            _flag(f"throughput for '{wb_op}' is {_stated_tp:.2f}/hr from "
+                  f"{_stated_shop_time_source(g, _stated_time_by_pn)} — NOT the "
+                  f"{default_tp}/hr department median. This operation normally takes the "
+                  f"median because a time derived from geometry would be fiction; this one "
+                  f"was not derived, it was stated.", flags)
         else:
             bh = g["bh"]
-            if bh and bh > 0:
+            # THE RATE FIRST, THE BATCH ONLY AS A FALLBACK.
+            #
+            # batch_hours carries a one-off setup and the quantity it was built for, so a
+            # rate derived from it moves when the order moves — 11350's fold read 65.85/hr
+            # at 180 off and 7.32/hr at 20, which is the same number scaled by 20/180. The
+            # run time per piece has no quantity in it and is what a throughput means.
+            _rhpu = _safe(g.get("run_hours_per_unit"))
+            if _rhpu and _rhpu > 0:
+                _derived = float(_qty) / _rhpu
+            elif bh and bh > 0:
                 _total_pieces = order_qty * _qty
                 _derived = _total_pieces / bh
+                _flag(f"throughput for '{wb_op}' derived from BATCH hours, which carry the "
+                      f"quantity they were built for — this rate moves with the order size "
+                      f"and should not. The estimator recorded no per-piece run time for "
+                      f"this operation.", flags)
+            # ── THE ROW SHOWS ITS WORKING WHERE IT COMBINES SEVERAL PARTS ──────────────
+            #
+            # "Is AI linking both parts with average rate input?" — the answer is no, and
+            # the honest version of that answer is arithmetic he can see. The row rate is
+            # total pieces divided by total hours, which is the CORRECT combination and not
+            # a mean: a mean of 235 and 900 is 567.5, and the true combination of two at
+            # each is 372.7. Those are different numbers and only one of them is a rate.
+            #
+            # But a single blended figure cannot be checked against either part, and where
+            # the members run at very different speeds it hides a fast part behind a slow
+            # one. 7332-01's row is a 441 x 10 strap beside a 15.88 square cap.
+            #
+            # So the row names its members and their own rates, and says loudly when they
+            # are far apart. Nothing about the money changes — this is the working, not a
+            # new figure, and the grouping stays because the set-up is genuinely shared.
+            _hbp = g.get("hours_by_part") or {}
+            _each_cell = None
+            if len(_hbp) > 1 and order_qty:
+                _per_part = member_rates(_hbp, order_qty)
+                if len(_per_part) > 1:
+                    _rates = [r for _, r, _ in _per_part]
+                    _spread = max(_rates) / max(1e-9, min(_rates))
+                    _shown = "; ".join(f"{p} {r:.0f}/hr" for p, r, _ in
+                                       sorted(_per_part, key=lambda x: -x[1]))
+                    _msg = (f"labour '{wb_op}' is ONE row covering {len(_per_part)} parts — "
+                            f"{_shown}. The row rate is total pieces / total hours, which is "
+                            f"the true combination and NOT an average of those figures "
+                            f"(a mean would be a different number and would not be a rate). "
+                            f"Set-up is booked once because the parts share it.")
+                    if _spread >= float(getattr(config, "LABOUR_GROUP_RATE_SPREAD_FLAG", 3.0)):
+                        _msg += (f" THESE RUN {_spread:.1f}x APART: a fast part is sharing a "
+                                 f"row with a slow one, so neither can be checked against "
+                                 f"the single figure. Split them on the sheet if the "
+                                 f"difference matters.")
+                    _flag(_msg, flags)
+                    g["members_own_rates"] = {p: round(r, 1) for p, r, _ in _per_part}
+                    # ON THE ROW ITSELF, not only in a flag. Every question this engine has
+                    # raised in a review flag so far has reached neither deliverable, and a
+                    # breakdown an estimator cannot see answers nothing.
+                    _desc_cell = ws.cell(row=row, column=lb["col_desc"])
+                    _desc_cell.value = (f"{str(_desc_cell.value or '')}  —  each: {_shown}"
+                                        )[:200]
+                    _each_cell = _desc_cell
+                    if _spread >= float(getattr(
+                            config, "LABOUR_GROUP_RATE_SPREAD_FLAG", 3.0)):
+                        _inputs.append({
+                            "kind": "assumption_unconfirmed",
+                            "part": ", ".join(p for p, _, _ in _per_part),
+                            "where": f"Estimate row {row}",
+                            "what": (f"ONE {wb_op} row covers parts running {_spread:.1f}x "
+                                     f"apart ({_shown}). The row rate is the true "
+                                     f"combination, not an average, but neither part can be "
+                                     f"checked against it. Split them if the difference "
+                                     f"matters to the price."),
+                        })
+
+            if (_rhpu and _rhpu > 0) or (bh and bh > 0):
                 throughput = _derived
-                if default_tp:
+                # ── A DEPARTMENT'S OWN RATE IS NOT A DEFAULT TO BE IMPROVED ON ────────
+                #
+                # The rule is already written forty lines below, for stated TIMES: "corpus
+                # medians are evidence about jobs in general. A stated time is evidence
+                # about this one, and it wins." A stated THROUGHPUT is the same fact in the
+                # other unit, and it was being treated as a fallback — used only when the
+                # derived figure was more than five times away from it.
+                #
+                # 11908-21's 17:18 book is what that costs. Tony measured CNC at 12/hr and
+                # packing at 20/hr; the corpus derived 22.5 and 75, both inside the ×5
+                # guard, so both overwrote him and the sheet booked his job at nearly four
+                # times his own packing rate. Bench and Machines happened to land outside
+                # the guard and took his figures, so ONE BOOK carried two of his rates and
+                # two corpus medians in the same block — which is worse than either, because
+                # nothing on the page says which is which.
+                #
+                # The guards stay exactly as they are for every unstated row: they exist to
+                # catch a garbage derivation, not to arbitrate between a median and a
+                # measurement.
+                if default_tp and wb_op in _STATED_THROUGHPUT_ROWS:
+                    if abs(_derived - float(default_tp)) > 0.01:
+                        _flag(f"'{wb_op}' at {float(default_tp):g}/hr — the rate the "
+                              f"department STATED, not the {_derived:.2f}/hr this job's own "
+                              f"hours derive. A corpus median is evidence about jobs in "
+                              f"general; a measured rate is evidence about this one.",
+                              flags)
+                    throughput = float(default_tp)
+                elif default_tp:
                     _ceiling = default_tp * _THROUGHPUT_CEILING_MULTIPLIER
                     _floor = default_tp / _THROUGHPUT_FLOOR_DIVISOR
-                    if _derived > _ceiling:
+                    # THE WRITER IS NOT A SECOND ESTIMATOR (D-598d). A time worked out per
+                    # finished product is the costed time; outside the default's range it is
+                    # a question, not a cue to charge the department default instead. 0320730's
+                    # drilling row derived 461/hr from its own run time and was charged at the
+                    # 30/hr default. A batch-only derivation keeps the guards below, and a time
+                    # the shop stated keeps its own branch. Keeping a time is not validating it.
+                    from charge_transfer_policy import preserve_run_rate
+                    if ((_derived > _ceiling or _derived < _floor)
+                            and preserve_run_rate(_qty, _rhpu, _derived)
+                            and not (_derived < _floor and _group_carries_a_stated_shop_time(
+                                g, _stated_time_by_pn, _stated_ops_by_pn))):
+                        _why = (f"'{wb_op}' derives {_derived:.2f}/hr from this job's run "
+                                f"hours per finished product, outside the default range "
+                                f"{_floor:.2f}-{_ceiling:.2f}/hr. Costed time retained; "
+                                f"confirm the operation count and time basis.")
+                        _flag(_why, flags)
+                        _inputs.append({"kind": "assumption_unconfirmed",
+                                        "part": ", ".join(str(p) for p in g.get("parts", [])),
+                                        "where": f"Estimate row {row}", "what": _why})
+                        g["throughput_review"] = _why
+                    elif _derived > _ceiling:
                         throughput = float(default_tp)
                         _flag(f"throughput CEILING hit on '{wb_op}': derived {_derived:.2f}/hr "
                               f"is {_derived/default_tp:.1f}x the default {default_tp}/hr "
                               f"— using default (was UNDER-charging).", flags)
-                    elif _derived < _floor:
+                    elif _derived < _floor and not _group_carries_a_stated_shop_time(g, _stated_time_by_pn, _stated_ops_by_pn):
                         throughput = float(default_tp)
                         _flag(f"throughput FLOOR hit on '{wb_op}': derived {_derived:.2f}/hr "
                               f"is {default_tp/_derived:.1f}x SLOWER than the default "
                               f"{default_tp}/hr — using default (was OVER-charging).", flags)
+                    elif _derived < _floor:
+                        # A DEPARTMENT'S OWN FIGURE IS NOT AN OUTLIER TO BE CORRECTED.
+                        #
+                        # The floor exists to catch garbage derivations — a missing bend
+                        # count deriving 0.17/hr and billing five hours to route a panel.
+                        # It cannot tell those from a time the shop actually gave us, and
+                        # on 7332-01 it could not: the welding department's 30 minutes and
+                        # the 4 + 8 minute plater pack both derive far below their corpus
+                        # medians, so the median replaced them and the sheet booked two
+                        # minutes. The engine was right, the guard overruled it, and the
+                        # estimator's own numbers never reached the page he reads.
+                        #
+                        # Corpus medians are evidence about jobs in general. A stated time
+                        # is evidence about this one, and it wins.
+                        _flag(f"throughput floor NOT applied on '{wb_op}': derived "
+                              f"{_derived:.2f}/hr is below the {default_tp}/hr corpus "
+                              f"median, but this time was STATED by the shop — "
+                              f"{_stated_shop_time_source(g, _stated_time_by_pn)} — so it stands.", flags)
+                # Derived from this job's own geometry unless a guard replaced it with the
+                # default, in which case the default's own basis stands.
+                if throughput == _derived:
+                    _rate_basis = "engine_derived"
+                elif _each_cell is not None:
+                    # THE ROW SAYS WHICH RATE IT CHARGES (D-353). M&S's bin, 30 Sep: "CNC
+                    # Joinery … each: CPT01 7/hr; CPT04 7/hr; CPT05 7/hr" on a row charging
+                    # the department's 12/hr. The members' figures are the engine's own
+                    # estimate and are not what the row costs; the row says so.
+                    _each_cell.value = (f"{str(_each_cell.value or '')} (engine estimate; "
+                                        f"charged at {throughput:g}/hr)")[:240]
                 ws.cell(row=row, column=lb["col_throughput"], value=round(throughput, 4))
             elif default_tp:
                 ws.cell(row=row, column=lb["col_throughput"], value=float(default_tp))
             else:
                 _flag(f"labour op '{wb_op}' has no batch_hours and no default throughput — "
                       f"WB hours/cost will be #DIV/0! for this row.", flags)
+        g["rate_basis"] = _rate_basis
+        # Remember WHICH sheet row this group became. The calculated read-back
+        # returns rows keyed only by their position, and without this join key it
+        # cannot recover which engine operations and which parts a row represents —
+        # it then falls back to inverting the department name, which expands every
+        # alias and duplicates operations on the client quote.
+        g["workbook_row"] = row
         row += 1
+
+    allocate_laser_nest_setup(ws, _groups, lb, flags)
+
+    # The canonical route record — built here, after the write loop, so every row carries
+    # the sheet row it actually landed on. See build_workbook_labour for why that matters.
+    summary["workbook_labour"] = build_workbook_labour(
+        _groups, _skip_pns, canonical_mode=_canonical_cutover)
 
     _flag(f"labour: {len(_groups)} grouped row(s) — setup is booked once per tooling group, "
           f"not once per part.", flags)
     if labour_overflow:
-        _flag(f"Labour overflow: more operations than {lb['last_row']-lb['first_row']+1} rows — extras DROPPED.", flags)
+        _dropped = summary.get("labour_not_on_sheet") or []
+        _flag(f"Labour overflow: more operations than {lb['last_row']-lb['first_row']+1} "
+              f"rows — {len(_dropped)} NOT ON THE SHEET and not in the unit cost: "
+              + "; ".join(f"{d['operation']} ({', '.join(d['parts'][:4])})" for d in _dropped)
+              + ". Add rows to the Labour block of the template.", flags)
+
+    # ── Make Total Material Cost tolerate not-yet-dimensioned rows ─────────
+    # One steel part with no blank L/W (or blank gauge) errors its per-row cost and, via the
+    # plain SUM in M92, blanks the WHOLE total (Material -> Unit -> Sell). Rewrite M92 to sum
+    # ignoring errors so the sheet shows a PARTIAL total from the credible lines + the flagged
+    # gaps, and self-completes as the estimator fills the dims. Non-regressive on clean jobs.
+    if _MATERIAL_TOTAL_ERROR_TOLERANT:
+        _make_material_total_error_tolerant(ws, flags)
+        # Also clean the scattered per-row #DIV/0!/#VALUE! so the sheet is presentable to
+        # estimating: wrap the error-prone row formulas in IFERROR (blank on error, real value
+        # once dims are filled). Same 'don't blank the credible work' intent, at cell level.
+        _clean_error_cells(ws, flags)
 
     # ── Append AI supplementary sheets (renamed to avoid clashing with WB) ──
+    # ── the inputs that are not BOM lines ──────────────────────────────────────
+    # MARGIN. A sheet whose Sell Price equals its cost has not had a commercial decision
+    # made on it. Zero is a legitimate answer, but it has to be a chosen one.
+    try:
+        _m_hit = _find_label_cell(ws, "margin applied")
+        if _m_hit:
+            _m_val = ws.cell(row=_m_hit[0], column=_m_hit[1] + 3)
+            if not _safe(_m_val.value):
+                _inputs.append({
+                    "kind": "margin_unset", "part": "MARGIN",
+                    "where": f"Estimate {_m_val.coordinate}",
+                    "what": "MARGIN NOT SET — Sell Price currently equals cost; set the "
+                            "margin or confirm 0% is intended",
+                })
+                _mark_input_cell(ws, _m_hit[0], _m_hit[1] + 3)
+    except Exception:
+        pass
+    # EDGING ON A FACED BOARD THAT NOBODY HAS STATED. Tony's first finding on 11908-21:
+    # "Not all materials calculated no ABS edging Allowed" — the drawing pack nowhere
+    # states the edging spec (his own line quotes the Egger reference from the spec book,
+    # not the sheet), so the engine cannot mint the material without inventing it. What
+    # it CAN do is measure: the laminated parts' edges are drawn, and their metreage is
+    # the quantity the spec will be priced over, by length, like the tape. One ask for
+    # the job, with the measurement in it, instead of a silently absent line.
+    try:
+        _lam_parts = [p for p in (bom_parts or [])
+                      if isinstance(p, dict)
+                      and (p.get("_laminate_in_board")
+                           or (p.get("material_estimate") or {}).get(
+                               "costing_material_family"))]
+        _bom_says_edging = any("EDG" in str(r.get("description") or "").upper()
+                               for r in (summary.get("bom_rows")
+                                         or (summary.get("document_analysis") or {}).get(
+                                             "bom_rows") or []) if isinstance(r, dict))
+        if _lam_parts and not _bom_says_edging:
+            # ── WHICH EDGES, THEN HOW LONG. NEVER THE PERIMETER BY DEFAULT ────────────
+            #
+            # This measured 2*(L+W) of every faced part and offered it as "the drawn edge
+            # metreage". On 11908-21 that is several times Tony's own 5 m, because his 5 m
+            # is the EXPOSED edges and the rest of the tray is not banded. A number that
+            # large, sitting in an estimate labelled as edging, is most of a material line.
+            #
+            # James: "identify the banded edges from a DXF layer, edge callout, note, hatch
+            # or detail; measure only those edges... Geometry can measure an edge precisely,
+            # but cannot know it needs ABS unless the drawing marks it."
+            #
+            # So the perimeter is still computed — as a CEILING an estimator can see — and
+            # the banded length comes from the drawing or does not come at all.
+            _banded_mm, _peri_mm, _bases, _why = 0.0, 0.0, set(), []
+            try:
+                from edge_banding import banded_length_mm as _banded_of
+            except Exception:                                    # noqa: BLE001
+                _banded_of = None
+            for _p in _lam_parts:
+                _q = float(_safe(_p.get("quantity")) or 1)
+                _v = _banded_of(_p) if _banded_of else {}
+                _peri_mm += float(_v.get("drawn_perimeter_mm") or 0.0) * _q
+                if _v.get("mm"):
+                    _banded_mm += float(_v["mm"]) * _q
+                    _bases.add(str(_v.get("basis") or ""))
+                elif _v.get("evidence"):
+                    _why.append(f"{_p.get('part_number') or 'part'}: {_v['evidence']}")
+            _edge_m = round(_banded_mm / 1000.0, 2)
+            _peri_m = round(_peri_mm / 1000.0, 2)
+            if _edge_m > 0 or _peri_m > 0:
+                # AND THE RATE WE HOLD, so the ask is one number to fill rather than a
+                # specification to write out. Asked of the system first and the estimators'
+                # own register second, exactly as the tape is — a line priced from the
+                # register says so, with the name and the date on it.
+                _edge_rate = ""
+                try:
+                    import stated_prices as _sp
+                    _px = _sp.resolve(getattr(config, "FACED_BOARD_EDGING_CODE", ""),
+                                      "ABS edging for faced board")
+                    if _px and _px.get("gbp"):
+                        _edge_rate = (
+                            f" We hold £{float(_px['gbp']):.2f} a metre for it "
+                            f"({_px.get('label') or 'source not named'}), so "
+                            f"{_edge_m:.1f} m would be "
+                            f"£{_edge_m * float(_px['gbp']):.2f} a unit if EVERY edge were "
+                            f"banded — tell us the banded metres and it prices by length, "
+                            f"like any roll goods.")
+                except Exception:                                # noqa: BLE001
+                    _edge_rate = ""
+                _inputs.append({
+                    "kind": ("material_measured" if _edge_m > 0
+                             else "material_unstated"),
+                    "part": "EDGING",
+                    "where": "faced-board parts",
+                    "what": (
+                        # MEASURED: the drawing marked the edges and the engine measured
+                        # exactly those. This is a length, not a question.
+                        (f"EDGING {_edge_m:.2f} m a unit, measured from the edges the "
+                         f"drawing marks as banded ({', '.join(sorted(b for b in _bases if b))}). "
+                         f"The parts' full drawn perimeter is {_peri_m:.2f} m — shown as "
+                         f"the ceiling, NOT as the banded length, because only the marked "
+                         f"edges take ABS. Spec {getattr(config, 'FACED_BOARD_EDGING_CODE', 'EDGE23X1ABS')}."
+                         + (_edge_rate or " The rate is asked of SDI Live or the supplier "
+                                          "catalogue; until one answers, the line is "
+                                          "explicitly unpriced rather than guessed."))
+                        if _edge_m > 0 else
+                        # NOT MEASURED: the drawing has not said which edges. The perimeter
+                        # is reported so the scale is visible, and it is not offered as the
+                        # answer — Tony's own 5 m is a fraction of it.
+                        (f"EDGING NOT ESTABLISHED — the faced parts have {_peri_m:.2f} m of "
+                         f"drawn perimeter a unit, which is a CEILING and not a banded "
+                         f"length: only the exposed edges take ABS. Nothing on the drawing "
+                         f"says which. "
+                         + (" ".join(_why[:3]) if _why else "")
+                         + " Mark the banded edges on an EDGEBAND layer, or name them in a "
+                           "note (e.g. 'ABS edge, 2 long edges'), and the engine measures "
+                           "them itself."))
+                })
+    except Exception:                                            # noqa: BLE001
+        pass
+
+    # POWDER COVERAGE. The rate in use is the template's 100%-transfer assumption, which
+    # nothing achieves; the flag already says so at length, but it says it to a console.
+    if _powder_kg_total and getattr(config, "POWDER_KG_PER_M2", None) is not None:
+        _inputs.append({
+            "kind": "assumption_unconfirmed", "part": "POWDER",
+            "where": "BOM — POWDER line",
+            "what": (f"POWDER COVERAGE UNCONFIRMED — booked at "
+                     f"{_POWDER_KG_PER_M2} kg/m2 (the template's 100% transfer efficiency). "
+                     f"Measured sheets imply 1.7-4.9x more. Confirm the rate "
+                     f"(config.POWDER_KG_PER_M2) or override the quantity here."),
+        })
+
+    # ── THE QUESTIONS THE ENGINE RAISED, WHICH REACHED NOBODY ───────────────────────────
+    #
+    # Every ruling this engine asks a person for was written to part["review_flags"], and
+    # part review_flags reach NEITHER the workbook NOR the report. Grepped on 7332-01's
+    # 20:26 book: zero hits for the brushing question, the 1.0 mm substitution, the tube
+    # bend charged on a word alone, or the double plater pack. Four commits' worth of "raised
+    # so a person can rule on it" were private notes to ourselves, and from the estimator's
+    # side the sheet looked as though his email had been read and ignored.
+    #
+    # A decision costs nothing to write and everything to lose. These are the flags that ASK
+    # something — a confirm, a TBC, a call that is the estimator's — put where the other
+    # outstanding inputs already are, so one list is the whole of what is unresolved.
+    # "NOT PRICED —" IS A QUESTION TOO (D-351): the researched rung's reason a bought-in line
+    # stayed at £0. 12645's shutters carried theirs only in the JSON, so the sheet could not
+    # say whether the research was never asked, found nothing, or was refused.
+    _ASKS = ("confirm", "tbc", "your call", "estimator", "rule on", "add it if",
+             "needs to say", "or take the op off", "which gauge is bought", "not priced —")
+    _seen_asks = set()
+    _priced_on_sheet = set()
+    for _pr in list(bom_parts or []) + [r for r in ((summary.get("estimate_summary") or {})
+                                                     .get("part_estimates") or [])
+                                         if isinstance(r, dict)]:
+        if not isinstance(_pr, dict):
+            continue
+        try:
+            from invariants import _line_carries_money as _has_money
+            if _has_money(_pr):
+                _priced_on_sheet.add(str(_pr.get("part_number") or "").strip().upper())
+        except Exception:                                            # noqa: BLE001
+            pass
+    _question_records = list(bom_parts or [])
+    _question_records += [r for r in (summary.get("parts") or []) if isinstance(r, dict)]
+    _question_records += [r for r in ((summary.get("estimate_summary") or {}).get(
+        "part_estimates") or []) if isinstance(r, dict)]
+    try:
+        from part_identity import thread_names_disagree as _threads_disagree
+    except Exception:                                                # noqa: BLE001
+        _threads_disagree = None
+    for _qp in _question_records:
+        if not isinstance(_qp, dict):
+            continue
+        _qpn = str(_qp.get("part_number") or "").strip()
+        # A CODE AND A DESCRIPTION THAT NAME DIFFERENT THREADS (D-347): priced as the code,
+        # and asked, because which one is meant is the drawing office's to say.
+        _tw = _threads_disagree(_qpn, _qp.get("description")) if _threads_disagree else ""
+        if _tw and (_qpn.upper(), "thread") not in _seen_asks:
+            _seen_asks.add((_qpn.upper(), "thread"))
+            _inputs.append({
+                "kind": "assumption_unconfirmed", "part": _qpn or "—",
+                "where": "engine question",
+                "what": (f"WHICH ITEM? {_tw}. The line is priced as the code; confirm which "
+                         f"is meant, and the drawing's parts list should say one thing")[:400],
+            })
+        for _fl in (_qp.get("review_flags") or []):
+            _txt = str(_fl or "").strip()
+            if not _txt or not any(_w in _txt.lower() for _w in _ASKS):
+                continue
+            # A LINE THE SHEET PRICES IS NOT "NOT PRICED" (D-359). D-357 removed the flag
+            # from the rescued record, but the raw record the list also reads kept it, so the
+            # 12:21 book still said "NOT PRICED — … refused" beside a £3.25 hinge.
+            if "not priced —" in _txt.lower() and (_qpn.upper() in _priced_on_sheet):
+                continue
+            _key = (_qpn.upper(), _txt[:120])
+            if _key in _seen_asks:
+                continue
+            _seen_asks.add(_key)
+            _inputs.append({
+                "kind": "assumption_unconfirmed", "part": _qpn or "—",
+                "where": "engine question", "what": _txt[:400],
+            })
+
+    # A RUN THAT COSTED NOTHING SAYS SO BESIDE THE PRICE CELLS (D-409), and the estimator-
+    # inputs banner stands aside: "PROVISIONAL — 2 to settle" over an empty book promised a
+    # figure somebody could finish.
+    _stopped = _write_run_stop_banner(ws, summary, flags)
+    if not _stopped:
+        # A book priced from the model carries that label first (D-411); the inputs banner
+        # follows it in the next free cell, since both are true.
+        _write_concept_takeoff_banner(ws, summary, flags)
+    _write_estimator_inputs(ws, _inputs, flags, banner=not _stopped)
+    _write_undrawn_bom_lines(ws, summary, flags)
     _append_ai_sheets(wb, summary, flags)
+
+    if _board_nest_rows:
+        _moved = point_bom_lines_at_nest_rows(ws, cm["bom"], _board_nest_rows)
+        for _bp in _board_spill:
+            if str(_bp.get("part_number") or "").strip() in _moved:
+                _bp["block_overflow"] = {"block": "Other Sheet Material",
+                                         "basis": "nested_by_block_formulas"}
+        if _moved:
+            flags[:] = [f for f in flags if not (
+                "overflow" in f and "engine's own figure" in f
+                and any(str(pn) in f for pn in _moved))]
+            _flag(f"Other Sheet Material block full: {', '.join(_moved)} nested by the "
+                  f"block's own formulas on the '{OVERFLOW_NEST_SHEET}' sheet and priced "
+                  f"from there on the Bill of Materials.", flags)
 
     # ── Force Excel to recalc on open ──────────────────────────────────────
     try:
@@ -1455,6 +8786,76 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             wb.calculation = CalcProperties(fullCalcOnLoad=True)
         except Exception:
             _flag("could not set fullCalcOnLoad — estimator may need to press F9.", flags)
+
+    # ── Last look before it is anybody's book ──────────────────────────────
+    # Asked here because here is the only point EVERY populated workbook passes through,
+    # whatever wrote the cell. A replacement character or an emoji can arrive from a
+    # drawing note, a supplier description or a module nobody thought to check; the glyph
+    # rule is enforced on the value, once, rather than trusted to every writer.
+    try:
+        from workbook_hygiene import scrub_workbook
+        _fixed, _where, _broken = scrub_workbook(wb)
+        if _broken:
+            # NAMED CELL BY CELL, BECAUSE THIS ONE IS NOT OURS. A #REF! comes from the
+            # blank template: openpyxl's value=None assigns nothing, so a price cell the
+            # engine left blank keeps whatever formula the template held, and one of those
+            # is broken — J20 on 7332-01, with M20 inheriting the error into the block
+            # total. Blanking it is right for the book in hand and wrong as a habit, so the
+            # address is on the log every time until the template itself is repaired.
+            _flag(f"BROKEN TEMPLATE FORMULA blanked in {len(_broken)} cell(s): "
+                  f"{', '.join(_broken)}. Each held a #REF! Excel can never evaluate, and "
+                  f"every cell reading it inherited the error. An unpriced line shows a "
+                  f"blank. THE TEMPLATE STILL CARRIES THIS — it wants fixing at source.",
+                  flags)
+        if _fixed:
+            _flag(f"cleaned {_fixed} cell(s) in "
+                  f"{', '.join(f'{k} ({v})' for k, v in sorted(_where.items()))} — "
+                  f"replacement boxes, emoji and broken references; the text around them "
+                  f"is unchanged.", flags)
+            print(f"   [wb_populate] workbook hygiene: {_fixed} cell(s) repaired {_where}")
+    except Exception as _e:
+        _flag(f"could not run the hygiene check over the workbook: {_e}", flags)
+
+    # ── Fold away the unused line slots — this book only, never the template ──
+    # Grouped and hidden, not deleted: formulas and row addresses stay exactly where the
+    # totals, the quantity sweep, the report and the quote read them. See workbook_compact.
+    if getattr(config, "ESTIMATE_COMPACT_UNUSED_SLOTS", True):
+        try:
+            from workbook_compact import compact_estimate
+            _cmp = compact_estimate(wb)
+            if _cmp.get("refused"):
+                _flag(f"Estimate sheet left full length: {_cmp['refused']}.", flags)
+            elif _cmp.get("hidden"):
+                print(f"   [wb_populate] Estimate sheet compacted: {_cmp['hidden']} unused "
+                      f"slot(s) grouped and hidden — "
+                      + "; ".join(f"{s_['title'] or 'block'} {s_['used']} shown/"
+                                  f"{s_['hidden']} hidden" for s_ in _cmp["sections"])
+                      + ". Open a group (the + at the left) to add a line.", flush=True)
+        except Exception as _ce:                                     # noqa: BLE001
+            _flag(f"could not compact the Estimate sheet ({_ce}); written full length.",
+                  flags)
+
+    # ── The book opens on the money, not the working ────────────────────────
+    # James Gray, 24 Sep 2026: "switch off the formulas to show the values". The blank
+    # template on the share was saved with Formulas > Show Formulas selected, and every book
+    # written from it opened showing =IF(H96=0,… in place of the price — whatever
+    # SHOW_FORMULAS_ON_ESTIMATE said, because nothing set the view; it was inherited. The view
+    # is set here on every sheet of the book we write. The template is not touched, and an
+    # estimator who wants the working presses Ctrl+` (or turns the switch on in config).
+    for _ws in wb.worksheets:
+        try:
+            _ws.sheet_view.showFormulas = False
+        except Exception:                                            # noqa: BLE001
+            pass
+
+    # ── ...on the Estimate sheet, scrolled to its top-left ──────────────────
+    # James Gray, 24 Sep 2026: the book should open on the estimating sheet with the page
+    # at the top left, so the compact estimate is the first thing estimating reads. The tab
+    # and scroll position are otherwise whatever the template was last saved with.
+    try:
+        open_on_sheet(wb, cm["estimate_sheet"])
+    except Exception as _oe:                                          # noqa: BLE001
+        _flag(f"could not set the book to open on the Estimate sheet ({_oe}).", flags)
 
     # ── Save-As to output dir with folder-name + timestamp ─────────────────
     os.makedirs(cm["output_dir"], exist_ok=True)
@@ -1498,12 +8899,267 @@ def _flag_to_text(rf):
         return " / ".join(_flag_to_text(x) for x in rf)
     return str(rf)
 
+def _geom_source_words(recorded: Any) -> str:
+    """What the geometry actually came from — READ, not re-derived.
+
+    THE DEFAULT WAS ANSWERING FOR THE RECORD. This column was:
+
+        {"dxf_flat_pattern": "dxf",
+         "solidworks_flat_pattern": "solidworks"}.get(str(geometry_source or ""), "pdf")
+
+    A two-key lookup with "pdf" as the fallback, over a field that takes at least six values.
+    `dxf_cut_length_only`, `dxf_matched_no_geometry` and `mirror_of_measured` all printed
+    "pdf" — three DXF-derived states reported as a PDF read, because they were not in the dict.
+    A miss and a genuine PDF read produced the same word, which is the failure mode the whole
+    source waterfall exists to prevent, reintroduced in the sheet that reports it.
+
+    IT ALSO PUT TWO TABS IN DISAGREEMENT. AI Provenance asks the same field a different way —
+    `"dxf" in geo` — so on 10575-01-001 one tab said `pdf` and the other `DXF flat pattern
+    (exact)` about one part. Neither was reading the record: one underclaimed by defaulting,
+    the other overclaimed by matching a substring, and `dxf_matched_no_geometry` means the DXF
+    was FOUND AND CARRIED NO GEOMETRY — the one state where "exact flat pattern" is precisely
+    wrong.
+
+    drawing_job_merge writes this field in three deliberate grades. Reading them back is the
+    whole job here; there is nothing to infer.
+    """
+    key = str(recorded or "").strip().lower()
+    return {
+        "dxf_flat_pattern":        "DXF — measured flat pattern",
+        "dxf_cut_length_only":     "DXF — cut length only, blank not measured",
+        "dxf_matched_no_geometry": "DXF matched but carried no geometry",
+        "solidworks_flat_pattern": "SolidWorks flat pattern",
+        "solidworks_api":          "SolidWorks model",
+        "mirror_of_measured":      "mirrored from the measured opposite hand",
+        "pdf":                     "PDF",
+        # NOT "pdf". A part with nothing recorded has not been read off a PDF; nobody has said
+        # where its geometry came from, and those are different facts about the estimate.
+        "":                        "not recorded",
+    }.get(key, key.replace("_", " "))
+
+
+def _ai_tab_parts(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """THE SAME LIST THE ESTIMATE SHEET IS BUILT FROM. These tabs annotate the Estimate
+    sheet's lines — the unit £, its source, the geometry behind it — so they must read the
+    exact rows the sheet carries. The Estimate sheet is built from canonical_part_estimates
+    (canonicalise merges recogniser duplicates AND MINTS explicit bought-in BOM lines that
+    never got a pricing record: the class-word commodities and the market/AI lines). Reading
+    the pre-canonical part_estimates here left every minted bought-in off both AI tabs — so
+    11762-17's £1.20 clip carried a price on the sheet and NO provenance row, and the report
+    read that absence as "source not named" on a line that has a source. Prefer the canonical
+    list; fall back to the pre-canonical one for the no-workbook / no-cutover path."""
+    _es = summary.get("estimate_summary") or {}
+    return (_es.get("canonical_part_estimates")
+            or _es.get("part_estimates") or summary.get("parts") or [])
+
+
+def _ai_tab_classifier(summary: Dict[str, Any]):
+    """(kind_of, origin_of) — the record's own classifiers, so the Material and Price
+    Source columns say what every other deliverable says. These tabs are written BEFORE
+    Excel calculates, so the money they carry is the engine's; the classification is not."""
+    try:
+        from costed_facts import (_line_kind, _material_label, _price_origin,
+                                  _canonical_nodes, canonical_identity, part_material_cost)
+        _nodes = _canonical_nodes(summary)
+
+        def kind_of(pe):
+            return _line_kind(pe, _nodes.get(canonical_identity(summary, pe.get("part_number"))))
+
+        def label_of(pe):
+            return _material_label(pe, kind_of(pe))
+
+        def origin_of(pe):
+            _unit, _ = part_material_cost(pe)
+            return _price_origin(pe, kind_of(pe), None, None, _unit, None, False)
+        return label_of, origin_of
+    except Exception:                                                # noqa: BLE001
+        return (lambda pe: pe.get("normalized_material")), (lambda pe: {})
+
+
+def _material_detail_rows(summary: Dict[str, Any]) -> List[List[Any]]:
+    """The AI Material Detail rows."""
+    pes = _ai_tab_parts(summary)
+    _label_of, _ = _ai_tab_classifier(summary)
+    mat_rows = []
+    for pe in pes:
+        me = pe.get("material_estimate") or {}
+        # A WIRE IS NOT A BLANK. A sheet part has Blank L × Blank W × Gauge; a wire has a
+        # developed LENGTH and a GAUGE (its diameter) and no width. Written into the sheet
+        # columns as-is, the gauge landed in Blank W and the Gauge column came out empty, so
+        # 04M read "900 | 0.554" with no gauge at all. Put the length under Blank L, the gauge
+        # under Gauge, and leave Blank W empty — the columns say what they hold.
+        _mi_md = pe.get("manufacturing_interpretation") or {}
+        _is_wire_md = (str(me.get("stock_form") or "").lower() in ("wire", "bar")
+                       or str(_mi_md.get("stock_form") or "").lower() in ("wire", "bar")
+                       or bool(pe.get("_bar_recognised")))
+        if _is_wire_md:
+            _blank_l = (_safe(me.get("wire_length_mm")) or _safe(pe.get("wire_length_mm"))
+                        or _safe(me.get("blank_length_mm")))
+            _blank_w = ""                       # a wire has no width
+            _gauge = (_safe(me.get("wire_gauge_mm")) or _safe(_mi_md.get("wire_gauge_mm"))
+                      or _safe(pe.get("wire_gauge_mm")) or _safe(me.get("blank_width_mm")))
+        else:
+            _blank_l = me.get("blank_length_mm")
+            _blank_w = me.get("blank_width_mm")
+            _gauge = pe.get("normalized_thickness_mm")
+        # WHAT THE LINE IS MADE OF, from the record's classifier. The stub that mints a
+        # commercial line or a plating service carries MILD STEEL because every stub does,
+        # and this column printed it beside PACKAGING, DELIVERY and the plating on 7332-01.
+        mat_rows.append([
+            pe.get("part_number"), pe.get("description"),
+            _label_of(pe),
+            _blank_l, _blank_w, _gauge,
+            me.get("cost_per_part_gbp"), me.get("extended_material_cost_gbp"),
+            (pe.get("geometry") or {}).get("estimated_cut_length_mm"),
+            _geom_source_words(pe.get("geometry_source")),
+        ])
+    return mat_rows
+
+
+def _price_provenance_rows(summary: Dict[str, Any]) -> List[List[Any]]:
+    """The AI Price Provenance rows — the unit £ and its source, for EVERY priced line."""
+    pes = _ai_tab_parts(summary)
+    _, _origin_of = _ai_tab_classifier(summary)
+    #
+    # EVERY PRICED LINE, NOT JUST THE BOUGHT-INS. This listed only page_roles 'bought_in', so a
+    # sheet-metal job showed a "Price Provenance" tab holding two placeholder lines
+    # (PACKAGING/DELIVERY) and nothing else — the sheet, the wires and the powder, every line
+    # that actually carries money, were absent. A tab titled Price Provenance that omits the
+    # priced lines reads as broken and sends a reader to the fuller AI Provenance tab for the
+    # one thing this one is named for. So it now carries a row per priced line: the fabricated
+    # ones name where the figure was struck (the nest/section block, via the cost method), the
+    # bought-ins name their catalogue/commodity source as before.
+    prov_rows = []
+    for pe in pes:
+        _me_pv = pe.get("material_estimate") or {}
+        _roles_pv = [str(r).lower() for r in (pe.get("page_roles") or [])]
+        _unit_pv = (_safe(pe.get("unit_cost_gbp"))
+                    or _safe(_me_pv.get("cost_per_part_gbp"))
+                    or _safe(_me_pv.get("unit_material_cost_gbp")))
+        _is_placeholder = bool(pe.get("_commercial_placeholder")
+                               or str(pe.get("source") or "") == "commercial_placeholder"
+                               or str(pe.get("part_number") or "").upper() in ("PACKAGING", "DELIVERY"))
+        # A line earns a provenance row if it carries a price, is a bought-in, or is a
+        # commercial placeholder we deliberately hold at £0 (so its £0 is explained, not blank).
+        if _unit_pv is None and "bought_in" not in _roles_pv and not _is_placeholder:
+            continue
+        _src_pv = (pe.get("cost_source") or pe.get("source")
+                   or _me_pv.get("cost_method") or "not named")
+        # THE RECORD'S WORDS FOR THE SOURCE. The raw token ("section_stock_config_rate",
+        # or nothing at all → "not named") is the machine's record; the estimator's column
+        # says what it means. The classes the record cannot name better than the token
+        # keep the token.
+        _origin = _origin_of(pe) or {}
+        _cls = str(_origin.get("class") or "")
+        if _origin.get("label") and _cls and _cls not in ("unrecorded", "nil_by_design"):
+            _src_pv = str(_origin["label"])
+        prov_rows.append([
+            pe.get("part_number"), pe.get("description"),
+            _unit_pv if _unit_pv is not None else pe.get("unit_cost_gbp"),
+            _src_pv,
+            "verified" if pe.get("price_verified") else "UNVERIFIED",
+            pe.get("supplier") or "",
+            " | ".join(_flag_to_text(_rf) for _rf in (pe.get("review_flags") or [])),
+        ])
+    return prov_rows
+
+
+def _write_boms_and_routes_sheet(wb, blocks: List[Dict[str, Any]]) -> Optional[str]:
+    """ONE tab. Three blocks: the BOMs, the routes, and where every column came from.
+
+    NOT THE TABS THAT WERE REMOVED, and the distinction is the point. Two sheets called Canonical
+    BOM and Canonical Route were deleted from this workbook on the instruction "we do have too
+    many tabs in that overall spreadsheet" — they were "ugly word document style listings": bare
+    text appended row after row, no header styling, no widths, no wrapping, restating facts held
+    elsewhere.
+
+    So this is ONE sheet, not three, because the ask was for a tab and three would be the same
+    bloat with better fonts. And presentation is not decoration here — it is the whole difference
+    between a sheet an estimator can work from and the one that was deleted: a block title, a
+    short note on what the block does and does not claim, a filled and frozen header, banded
+    rows, widths from the content with prose columns capped so one long reason cannot push the
+    columns somebody actually reads off the screen, and numbers right-aligned so a quantity reads
+    as a quantity.
+    """
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    title = "BOMs & Routes"
+    if title in CELL_MAP["structural_sheets"] or title in wb.sheetnames:
+        title = "AI " + title
+    ws = wb.create_sheet(title=title[:31])
+
+    NAVY = "1F3864"
+    head_fill = PatternFill("solid", fgColor=NAVY)
+    band_fill = PatternFill("solid", fgColor="FAFBFD")
+    wrap_top = Alignment(vertical="top", wrap_text=True)
+    widest: Dict[int, int] = {}
+    capped: Dict[int, int] = {}
+
+    cell = ws.cell(row=1, column=1, value="BOMs and Routes — what is in the pack, and where it "
+                                         "came from")
+    cell.font = Font(bold=True, size=15, color=NAVY)
+    note = ws.cell(row=2, column=1,
+                   value="Reads off the drawing pack and the compiled route. NO FIGURE ON THIS "
+                         "SHEET IS A COST.")
+    note.font = Font(size=9, italic=True, color="54607A")
+    row = 4
+
+    for block in blocks:
+        rows = block["rows"]
+        if not rows:
+            continue
+        header = block["header"]
+        wide = set(block.get("wide") or ())
+
+        cell = ws.cell(row=row, column=1, value=block["title"])
+        cell.font = Font(bold=True, size=12, color=NAVY)
+        row += 1
+        for line in block.get("intro") or []:
+            cell = ws.cell(row=row, column=1, value=line)
+            cell.font = Font(size=9, italic=True, color="54607A")
+            cell.alignment = wrap_top
+            ws.merge_cells(start_row=row, start_column=1,
+                           end_row=row, end_column=max(2, len(header)))
+            ws.row_dimensions[row].height = 26
+            row += 1
+
+        head_row = row
+        for column, name in enumerate(header, start=1):
+            cell = ws.cell(row=head_row, column=column, value=name)
+            cell.fill = head_fill
+            cell.font = Font(bold=True, color="FFFFFF", size=10)
+            cell.alignment = Alignment(vertical="bottom", wrap_text=True)
+            widest[column] = max(widest.get(column, 0), len(str(name)))
+            if name in wide:
+                capped[column] = 64
+        ws.row_dimensions[head_row].height = 30
+        row += 1
+
+        for index, values in enumerate(rows):
+            for column, value in enumerate(values, start=1):
+                cell = ws.cell(row=row, column=column, value=value)
+                cell.alignment = (Alignment(vertical="top", horizontal="right")
+                                  if isinstance(value, (int, float)) else wrap_top)
+                cell.font = Font(size=10)
+                if index % 2:
+                    cell.fill = band_fill
+                widest[column] = max(widest.get(column, 0),
+                                     len(str(value)) if value is not None else 0)
+            row += 1
+        row += 2       # air between blocks, so three tables do not read as one
+
+    for column, longest in widest.items():
+        ws.column_dimensions[get_column_letter(column)].width = min(
+            capped.get(column, 34), max(11, longest + 2))
+    # Frozen at the top so the sheet's own title stays visible while scrolling three blocks.
+    ws.freeze_panes = "A3"
+    return title
+
+
 def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
     """Append the engine's own detail/provenance sheets under NON-colliding names,
     so the WB's structural 'Labour' and 'Material Price Break' sheets are untouched."""
-    # AI Labour Detail — the engine's own labour breakdown (informational)
-    pes = (summary.get("estimate_summary") or {}).get("part_estimates") or summary.get("parts") or []
-
     def _add(title: str, header: List[str], rows: List[List[Any]]):
         # ensure name doesn't clash with structural sheets
         if title in CELL_MAP["structural_sheets"] or title in wb.sheetnames:
@@ -1513,39 +9169,234 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
         for r in rows:
             ws.append(r)
 
-    # AI Material Detail
-    mat_rows = []
-    for pe in pes:
-        me = pe.get("material_estimate") or {}
-        mat_rows.append([
-            pe.get("part_number"), pe.get("description"),
-            pe.get("normalized_material"),
-            (me.get("blank_length_mm")), (me.get("blank_width_mm")),
-            pe.get("normalized_thickness_mm"),
-            me.get("cost_per_part_gbp"), me.get("extended_material_cost_gbp"),
-            (pe.get("geometry") or {}).get("estimated_cut_length_mm"),
-            "dxf" if (pe.get("geometry_source") == "dxf_flat_pattern") else "pdf",
-        ])
-    _add("AI Material Detail",
-         ["Part", "Desc", "Material", "Blank L", "Blank W", "Gauge",
-          "Cost/Part", "Ext Material", "Cut len (mm)", "Geom source"],
-         mat_rows)
+    # NO "AI Material Detail" AND NO "AI Price Provenance" TABS ANY MORE.
+    #
+    # Both were written HERE, before Excel calculates, so they carried the engine's per-part
+    # figures — and sat in the same workbook as an Estimate sheet and an AI Provenance tab
+    # charging different money for the same lines (7332-01's base: £4.42 here, £7.65 on the
+    # sheet). Every column they held is on AI Provenance, which is written after the
+    # read-back from the charged rows. James: "we do have too many tabs in that overall
+    # spreadsheet." The two row builders above are kept: the AI Explanation tab and the
+    # covering note read them from the run JSON instead of from a sheet.
 
-    # AI Provenance — where each bought-in price came from
-    prov_rows = []
-    for pe in pes:
-        if "bought_in" in [str(r).lower() for r in (pe.get("page_roles") or [])]:
-            prov_rows.append([
-                pe.get("part_number"), pe.get("description"),
-                pe.get("unit_cost_gbp"),
-                pe.get("cost_source") or pe.get("source"),
-                "verified" if pe.get("price_verified") else "UNVERIFIED",
-                pe.get("supplier") or "",
-                " | ".join(_flag_to_text(_rf) for _rf in (pe.get("review_flags") or [])),
-            ])
-    _add("AI Provenance",
-         ["Part", "Desc", "Unit £", "Price Source", "Verified", "Supplier", "Review Flags"],
-         prov_rows)
+    # NO "Canonical BOM" AND NO "Canonical Route" TABS ANY MORE. Bare text, no presentation,
+    # and the same facts appear elsewhere. Both are folded into the AI Provenance tab, with
+    # presentation — the hierarchy indented under its assemblies, the route grouped by part
+    # with the ruled-out decisions beside the kept ones. The row builders below are kept:
+    # the covering note reads the route rows from the run JSON.
+
+    # ── BOMs AND ROUTES, BACK AS TWO TABS, AND THIS TIME THEY RECONCILE ────────────────
+    #
+    # THE HISTORY, BECAUSE IT MATTERS. Two tabs with these names were removed from this
+    # workbook on the instruction "we do have too many tabs in that overall spreadsheet", and
+    # that was right: they were bare text with no presentation, restating facts held elsewhere.
+    # They are back because the reason for them turned out to be different from the reason they
+    # were written the first time.
+    #
+    # WHAT WENT WRONG WITHOUT THEM. Reading the 11 September 7332-01 pack, the covering note
+    # promised "13 lines" of operations and the Estimate sheet showed 12. Nothing was lost and
+    # nothing disagreed: a workbook row is a tooling SETUP and can hold several parts, so the
+    # 2.5 mm laser decisions for -003 and -004 share one nest row. But no artefact said that,
+    # so the only way to reconcile 13 with 12 was to know it already — and the reasonable
+    # conclusion from outside was that items were missing.
+    #
+    # The same reading problem has three more faces on that one job:
+    #
+    #   the BOM charges 7332-01-101-PLATE   the routes weld 7332-01-101. One is the service
+    #                                       line that carries the plating money, the other the
+    #                                       assembly that gets welded — related, differently
+    #                                       named, and never reconciled on a page
+    #   the sheet's Assemble/pack row
+    #   lists four members                  the route's assembly decision targets 7332-01-GA
+    #   P/P is charged                      and no reader is named for it
+    #
+    # So the Routes tab carries the DECISION and the sheet row it landed on, side by side, and
+    # names the grouping where several decisions share a row. That is the column that makes the
+    # two counts legible; without it this would be a third place to read the same numbers.
+    try:
+        import bom_and_route_extract as _bre
+        _ex_tables = _bre.build_tables(summary, "both")
+        _wl_rows = ((summary.get("workbook_labour") or {}).get("rows") or [])
+
+        def _bom_blank_column_notes(_summary) -> list:
+            """Say WHY a column is blank on every row, at the top of the block.
+
+            A blank cell cannot be told apart from a fact that was looked for and found absent.
+            On 7332-01 the "material as printed" column was empty on all eleven rows while the
+            covering email from the same run printed 5mm MS and 2mm Acrylic — so the sheet said,
+            silently, that the drawings printed no materials.
+            """
+            try:
+                missing = _bre.bom_columns_not_recorded(_summary)
+            except Exception:                                            # noqa: BLE001
+                return []
+            if not missing:
+                return []
+            return ["COLUMNS THIS PACK COULD NOT FILL, and why — a blank here is the RECORD "
+                    "not holding the fact, never the drawing failing to state it:"] + [
+                f"    {name.replace('_', ' ')} — {reason}"
+                for name, reason in sorted(missing.items())]
+
+        # decision id -> the sheet row that charged it, and who else shares that row.
+        _row_for: Dict[str, Dict[str, Any]] = {}
+        for _r in _wl_rows:
+            for _did in (list(_r.get("decision_ids") or [])
+                         + ([_r["decision_id"]] if _r.get("decision_id") else [])):
+                _row_for[str(_did)] = _r
+
+        _blocks: List[Dict[str, Any]] = []
+
+        _bom = _ex_tables.get("BOMs") or []
+        if _bom:
+            _kb = list(_bom[0].keys())
+            _blocks.append({
+                "title": "1 · BOMs — every parts-list row the pack gave us",
+                "intro": [
+                    "With the page it was read from and the reader that read it. NOTHING IS "
+                    "MERGED: a part number on several sheets stays several rows, flagged — most "
+                    "SDI parts are drawn more than once, and whether that is one part or three "
+                    "is an estimator's call.",
+                    "The quantity is THE ROW'S OWN. It is not rolled through the assembly: a "
+                    "2-off inside a 6-off stand is twelve parts, and that multiplication belongs "
+                    "to the route, not to a parts list."]
+                + _bom_blank_column_notes(summary),
+                "header": [h.replace("_", " ") for h in _kb],
+                "rows": [[r.get(k) for k in _kb] for r in _bom],
+                "wide": ("description", "material as printed", "what that reader is",
+                         "duplicate note")})
+
+        _routes = _ex_tables.get("Routes") or []
+        if _routes:
+            _keys = list(_routes[0].keys())
+            # THE YES/NO COLUMN BY ROLE, NOT BY NAME. bom_and_route_extract calls it "charged"
+            # on a costed run and "required by the route" on a pack that was never priced, so
+            # a hardcoded "charged" lookup returned None for every row on an uncosted record —
+            # and every decision then read "not charged, so no sheet row is expected", which is
+            # a statement about money made by a sheet that had no money in it. This workbook is
+            # only written by a costed run today, so the wrong branch was unreachable in
+            # practice; it would not have stayed that way.
+            try:
+                from bom_and_route_extract import source_declaration as _src_decl
+                _yes_no = _src_decl(summary)["operation_column"]
+            except Exception:                                            # noqa: BLE001
+                _yes_no = "charged"
+            if _yes_no not in _keys:                 # trust the rows over any declaration
+                _yes_no = next((k for k in _keys if k in ("charged",
+                                                          "required by the route")), _yes_no)
+            _header = [h.replace("_", " ") for h in _keys] + [
+                "sheet row", "shares that row with", "why the counts differ"]
+            _out_rows = []
+            for _r in _routes:
+                _wr = _row_for.get(str(_r.get("decision_id") or ""))
+                _shares, _note = "", ""
+                if _wr:
+                    _others = [p for p in (_wr.get("part_numbers") or [])
+                               if str(p).upper() != str(_r.get("part_or_assembly") or "").upper()]
+                    _shares = ", ".join(str(p) for p in _others)
+                    if _others:
+                        _note = ("one sheet row, several parts — a row is a tooling SETUP, so "
+                                 "this decision and the ones for the parts beside it are "
+                                 "charged once between them")
+                elif str(_r.get(_yes_no)) == "yes":
+                    _note = ("charged, but no sheet row carries this decision id — the join "
+                             "from the route to the sheet is missing for this line")
+                else:
+                    _note = "not charged, so no sheet row is expected"
+                _out_rows.append([_r.get(k) for k in _keys]
+                                 + [(_wr or {}).get("workbook_row"), _shares, _note])
+            _blocks.append({
+                "title": "2 · Routes — every decision, and which sheet row charged it",
+                "intro": [
+                    "An operation listed is not necessarily charged: `required` is charged, "
+                    "`unverified` means the compiler found evidence it could not confirm and is "
+                    "waiting for a person.",
+                    "THE LAST THREE COLUMNS ARE WHY THIS SHEET EXISTS. A workbook row is a "
+                    "tooling SETUP and can hold several parts, so a job can have more decisions "
+                    "than labour rows — on 7332-01 thirteen decisions became twelve rows because "
+                    "two laser parts share one 2.5 mm nest. Nothing was lost; it was never said."],
+                "header": _header, "rows": _out_rows,
+                "wide": ("why", "what that status means", "covers parts",
+                         "shares that row with", "why the counts differ")})
+
+        _deriv = _ex_tables.get("How these were derived") or []
+        if _deriv:
+            _kd = list(_deriv[0].keys())
+            _blocks.append({
+                "title": "3 · Where every column came from",
+                "intro": [
+                    "Column by column: the field it was derived from, how, and — the column that "
+                    "earns its place — WHAT IT DOES NOT MEAN. Every figure on a sheet like this "
+                    "gets quoted eventually, and the quickest way to be misquoted is to publish "
+                    "a number with no statement of its limits."],
+                "header": [h.replace("_", " ") for h in _kd],
+                "rows": [[r.get(k) for k in _kd] for r in _deriv],
+                "wide": ("how", "what it does not mean", "derived from")})
+
+        if _blocks:
+            _written = _write_boms_and_routes_sheet(wb, _blocks)
+            print(f"   [wb_populate] '{_written}' tab written: "
+                  f"{len(_ex_tables.get('BOMs') or [])} BOM row(s), "
+                  f"{len(_ex_tables.get('Routes') or [])} route decision(s)", flush=True)
+    except Exception as _bre_exc:                                        # noqa: BLE001
+        # A diagnostic tab must never be the reason a workbook fails to save.
+        print(f"   [wb_populate] BOMs/Routes tabs not added "
+              f"({type(_bre_exc).__name__}: {_bre_exc})", flush=True)
+    return
+
+
+CANONICAL_BOM_HEADERS = ["Part", "Description", "Kind", "Qty/unit", "Parent(s)", "Children",
+                         "Colourway variant"]
+CANONICAL_ROUTE_HEADERS = ["Seq", "Operation", "Status", "Target", "Scope", "Qty/unit",
+                           "Participants", "Source", "Reason", "Decision ID"]
+
+
+def colourway_note(node: Dict[str, Any]) -> str:
+    """A COLLAPSED COLOURWAY IS SHOWN, NOT DROPPED SILENTLY. When the GA/GA2 collapse folded
+    a duplicate general-arrangement root onto this one (7332-01: the Champagne Gold GA2 onto
+    the kept GA) the dropped root was recorded on the node's evidence. Named so the BOM says
+    the same stand also ships in the other colourway, rather than the second drawing
+    vanishing without a trace."""
+    _cvars = ((node.get("evidence") or {}).get("colourway_variants") or [])
+    _cnote = "; ".join(
+        f"{_v.get('part_number')}"
+        + (f" ({_v.get('description')})" if _v.get("description") else "")
+        + (f" rev {_v.get('revision')}" if _v.get("revision") else "")
+        for _v in _cvars if isinstance(_v, dict) and _v.get("part_number")
+    )
+    return f"also supplied as {_cnote} — colourway variant" if _cnote else ""
+
+
+def canonical_bom_rows(summary: Dict[str, Any]) -> List[List[Any]]:
+    """The hierarchy as rows, one per canonical node (CANONICAL_BOM_HEADERS)."""
+    canonical = canonical_route_payload(summary)
+    rows: List[List[Any]] = []
+    for node in (canonical.get("nodes") or []) if canonical else []:
+        if not isinstance(node, dict):
+            continue
+        rows.append([
+            node.get("part_number"), node.get("description"), node.get("kind"),
+            node.get("qty_per_unit"), ", ".join(node.get("parents") or []),
+            ", ".join(f"{edge.get('part_number')} x{edge.get('qty')}"
+                      for edge in (node.get("children") or []) if isinstance(edge, dict)),
+            colourway_note(node),
+        ])
+    return rows
+
+
+def canonical_route_rows(summary: Dict[str, Any]) -> List[List[Any]]:
+    """Every route decision as a row, kept and ruled out (CANONICAL_ROUTE_HEADERS)."""
+    canonical = canonical_route_payload(summary)
+    rows: List[List[Any]] = []
+    for decision in (canonical.get("decisions") or []) if canonical else []:
+        if not isinstance(decision, dict):
+            continue
+        rows.append([
+            decision.get("sequence"), decision.get("operation"), decision.get("status"),
+            decision.get("target_id"), decision.get("scope"), decision.get("qty_per_unit"),
+            ", ".join(decision.get("participants") or []), decision.get("source"),
+            decision.get("reason"), decision.get("decision_id"),
+        ])
+    return rows
 
 
 # ── standalone test entry ──────────────────────────────────────────────────
