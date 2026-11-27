@@ -5530,6 +5530,7 @@ def _rung4_researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
         "price_first_taken": _found.get("price_first_taken") or "",
         # What the model says it priced, in its own words, and per what.
         "item_priced": _found.get("item_priced") or "",
+        "minimum_gbp": _found.get("minimum_gbp"),
     }
 
 
@@ -17932,6 +17933,11 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             print(f"   [plating] priced {_plated_n} subcontract plating line(s) on plated mass")
     except Exception as _e_pl:                                   # noqa: BLE001
         print(f"   [plating] subcontract plating pass skipped: {_e_pl}")
+    # A named process needs its own researched budget, not the trade zinc card.
+    # Existing quoted/stated prices win; missing finish and round-trip costs are
+    # completed with source, units, arithmetic and a visible non-firm label.
+    from subcontract_cost_completion import complete_subcontract_costs
+    complete_subcontract_costs(part_estimates, summary, parts, _order_qty, _rung4_researcher)
     material_total_raw = sum((item.get("material_estimate", {}).get("extended_material_cost_gbp") or 0.0) for item in part_estimates)
     labour_total_raw = sum((item.get("labour_estimate", {}).get("total_labour_cost_gbp") or 0.0) for item in part_estimates)
     material_total = _round_money(material_total_raw)

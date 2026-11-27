@@ -379,6 +379,17 @@ def stock_in_material_words(text: Any) -> Optional[Dict[str, Any]]:
     if not raw or not re.search(r"\d", raw):
         return None
     up = _prose_free(inch_sizes_to_mm(raw).upper())
+    # Diameter x wall, with ROUND/CHS naming the shape, is not two rectangle sides.
+    # A trailing 6M names the purchased bar, never this component's cut length.
+    round_pair = re.search(r'(?i)(\d+(?:\.\d+)?)\s*(?:MM)?\s*[X×]\s*'
+                           r'(\d+(?:\.\d+)?)\s*(?:MM)?\s+(?:ERW\s+)?(?:ROUND\s+TUBE|CHS)\b', raw)
+    if round_pair and not re.search(r'(?i)\bSHEET|\bPLATE|\bBAR|\bROD|\bRHS|\bSHS', raw):
+        diameter, wall = map(float, round_pair.groups())
+        if 0 < diameter <= 300 and 0 < wall * 2 < diameter:
+            return {'a':diameter,'b':diameter,'t':wall,'length_mm':None,
+                    'outside_diameter_mm':diameter,'profile_form':'CHS','form':'tube',
+                    'solid':False,'wall_stated':True,'detection_path':'material_words',
+                    'source_text':raw}
     words = set(re.findall(r"[A-Z]+", up))
     squashed = " ".join(re.findall(r"[A-Z]+", up))
     # A WHOLE PROFILE IS THE ONE READER'S (D-383): "1/2" x 1/2" x 1.5 SHS" once in millimetres,

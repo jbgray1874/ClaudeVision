@@ -52,12 +52,50 @@ def shifted_formula(formula, owner, target, at, count, first):
     return tokens.render()
 
 
+def _department_expansion(wb, coverage, required):
+    """Plan a wider recognised A/B department scan without moving unrelated cells."""
+    if not coverage or coverage.get('capacity', required) >= required:
+        return []
+    sh = wb[coverage['sheet']]
+    capacity = int(coverage['capacity'])
+    for row in range(capacity + 1, required + 1):
+        if any(sh.cell(row, col).value is not None for col in (1, 2)):
+            raise ValueError('Cannot widen department-hours scan over occupied input cells.')
+    changes = []
+    for row in sh:
+        for cell in row:
+            value = cell.value
+            formula = value if isinstance(value, str) else getattr(value, 'text', None)
+            if not formula or not formula.startswith('='):
+                continue
+            tokens = Tokenizer(formula)
+            changed = False
+            for token in tokens.items:
+                if token.type != 'OPERAND' or token.subtype != 'RANGE':
+                    continue
+                prefix, bang, address = token.value.rpartition('!')
+                if bang and _sheet_name(prefix) != sh.title:
+                    continue
+                match = re.fullmatch(r'(\$?[AB]\$?1):(\$?[AB]\$?)' + str(capacity), address)
+                if match:
+                    token.value = (prefix + '!' if bang else '') + match[1] + ':' + match[2] + str(required)
+                    changed = True
+            if changed:
+                new = tokens.render()
+                if not isinstance(value, str):
+                    new = copy(value)
+                    new.text = tokens.render()
+                changes.append((cell, new))
+    if not changes:
+        raise ValueError('Cannot recognise the department-hours scan formulas; no changes made.')
+    return changes
+
+
 def ensure_labour_capacity(wb, cm, required, flags=None):
     """Add exactly the missing rows in a recognised template, retaining formulas.
 
-    Department arrays are an independent template capacity. Refuse an untested
-    expansion beyond that capacity before touching anything, rather than emit
-    an apparently complete price with hours missing from the department totals.
+    The department-hours scan grows with the cost rows when its A/B mapping is
+    recognised. Refuse an unknown or occupied layout before changing money cells.
     """
     lab = cm['labour']
     first, last = int(lab['first_row']), int(lab['last_row'])
@@ -72,9 +110,7 @@ def ensure_labour_capacity(wb, cm, required, flags=None):
     # Reuse the writer's own template inspection, not a guessed 100-row limit.
     from wb_populate import labour_sheet_coverage
     coverage = labour_sheet_coverage(wb, cm)
-    if coverage and coverage.get('capacity', required) < required:
-        raise ValueError(f"The department-hours template scans {coverage['capacity']} rows; "
-                         f"{required} are required. Widen its scan before pricing; no costs were dropped.")
+    department_changes = _department_expansion(wb, coverage, required)
 
     at = last + 1
     # Prepare every formula first: unsupported syntax fails before any mutation.
@@ -114,6 +150,8 @@ def ensure_labour_capacity(wb, cm, required, flags=None):
         cell.value = value
     for name, value in names:
         name.attr_text = value
+    for cell, value in department_changes:
+        cell.value = value
     ws.insert_rows(at, extra)
     for r in dimensions:
         del ws.row_dimensions[r]
@@ -164,6 +202,13 @@ def ensure_labour_capacity(wb, cm, required, flags=None):
     if areas:
         ws.print_area = [shifted_range(str(a), ws.title, ws.title, at, extra, first) for a in areas]
     lab['last_row'] = last + extra
+    if department_changes:
+        sh = wb[coverage['sheet']]
+        for index in range(required):
+            sh.cell(index + 1, 1, f"={ws.title}!{coverage['dept_col']}{first + index}")
+            sh.cell(index + 1, 2, f"={ws.title}!{coverage['hours_col']}{first + index}")
+        if isinstance(flags, list):
+            flags.append(f"Department-hours scan expanded in this generated book: {coverage['capacity']} -> {required}; all charged labour is included.")
     if isinstance(flags, list):
         flags.append(f'Labour block expanded in this generated book: {last-first+1} -> '
                      f'{required} rows; individual routes, setups and quantities retained. Template unchanged.')

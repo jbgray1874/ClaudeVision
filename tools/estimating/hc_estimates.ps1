@@ -71,11 +71,7 @@ products. A file leaves a product only on positive evidence: it is another produ
 drawing and nothing in this product names it, or its sheet lives only in another product
 that names it. Every file in the pack is accounted for at the end.
 """
-import sys, os, re, json, hashlib, pathlib, urllib.request, urllib.error, collections, datetime, time
-try:
-    import pymupdf as fitz
-except ImportError:
-    import fitz  # Older installed PyMuPDF versions expose only this name.
+import sys, os, re, json, hashlib, pathlib, urllib.request, urllib.error, collections, datetime, time, subprocess
 
 # PATHS OVER 260 CHARACTERS (26 Nov 2026). Three shelving folders sit 260-261 characters deep on
 # the share; PowerShell lists them, Windows' classic file calls do not, and the plan silently came
@@ -101,6 +97,10 @@ TOO_LONG = 260
 
 mode = sys.argv[1]
 if mode == 'plan':
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        import fitz  # Only plan mode reads PDFs; queue mode verifies stored fingerprints.
     pack_root, out_dir = pathlib.Path(long_path(sys.argv[2])), pathlib.Path(sys.argv[3])
     _rest = sys.argv[4:]
     _only = next((a for a in _rest if not a.startswith('expect=')), '')
@@ -115,6 +115,7 @@ else:
     _since = next((a[6:].strip() for a in sys.argv[4:] if a.startswith('since=')), '')
     since = datetime.datetime.strptime(_since, '%Y-%m-%d %H:%M').timestamp() if _since else 0.0
     _release = next((a[8:].strip() for a in sys.argv[4:] if a.startswith('release=') and a[8:].strip()), '')
+    scope_helper = next((a[13:] for a in sys.argv[4:] if a.startswith('scope_helper=')), '')
     release_build = ''
     if _release:
         _rec = json.loads(pathlib.Path(_release).read_text(encoding='utf-8-sig'))
@@ -523,11 +524,56 @@ if mode == 'plan':
     print('Nothing was submitted.')
 elif mode == 'queue':
     data = json.loads(plan_file.read_text(encoding='utf-8'))
+    def check_preservation():
+        scope = data.get('preservation_scope')
+        if not scope:
+            return None  # Existing unscoped plans retain their existing behaviour.
+        if not scope_helper or not pathlib.Path(scope_helper).is_file():
+            raise SystemExit('NOT QUEUED: the scoped plan requires its preservation checker.')
+        checked = subprocess.run([sys.executable, '-I', scope_helper, 'check', '--scope', scope,
+                                  '--plan', str(plan_file)], capture_output=True, text=True)
+        if checked.returncode:
+            raise SystemExit('NOT QUEUED: original-result preservation check failed. ' +
+                             checked.stdout.strip() + ' ' + checked.stderr.strip())
+        if not release_build:
+            raise SystemExit('NOT QUEUED: a scoped correction requires a verified release record.')
+        expected = {str(x.get('runner') or x.get('runner_id') or x.get('id') or '')
+                    for x in _rec.get('runners', [])}
+        if not expected or '' in expected:
+            raise SystemExit('NOT QUEUED: release record must identify every expected runner.')
+        seen = set()
+        try:
+            for service in SERVICES:
+                health = get_json(service + '/api/health')
+                if not str(health.get('commit') or '').startswith(release_build):
+                    raise ValueError('a service is not on the verified release')
+                grid = get_json(service + '/api/estimate/runners')
+                if not isinstance(grid.get('runners'), list):
+                    raise ValueError('a runner list is missing')
+                for runner in grid['runners']:
+                    if runner.get('online') is not True:
+                        continue
+                    identity = str(runner.get('runner_id') or runner.get('id') or '')
+                    build = str(runner.get('build') or '')
+                    if (identity not in expected or not build.startswith(release_build)
+                            or '+local edits' in build or runner.get('conflict')
+                            or runner.get('process_count') != 1):
+                        raise ValueError('an online runner has an unexpected identity, build or process state')
+                    seen.add(identity)
+            if seen != expected:
+                raise ValueError('an expected runner is not online')
+        except Exception as exc:
+            raise SystemExit('NOT QUEUED: loaded-build verification failed: ' + str(exc))
+        return json.loads(pathlib.Path(scope).read_text(encoding='utf-8-sig'))
+    preserved = check_preservation()
     if data.get('files_expected') is not None and data['files_expected'] != data.get('files_read'):
         print('NOT QUEUED: this plan read %s of the %s files on the share, so products may be missing. '
               'Plan again; nothing was submitted.' % (data.get('files_read'), data['files_expected']))
         sys.exit(2)
-    JOURNAL = plan_file.parent / 'Hotel Chocolat submissions.jsonl'
+    # Keep the original journal when the selected plan is frozen into a new folder.
+    # Moving the plan must not hide an earlier uncertain submission.
+    JOURNAL = pathlib.Path(preserved['historical_submission_journal']) if preserved else \
+        plan_file.parent / 'Hotel Chocolat submissions.jsonl'
     UNSURE_WAIT_MIN = float(os.environ.get('HC_UNSURE_WAIT_MIN') if os.environ.get('HC_UNSURE_WAIT_MIN') is not None else 30)
 
     def journal(item, asked, result, run_id):
@@ -575,6 +621,7 @@ elif mode == 'queue':
             print('HELD    %s: files changed since the plan (%s); plan again' % (label, ', '.join(changed[:5])))
             held += 1
             continue
+        check_preservation()
         # THE LIST AS IT IS NOW, not as it was when this queue started: a second queue window
         # started meanwhile, or a person on the Wall, may have submitted this product since.
         already = existing_runs()
@@ -673,6 +720,7 @@ elif mode == 'queue':
                       'first and holds the product until it appears or %d min pass.' % (label, e, UNSURE_WAIT_MIN), flush=True)
                 journal(item, asked, 'unsure', None)
                 unsure += 1
+    check_preservation()
     print('%d queued, %d already run or in flight, %d held or refused, %d unsure' % (sent, done, held, unsure))
     if held or unsure:
         print('NOT ALL SUBMITTED CLEANLY: see the HELD / REFUSED / UNSURE lines above.')
@@ -979,7 +1027,8 @@ try {
     Write-Host "Queueing the reviewed plan: $Plan" -ForegroundColor Cyan
     if ($Since -and $Since -notmatch '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$') { Write-Host "-Since must look like '2026-11-26 12:57'. Nothing queued." -ForegroundColor Red; exit 2 }
     if ($Release -and -not (Test-Path -LiteralPath $Release)) { Write-Host "Release record not found: $Release. Nothing queued." -ForegroundColor Red; exit 2 }
-    & 'C:\ClaudeVision\.venv\Scripts\python.exe' -I $py queue $Plan $(if ($Rerun) { 'rerun' } else { 'once' }) "since=$Since" "release=$Release"
+    $scopeHelper = Join-Path $PSScriptRoot 'estimate_rerun_scope.py'
+    & 'C:\ClaudeVision\.venv\Scripts\python.exe' -I $py queue $Plan $(if ($Rerun) { 'rerun' } else { 'once' }) "since=$Since" "release=$Release" "scope_helper=$scopeHelper"
     $rc = $LASTEXITCODE
   }
 } finally {

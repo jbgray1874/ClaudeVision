@@ -5646,8 +5646,8 @@ _DIMS_REQUIRED = "DIMS REQUIRED"
 def grow_labour_block(wb, cm, required: int, flags: List[str]) -> int:
     """Grow the generated book's labour block to fit every route group, or say why not.
 
-    A template the grower does not recognise, or whose department-hours scan is too short,
-    is REFUSED by workbook_labour_capacity before anything is touched. That refusal must not
+    An unrecognised or occupied template layout is REFUSED by workbook_labour_capacity
+    before cost cells are touched. A recognised department-hours scan grows too. Refusal must not
     cost the estimator the whole workbook: the book is written as before, the groups that do
     not fit are reported as labour not on the sheet, and this line says why.
     """

@@ -104,6 +104,8 @@ def _blank_allowance(part, page):
     envelope is not a measured flat. A proven stock-sheet/weak assembly envelope
     may be displaced, but accepted component/DXF/model/human dimensions win.
     """
+    if part.get('section_stock'):
+        return  # A round section buys linear stock, not a rectangular flat nest.
     geometry = part.get('normalized_geometry') or {}
     src=str(geometry.get('geometry_source') or part.get('geometry_source') or '').lower()
     if src in ('solidworks', 'solidworks_api', 'model', 'mirror_of_measured'):
@@ -308,9 +310,10 @@ def prepare(summary):
             if len(refs)==1 and (stock not in aliases or _key(aliases[stock])==owner):aliases[stock]=refs[0]
     changed=[]
     for part in parts:
-        if _excluded(part):continue
         key=_key(part.get('part_number'));owner=stock_aliases.get(key,key)
         owned=by_owner.get(owner,[])
+        _repeat_supply(part,owned)
+        if _excluded(part):continue
         caption=part.get('component_caption_blank') or {}
         if caption:
             owned=[p for p in pages if p.get('page_number')==caption.get('page')]
@@ -330,6 +333,7 @@ def prepare(summary):
             _apply(part,'normalized_material',spec['material'],page)
             _apply(part,'normalized_thickness_mm',spec['thickness'],page)
             part['material_specification']=spec['specification']
+            _owned_section(part,page,spec)
             part['owned_manufacturing_pages']=[p.get('page_number') for p,_ in specs]
             part['pages']=list(dict.fromkeys(part['owned_manufacturing_pages']))
             part['owned_manufacturing_text']='\n'.join(text_of(p) for p,_ in specs)
@@ -455,6 +459,63 @@ def prepare(summary):
     from named_finish_schedule import mint_consumables
     mint_consumables(parts)
     return changed
+
+
+def _repeat_supply(part, pages):
+    """Infer a repeat-supplied complete component, not a generic item of similar name."""
+    from bought_in_policy import make_or_buy_ruling, strip_fabrication_ops
+    if (part.get('repeat_supply_basis') or any(part.get(k) for k in
+            ('supplied_by_third_party','reference_only','is_reference_only','for_reference_only')) or make_or_buy_ruling(part)=='make'
+            or part.get('is_assembly_parent') or part.get('assembly_children')):
+        return
+    for page in pages:
+        body=re.split(r'(?i)MODIFICATIONS|DISCLAIMER|GENERAL\s+DIMENSION',text_of(page))[0]
+        article=re.search(r'(?im)^\s*PART\s+NO\.?\s*:\s*(\d{7,8})\b',body)
+        if not (article and re.search(r'(?i)SAME\s+SPEC(?:IFICATION)?\s+AS\s+PREVIOUSLY\s+SUPPLIED',body)):
+            continue
+        if _material(body):
+            continue  # An owned stock specification still says this may be made here.
+        basis={'source_pdf_name':page.get('source_pdf_name'),'page_number':page.get('page_number'),
+               'article':article[1],'source_text':body.strip(),
+               'provisional':True,'basis':'Repeat-supplied complete component with its own article; make/buy and supplier specification require confirmation.'}
+        part['repeat_supply_basis']=basis
+        part['is_bought_in']=True
+        part['supplier_part_number']=part.get('supplier_part_number') or article[1]
+        part['price_chain_description']=(str(part.get('description') or '')+
+            ' - COMPLETE component as detailed, not merely a spring/feed insert. '+body.strip())
+        strip_fabrication_ops(part)
+        part.setdefault('review_flags',[]).append(
+            'PROVISIONAL procurement assumption: price the complete repeat-supplied component, including its housing/mechanism as shown. Confirm supplier and make/buy; its drawing is not a generic catalogue pusher. Assembly to its separately costed backing remains separate.')
+        break
+
+
+def _owned_section(part,page,spec):
+    from section_profile import stock_in_material_words
+    stock=stock_in_material_words(spec['specification'])
+    if not stock or not stock.get('t'):
+        return
+    body=re.split(r'(?im)^\s*(?:FINISHED\s+)?PART\s+NO\.?|^\s*MATERIAL\s*:',text_of(page))[0]
+    dimensions=[]
+    for line in body.splitlines():
+        if re.fullmatch(r'\s*(?:\d+(?:\.\d+)?\s*)+',line):
+            dimensions.extend(float(v) for v in line.split())
+    lengths=[v for v in dimensions if stock['a'] < v < 20000]
+    existing=part.get('section_stock') or {}
+    if existing.get('length_mm'):
+        stock['length_mm']=existing['length_mm']
+        if existing.get('length_basis'):stock['length_basis']=existing['length_basis']
+    elif lengths:
+        stock['length_mm']=max(lengths)
+        stock['length_basis']='Provisional largest body dimension on component-owned sheet; not the raw-stock purchase length.'
+    else:
+        return
+    stock.update(source='own_sheet_title_block',source_pdf_name=page.get('source_pdf_name'),page_number=page.get('page_number'))
+    _apply(part,'section_stock',stock,page)
+    if part.get('section_stock')==stock:
+        part['material_text_as_printed']=spec['specification']
+        _ops(part,['tube_cut'],'Cut the component from its stated section stock; do not flat-nest the round profile.')
+        note=f"Section stock {stock['a']:g} x {stock['t']:g} mm; cut length {stock['length_mm']:g} mm from its own sheet. Confirm the body-dimension reading; the purchased bar length is not the part length."
+        if note not in part.setdefault('review_flags',[]):part['review_flags'].append(note)
 
 
 # Common sheet-board gauges. A lone printed number of one of these on a board panel's

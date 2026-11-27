@@ -112,11 +112,11 @@ def test_growth_is_idempotent_and_a_small_job_changes_nothing():
     assert wb['Estimate']['M251'].value == '=(M147+M249)/(1-M253)/0.92'
 
 
-def test_unknown_layout_or_insufficient_department_scan_is_not_mutated():
+def test_known_department_scan_can_expand_but_unknown_layout_is_not_mutated():
     wb, cm = book(cap=90)
-    with pytest.raises(ValueError, match='department-hours'):
-        ensure_labour_capacity(wb, cm, 98)
-    assert wb['Estimate']['M225'].value == '=(M147+M223)/(1-M227)/0.92'
+    assert ensure_labour_capacity(wb, cm, 98) == 26
+    assert '$A$1:$B$98' in wb['Labour']['C2'].value.text
+    wb, cm = book(cap=90)
     wb['Estimate']['C223'] = 'Unknown'
     with pytest.raises(ValueError, match='unrecognised'):
         ensure_labour_capacity(wb, cm, 98)
