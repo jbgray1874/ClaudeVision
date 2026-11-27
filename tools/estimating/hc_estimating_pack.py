@@ -220,58 +220,57 @@ def handover_note(path, stamp, rel_build, products, walls, adjustments, missing_
         return None
     doc = Document()
     doc.styles['Normal'].font.size = Pt(10.5)
-    doc.add_heading('Hotel Chocolat (HotelChocolat-1204): estimating handover', 0)
+    doc.add_heading('Hotel Chocolat (HotelChocolat-1204): AI estimating pack', 0)
     doc.add_paragraph('%s. Provisional costs for estimating review. Not a customer quotation.' % stamp)
     doc.add_heading('What this is', 1)
-    doc.add_paragraph('The AI estimating pack for all %d products in the Hotel Chocolat drawing pack, ready for the estimating '
-                      'team to take over. Each product was estimated from its complete drawing pack: BOM, sheet parts, bought-in '
-                      'lines, operations and finishes. The engine build that produced the corrected results is %s.' % (len(products), rel_build))
-    doc.add_heading('Start here', 1)
-    for line in ('1. Open "Price schedule" in the estimating pack workbook. Every product, by family, with its unit cost, what the '
-                 'figure rests on, and how many items are open.',
-                 '2. For a product you are quoting, open its own tab (the full Estimate sheet) or the workbook in its family folder.',
-                 '3. Work through "Review items": the open decisions with the most money at stake, across the whole job.',
-                 '4. Check "Gaps and confirmations" before quoting anything in the affected families.'):
+    doc.add_paragraph('AI estimates for all %d products in the Hotel Chocolat drawing pack, in eight product families. Each product '
+                      'was estimated from its complete drawing pack: bill of materials, sheet parts, bought-in lines, operations and '
+                      'finishes. Every figure is a unit cost per finished product at quantity 1.' % len(products))
+    doc.add_heading('How to use the pack', 1)
+    for line in ('1. Price schedule tab: every product by family, with its unit cost, material and labour, the confidence level, '
+                 'how many items are open and the money at stake in them.',
+                 '2. Confidence: DRAWING means costed from the drawings. PROVISIONAL means a corrected line sits on the Adjustments '
+                 'tab and the revised unit cost is the one to use. ALLOWANCE means no readable drawings were supplied, so the product '
+                 'is priced from a brief by analogy with its family.',
+                 '3. Review items tab: the open decisions across the whole job, most money first. Work down it before quoting.',
+                 '4. Each product has its own tab with its full estimate sheet, and its full workbook, report and client quote page '
+                 'sit in its family folder.',
+                 '5. Gaps and confirmations tab: what still needs an answer, by product.'):
         doc.add_paragraph(line)
-    doc.add_heading('Wall of Chocolate: corrected today', 1)
+    doc.add_heading('Wall of Chocolate', 1)
     for d, w in walls.items():
-        doc.add_paragraph('%s %s: unit cost GBP %s (material %s, labour %s). The earlier figure of GBP %s was wrong: drawing-layout '
-                          'lines were priced as laser-cutting paths (the box spacer carried 783 m of cutting per piece; it is now 191 mm). '
-                          'Box quantities are intact: 30 boxes, 150 spacers, 60 tops, 120 shelves, 120 ticket surrounds.'
-                          % (d, w['title'], fmt(w['unit']), fmt(w['material']), fmt(w['labour']), fmt(w['old'])))
+        doc.add_paragraph('%s %s: unit cost GBP %s (material %s, labour %s). 30 boxes: 150 spacers, 60 tops, 120 shelves, '
+                          '120 ticket surrounds.' % (d, w['title'], fmt(w['unit']), fmt(w['material']), fmt(w['labour'])))
     doc.add_paragraph('The two layouts are ALTERNATIVES. Price them separately; never add them together.')
-    doc.add_paragraph('Both are DRAFT with items to confirm. The ones that matter most:')
+    doc.add_paragraph('Both are DRAFT. The items with the most at stake:')
     for d, w in walls.items():
         for c in w['top'][:6]:
             doc.add_paragraph('%s: %s (%s), GBP %s at stake' % (d, c['decision'], c['part'], fmt(c['stake'])), style='List Bullet')
-    doc.add_heading('Provisional adjustments (plinths, 800 shelf, cash desk)', 1)
-    doc.add_paragraph('These five workbooks carry known errors from the earlier engine: ballast, brackets and supports priced as whole '
-                      'stock sheets; plinth panels missing; a cash-desk panel costed as faced board with press-brake folds. Their '
-                      'workbook totals should not be used. The "Adjustments" tab sets out each corrected line with its basis; use the '
-                      'revised unit cost on the price schedule. Full re-estimates on the corrected engine will follow.')
+    doc.add_heading('Products with a provisional adjustment', 1)
+    doc.add_paragraph('For these, use the revised unit cost on the price schedule, not the workbook total. Each corrected line, its '
+                      'quantity, the original and revised cost and the basis are on the Adjustments tab.')
     for k, a in adjustments.items():
-        doc.add_paragraph('%s: original GBP %s, adjustment GBP %s, revised GBP %s' % (
+        doc.add_paragraph('%s: workbook GBP %s, adjustment GBP %s, revised GBP %s' % (
             a.get('Product'), fmt(a.get('Original unit price (GBP)')), fmt(a.get('Adjustment (GBP)')),
             fmt(a.get('Revised unit price (GBP)'))), style='List Bullet')
-    doc.add_heading('Please confirm', 1)
+    doc.add_heading('Please confirm before quoting', 1)
     for line in ('Cash desk panel C33799: 18 mm (material note) or 6 mm (section)?',
                  'Plinth finish system, including any fire-rated requirement (the GA scan is unreadable).',
                  'Whether both Wall of Chocolate layouts are being supplied, or one is an alternative.',
-                 'Wall shelf pusher C-33490: its BOM row states 1, the sheet costs 150 (GBP 1,875 at stake on A.34225).',
-                 'Wall unpriced lines (D-33491 and the plating freight) need a price before quoting.'):
+                 'Wall shelf pusher C-33490: its BOM row states 1, the sheet costs 150.',
+                 'Wall unpriced lines (D-33491 and the plating freight) need a price.'):
         doc.add_paragraph(line, style='List Bullet')
-    doc.add_heading('Everything else', 1)
-    doc.add_paragraph('All other products are unchanged from their completed runs; use the workbook figures with the notes in each. '
-                      'A.34504, A.33559 and B.34468 share the stock-blank fault on their brackets and are listed for later correction. '
-                      'Three shelving products (B.33381, B.33384, B.34469) were priced from a brief because their drawing files are empty. '
-                      'Signage is a separate scope and is not in these prices.')
+    doc.add_heading('Scope notes', 1)
+    doc.add_paragraph('Three shelving products (B.33381, B.33384, B.34469) were priced from a brief because the drawing files supplied '
+                      'for them are empty. A.34504, A.33559 and B.34468 have brackets priced on whole stock sheets; their material is '
+                      'likely overstated and a correction will follow. Drawings named by the pack but not supplied (D.34046, B.33542, '
+                      'E.33599, C.33460, B.33520) are carried as allowances. Signage is a separate scope and is not in these prices.')
     if missing_books:
         doc.add_paragraph('NO WORKBOOK FOUND for: %s. Their prices are not in this pack.' % ', '.join(missing_books))
     doc.add_heading('Where the files are', 1)
-    doc.add_paragraph('Everything in this folder is a copy; the originals are untouched in the per-product folders on K:. '
-                      'Each family folder holds each product\'s newest workbook, report and client quote page. Older Wall results are in '
-                      '_Superseded. Client quote pages for the five provisionally adjusted products are in _Withheld client quotes because '
-                      'they show the old prices; do not send them to the customer.')
+    doc.add_paragraph('Everything in this folder is a copy; the originals stay in the per-product folders on K:. Each family folder '
+                      'holds each product\'s workbook, report and client quote page. Client quote pages for the provisionally adjusted '
+                      'products are in _Withheld client quotes and must not go to the customer as they stand.')
     doc.save(path)
     return path
 
@@ -382,8 +381,7 @@ def main(argv=None):
         adj = adjustments.get(dkey)
         adjustment = None
         if dkey in rerun:
-            confidence, rests = 'DRAWING (rerun %s)' % rel_build, ('Re-estimated today from the complete pack on the corrected engine; '
-                                                                     'the earlier figure was inflated by drawing lines priced as cutting.')
+            confidence, rests = 'DRAWING', 'Costed from the complete drawing pack (build %s).' % rel_build
             revised = unit
             if facts:
                 old = money(adj.get('Original unit price (GBP)')) if adj else None
@@ -435,22 +433,16 @@ def main(argv=None):
 
     # Wall of Chocolate sheet
     ww = wb.create_sheet('Wall of Chocolate', 1)
-    ww['A1'] = 'Wall of Chocolate: the two layouts, corrected %s on build %s. ALTERNATIVES: never add together.' % (stamp, rel_build)
+    ww['A1'] = 'Wall of Chocolate: the two layouts (%s). ALTERNATIVES: never add together.' % stamp
     ww['A1'].font = Font(bold=True, size=13)
     r = 3
-    r = table(ww, r, ['Layout', 'Product', 'Earlier (wrong) GBP', 'Corrected unit cost GBP', 'Material GBP', 'Labour GBP',
+    r = table(ww, r, ['Layout', 'Product', 'Unit cost GBP', 'Material GBP', 'Labour GBP',
                       'Items to confirm', 'Market-priced GBP', 'Unpriced lines'],
-              [[d, w['title'], w['old'], w['unit'], w['material'], w['labour'], len(w['confirm']), round(w['market_gbp'], 2),
-                ', '.join(w['missing'])] for d, w in walls.items()], [12, 44, 18, 20, 14, 14, 12, 16, 40]) + 1
+              [[d, w['title'], w['unit'], w['material'], w['labour'], len(w['confirm']), round(w['market_gbp'], 2),
+                ', '.join(w['missing'])] for d, w in walls.items()], [34, 44, 18, 14, 14, 12, 16, 40]) + 1
+    ww.cell(row=r, column=1, value='Each layout is 30 boxes: 150 spacers, 60 tops, 120 shelves, 120 ticket surrounds.').alignment = WRAP
+    r += 2
     for d, w in walls.items():
-        ww.cell(row=r, column=1, value='%s: why the earlier figure was wrong' % d).font = H
-        ww.cell(row=r + 1, column=1, value=('Drawing-layout vectors were priced as laser paths: the box spacer C-33497 carried 783 m of '
-                                            'cutting per piece (150 off). It now carries 191 mm, and the whole laser row for it is GBP %s. '
-                                            'Box quantities intact: 150 spacers, 60 tops, 120 shelves, 120 ticket surrounds, 30 boxes.'
-                                            % fmt(w['labour_by_op'].get('Laser (Metal)', 0)))).alignment = WRAP
-        ww.merge_cells(start_row=r + 1, start_column=1, end_row=r + 1, end_column=9)
-        ww.row_dimensions[r + 1].height = 45
-        r += 3
         ww.cell(row=r, column=1, value='%s: labour by operation (GBP, quantity 1)' % d).font = H
         r = table(ww, r + 1, ['Operation', 'GBP'], [[k, round(v, 2)] for k, v in sorted(w['labour_by_op'].items(), key=lambda x: -x[1])]) + 1
         ww.cell(row=r, column=1, value='%s: sheet-metal and board parts (per unit)' % d).font = H
@@ -462,7 +454,7 @@ def main(argv=None):
         ww.cell(row=r, column=1, value='%s: review items with the most at stake' % d).font = H
         r = table(ww, r + 1, ['Kind', 'Decision', 'Part', 'GBP at stake', 'Action'],
                   [[c['kind'], c['decision'], c['part'], c['stake'], c['action']] for c in w['top']]) + 2
-    for i, wdt in enumerate([34, 60, 18, 20, 14, 14, 12, 16, 40], 1):
+    for i, wdt in enumerate([34, 60, 18, 14, 14, 12, 16, 40], 1):
         ww.column_dimensions[get_column_letter(i)].width = wdt
 
     rv = wb.create_sheet('Review items', 2)

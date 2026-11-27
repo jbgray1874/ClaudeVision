@@ -135,13 +135,13 @@ def test_one_consolidated_workbook_with_detail_tabs_family_folders_and_checked_l
     wb = openpyxl.load_workbook(pack)
     rows = {r[1]: r for r in wb['Price schedule'].iter_rows(min_row=5, values_only=True) if r[1]}
     assert rows['A.33446'][3] == 21000.00 and rows['A.33446'][13] == 'wall-new'          # verified rerun
-    assert rows['A.33446'][8].startswith('DRAWING (rerun c4ad620')
+    assert rows['A.33446'][8] == 'DRAWING' and 'c4ad620' in rows['A.33446'][9]
     assert (rows['B.34487'][3], rows['B.34487'][6], rows['B.34487'][7]) == (730.94, -300.57, 430.37)
     assert rows['B.34487'][8].startswith('PROVISIONAL') and rows['A.33324'][7] == 410.00 and rows['A.33324'][8] == 'DRAWING'
     assert rows['A.33446'][10] == 2 and rows['A.33446'][11] == 666.43
     assert {'Wall of Chocolate', 'Review items', '6 A.33446', '8 B.34487', '1 A.33324', 'Adjustments', 'Gaps and confirmations'} <= set(wb.sheetnames)
     woc = [r for r in wb['Wall of Chocolate'].iter_rows(values_only=True) if r[0]]
-    assert any(r[0] == 'A.33446' and r[2] == 137675.71 and r[3] == 21000.00 for r in woc)
+    assert any(r[0] == 'A.33446' and r[2] == 21000.00 for r in woc)
     assert any(r[0] == 'C-33497  WOC BOX BASE SPACER' and r[1] == 150 for r in woc)
     review = [r for r in wb['Review items'].iter_rows(min_row=4, values_only=True) if r[0]]
     assert review[0][0] == 1862.5 and 'C-33490' in review[0][3] and {r[1] for r in review} == {'A.33446', 'B.34487', 'A.33324'}
