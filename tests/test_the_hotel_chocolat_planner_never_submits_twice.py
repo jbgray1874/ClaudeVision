@@ -113,8 +113,8 @@ def test_a_plan_that_read_fewer_files_than_the_share_holds_cannot_be_queued(tmp_
     text = _run("plan", str(tmp_path / "pack"), str(tmp_path), "expect=7", env=env)
     assert "THE SHARE HOLDS 7 FILES AND THIS PLAN READ 4" in text
     plan_file = str(next(tmp_path.glob("Hotel Chocolat plan *.json")))
-    out = _run("queue", plan_file, "once", "since=", env=env)
-    assert out.startswith("NOT QUEUED: this plan read 4 of the 7 files")
+    rc, out = _run_rc("queue", plan_file, "once", "since=", env=env)
+    assert rc == 2 and out.startswith("NOT QUEUED: this plan read 4 of the 7 files")
 
 
 def test_a_path_past_260_characters_is_read_by_its_long_form_and_shown_by_its_own():
@@ -331,3 +331,112 @@ def test_review_never_borrows_another_products_workbook_or_an_unvalidated_price(
         assert not row['N5'].value and svc.posts==0
     finally:
         svc.close()
+
+
+# -- FAIL CLOSED (27 Nov 2026): a queue that cannot see the whole history submits nothing --
+
+def _run_rc(*args, env):
+    out = subprocess.run([sys.executable, "-I", str(PLANNER), *args], capture_output=True,
+                         text=True, env=env, timeout=120)
+    return out.returncode, out.stdout + out.stderr
+
+
+def _planned(tmp_path, env):
+    _pack(tmp_path / "pack")
+    _run("plan", str(tmp_path / "pack"), str(tmp_path), env=env)
+    plan_file = next(tmp_path.glob("Hotel Chocolat plan *.json"))
+    return plan_file, json.loads(plan_file.read_text("utf-8"))
+
+
+def test_one_service_not_answering_means_nothing_is_submitted(tmp_path):
+    svc = _Service(slow=0)
+    env = dict(os.environ, HC_SERVICES=svc.urls)
+    try:
+        plan_file, _ = _planned(tmp_path, env)
+        svc.servers[1].shutdown(); svc.servers[1].server_close()
+        rc, out = _run_rc("queue", str(plan_file), "once", "since=", env=env)
+        assert rc != 0 and "NOT QUEUED: the run history is incomplete" in out and svc.posts == 0
+    finally:
+        svc.servers[0].shutdown()
+
+
+def test_a_run_list_at_its_limit_is_not_complete_history(tmp_path):
+    svc = _Service(slow=0)
+    env = dict(os.environ, HC_SERVICES=svc.urls, HC_RUN_LIMIT="3")
+    try:
+        plan_file, _ = _planned(tmp_path, env)
+        svc.runs.extend({"run_id": "x%d" % i, "client": "Other", "job_title": "t", "status": "done",
+                         "queued_at": time.time()} for i in range(3))
+        rc, out = _run_rc("queue", str(plan_file), "once", "since=", env=env)
+        assert rc != 0 and "its limit" in out and svc.posts == 0
+    finally:
+        svc.close()
+
+
+def test_a_live_run_of_the_same_drawing_blocks_a_submit_whatever_its_title(tmp_path):
+    svc = _Service(slow=0)
+    env = dict(os.environ, HC_SERVICES=svc.urls)
+    try:
+        plan_file, plan = _planned(tmp_path, env)
+        for p in plan["products"]:
+            svc.runs.append({"run_id": "wall-" + p["drawing"], "client": "Someone", "job_title": "by hand",
+                             "drawing_number": p["drawing"].replace(".", "-").lower(), "status": "claimed",
+                             "queued_at": time.time()})
+        rc, out = _run_rc("queue", str(plan_file), "once", "since=", env=env)
+        assert rc == 0 and out.count("IN FLIGHT") == 2 and svc.posts == 0
+    finally:
+        svc.close()
+
+
+def test_a_finished_run_counts_as_done_only_on_the_verified_release(tmp_path):
+    svc = _Service(slow=0)
+    env = dict(os.environ, HC_SERVICES=svc.urls)
+    try:
+        plan_file, plan = _planned(tmp_path, env)
+        verified = time.time() - 600
+        release = tmp_path / "release.json"
+        release.write_text(json.dumps({"build": "abc1234", "loaded_verified_at": verified}), "utf-8")
+        a, b = plan["products"]
+        title = lambda p: "%s [hc:%s]" % (p["title"], p["fingerprint"])
+        svc.runs += [
+            # after the verified release, but its own log shows the OLD engine: not done
+            {"run_id": "old-engine", "client": "Hotel Chocolat", "job_title": title(a), "status": "done",
+             "queued_at": verified + 60, "log": ["   [build] engine source: 8e03a71 · src 51dd (782 modules)"]},
+            # its own log shows the released engine: done
+            {"run_id": "new-engine", "client": "Hotel Chocolat", "job_title": title(b), "status": "done",
+             "queued_at": verified + 60, "log": ["   [build] engine source: abc1234 · src 77aa (790 modules)"]},
+        ]
+        rc, out = _run_rc("queue", str(plan_file), "once", "release=" + str(release), env=env)
+        assert rc == 0, out
+        assert "old-engine" in out and "8e03a71" in out and "new-engine" in out
+        assert "1 queued, 1 already run or in flight" in out and svc.posts == 1
+    finally:
+        svc.close()
+
+
+def test_an_uncertain_submit_is_reconciled_before_anything_is_sent_again(tmp_path):
+    def vanish(runs):
+        runs.clear()                                   # the service never kept it
+    svc = _Service(slow=3, on_first_post=vanish)
+    env = dict(os.environ, HC_SERVICES=svc.urls, HC_SUBMIT_TIMEOUT="1", HC_CONFIRM_TRIES="1",
+               HC_CONFIRM_SLEEP="0")
+    try:
+        plan_file, _ = _planned(tmp_path, env)
+        rc, out = _run_rc("queue", str(plan_file), "once", "since=", env=env)
+        assert rc != 0 and "UNSURE" in out and "1 unsure" in out
+        posts = svc.posts
+        rc, out = _run_rc("queue", str(plan_file), "once", "since=", env=env)
+        assert rc != 0 and "earlier uncertain submit" in out and "HELD" in out
+        assert svc.posts == posts
+        journal = (tmp_path / "Hotel Chocolat submissions.jsonl").read_text("utf-8")
+        assert '"result": "unsure"' in journal and '"result": "queued"' in journal
+        rc, out = _run_rc("queue", str(plan_file), "once", "since=", env=dict(env, HC_UNSURE_WAIT_MIN="0"))
+        assert "never appeared on either complete run list" in out
+    finally:
+        svc.close()
+
+
+def test_a_plan_that_read_too_few_files_exits_with_a_failure():
+    src = PLANNER.read_text("utf-8")
+    block = src[src.index("NOT QUEUED: this plan read"):]
+    assert "sys.exit(2)" in block[:400]

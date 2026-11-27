@@ -12,6 +12,14 @@ queue : reads THAT JSON plan, re-checks every product's source fingerprint, skip
         makes a result queued before that time not count as estimated (a release since). A
         submit that does not answer is checked against the run list before it is called
         anything: a slow answer is not a refusal.
+        FAIL CLOSED: both services must answer with their whole history (fewer runs than the
+        list limit) or nothing more is submitted. A live run of the same plan fingerprint OR
+        the same drawing number blocks a submit. release=<file> (written by the release step
+        once the build is verified LOADED) makes a finished run count as done only when its
+        own log shows that build, or, where its log names no build, when it was queued after
+        the verified release. Every attempt is journalled beside the plan, and an earlier
+        UNSURE submit is reconciled against the complete lists before anything is sent again.
+        Exit code 0 only when nothing was held, refused or left uncertain.
 
 Folders are weak evidence in this pack. A file belongs to a product when a drawing of that
 product names it (the BOM references, followed through the whole pack), or when it sits in
@@ -63,6 +71,14 @@ else:
     plan_file, rerun = pathlib.Path(sys.argv[2]), (len(sys.argv) > 3 and sys.argv[3] == 'rerun')
     _since = next((a[6:].strip() for a in sys.argv[4:] if a.startswith('since=')), '')
     since = datetime.datetime.strptime(_since, '%Y-%m-%d %H:%M').timestamp() if _since else 0.0
+    _release = next((a[8:].strip() for a in sys.argv[4:] if a.startswith('release=') and a[8:].strip()), '')
+    release_build = ''
+    if _release:
+        _rec = json.loads(pathlib.Path(_release).read_text(encoding='utf-8-sig'))
+        release_build = str(_rec.get('build') or '')[:7]
+        since = float(_rec.get('loaded_verified_at') or 0)
+        if len(release_build) < 7 or not since:
+            raise SystemExit('NOT QUEUED: the release record names no verified build and load time.')
 
 SERVICES = tuple(os.environ.get('HC_SERVICES', 'http://localhost:8071,http://localhost:8072').split(','))
 KEY = os.environ.get('HC_KEY', '')
@@ -86,24 +102,58 @@ def get_json(url):
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read().decode('utf-8'))
 
-def existing_runs():
-    """Every Hotel Chocolat run either service still knows, keyed by source fingerprint."""
+LIMIT = int(os.environ.get('HC_RUN_LIMIT') or 500)
+FINISHED = ('done', 'error', 'failed', 'cancelled', 'canceled', 'stopped', 'abandoned', 'complete', 'completed')
+BY_DRAWING = {}
+
+def dkey(value):
+    return re.sub(r'[^A-Z0-9]', '', str(value or '').upper())
+
+def existing_runs(strict=None):
+    """Every Hotel Chocolat run either service still knows, keyed by source fingerprint; every
+    run of any client by drawing number in BY_DRAWING. In queue mode the history must be whole:
+    a service that does not answer, or answers with a full page, stops the queue."""
+    strict = (mode == 'queue') if strict is None else strict
     found = {}
     answered = 0
+    gaps = []
+    BY_DRAWING.clear()
     for s in SERVICES:
         try:
-            runs = get_json(s + '/api/estimate?limit=500').get('runs', [])
+            runs = get_json(s + '/api/estimate?limit=%d' % LIMIT).get('runs', [])
             answered += 1
-        except Exception:
+        except Exception as e:
+            gaps.append('%s did not answer (%s)' % (s, type(e).__name__))
             continue
+        if len(runs) >= LIMIT:
+            gaps.append('%s returned %d runs, its limit, so older runs may be missing' % (s, len(runs)))
         for r in runs:
+            d = dkey(r.get('drawing_number'))
+            if d:
+                lst = BY_DRAWING.setdefault(d, [])
+                prior = next((e for e in lst if e.get('run_id') == r.get('run_id')), None)
+                if prior is None:
+                    lst.append(dict(r))
+                elif str(prior.get('status')).lower() != str(r.get('status')).lower():
+                    # THE SAME RUN, TWO STATUSES: reconciled to live if either service says live.
+                    prior['status_conflict'] = sorted({str(prior.get('status')), str(r.get('status'))})
+                    if str(r.get('status')).lower() not in FINISHED:
+                        prior['status'] = r.get('status')
             m = re.search(r'\[hc:([0-9a-f]{12})\]', str(r.get('job_title') or ''))
             if m and str(r.get('client') or '').lower().startswith('hotel'):
                 lst = found.setdefault(m.group(1), [])
-                if all(e['run_id'] != r.get('run_id') for e in lst):
+                prior = next((e for e in lst if e['run_id'] == r.get('run_id')), None)
+                if prior is None:
                     # Review needs the actual price, deliverables and output folder, not
                     # just the three fields queue deduplication happened to consume.
                     lst.append(dict(r))
+                elif str(prior.get('status')).lower() != str(r.get('status')).lower():
+                    prior['status_conflict'] = sorted({str(prior.get('status')), str(r.get('status'))})
+                    if str(r.get('status')).lower() not in FINISHED:
+                        prior['status'] = r.get('status')
+    if strict and gaps:
+        raise SystemExit('NOT QUEUED: the run history is incomplete, so a duplicate cannot be ruled out: '
+                         + '; '.join(gaps) + '. Nothing further was submitted.')
     if not answered and (mode == 'queue' or (mode == 'review' and not books_dir)):
         raise SystemExit('NOT PROCESSED: neither service run list is reachable. No submission or review export was made.')
     return found
@@ -433,7 +483,35 @@ elif mode == 'queue':
     if data.get('files_expected') is not None and data['files_expected'] != data.get('files_read'):
         print('NOT QUEUED: this plan read %s of the %s files on the share, so products may be missing. '
               'Plan again; nothing was submitted.' % (data.get('files_read'), data['files_expected']))
-        sys.exit(0)
+        sys.exit(2)
+    JOURNAL = plan_file.parent / 'Hotel Chocolat submissions.jsonl'
+    UNSURE_WAIT_MIN = float(os.environ.get('HC_UNSURE_WAIT_MIN') if os.environ.get('HC_UNSURE_WAIT_MIN') is not None else 30)
+
+    def journal(item, asked, result, run_id):
+        with JOURNAL.open('a', encoding='utf-8') as f:
+            f.write(json.dumps({'asked': asked, 'fingerprint': item['fingerprint'], 'drawing': item['drawing'],
+                                'result': result, 'run_id': run_id}) + '\n')
+
+    def journal_entries(fingerprint):
+        if not JOURNAL.exists():
+            return []
+        out = []
+        for line in JOURNAL.read_text(encoding='utf-8').splitlines():
+            try:
+                j = json.loads(line)
+            except ValueError:
+                continue
+            if j.get('fingerprint') == fingerprint and j.get('result') == 'unsure':
+                out.append(j)
+        return out
+
+    def run_build(run):
+        m = re.search(r'\[build\] engine source: ([0-9a-f]{7,40})( \+local edits)?',
+                      '\n'.join(str(x) for x in (run.get('log') or [])))
+        return (m.group(1), bool(m.group(2))) if m else (None, None)
+
+    if release_build:
+        print('Release record: build %s verified loaded at %s' % (release_build, time.strftime('%d %b %H:%M', time.localtime(since))))
     already = existing_runs()
     done = sent = held = unsure = 0
     _digests = {}
@@ -457,14 +535,57 @@ elif mode == 'queue':
         # THE LIST AS IT IS NOW, not as it was when this queue started: a second queue window
         # started meanwhile, or a person on the Wall, may have submitted this product since.
         already = existing_runs()
-        runs = already.get(item['fingerprint'], [])
-        flying = [e for e in runs if str(e.get('status')).lower() in ('queued', 'running')]
+        runs = list(already.get(item['fingerprint'], []))
+        ids = {e.get('run_id') for e in runs}
+        runs += [e for e in BY_DRAWING.get(dkey(item['drawing']), []) if e.get('run_id') not in ids]
+        flying = [e for e in runs if str(e.get('status')).lower() not in FINISHED]
         if flying:
-            print('IN FLIGHT %s: %s; not submitted again' % (label, ', '.join('%s (%s)' % (e['run_id'], e['status']) for e in flying)))
+            print('IN FLIGHT %s: %s; not submitted again' % (label, ', '.join(
+                '%s (%s%s)' % (e['run_id'], e['status'], ', status differs between services' if e.get('status_conflict') else '')
+                for e in flying)))
             done += 1
             continue
-        live = [e for e in runs if str(e.get('status')).lower() not in ('failed', 'error', 'stopped', 'cancelled')
-                and float(e.get('queued_at') or 0) >= since]
+        # AN EARLIER UNSURE SUBMIT IS RECONCILED FIRST, against the complete lists just read.
+        waiting = False
+        for j in journal_entries(item['fingerprint']):
+            if any(float(e.get('queued_at') or 0) >= j['asked'] - 60 for e in runs):
+                continue
+            age_min = (time.time() - j['asked']) / 60
+            if age_min < UNSURE_WAIT_MIN:
+                print('HELD    %s: an earlier uncertain submit at %s is not on either complete run list yet; '
+                      'queue again after %s' % (label, time.strftime('%H:%M', time.localtime(j['asked'])),
+                                                time.strftime('%H:%M', time.localtime(j['asked'] + UNSURE_WAIT_MIN * 60))))
+                waiting = True
+                break
+            print('NOTE    %s: the uncertain submit at %s never appeared on either complete run list in %d min; '
+                  'it was not created' % (label, time.strftime('%H:%M', time.localtime(j['asked'])), age_min))
+        if waiting:
+            held += 1
+            continue
+        if release_build:
+            live = []
+            for e in runs:
+                status = str(e.get('status')).lower()
+                built, dirty = run_build(e)
+                queued = float(e.get('queued_at') or 0)
+                when = time.strftime('%d %b %H:%M', time.localtime(queued)) if queued else 'unknown time'
+                if status not in ('done', 'complete', 'completed'):
+                    verdict = 'does not count (%s)' % status
+                elif built:
+                    ok = built.startswith(release_build) and not dirty
+                    verdict = ('counts: its log shows build %s' % built) if ok else \
+                              ('does not count: its log shows build %s%s, not %s' % (built, ' +local edits' if dirty else '', release_build))
+                    if ok:
+                        live.append(e)
+                elif queued >= since:
+                    verdict = 'counts: no build in its log, queued %s after the verified release' % when
+                    live.append(e)
+                else:
+                    verdict = 'does not count: no build in its log, queued before the verified release'
+                print('  existing %s %s (%s, queued %s): %s' % (item['drawing'], e.get('run_id'), status, when, verdict))
+        else:
+            live = [e for e in runs if str(e.get('status')).lower() not in ('failed', 'error', 'stopped', 'cancelled')
+                    and float(e.get('queued_at') or 0) >= since]
         if live and not rerun:
             print('SKIPPED %s: already run %s' % (label, ', '.join('%s (%s)' % (e['run_id'], e['status']) for e in live)))
             done += 1
@@ -481,30 +602,38 @@ elif mode == 'queue':
         asked = time.time()
         try:
             with urllib.request.urlopen(req, timeout=float(os.environ.get('HC_SUBMIT_TIMEOUT') or 600)) as r:
-                print('QUEUED  %s  run %s' % (label, json.loads(r.read().decode('utf-8')).get('run_id')), flush=True)
+                run_id = json.loads(r.read().decode('utf-8')).get('run_id')
+            print('QUEUED  %s  run %s' % (label, run_id), flush=True)
+            journal(item, asked, 'queued', run_id)
             sent += 1
         except urllib.error.HTTPError as e:
             detail = e.read().decode('utf-8', 'replace') or str(e)
             print('REFUSED %s: %s' % (label, detail[:300]), flush=True)
+            journal(item, asked, 'refused', None)
             held += 1
         except Exception as e:
             # NO ANSWER IS NOT NO. On 26 Nov a submit timed out and the run was there, running.
             found = []
-            for _ in range(12):
+            for _ in range(int(os.environ.get('HC_CONFIRM_TRIES') or 12)):
                 found = [x for x in existing_runs().get(item['fingerprint'], [])
                          if float(x.get('queued_at') or 0) >= asked - 60]
                 if found:
                     break
-                time.sleep(10)
+                time.sleep(float(os.environ.get('HC_CONFIRM_SLEEP') or 10))
             if found:
                 print('QUEUED  %s  run %s (the service answered slowly; the run is on the list)'
                       % (label, found[0]['run_id']), flush=True)
+                journal(item, asked, 'queued', found[0]['run_id'])
                 sent += 1
             else:
-                print('UNSURE  %s: %s, and no run for it is on the list after two minutes. Check the Wall '
-                      'before queueing again; queueing again skips it if it appears.' % (label, e), flush=True)
+                print('UNSURE  %s: %s, and no run for it is on the list yet. Queueing again reconciles it '
+                      'first and holds the product until it appears or %d min pass.' % (label, e, UNSURE_WAIT_MIN), flush=True)
+                journal(item, asked, 'unsure', None)
                 unsure += 1
     print('%d queued, %d already run or in flight, %d held or refused, %d unsure' % (sent, done, held, unsure))
+    if held or unsure:
+        print('NOT ALL SUBMITTED CLEANLY: see the HELD / REFUSED / UNSURE lines above.')
+        sys.exit(3)
 
 else:
     # -- REVIEW: eight packs and one schedule, instead of 35 workbooks --
