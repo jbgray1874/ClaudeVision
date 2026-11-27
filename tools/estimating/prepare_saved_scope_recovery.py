@@ -17,6 +17,8 @@ def main():
         help='Reviewed JSON object mapping numeric supplier stock codes to exact drawing references; requires --scope-basis')
     ap.add_argument('--allowances',type=Path,
         help='Explicit job-scoped estimating_allowances.v1 input; adds provisional material and operation inputs, not prices')
+    ap.add_argument('--owned-text',type=Path,
+        help='Explicit owned_manufacturing_text.v1 reviewed transcription, bound to an existing filename/page; never auto-discovered')
     args=ap.parse_args()
     os.environ['SDI_OFFLINE']='1'
     if args.out.resolve() == args.record.resolve() or args.out.exists():
@@ -26,8 +28,9 @@ def main():
     if aliases is not None and not isinstance(aliases,dict):
         ap.error('--identity-aliases must contain a JSON object')
     allowances=json.loads(args.allowances.read_text(encoding='utf-8-sig')) if args.allowances else None
+    owned_text=json.loads(args.owned_text.read_text(encoding='utf-8-sig')) if args.owned_text else None
     result,audit=prepare(source,scope=args.scope,scope_basis=args.scope_basis,identity_aliases=aliases,
-        allowances=allowances)
+        allowances=allowances,owned_text=owned_text)
     args.out.parent.mkdir(parents=True,exist_ok=True)
     with args.out.open('x',encoding='utf-8') as f:
         json.dump(result,f,indent=2,default=str)

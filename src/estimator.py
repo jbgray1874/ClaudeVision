@@ -12293,6 +12293,16 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 if _op in _SPECIAL_ITEM_FAB_OPS:
                     _timing.pop(_op, None)
 
+    # Apply named passes AFTER all generic timber allowances have contributed to
+    # the one-pass time. Otherwise a later allowance silently cancels some coats.
+    if 'wet_spray' in run_times_min:
+        from named_finish_schedule import apply_times as apply_named_finish_times
+        setup_times_min['wet_spray'], run_times_min['wet_spray'] = apply_named_finish_times(
+            part, setup_times_min.get('wet_spray', 0), run_times_min['wet_spray'])
+        if powder_coating_detail is not None and part.get('finish_schedule_applied'):
+            powder_coating_detail['named_passes'] = part['finish_schedule_applied']
+            powder_coating_detail['run_min_per_unit'] = run_times_min['wet_spray']
+
     unit_times_min: Dict[str, float] = {}
     total_times_min: Dict[str, float] = {}
     for op in set(setup_times_min) | set(run_times_min):
@@ -13337,8 +13347,12 @@ def _estimate_part_costed(part: Dict[str, Any], job_quantity: Optional[int] = No
     labour = estimate_labour_costs(process, job_quantity=order_qty, material=part.get("normalized_material"))
     if debug:
         print(f"[DEBUG] estimate_part labour done {part_number}")
-    system_cost = (_consumable_share_cost(part) if part.get("consumable_share")
-                   else _resolve_part_system_cost(part))
+    if part.get("named_finish_consumable"):
+        from named_finish_schedule import consumable_cost as named_finish_consumable_cost
+        system_cost = named_finish_consumable_cost(part)
+    else:
+        system_cost = (_consumable_share_cost(part) if part.get("consumable_share")
+                       else _resolve_part_system_cost(part))
     if debug:
         print(f"[DEBUG] estimate_part system_cost done {part_number}")
     system_unit_cost = _safe_float(system_cost.get("applied_unit_cost"))
@@ -13360,13 +13374,16 @@ def _estimate_part_costed(part: Dict[str, Any], job_quantity: Optional[int] = No
     _is_commodity_provisional = (
         system_unit_cost is not None
         and str((_extract_selected_price(system_cost_result) or {}).get("source") or "")
-        == "standard_commodity_provisional")
+        in {"standard_commodity_provisional", "wet_finish_house_allowance"})
     if _is_commodity_provisional:
         _com_unit = round(float(system_unit_cost), 4)
         material["unit_material_cost_gbp"] = _com_unit
         material["cost_per_part_gbp"] = _com_unit
         material["extended_material_cost_gbp"] = round(_com_unit * quantity, 4)
-        material.setdefault("cost_method", "standard_commodity_provisional")
+        if part.get("named_finish_consumable"):
+            material["cost_method"] = "wet_finish_house_allowance"
+        else:
+            material.setdefault("cost_method", "standard_commodity_provisional")
 
     material_extended = material.get("extended_material_cost_gbp")
     extended_material_cost = _safe_float(material_extended) or 0.0
@@ -13771,6 +13788,9 @@ def _estimate_part_costed(part: Dict[str, Any], job_quantity: Optional[int] = No
         "material_estimate": material,
         "process_estimate": process,
         "labour_estimate": labour,
+        **{k: part[k] for k in ('finish_schedule', 'finish_schedule_applied',
+                               'named_finish_consumable', 'material_specification',
+                               'owned_blank_basis', 'manufacturing_allowance_basis') if k in part},
         "normalized_geometry": part.get("normalized_geometry", {}),
         # THE ROLLUP TRAVELS WITH THE MONEY, TOO.
         #

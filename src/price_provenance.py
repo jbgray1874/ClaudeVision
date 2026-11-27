@@ -105,6 +105,7 @@ _SOURCE_SYSTEM_NAMES = {
     "estimator_stated":   "Estimator stated",
     "roll_goods_stated":  "Estimator stated",
     "stated_price":       "Estimator stated",
+    "wet_finish_house_allowance": "Provisional house coating budget (not a supplier quote)",
     "historical_quote":   "Historical quote",
     # The packing (and any future) stated-method lines: counts an estimator stated,
     # prices from SDI's own system this run. Both facts, one label.
@@ -207,7 +208,7 @@ def classify_price_source(
     # A NAMED ESTIMATOR'S FIGURE IS NOT A CATALOGUE ROW. It lives in this repository, which
     # is what `config` means; falling through to `catalogue` put Howard's stated tape price
     # on the sheet looking like a row purchasing buys against.
-    if n in _STATED_SOURCES:
+    if n in _STATED_SOURCES or n == "wet_finish_house_allowance":
         return "config"
     return "catalogue"
 
@@ -894,6 +895,8 @@ def declared_price_disagreements(node: Any) -> list:
 
 def review_reason_for(source_class: str, source_name: Any = None) -> Optional[str]:
     """The sentence an estimator needs to see next to this price, or None if it needs none."""
+    if _norm(source_name) == "wet_finish_house_allowance":
+        return "Provisional house coating budget: confirm the actual coating coverage and tin price before quotation."
     if source_class == "ai_estimate":
         return (
             f"Indicative AI market estimate ({_norm(source_name) or 'ai'}) — not a catalogue "

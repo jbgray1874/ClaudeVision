@@ -8,6 +8,39 @@ priced estimate.
 
 ## What it does
 
+### Component-owned manufacturing evidence and allowances
+
+Generic rules in `owned_component_manufacturing.py` read an exact component's own
+MATERIAL callout, retain its full grade/specification, and propose the normal sheet
+or board manufacturing route. They do not dispatch on a customer, product number,
+folder name or price. Higher-ranked CAD/DXF/human evidence, existing component
+dimensions, explicit buy/by-others decisions and piece quantities are preserved.
+Numeric supplier stock/drawing duplicates merge only on an unambiguous own-sheet
+PART NO.; no fuzzy description matching is used.
+
+Two labelled CUT axes can supply a flat. Where no blank exists, the largest two
+distinct standalone body dimensions can supply a **provisional envelope allowance**,
+excluding MATERIAL stock sizes and title-block text. It is flagged as inference,
+not a measured flat, and must be confirmed against the DXF before quotation.
+
+A named wet-coat schedule costs every pass at the ordinary shop area/rate labour
+model, with a setup per distinct stage, without multiplying physical pieces. Its
+consumables are separate, labelled **provisional house-budget lines**, not supplier
+quotes. `config.NAMED_WET_FINISH_CONSUMABLES` states the current assumptions:
+8 m2/litre coverage, 15% waste, GBP 25/litre. These are budgeting assumptions, not
+published market prices, and do not certify specialist/fire-rated coating performance.
+Confirm coverage, exact grade and actual tin prices before a firm quotation. No
+finish schedule is invented for a raster sheet whose text has not been read.
+
+Offline saved-evidence preparation accepts optional `--owned-text <decision.json>`
+alongside the existing `--identity-aliases`, `--scope-basis` and `--allowances` inputs.
+The `owned_manufacturing_text.v1` decision names each existing `source_pdf_name`,
+`page_number`, reviewed `text` and nonempty `basis`. It is never auto-discovered;
+raw reader text is preserved, and conflicting page identities are refused. The
+prepare tool still requires a **new output file** and never prices, submits, deploys
+or overwrites a completed result. Integration alone changes no saved workbook,
+price, tracker cell, service, runner or queued job.
+
 ### TTI drawing rows and explicit brief fallback
 
 The drawing pricer holds a row carrying a drawing reference when no resolved pack is

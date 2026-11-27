@@ -7,10 +7,14 @@ from drawing_reference import compact
 from supplier_sheet_identity import reconcile_saved_sheet_identities
 
 
-def prepare(summary, *, scope=None, scope_basis=None, identity_aliases=None, allowances=None):
+def prepare(summary, *, scope=None, scope_basis=None, identity_aliases=None, allowances=None,
+            owned_text=None):
     if scope and not str(scope_basis or '').strip():
         raise ValueError('A scope correction needs its drawing evidence/basis')
     result = copy.deepcopy(summary)
+    if owned_text:
+        from owned_component_manufacturing import apply_reviewed_text
+        apply_reviewed_text(result, owned_text)
     before = {compact(p.get('part_number')): p for p in summary.get('parts', [])}
     reconcile_saved_sheet_identities(result)
     if identity_aliases:
@@ -71,6 +75,8 @@ def prepare(summary, *, scope=None, scope_basis=None, identity_aliases=None, all
                         'dxf_augmented','dxf_source','blank_length_mm','blank_width_mm'):
                 if old.get(key) is not None:
                     part[key] = copy.deepcopy(old[key])
+    from owned_component_manufacturing import prepare as prepare_owned_manufacturing
+    prepare_owned_manufacturing(result)
     if allowances:
         from reviewed_manufacturing_allowances import add as add_allowances
         add_allowances(result,allowances)

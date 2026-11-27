@@ -9,7 +9,7 @@ the chain where the measured rate lives. D-664 widened who counts as faced board
 nothing on the sheet, because this branch was the one deciding.
 
 A measured time still wins (a weld model, a plater pack, a count off the part's own record);
-only the two allowance claims give way.
+only explicitly registered allowance claims give way.
 """
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ os.environ.setdefault("SDI_OFFLINE", "1")
 import wb_populate as W  # noqa: E402
 
 
-def test_the_two_allowance_claims_are_named():
-    assert W._ALLOWANCE_TIME_MARKERS == {"bench_work_applied", "unit_fitting_applied"}
+def test_the_allowance_claims_are_named():
+    assert W._ALLOWANCE_TIME_MARKERS == {"bench_work_applied", "unit_fitting_applied", "finish_schedule_applied"}
     named = {m for m, _ops, _why in W._STATED_SHOP_TIME_MARKERS}
     assert W._ALLOWANCE_TIME_MARKERS <= named
 

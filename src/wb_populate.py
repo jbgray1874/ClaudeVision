@@ -5821,6 +5821,8 @@ def build_workbook_labour(
 # nothing about being plated says otherwise. Each marker therefore names the operations it
 # actually vouches for, and a claim reaches those and no others.
 _STATED_SHOP_TIME_MARKERS = (
+    ("finish_schedule_applied", ("wet_spray",),
+     "the named coating stages, costed as normal area/rate passes; provisional booth times"),
     ("weld_time_is_an_allowance", ("welding", "dress_welds"),
      "the welding department's stated weldment allowance (config.WELD_TIME_MODEL)"),
     ("weld_time_is_per_joint", ("welding", "dress_welds"),
@@ -5853,7 +5855,7 @@ _STATED_SHOP_TIME_MARKERS = (
 # fitting is a per-piece handling allowance. Both are honest stand-ins where nothing measured
 # the work; neither is evidence about this job that a department's measured rate for the same
 # department, inside that rate's own scope, should give way to.
-_ALLOWANCE_TIME_MARKERS = frozenset({"bench_work_applied", "unit_fitting_applied"})
+_ALLOWANCE_TIME_MARKERS = frozenset({"bench_work_applied", "unit_fitting_applied", "finish_schedule_applied"})
 
 
 def allowance_only_claim(group: Any, stated_time_by_pn: Dict[str, str],

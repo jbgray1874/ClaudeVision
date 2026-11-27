@@ -2977,6 +2977,8 @@ def pre_costing_passes(summary: Dict[str, Any]) -> None:
     # evidence passes, so a shared sheet's envelope cannot erase their own axes.
     from component_caption_blanks import repair as _repair_component_caption_blanks
     _repair_component_caption_blanks(summary)
+    from owned_component_manufacturing import prepare as _prepare_owned_manufacturing
+    _prepare_owned_manufacturing(summary)
     # THE DRAWING LEDGER (SCRUM-194 requirement 2): every fact the drawing's own text gave a
     # made part, captured once the deterministic build is done and before costing, to be held
     # to the calculated workbook after Excel as the LLM read's ledger is.
@@ -5404,6 +5406,8 @@ def _finalize_scan_summary(
 
     from component_caption_blanks import repair as _repair_component_caption_blanks
     _repair_component_caption_blanks(summary)
+    from owned_component_manufacturing import prepare as _prepare_owned_manufacturing
+    _prepare_owned_manufacturing(summary)
     try:
         from route_compiler import apply_canonical_evidence_to_parts, job_drawing_numbers
         # THE BOM'S OWN PARENT EDGES, at the point the classification still changes the

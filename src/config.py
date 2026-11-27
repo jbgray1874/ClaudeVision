@@ -3381,6 +3381,15 @@ NESTING_RULES = {
     "waste_factor_pct": 4.0,
 }
 
+# An explicitly named wet-coat schedule carries consumables as well as booth
+# time. These are PROVISIONAL HOUSE BUDGETS, not researched/supplier prices.
+# Coverage and tin cost must be confirmed for specialist/fire-rated coatings.
+NAMED_WET_FINISH_CONSUMABLES = {
+    "coverage_m2_per_litre": 8.0,
+    "waste_fraction": 0.15,
+    "budget_gbp_per_litre": 25.0,
+}
+
 LABOUR_RULES = {
     "laser_cutting": {
         "setup_min": 3.0,
